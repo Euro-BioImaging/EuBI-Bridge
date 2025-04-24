@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Conversion Tutorial - EuBI-Bridge</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../assets/_mkdocstrings.css" rel="stylesheet" />
+        <link href="../css/custom.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Conversion Tutorial";
+        var mkdocs_page_input_path = "conversion_tutorial.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> EuBI-Bridge
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Home</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../cli/">CLI Usage</a>
+                </li>
+              </ul>
+              <ul class="current">
+                <li class="toctree-l1 current"><a class="reference internal current" href="#">Conversion Tutorial</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#unary-conversion">Unary Conversion</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#aggregative-conversion-concatenation-along-dimensions">Aggregative Conversion (Concatenation Along Dimensions)</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#handling-nested-directories">Handling Nested Directories</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#selective-data-conversion">Selective Data Conversion</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#handling-categorical-dimension-patterns">Handling Categorical Dimension Patterns</a>
+    </li>
+    </ul>
+                </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">EuBI-Bridge</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Conversion Tutorial</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/Euro-BioImaging/EuBI-Bridge/edit/master/docs/conversion_tutorial.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="tutorial">Tutorial</h1>
+<p>Welcome to the EuBI-Bridge conversion tutorial. Here we demonstrate how to convert batches
+of image datasets to OME-Zarr using the EuBI-Bridge CLI. </p>
+<p>EuBI-Bridge supports two different conversion modes: <strong>unary</strong> (one-to-one) and <strong>aggregative</strong> (multiple-to-one) conversion. Unary conversion converts each input file to a single OME-Zarr container, whereas aggregative conversion concatenates input images along specified dimensions. Below we explain each of these modes with examples.</p>
+<h3 id="unary-conversion">Unary Conversion</h3>
+<p>Given a dataset structured as follows: </p>
+<pre><code class="language-bash">multichannel_timeseries
+├── Channel1-T0001.tif
+├── Channel1-T0002.tif
+├── Channel1-T0003.tif
+├── Channel1-T0004.tif
+├── Channel2-T0001.tif
+├── Channel2-T0002.tif
+├── Channel2-T0003.tif
+└── Channel2-T0004.tif
+</code></pre>
+<p>To convert each TIFF into a separate OME-Zarr container (unary conversion):  </p>
+<pre><code class="language-bash">eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr
+</code></pre>
+<p>This produces:  </p>
+<pre><code class="language-bash">multichannel_timeseries_zarr
+├── Channel1-T0001.zarr
+├── Channel1-T0002.zarr
+├── Channel1-T0003.zarr
+├── Channel1-T0004.zarr
+├── Channel2-T0001.zarr
+├── Channel2-T0002.zarr
+├── Channel2-T0003.zarr
+└── Channel2-T0004.zarr
+</code></pre>
+<p>Use <strong>wildcards</strong> to specifically convert the images belonging to Channel1:</p>
+<pre><code class="language-bash">eubi to_zarr &quot;multichannel_timeseries/Channel1*&quot; multichannel_timeseries_channel1_zarr
+</code></pre>
+<p>This produces:</p>
+<pre><code class="language-bash">multichannel_timeseries_zarr
+├── Channel1-T0001.zarr
+├── Channel1-T0002.zarr
+├── Channel1-T0003.zarr
+└── Channel1-T0004.zarr
+</code></pre>
+<h3 id="aggregative-conversion-concatenation-along-dimensions">Aggregative Conversion (Concatenation Along Dimensions)</h3>
+<p>To concatenate images along specific dimensions, EuBI-Bridge needs to be informed
+of file patterns that specify image dimensions. For this example,
+the file pattern for the channel dimension is <code>Channel</code>, which is followed by the channel index,
+and the file pattern for the time dimension is <code>T</code>, which is followed by the time index.</p>
+<p>To concatenate along the <strong>time</strong> dimension:</p>
+<pre><code class="language-bash">eubi to_zarr multichannel_timeseries multichannel_timeseries_concat_zarr --channel_tag Channel --time_tag T --concatenation_axes t
+</code></pre>
+<p>Output:  </p>
+<pre><code class="language-bash">multichannel_timeseries_time-concat_zarr
+├── Channel1-T_tset.zarr
+└── Channel2-T_tset.zarr
+</code></pre>
+<p><strong>Important note:</strong> if the <code>--channel_tag</code> was not provided, the tool would not be aware
+of the multiple channels in the image and try to concatenate all images into a single one-channeled OME-Zarr. Therefore, 
+when an aggregative conversion is performed, all dimensions existing in the input files must be specified via their respective tags. </p>
+<p>For multidimensional concatenation (<strong>channel</strong> + <strong>time</strong>):</p>
+<pre><code class="language-bash">eubi to_zarr multichannel_timeseries multichannel_timeseries_concat_zarr --channel_tag Channel --time_tag T --concatenation_axes ct
+</code></pre>
+<p>Note that both axes are specified via the argument <code>--concatenation_axes ct</code>.</p>
+<p>Output:</p>
+<pre><code class="language-bash">multichannel_timeseries_concat_zarr
+└── Channel_cset-T_tset.zarr
+</code></pre>
+<h3 id="handling-nested-directories">Handling Nested Directories</h3>
+<p>For datasets stored in nested directories such as:  </p>
+<pre><code class="language-bash">multichannel_timeseries_nested
+├── Channel1
+│   ├── T0001.tif
+│   ├── T0002.tif
+│   ├── T0003.tif
+│   ├── T0004.tif
+├── Channel2
+│   ├── T0001.tif
+│   ├── T0002.tif
+│   ├── T0003.tif
+│   ├── T0004.tif
+</code></pre>
+<p>EuBI-Bridge automatically detects the nested structure. To concatenate along both channel and time dimensions:  </p>
+<pre><code class="language-bash">eubi to_zarr multichannel_timeseries_nested multichannel_timeseries_nested_concat_zarr --channel_tag Channel --time_tag T --concatenation_axes ct
+</code></pre>
+<p>Output:  </p>
+<pre><code class="language-bash">multichannel_timeseries_nested_concat_zarr
+└── Channel_cset-T_tset.zarr
+</code></pre>
+<p>To concatenate along the channel dimension only:  </p>
+<pre><code class="language-bash">eubi to_zarr multichannel_timeseries_nested multichannel_timeseries_nested_concat_zarr --channel_tag Channel --time_tag T --concatenation_axes c
+</code></pre>
+<p>Output:  </p>
+<pre><code class="language-bash">multichannel_timeseries_nested_concat_zarr
+├── Channel_cset-T0001.zarr
+├── Channel_cset-T0002.zarr
+├── Channel_cset-T0003.zarr
+└── Channel_cset-T0004.zarr
+</code></pre>
+<h3 id="selective-data-conversion">Selective Data Conversion</h3>
+<p>To recursively select specific files for conversion, wildcard patterns can be used. 
+For example, to concatenate only <strong>timepoint 3</strong> along the channel dimension:  </p>
+<pre><code class="language-bash">eubi to_zarr &quot;multichannel_timeseries_nested/**/*T0003*&quot; multichannel_timeseries_nested_concat_zarr --channel_tag Channel --time_tag T --concatenation_axes c
+</code></pre>
+<p>Output:  </p>
+<pre><code class="language-bash">multichannel_timeseries_nested_concat_zarr
+└── Channel_cset-T0003.zarr
+</code></pre>
+<p><strong>Note:</strong> When using wildcards, the input directory path must be enclosed 
+in quotes as shown in the example above.  </p>
+<h3 id="handling-categorical-dimension-patterns">Handling Categorical Dimension Patterns</h3>
+<p>For datasets where channel names are categorical such as in:</p>
+<pre><code class="language-bash">blueredchannel_timeseries
+├── Blue-T0001.tif
+├── Blue-T0002.tif
+├── Blue-T0003.tif
+├── Blue-T0004.tif
+├── Red-T0001.tif
+├── Red-T0002.tif
+├── Red-T0003.tif
+└── Red-T0004.tif
+</code></pre>
+<p>Specify categorical names as a comma-separated list:  </p>
+<pre><code class="language-bash">eubi to_zarr blueredchannels_timeseries blueredchannels_timeseries_concat_zarr --channel_tag Blue,Red --time_tag T --concatenation_axes ct
+</code></pre>
+<p>Output:  </p>
+<pre><code class="language-bash">blueredchannels_timeseries_concat_zarr
+└── BlueRed_cset-T_tset.zarr
+</code></pre>
+<p>Note that the categorical names are aggregated in the output OME-Zarr name.  </p>
+<p>With nested input structure such as in:  </p>
+<pre><code class="language-bash">blueredchannels_timeseries_nested
+├── Blue
+│   ├── T0001.tif
+│   ├── T0002.tif
+│   ├── T0003.tif
+│   ├── T0004.tif
+├── Red
+│   ├── T0001.tif
+│   ├── T0002.tif
+│   ├── T0003.tif
+│   ├── T0004.tif
+</code></pre>
+<p>One can run the exact same command:</p>
+<pre><code class="language-bash">eubi to_zarr blueredchannels_timeseries_nested blueredchannels_timeseries_nested_concat_zarr --channel_tag Blue,Red --time_tag T --concatenation_axes ct
+</code></pre>
+<p>Output:  </p>
+<pre><code class="language-bash">blueredchannels_timeseries_nested_concat_zarr
+└── BlueRed_cset-T_tset.zarr
+</code></pre>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../cli/" class="btn btn-neutral float-left" title="CLI Usage"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/Euro-BioImaging/EuBI-Bridge" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../cli/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../js/copy-button.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

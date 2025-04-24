@@ -1,0 +1,56 @@
+/* Adjust outer pre block to add more space */
+pre {
+  position: relative;
+  padding: 0.5em 2.1em 0.5em 0.5em; /* More space at the top and bottom */
+  margin: 10em 100; /* Optional: adds space around the pre block */
+  border-radius: 8px; /* Smooth corners */
+  background: #f5f5f5; /* Optional background color */
+  min-height: 10px; /* Ensure a minimum height */
+}
+
+/* Add more space inside the pre block for the code content */
+pre > code {
+  display: block;
+  padding-top: 10em; /* Add padding to the top of the code block only */
+  padding-bottom: 10em; /* Add padding to the top of the code block only */
+  padding-left: 0em; /* Optional: Add some padding on the left side of the code */
+  padding-right: 10em; /* Optional: Add some padding on the right side of the code */
+  background: none; /* Removes extra background from the code block */
+  white-space: pre-wrap; /* Ensures long lines wrap inside the code block */
+}
+
+/* Copy button positioning - top right */
+.copy-button {
+  position: absolute;
+  top: 8px;  /* Move button a little lower from the top */
+  right: 4px; /* Ensure it's well positioned in the left corner */
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+}
+
+.copy-button svg {
+  width: 14px;
+  height: 14px;
+  color: #666;
+  vertical-align: middle;
+}
+
+/* Optional: On hover, make the button more prominent */
+.copy-button:hover svg {
+  color: #333;
+}
+
+
+footer {
+  display: none !important;
+}

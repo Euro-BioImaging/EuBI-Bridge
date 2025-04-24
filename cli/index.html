@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>CLI Usage - EuBI-Bridge</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../assets/_mkdocstrings.css" rel="stylesheet" />
+        <link href="../css/custom.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "CLI Usage";
+        var mkdocs_page_input_path = "cli.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> EuBI-Bridge
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Home</a>
+                </li>
+              </ul>
+              <ul class="current">
+                <li class="toctree-l1 current"><a class="reference internal current" href="#">CLI Usage</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#quick-start">Quick Start</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#unary-vs-aggregative-conversion">Unary vs aggregative conversion</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#examples">Examples</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#main-commands">Main Commands</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#eubi-to_zarr">eubi to_zarr</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#non-configurable-parameters">Non-configurable Parameters</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#examples_1">Examples</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#configurable-parameters">Configurable Parameters</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#cluster-parameters">Cluster Parameters</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#conversion-parameters">Conversion Parameters</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#downscale-parameters">Downscale Parameters</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#examples_2">Examples</a>
+    </li>
+        </ul>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration-commands">Configuration Commands</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#eubi-configure_cluster">eubi configure_cluster</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#example">Example</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#eubi-configure_conversion">eubi configure_conversion</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#example_1">Example</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#eubi-configure_downscale">eubi configure_downscale</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#example_2">Example</a>
+    </li>
+        </ul>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#reset-and-inspect-configuration">Reset and Inspect Configuration</a>
+    </li>
+    </ul>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../conversion_tutorial/">Conversion Tutorial</a>
+                </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">EuBI-Bridge</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">CLI Usage</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/Euro-BioImaging/EuBI-Bridge/edit/master/docs/cli.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="cli-usage">CLI Usage</h1>
+<p>After installing <strong>EuBI-Bridge</strong>, the CLI command <code>eubi</code> becomes globally available.</p>
+<hr />
+<h2 id="quick-start">Quick Start</h2>
+<h3 id="unary-vs-aggregative-conversion">Unary vs aggregative conversion</h3>
+<p><strong>Unary conversion:</strong> conversion of each input file to a single output OME-Zarr container.</p>
+<p><strong>Aggregative conversion:</strong> conversion that concatenates multiple input files along user-specified dimensions. </p>
+<p>Below are examples for both of these conversion modes:</p>
+<h3 id="examples">Examples</h3>
+<p><strong>Simple unary conversion:</strong></p>
+<p>Convert each file in <code>input_dir</code> into an OME-Zarr container, saving the result in <code>output_dir</code>:</p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir
+</code></pre>
+<p><strong>Excluding files:</strong></p>
+<p>Exclude files with <code>thumbs</code> in the filename:</p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --excludes 'thumbs'
+</code></pre>
+<p><strong>Wildcard filtering:</strong></p>
+<p>Convert only <code>tiff</code> files using wildcards:</p>
+<pre><code class="language-bash">eubi to_zarr &quot;/path/to/input_dir/*tiff&quot; /path/to/output_dir
+</code></pre>
+<p><strong>Aggregative conversion:</strong></p>
+<p>Perform an aggregative conversion that concatenates input files along the z axis:</p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --z_tag slice_ --concatenation_axes z
+</code></pre>
+<p>Note that the pattern corresponding to the z axis is provided to the command via the <code>--z_tag</code> and the concatenation is activated by supplying <code>--concatenation_axes</code>. </p>
+<blockquote>
+<p>ℹ️ To better understand aggregative conversion, see the <a href="../conversion_tutorial/#tutorial">conversion tutorial</a>.</p>
+</blockquote>
+<hr />
+<hr />
+<h2 id="main-commands">Main Commands</h2>
+<h3 id="eubi-to_zarr"><code>eubi to_zarr</code></h3>
+<p>Performs data conversion from supported input formats (including most BioFormats-compatible formats) to OME-Zarr. It supports both <strong>unary</strong> and <strong>aggregative</strong> conversion modes, with options for filtering, metadata specification, downscaling, and distributed processing.</p>
+<hr />
+<h3 id="non-configurable-parameters">Non-configurable Parameters</h3>
+<p>These must be provided directly via the CLI:</p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>input_path</code></td>
+<td><code>str</code> or <code>Path</code> (mandatory)</td>
+<td>Path to input file or folder</td>
+</tr>
+<tr>
+<td><code>output_path</code></td>
+<td><code>str</code> or <code>Path</code> (mandatory)</td>
+<td>Path to output Zarr directory</td>
+</tr>
+<tr>
+<td><code>--includes</code></td>
+<td><code>str</code></td>
+<td>Include filter for filenames</td>
+</tr>
+<tr>
+<td><code>--excludes</code></td>
+<td><code>str</code></td>
+<td>Exclude filter for filenames</td>
+</tr>
+<tr>
+<td><code>--series</code></td>
+<td><code>int</code></td>
+<td>BioFormats series index</td>
+</tr>
+<tr>
+<td><code>--time_tag</code></td>
+<td><code>str</code> or <code>tuple</code></td>
+<td>Time dimension tag</td>
+</tr>
+<tr>
+<td><code>--channel_tag</code></td>
+<td><code>str</code> or <code>tuple</code></td>
+<td>Channel dimension tag</td>
+</tr>
+<tr>
+<td><code>--z_tag</code></td>
+<td><code>str</code> or <code>tuple</code></td>
+<td>Z-dimension tag</td>
+</tr>
+<tr>
+<td><code>--y_tag</code></td>
+<td><code>str</code> or <code>tuple</code></td>
+<td>Y-dimension tag</td>
+</tr>
+<tr>
+<td><code>--x_tag</code></td>
+<td><code>str</code> or <code>tuple</code></td>
+<td>X-dimension tag</td>
+</tr>
+<tr>
+<td><code>--concatenation_axes</code></td>
+<td><code>int</code>, <code>tuple</code>, or <code>str</code></td>
+<td>Axes for concatenating datasets</td>
+</tr>
+<tr>
+<td><code>--time_scale</code></td>
+<td><code>int</code>, <code>float</code></td>
+<td>Temporal increment</td>
+</tr>
+<tr>
+<td><code>--z_scale</code></td>
+<td><code>int</code>, <code>float</code></td>
+<td>Z spatial increment</td>
+</tr>
+<tr>
+<td><code>--y_scale</code></td>
+<td><code>int</code>, <code>float</code></td>
+<td>Y spatial increment</td>
+</tr>
+<tr>
+<td><code>--x_scale</code></td>
+<td><code>int</code>, <code>float</code></td>
+<td>X spatial increment</td>
+</tr>
+<tr>
+<td><code>--time_unit</code></td>
+<td><code>str</code></td>
+<td>Temporal unit</td>
+</tr>
+<tr>
+<td><code>--z_unit</code></td>
+<td><code>str</code></td>
+<td>Z spatial unit</td>
+</tr>
+<tr>
+<td><code>--y_unit</code></td>
+<td><code>str</code></td>
+<td>Y spatial unit</td>
+</tr>
+<tr>
+<td><code>--x_unit</code></td>
+<td><code>str</code></td>
+<td>X spatial unit</td>
+</tr>
+</tbody>
+</table>
+<h4 id="examples_1">Examples</h4>
+<p><strong>Override metadata for unary conversion:</strong></p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --z_scale 2.5 --z_unit micrometer --time_scale 1.5 --time_unit second
+</code></pre>
+<p><strong>Perform aggregative conversion along the time and channel axes:</strong></p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --time_tag T --channel_tag Channel --concatenation_axes tc
+</code></pre>
+<blockquote>
+<p>ℹ️ Tag arguments corresponding to the axes <code>tczyx</code> are: <code>--time_tag</code>, <code>--channel_tag</code>, <code>--z_tag</code> <code>--y_tag</code>, <code>--x_tag</code>, respectively.</p>
+<p>ℹ️ To better understand aggregative conversion, see the <a href="../conversion_tutorial/#tutorial">conversion tutorial</a>.</p>
+</blockquote>
+<hr />
+<hr />
+<h3 id="configurable-parameters">Configurable Parameters</h3>
+<p>These can be passed via CLI or stored in the configuration file. </p>
+<h4 id="cluster-parameters">Cluster Parameters</h4>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--memory_limit</code></td>
+<td><code>str</code></td>
+<td>Maximum memory per Dask worker</td>
+</tr>
+<tr>
+<td><code>--n_jobs</code></td>
+<td><code>int</code></td>
+<td>Number of Dask workers</td>
+</tr>
+<tr>
+<td><code>--no_distributed</code></td>
+<td><code>bool</code></td>
+<td>Disable distributed computation</td>
+</tr>
+<tr>
+<td><code>--no_worker_restart</code></td>
+<td><code>bool</code></td>
+<td>Prevent automatic worker restarts on failure</td>
+</tr>
+<tr>
+<td><code>--on_slurm</code></td>
+<td><code>bool</code></td>
+<td>Enable SLURM-based execution</td>
+</tr>
+<tr>
+<td><code>--temp_dir</code></td>
+<td><code>str</code></td>
+<td>Temporary directory for Dask</td>
+</tr>
+<tr>
+<td><code>--threads_per_worker</code></td>
+<td><code>int</code></td>
+<td>Threads per worker</td>
+</tr>
+<tr>
+<td><code>--verbose</code></td>
+<td><code>bool</code></td>
+<td>Enable verbose logging</td>
+</tr>
+</tbody>
+</table>
+<h4 id="conversion-parameters">Conversion Parameters</h4>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--compressor</code></td>
+<td><code>str</code></td>
+<td>Compression algorithm</td>
+</tr>
+<tr>
+<td><code>--compressor_params</code></td>
+<td><code>dict</code></td>
+<td>Compressor parameters</td>
+</tr>
+<tr>
+<td><code>--output_chunks</code></td>
+<td><code>list</code></td>
+<td>Output Zarr chunk size</td>
+</tr>
+<tr>
+<td><code>--overwrite</code></td>
+<td><code>bool</code></td>
+<td>Overwrite existing Zarr data</td>
+</tr>
+<tr>
+<td><code>--rechunk_method</code></td>
+<td><code>str</code></td>
+<td>Rechunking method (<code>tasks</code>, <code>p2p</code> or <code>rechunker</code>)</td>
+</tr>
+<tr>
+<td><code>--rechunkers_max_mem</code></td>
+<td><code>str</code></td>
+<td>Max memory for <code>rechunker</code></td>
+</tr>
+<tr>
+<td><code>--trim_memory</code></td>
+<td><code>bool</code></td>
+<td>Reduce memory usage</td>
+</tr>
+<tr>
+<td><code>--use_tensorstore</code></td>
+<td><code>bool</code></td>
+<td>Use TensorStore backend for writing</td>
+</tr>
+<tr>
+<td><code>--metadata_reader</code></td>
+<td><code>str</code></td>
+<td>Metadata extraction method (<code>bfio</code> or <code>aicsimageio</code>)</td>
+</tr>
+<tr>
+<td><code>--save_omexml</code></td>
+<td><code>bool</code></td>
+<td>Save OME-XML metadata</td>
+</tr>
+</tbody>
+</table>
+<h4 id="downscale-parameters">Downscale Parameters</h4>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--downscale_method</code></td>
+<td><code>str</code></td>
+<td>Downscale algorithm (<code>simple</code>, <code>mean</code>, etc.)</td>
+</tr>
+<tr>
+<td><code>--n_layers</code></td>
+<td><code>int</code></td>
+<td>Number of downscaling layers</td>
+</tr>
+<tr>
+<td><code>--scale_factor</code></td>
+<td><code>list</code></td>
+<td>Scaling factors in each dimension</td>
+</tr>
+</tbody>
+</table>
+<h4 id="examples_2">Examples</h4>
+<p><strong>Run with 8 workers and limit memory per worker:</strong></p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --n_jobs 8 --memory_limit 10GB
+</code></pre>
+<p><strong>Specify output chunk size:</strong></p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --output_chunks 1,1,128,128,128
+</code></pre>
+<p><strong>Specify downscaling layers and scale factor:</strong></p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --n_layers 6 --scale_factor 1,1,3,3,3
+</code></pre>
+<blockquote>
+<p>ℹ️ For more examples, see the <a href="../conversion_tutorial/#tutorial">conversion tutorial</a>.</p>
+</blockquote>
+<hr />
+<h2 id="configuration-commands">Configuration Commands</h2>
+<h3 id="eubi-configure_cluster"><code>eubi configure_cluster</code></h3>
+<p>Set cluster defaults using any of the <a href="#cluster-parameters">cluster parameters</a>.</p>
+<h4 id="example">Example</h4>
+<pre><code class="language-bash">eubi configure_cluster --memory_limit 10GB
+</code></pre>
+<hr />
+<h3 id="eubi-configure_conversion"><code>eubi configure_conversion</code></h3>
+<p>Set conversion defaults using any of the <a href="#conversion-parameters">conversion parameters</a>.</p>
+<h4 id="example_1">Example</h4>
+<pre><code class="language-bash">eubi configure_conversion --rechunk_method p2p
+</code></pre>
+<hr />
+<h3 id="eubi-configure_downscale"><code>eubi configure_downscale</code></h3>
+<p>Set downscale defaults using any of the <a href="#downscale-parameters">downscale parameters</a>.</p>
+<h4 id="example_2">Example</h4>
+<pre><code class="language-bash">eubi configure_downscale --scale_factor 1,1,2,2,2
+</code></pre>
+<hr />
+<h2 id="reset-and-inspect-configuration">Reset and Inspect Configuration</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>eubi reset_config</code></td>
+<td>Reset cluster/conversion/downscale parameters to installation defaults</td>
+</tr>
+<tr>
+<td><code>eubi reset_dask_config</code></td>
+<td>Reset the <code>dask.distributed</code> settings</td>
+</tr>
+<tr>
+<td><code>eubi show_config</code></td>
+<td>Show current cluster/conversion/downscale settings</td>
+</tr>
+<tr>
+<td><code>eubi show_dask_config</code></td>
+<td>Show current Dask configuration</td>
+</tr>
+<tr>
+<td><code>eubi show_root_defaults</code></td>
+<td>Show installation defaults for cluster/conversion/downscale parameters</td>
+</tr>
+<tr>
+<td><code>eubi show_root_dask_defaults</code></td>
+<td>Show installation defaults for Dask parameters</td>
+</tr>
+</tbody>
+</table>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href=".." class="btn btn-neutral float-left" title="Home"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../conversion_tutorial/" class="btn btn-neutral float-right" title="Conversion Tutorial">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/Euro-BioImaging/EuBI-Bridge" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href=".." style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../conversion_tutorial/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../js/copy-button.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
