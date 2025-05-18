@@ -59,9 +59,9 @@
     <li class="toctree-l2"><a class="reference internal" href="#main-commands">Main Commands</a>
         <ul>
     <li class="toctree-l3"><a class="reference internal" href="#eubi-to_zarr">eubi to_zarr</a>
-    </li>
-    <li class="toctree-l3"><a class="reference internal" href="#non-configurable-parameters">Non-configurable Parameters</a>
         <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#non-configurable-parameters">Non-configurable Parameters</a>
+    </li>
     <li class="toctree-l4"><a class="reference internal" href="#examples_1">Examples</a>
     </li>
         </ul>
@@ -78,25 +78,39 @@
     </li>
         </ul>
     </li>
+    <li class="toctree-l3"><a class="reference internal" href="#eubi-update_pixel_meta">eubi update_pixel_meta</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#parameters">Parameters</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#example">Example</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#eubi-show_pixel_meta">eubi show_pixel_meta</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#example_1">Example</a>
+    </li>
+        </ul>
+    </li>
         </ul>
     </li>
     <li class="toctree-l2"><a class="reference internal" href="#configuration-commands">Configuration Commands</a>
         <ul>
     <li class="toctree-l3"><a class="reference internal" href="#eubi-configure_cluster">eubi configure_cluster</a>
         <ul>
-    <li class="toctree-l4"><a class="reference internal" href="#example">Example</a>
+    <li class="toctree-l4"><a class="reference internal" href="#example_2">Example</a>
     </li>
         </ul>
     </li>
     <li class="toctree-l3"><a class="reference internal" href="#eubi-configure_conversion">eubi configure_conversion</a>
         <ul>
-    <li class="toctree-l4"><a class="reference internal" href="#example_1">Example</a>
+    <li class="toctree-l4"><a class="reference internal" href="#example_3">Example</a>
     </li>
         </ul>
     </li>
     <li class="toctree-l3"><a class="reference internal" href="#eubi-configure_downscale">eubi configure_downscale</a>
         <ul>
-    <li class="toctree-l4"><a class="reference internal" href="#example_2">Example</a>
+    <li class="toctree-l4"><a class="reference internal" href="#example_4">Example</a>
     </li>
         </ul>
     </li>
@@ -165,12 +179,11 @@
 <p>ℹ️ To better understand aggregative conversion, see the <a href="../conversion_tutorial/#tutorial">conversion tutorial</a>.</p>
 </blockquote>
 <hr />
-<hr />
 <h2 id="main-commands">Main Commands</h2>
+<hr />
 <h3 id="eubi-to_zarr"><code>eubi to_zarr</code></h3>
 <p>Performs data conversion from supported input formats (including most BioFormats-compatible formats) to OME-Zarr. It supports both <strong>unary</strong> and <strong>aggregative</strong> conversion modes, with options for filtering, metadata specification, downscaling, and distributed processing.</p>
-<hr />
-<h3 id="non-configurable-parameters">Non-configurable Parameters</h3>
+<h4 id="non-configurable-parameters">Non-configurable Parameters</h4>
 <p>These must be provided directly via the CLI:</p>
 <table>
 <thead>
@@ -289,8 +302,6 @@
 <p>ℹ️ Tag arguments corresponding to the axes <code>tczyx</code> are: <code>--time_tag</code>, <code>--channel_tag</code>, <code>--z_tag</code> <code>--y_tag</code>, <code>--x_tag</code>, respectively.</p>
 <p>ℹ️ To better understand aggregative conversion, see the <a href="../conversion_tutorial/#tutorial">conversion tutorial</a>.</p>
 </blockquote>
-<hr />
-<hr />
 <h3 id="configurable-parameters">Configurable Parameters</h3>
 <p>These can be passed via CLI or stored in the configuration file. </p>
 <h4 id="cluster-parameters">Cluster Parameters</h4>
@@ -366,9 +377,64 @@
 <td>Compressor parameters</td>
 </tr>
 <tr>
-<td><code>--output_chunks</code></td>
-<td><code>list</code></td>
-<td>Output Zarr chunk size</td>
+<td><code>--time_chunk</code></td>
+<td><code>int</code></td>
+<td>Output Zarr chunk size in the time dimension</td>
+</tr>
+<tr>
+<td><code>--channel_chunk</code></td>
+<td><code>int</code></td>
+<td>Output Zarr chunk size in the channel dimension</td>
+</tr>
+<tr>
+<td><code>--z_chunk</code></td>
+<td><code>int</code></td>
+<td>Output Zarr chunk size in the z dimension</td>
+</tr>
+<tr>
+<td><code>--y_chunk</code></td>
+<td><code>int</code></td>
+<td>Output Zarr chunk size in the y dimension</td>
+</tr>
+<tr>
+<td><code>--x_chunk</code></td>
+<td><code>int</code></td>
+<td>Output Zarr chunk size in the x dimension</td>
+</tr>
+<tr>
+<td><code>--time_range</code></td>
+<td><code>int</code></td>
+<td>Range of pixels to crop in the time dimension</td>
+</tr>
+<tr>
+<td><code>--channel_range</code></td>
+<td><code>int</code></td>
+<td>Range of pixels to crop in the channel dimension</td>
+</tr>
+<tr>
+<td><code>--z_range</code></td>
+<td><code>int</code></td>
+<td>Range of pixels to crop in the z dimension</td>
+</tr>
+<tr>
+<td><code>--y_range</code></td>
+<td><code>int</code></td>
+<td>Range of pixels to crop in the y dimension</td>
+</tr>
+<tr>
+<td><code>--x_range</code></td>
+<td><code>int</code></td>
+<td>Range of pixels to crop in the x dimension</td>
+</tr>
+<tr>
+<td><code>--dimension_order</code></td>
+<td><code>bool</code></td>
+<td>Dimension order of the output dataset</td>
+</tr>
+<tr>
+<td><code>--squeeze</code></td>
+<td><code>bool</code></td>
+<td>Drop the singlet dimensions from the output array</td>
 </tr>
 <tr>
 <td><code>--overwrite</code></td>
@@ -428,9 +494,24 @@
 <td>Number of downscaling layers</td>
 </tr>
 <tr>
-<td><code>--scale_factor</code></td>
-<td><code>list</code></td>
-<td>Scaling factors in each dimension</td>
+<td><code>--time_scale_factor</code></td>
+<td><code>int</code></td>
+<td>Downscaling factor for the time dimension</td>
+</tr>
+<tr>
+<td><code>--z_scale_factor</code></td>
+<td><code>int</code></td>
+<td>Downscaling factor for the z dimension</td>
+</tr>
+<tr>
+<td><code>--y_scale_factor</code></td>
+<td><code>int</code></td>
+<td>Downscaling factor for the y dimension</td>
+</tr>
+<tr>
+<td><code>--x_scale_factor</code></td>
+<td><code>int</code></td>
+<td>Downscaling factor for the x dimension</td>
 </tr>
 </tbody>
 </table>
@@ -439,68 +520,156 @@
 <pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --n_jobs 8 --memory_limit 10GB
 </code></pre>
 <p><strong>Specify output chunk size:</strong></p>
-<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --output_chunks 1,1,128,128,128
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --z_chunk 128 --y_chunk 128 --x_chunk 128
 </code></pre>
 <p><strong>Specify downscaling layers and scale factor:</strong></p>
-<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --n_layers 6 --scale_factor 1,1,3,3,3
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --n_layers 6 --z_scale_factor 2 --y_scale_factor 3 --x_scale_factor 3
 </code></pre>
+<p><strong>Drop singlet dimensions:</strong></p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --squeeze True
+</code></pre>
+<p>Note that supplying <code>False</code> to <code>--squeeze</code> will guarantee a 5-dimensional output, creating singletons for dimensions that do not exist in the input images.</p>
+<p><strong>Crop a subset of the array:</strong></p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --t_range 0,100 --z_range 15,125
+</code></pre>
+<p>This will convert a subset of the input datasets (0-100 in the time range and 15-125 in the z range) to OME-Zarr.</p>
 <blockquote>
 <p>ℹ️ For more examples, see the <a href="../conversion_tutorial/#tutorial">conversion tutorial</a>.</p>
 </blockquote>
 <hr />
-<h2 id="configuration-commands">Configuration Commands</h2>
-<h3 id="eubi-configure_cluster"><code>eubi configure_cluster</code></h3>
-<p>Set cluster defaults using any of the <a href="#cluster-parameters">cluster parameters</a>.</p>
-<h4 id="example">Example</h4>
-<pre><code class="language-bash">eubi configure_cluster --memory_limit 10GB
-</code></pre>
-<hr />
-<h3 id="eubi-configure_conversion"><code>eubi configure_conversion</code></h3>
-<p>Set conversion defaults using any of the <a href="#conversion-parameters">conversion parameters</a>.</p>
-<h4 id="example_1">Example</h4>
-<pre><code class="language-bash">eubi configure_conversion --rechunk_method p2p
-</code></pre>
-<hr />
-<h3 id="eubi-configure_downscale"><code>eubi configure_downscale</code></h3>
-<p>Set downscale defaults using any of the <a href="#downscale-parameters">downscale parameters</a>.</p>
-<h4 id="example_2">Example</h4>
-<pre><code class="language-bash">eubi configure_downscale --scale_factor 1,1,2,2,2
-</code></pre>
-<hr />
-<h2 id="reset-and-inspect-configuration">Reset and Inspect Configuration</h2>
+<h3 id="eubi-update_pixel_meta"><code>eubi update_pixel_meta</code></h3>
+<p>Performs in-place metadata update in the OME-Zarr datasets. Currently, pixel units and pixel scales are updateable metadata elements. </p>
+<h4 id="parameters">Parameters</h4>
+<p>Each of these parameters can be supplied to the <code>eubi update_pixel_meta</code> command:</p>
 <table>
 <thead>
 <tr>
-<th>Command</th>
+<th style="text-align: left;">Argument</th>
+<th>Type</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>eubi reset_config</code></td>
-<td>Reset cluster/conversion/downscale parameters to installation defaults</td>
+<td style="text-align: left;"><code>input_path</code></td>
+<td><code>str</code> or <code>Path</code> (mandatory)</td>
+<td>Path to an <strong>OME-Zarr</strong> or a directory of <strong>OME-Zarrs</strong></td>
 </tr>
 <tr>
-<td><code>eubi reset_dask_config</code></td>
-<td>Reset the <code>dask.distributed</code> settings</td>
+<td style="text-align: left;"><code>--includes</code></td>
+<td><code>str</code></td>
+<td>Filename include filter</td>
 </tr>
 <tr>
-<td><code>eubi show_config</code></td>
-<td>Show current cluster/conversion/downscale settings</td>
+<td style="text-align: left;"><code>--excludes</code></td>
+<td><code>str</code></td>
+<td>Filename exclude filter</td>
 </tr>
 <tr>
-<td><code>eubi show_dask_config</code></td>
-<td>Show current Dask configuration</td>
+<td style="text-align: left;"><code>--time_scale</code></td>
+<td><code>int</code>, <code>float</code></td>
+<td>Time increment</td>
 </tr>
 <tr>
-<td><code>eubi show_root_defaults</code></td>
-<td>Show installation defaults for cluster/conversion/downscale parameters</td>
+<td style="text-align: left;"><code>--z_scale</code></td>
+<td><code>int</code>, <code>float</code></td>
+<td>Z-axis increment</td>
 </tr>
 <tr>
-<td><code>eubi show_root_dask_defaults</code></td>
-<td>Show installation defaults for Dask parameters</td>
+<td style="text-align: left;"><code>--y_scale</code></td>
+<td><code>int</code>, <code>float</code></td>
+<td>Y-axis increment</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--x_scale</code></td>
+<td><code>int</code>, <code>float</code></td>
+<td>X-axis increment</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--time_unit</code></td>
+<td><code>str</code></td>
+<td>Time unit</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--z_unit</code></td>
+<td><code>str</code></td>
+<td>Z-axis unit</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--y_unit</code></td>
+<td><code>str</code></td>
+<td>Y-axis unit</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>--x_unit</code></td>
+<td><code>str</code></td>
+<td>X-axis unit</td>
 </tr>
 </tbody>
+</table>
+<p>Note that, input to <code>update_pixel_meta</code> <strong>must</strong> be in the OME-Zarr format. Updating pixel metadata is not supported with other file formats. </p>
+<h4 id="example">Example</h4>
+<pre><code class="language-bash">eubi update_pixel_meta /path/to/input_dir --z_scale 5 --z_unit nanometer
+</code></pre>
+<h3 id="eubi-show_pixel_meta"><code>eubi show_pixel_meta</code></h3>
+<p>Displays basic pixel metadata for all images in the input directory. </p>
+<h4 id="example_1">Example</h4>
+<pre><code class="language-bash">eubi show_pixel_meta /path/to/input_dir
+</code></pre>
+<p>The command <code>show_pixel_meta</code> supports inputs with diverse file formats. Note that for pyramidal images, currently metadata is displayed only for the highest resolution layer.</p>
+<hr />
+<h2 id="configuration-commands">Configuration Commands</h2>
+<hr />
+<h3 id="eubi-configure_cluster"><code>eubi configure_cluster</code></h3>
+<p>Set cluster defaults using any of the <a href="#cluster-parameters">cluster parameters</a>.</p>
+<h4 id="example_2">Example</h4>
+<pre><code class="language-bash">eubi configure_cluster --memory_limit 10GB
+</code></pre>
+<h3 id="eubi-configure_conversion"><code>eubi configure_conversion</code></h3>
+<p>Set conversion defaults using any of the <a href="#conversion-parameters">conversion parameters</a>.</p>
+<h4 id="example_3">Example</h4>
+<pre><code class="language-bash">eubi configure_conversion --rechunk_method p2p
+</code></pre>
+<h3 id="eubi-configure_downscale"><code>eubi configure_downscale</code></h3>
+<p>Set downscale defaults using any of the <a href="#downscale-parameters">downscale parameters</a>.</p>
+<h4 id="example_4">Example</h4>
+<pre><code class="language-bash">eubi configure_downscale --scale_factor 1,1,2,2,2
+</code></pre>
+<hr />
+<h2 id="reset-and-inspect-configuration">Reset and Inspect Configuration</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code><nobr>eubi reset_config</nobr></code></td>
+      <td>Reset cluster/conversion/downscale parameters to installation defaults</td>
+    </tr>
+    <tr>
+      <td><code><nobr>eubi reset_dask_config</nobr></code></td>
+      <td>Reset the <code>dask.distributed</code> settings</td>
+    </tr>
+    <tr>
+      <td><code><nobr>eubi show_config</nobr></code></td>
+      <td>Show current cluster/conversion/downscale settings</td>
+    </tr>
+    <tr>
+      <td><code><nobr>eubi show_dask_config</nobr></code></td>
+      <td>Show current Dask configuration</td>
+    </tr>
+    <tr>
+      <td><code><nobr>eubi show_root_defaults</nobr></code></td>
+      <td>Show installation defaults for cluster/conversion/downscale parameters</td>
+    </tr>
+    <tr>
+      <td><code><nobr>eubi show_root_dask_defaults</nobr></code></td>
+      <td>Show installation defaults for Dask parameters</td>
+    </tr>
+  </tbody>
 </table>
               
             </div>
