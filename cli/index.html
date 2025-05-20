@@ -303,7 +303,7 @@
 <p>ℹ️ To better understand aggregative conversion, see the <a href="../conversion_tutorial/#tutorial">conversion tutorial</a>.</p>
 </blockquote>
 <h3 id="configurable-parameters">Configurable Parameters</h3>
-<p>These can be passed via CLI or stored in the configuration file. </p>
+<p>These are stored in the configuration file but can also be supplied directly to the command. The values supplied to the command will override the values from the configuration file. </p>
 <h4 id="cluster-parameters">Cluster Parameters</h4>
 <table>
 <thead>
@@ -525,7 +525,7 @@
 <p><strong>Specify downscaling layers and scale factor:</strong></p>
 <pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --n_layers 6 --z_scale_factor 2 --y_scale_factor 3 --x_scale_factor 3
 </code></pre>
-<p><strong>Drop singlet dimensions:</strong></p>
+<p><strong>Remove singlet dimensions:</strong></p>
 <pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --squeeze True
 </code></pre>
 <p>Note that supplying <code>False</code> to <code>--squeeze</code> will guarantee a 5-dimensional output, creating singletons for dimensions that do not exist in the input images.</p>
