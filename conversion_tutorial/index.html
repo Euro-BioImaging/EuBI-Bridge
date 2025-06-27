@@ -108,6 +108,9 @@ of image datasets to OME-Zarr using the EuBI-Bridge CLI. </p>
 <p>To convert each TIFF into a separate OME-Zarr container (unary conversion):  </p>
 <pre><code class="language-bash">eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr
 </code></pre>
+<p>To create OME-Zarr version 0.5 (with zarr version 3), add the <code>--zarr_format 3</code> argument to the command:</p>
+<pre><code class="language-bash">eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr --zarr_format 3
+</code></pre>
 <p>This produces:  </p>
 <pre><code class="language-bash">multichannel_timeseries_zarr
 ├── Channel1-T0001.zarr

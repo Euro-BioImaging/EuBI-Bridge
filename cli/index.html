@@ -70,6 +70,8 @@
         <ul>
     <li class="toctree-l4"><a class="reference internal" href="#cluster-parameters">Cluster Parameters</a>
     </li>
+    <li class="toctree-l4"><a class="reference internal" href="#readers-parameters">Readers Parameters</a>
+    </li>
     <li class="toctree-l4"><a class="reference internal" href="#conversion-parameters">Conversion Parameters</a>
     </li>
     <li class="toctree-l4"><a class="reference internal" href="#downscale-parameters">Downscale Parameters</a>
@@ -162,9 +164,12 @@
 <p>Convert each file in <code>input_dir</code> into an OME-Zarr container, saving the result in <code>output_dir</code>:</p>
 <pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir
 </code></pre>
+<p>Convert to OME-Zarr with zarr version 3:</p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --zarr_format 3
+</code></pre>
 <p><strong>Excluding files:</strong></p>
 <p>Exclude files with <code>thumbs</code> in the filename:</p>
-<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --excludes 'thumbs'
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --zarr_format 3 --excludes 'thumbs'
 </code></pre>
 <p><strong>Wildcard filtering:</strong></p>
 <p>Convert only <code>tiff</code> files using wildcards:</p>
@@ -182,7 +187,8 @@
 <h2 id="main-commands">Main Commands</h2>
 <hr />
 <h3 id="eubi-to_zarr"><code>eubi to_zarr</code></h3>
-<p>Performs data conversion from supported input formats (including most BioFormats-compatible formats) to OME-Zarr. It supports both <strong>unary</strong> and <strong>aggregative</strong> conversion modes, with options for filtering, metadata specification, downscaling, and distributed processing.</p>
+<p>Performs data conversion from supported input formats (including most BioFormats-compatible formats) to OME-Zarr. 
+It supports both <strong>unary</strong> and <strong>aggregative</strong> conversion modes, with options for filtering, metadata specification, downscaling, and distributed processing.</p>
 <h4 id="non-configurable-parameters">Non-configurable Parameters</h4>
 <p>These must be provided directly via the CLI:</p>
 <table>
@@ -356,6 +362,58 @@
 </tr>
 </tbody>
 </table>
+<h4 id="readers-parameters">Readers Parameters</h4>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>as_mosaic</code></td>
+<td><code>bool</code></td>
+<td>Whether to stitch the mosaic tiles</td>
+</tr>
+<tr>
+<td><code>view_index</code></td>
+<td><code>int</code></td>
+<td>Index for view selection</td>
+</tr>
+<tr>
+<td><code>phase_index</code></td>
+<td><code>int</code></td>
+<td>Index for phase selection</td>
+</tr>
+<tr>
+<td><code>illumination_index</code></td>
+<td><code>int</code></td>
+<td>Index for illumination selection</td>
+</tr>
+<tr>
+<td><code>scene_index</code></td>
+<td><code>int</code></td>
+<td>Index for scene selection</td>
+</tr>
+<tr>
+<td><code>rotation_index</code></td>
+<td><code>int</code></td>
+<td>Index for rotation selection</td>
+</tr>
+<tr>
+<td><code>mosaic_tile_index</code></td>
+<td><code>int</code></td>
+<td>Index for mosaic tile selection</td>
+</tr>
+<tr>
+<td><code>sample_index</code></td>
+<td><code>int</code></td>
+<td>Index for sample selection</td>
+</tr>
+</tbody>
+</table>
 <h4 id="conversion-parameters">Conversion Parameters</h4>
 <table>
 <thead>
@@ -366,6 +424,11 @@
 </tr>
 </thead>
 <tbody>
+<tr>
+<td><code>--zar_format</code></td>
+<td><code>int</code></td>
+<td>Zarr version (3 for OME-Zarr 0.5 and 2 for OME-Zarr 0.4)</td>
+</tr>
 <tr>
 <td><code>--compressor</code></td>
 <td><code>str</code></td>
@@ -400,6 +463,31 @@
 <td><code>--x_chunk</code></td>
 <td><code>int</code></td>
 <td>Output Zarr chunk size in the x dimension</td>
+</tr>
+<tr>
+<td><code>--time_shard_coef</code></td>
+<td><code>int</code></td>
+<td>Sharding coefficient for the time dimension</td>
+</tr>
+<tr>
+<td><code>--channel_shard_coef</code></td>
+<td><code>int</code></td>
+<td>Sharding coefficient for the channel dimension</td>
+</tr>
+<tr>
+<td><code>--z_shard_coef</code></td>
+<td><code>int</code></td>
+<td>Sharding coefficient for the z dimension</td>
+</tr>
+<tr>
+<td><code>--y_shard_coef</code></td>
+<td><code>int</code></td>
+<td>Sharding coefficient for the y dimension</td>
+</tr>
+<tr>
+<td><code>--x_shard_coef</code></td>
+<td><code>int</code></td>
+<td>Sharding coefficient for the x dimension</td>
 </tr>
 <tr>
 <td><code>--time_range</code></td>
@@ -447,11 +535,6 @@
 <td>Rechunking method (<code>tasks</code>, <code>p2p</code> or <code>rechunker</code>)</td>
 </tr>
 <tr>
-<td><code>--rechunkers_max_mem</code></td>
-<td><code>str</code></td>
-<td>Max memory for <code>rechunker</code></td>
-</tr>
-<tr>
 <td><code>--trim_memory</code></td>
 <td><code>bool</code></td>
 <td>Reduce memory usage</td>
@@ -460,6 +543,11 @@
 <td><code>--use_tensorstore</code></td>
 <td><code>bool</code></td>
 <td>Use TensorStore backend for writing</td>
+</tr>
+<tr>
+<td><code>--use_gpu</code></td>
+<td><code>bool</code></td>
+<td>Run on GPU by using cupy arrays</td>
 </tr>
 <tr>
 <td><code>--metadata_reader</code></td>
@@ -522,6 +610,10 @@
 <p><strong>Specify output chunk size:</strong></p>
 <pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --z_chunk 128 --y_chunk 128 --x_chunk 128
 </code></pre>
+<p><strong>Convert to zarr version 3 and specify the shard size:</strong></p>
+<pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --zarr_format 3 --y_shard_coef 4 --x_shard_coef 4 --y_chunk 128 --x_chunk 128
+</code></pre>
+<p>Note that this will create a zarr dataset with a chunk size of 128x128 and a shard size of 512x512 (by multiplying the chunk size by the shard coefficient).</p>
 <p><strong>Specify downscaling layers and scale factor:</strong></p>
 <pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --n_layers 6 --z_scale_factor 2 --y_scale_factor 3 --x_scale_factor 3
 </code></pre>

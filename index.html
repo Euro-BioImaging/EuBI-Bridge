@@ -46,8 +46,6 @@
     <ul class="current">
     <li class="toctree-l2"><a class="reference internal" href="#key-features">Key Features</a>
     </li>
-    <li class="toctree-l2"><a class="reference internal" href="#installation">Installation</a>
-    </li>
     <li class="toctree-l2"><a class="reference internal" href="#additional-notes">Additional Notes</a>
     </li>
     </ul>
@@ -86,31 +84,47 @@
             <div class="section" itemprop="articleBody">
               
                 <h1 id="eubi-bridge">EuBI-Bridge</h1>
-<p>EuBI-Bridge is a Python-based command line tool for distributed conversion of microscopy datasets into the OME-Zarr (v0.4) format with optional downscaling.  </p>
-<p>A key feature of EuBI-Bridge is <strong>aggregative conversion</strong>, which concatenates multiple images along specified dimensions—particularly useful for handling large datasets stored as file collections.  </p>
-<p>EuBI-Bridge is built on several powerful libraries, including <code>zarr</code>, <code>aicsimageio</code>, <code>dask-distributed</code>, and <code>rechunker</code>, among others. 
-While a variety of input file formats are supported, testing has so far primarily focused on TIFF files.</p>
+<p>EuBI-Bridge is a tool for distributed conversion of microscopic image collections into the OME-Zarr format. 
+It can run on the command line or as part of a Python script.  </p>
+<p>A key feature of EuBI-Bridge is <strong>aggregative conversion</strong>, which concatenates multiple images along specified dimensions—particularly 
+useful for handling large datasets stored as TIFF file collections.  </p>
+<p>EuBI-Bridge is built on several powerful libraries, including <code>zarr</code>, <code>bioio</code>, <code>dask-distributed</code> and <code>tensorstore</code>, among others. 
+Relying on <code>bioio</code> plugins for reading, EuBI-Bridge supports a wide range of input file formats. </p>
 <hr />
 <h2 id="key-features">Key Features</h2>
 <ul>
-<li>Parallelised batch conversion</li>
+<li>Parallelised batch conversion to OME-Zarr version 0.4 or 0.5</li>
 <li>Conversion with multi-dimensional concatenation</li>
-<li>Cluster-based conversion</li>
+<li>Distributed conversion on HPC clusters</li>
 <li>N-dimensional chunking</li>
 <li>N-dimensional downscaling</li>
 <li>OME-XML metadata export</li>
 </ul>
 <hr />
-<h2 id="installation">Installation</h2>
-<p>EuBI-Bridge can be installed via conda:</p>
-<pre><code class="language-bash">conda install -c euro-bioimaging -c conda-forge eubi-bridge
-</code></pre>
-<blockquote>
-<p>ℹ️ <strong>EuBI-Bridge is currently only compatible with Python 3.10 due to conflicting dependencies. We are working on supporting a wider range of Python versions in future releases.</strong></p>
-</blockquote>
+<h2>Installation</h2>
+
+<p>The following steps can be followed to install EuBI-Bridge:</p>
+
+<ol>
+  <li>
+    <p><strong>Create a conda environment with the required dependencies:</strong></p>
+    <pre><code class="language-bash">mamba create -n eubizarr openjdk=8.* maven python=3.12</code></pre>
+    <blockquote>
+      <strong>ℹ️ Specify either python=3.11 or python=3.12.
+      EuBI-Bridge is currently only compatible with Python 3.11 or 3.12 due to conflicting dependencies. We are working on supporting a wider range of Python versions in future releases.</strong>
+    </blockquote>
+  </li>
+  <li>
+    <p><strong>Activate the environment and install EuBI-Bridge via pip:</strong></p>
+    <pre><code class="language-bash">conda activate eubizarr
+pip install --no-cache-dir eubi-bridge</code></pre>
+  </li>
+</ol>
+<hr>
+
 <h2 id="additional-notes">Additional Notes</h2>
 <ul>
-<li>EuBI-Bridge is in the <strong>alpha stage</strong>, and significant updates may be expected.</li>
+<li>EuBI-Bridge is in the <strong>beta stage</strong>, and significant updates may be expected.</li>
 <li><strong>Community support:</strong> Questions and contributions are welcome! Please report any issues.</li>
 </ul>
               
@@ -166,5 +180,5 @@ While a variety of input file formats are supported, testing has so far primaril
 
 <!--
 MkDocs version : 1.6.1
-Build Date UTC : 2025-05-20 09:33:08.530133+00:00
+Build Date UTC : 2025-06-27 20:52:55.555283+00:00
 -->
