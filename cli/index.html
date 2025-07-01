@@ -164,13 +164,14 @@
 <p>Convert each file in <code>input_dir</code> into an OME-Zarr container, saving the result in <code>output_dir</code>:</p>
 <pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir
 </code></pre>
-<p>Convert to OME-Zarr with zarr version 3:</p>
+<p>Convert to OME-Zarr <strong>version 0.5</strong> with zarr version 3:</p>
 <pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --zarr_format 3
 </code></pre>
 <p><strong>Excluding files:</strong></p>
 <p>Exclude files with <code>thumbs</code> in the filename:</p>
 <pre><code class="language-bash">eubi to_zarr /path/to/input_dir /path/to/output_dir --zarr_format 3 --excludes 'thumbs'
 </code></pre>
+<p>Note that this option is especially useful to filter out non-image files that may be present in the input directory.</p>
 <p><strong>Wildcard filtering:</strong></p>
 <p>Convert only <code>tiff</code> files using wildcards:</p>
 <pre><code class="language-bash">eubi to_zarr &quot;/path/to/input_dir/*tiff&quot; /path/to/output_dir

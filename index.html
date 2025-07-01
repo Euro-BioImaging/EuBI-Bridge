@@ -84,7 +84,7 @@
             <div class="section" itemprop="articleBody">
               
                 <h1 id="eubi-bridge">EuBI-Bridge</h1>
-<p>EuBI-Bridge is a tool for distributed conversion of microscopic image collections into the OME-Zarr format. 
+<p>EuBI-Bridge is a tool for distributed conversion of microscopic image collections to the OME-Zarr format (<strong>v0.4 or v0.5</strong>). 
 It can run on the command line or as part of a Python script.  </p>
 <p>A key feature of EuBI-Bridge is <strong>aggregative conversion</strong>, which concatenates multiple images along specified dimensions—particularly 
 useful for handling large datasets stored as TIFF file collections.  </p>
@@ -93,7 +93,7 @@ Relying on <code>bioio</code> plugins for reading, EuBI-Bridge supports a wide r
 <hr />
 <h2 id="key-features">Key Features</h2>
 <ul>
-<li>Parallelised batch conversion to OME-Zarr version 0.4 or 0.5</li>
+<li>Parallelised batch conversion to OME-Zarr version <strong>0.4 or 0.5 (with sharding)</strong></li>
 <li>Conversion with multi-dimensional concatenation</li>
 <li>Distributed conversion on HPC clusters</li>
 <li>N-dimensional chunking</li>
@@ -180,5 +180,5 @@ pip install --no-cache-dir eubi-bridge</code></pre>
 
 <!--
 MkDocs version : 1.6.1
-Build Date UTC : 2025-06-28 20:26:27.763211+00:00
+Build Date UTC : 2025-07-01 08:53:00.265192+00:00
 -->
