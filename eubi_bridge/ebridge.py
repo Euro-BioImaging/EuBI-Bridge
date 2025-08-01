@@ -26,11 +26,21 @@ logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
 logging.getLogger('distributed.worker').setLevel(logging.WARNING)
 logging.getLogger('distributed.scheduler').setLevel(logging.WARNING)
 
+def soft_start_jvm():
+    """Starts the JVM if it is not already running."""
+    import scyjava, jpype
+
+    if not scyjava.jvm_started():
+        scyjava.config.endpoints.append("ome:formats-gpl:6.7.0")
+        scyjava.start_jvm()
+    return
+
 def verify_filepaths_for_cluster(filepaths):
     """Verify that all file extensions are supported for distributed processing."""
     logger.info("Verifying file extensions for distributed setup.")
     formats = ['lif', 'czi', 'lsm',
-               'nd2', 'ome.tiff', 'ome.tif',
+               'nd2',
+               'ome.tiff', 'ome.tif',
                'tiff', 'tif', 'zarr',
                'png', 'jpg', 'jpeg']
     
@@ -195,7 +205,8 @@ class EuBIBridge:
                 scene_index=0,
                 rotation_index=0,
                 mosaic_tile_index=0,
-                sample_index=0
+                sample_index=0,
+                use_bioformats_readers=False
             ),                
             conversion = dict(
                 zarr_format = 2,
@@ -331,7 +342,7 @@ class EuBIBridge:
             'distributed.client.scheduler-info-interval': '5s',
 
             # Compression
-            'distributed.comm.compression': 'lz4',  # Faster compression
+            # 'distributed.comm.compression': 'lz4',  # Faster compression
             'distributed.comm.zstd.level': 1,  # Faster compression level
 
             # I/O optimization
@@ -498,6 +509,7 @@ class EuBIBridge:
                           rotation_index: int = 'default',
                           mosaic_tile_index: int = 'default',
                           sample_index: int = 'default',
+                          use_bioformats_readers: bool = 'default'
                          ):
         """
         Updates reader configuration settings. To update the current default value for a parameter, provide that parameter with a value other than 'default'.
@@ -514,7 +526,8 @@ class EuBIBridge:
             'scene_index': scene_index,
             'rotation_index': rotation_index,
             'mosaic_tile_index': mosaic_tile_index,
-            'sample_index': sample_index
+            'sample_index': sample_index,
+            'use_bioformats_readers': use_bioformats_readers
         }
 
         for key in params:
@@ -931,8 +944,11 @@ class EuBIBridge:
 
         ###### Start the cluster
         verified_for_cluster = verify_filepaths_for_cluster(filepaths) ### Ensure non-bioformats conversion. If bioformats is needed, fall back on local conversion.
-        if not verified_for_cluster:
+        if not verified_for_cluster or self.readers_params['use_bioformats_readers']:
             self.cluster_params['no_distributed'] = True
+            # IMPORTANT: If we are here, then bioformats will be needed
+            # Then, jvm must be started before importing bioio_bioformats readers
+            soft_start_jvm()
 
         cluster_is_true = not self.cluster_params['no_distributed']
 
@@ -947,7 +963,6 @@ class EuBIBridge:
 
         self._start_cluster(**self.cluster_params)
 
-
         series = self.readers_params['scene_index']
 
         ###### Read and concatenate
@@ -959,7 +974,7 @@ class EuBIBridge:
                         verbose = self.cluster_params['verbose']
                         )
 
-        base.read_dataset(cluster_is_true,
+        base.read_dataset(verified_for_cluster = cluster_is_true,
                           chunks_yx=chunks_yx,
                           readers_params = self.readers_params
                           )

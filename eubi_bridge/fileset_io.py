@@ -460,6 +460,7 @@ class BatchFile:
                           axis_tag4=axis_tag4,
                           arrays=arrays)
         self.managers = None
+        self.channel_managers = None
 
 
     def split_channel_groups(self):
@@ -479,15 +480,16 @@ class BatchFile:
             groups = fileset._split_by(fileset.axis_tags[1])
         return groups
 
-
-    def read_metadata(self,
-                      series: int = None,
-                      metadata_reader: str = 'bfio',
-                      **kwargs
-                      ):
-        grs = self.split_channel_groups()
-        self.sample_paths = natsorted([grs[grname][0]
-                                        for grname in grs])
+    def _construct_managers(self,
+                          axes: Iterable[int] = [],
+                          series: int = None,
+                          metadata_reader: str = 'bfio',
+                          **kwargs
+                          ):
+        for axis in axes:
+            self.fileset.concatenate_along(axis)
+        arrays_ = self.fileset.get_concatenated_arrays()
+        self.sample_paths = natsorted(arrays_.keys())
         managers = {path: delayed(ArrayManager)(path,
                                             series = series,
                                             metadata_reader = metadata_reader,
@@ -495,36 +497,65 @@ class BatchFile:
                                             ) for
                          path in self.sample_paths
                          }
-
         self.managers = build_managers_dict(**managers).compute()
         return self.managers
 
-    def batch_concatenate(self,
-                          axes: Iterable[int] = []
-                          ):
+    def _fuse_channels(self):
+        channelsdict = {
+            key: self.channel_managers[key].channels
+            for
+            key in natsorted(self.channel_managers.keys())
+        }
+        channelslist = []
+        for key in natsorted(channelsdict.keys()):
+            channelslist.extend(channelsdict[key])
+        for path,manager in self.managers.items():
+            manager._channels = channelslist
+            self.managers[path] = manager
 
-        for axis in axes:
-            self.fileset.concatenate_along(axis)
+    def _construct_channel_managers(self,
+                      series: int = None,
+                      metadata_reader: str = 'bfio',
+                      **kwargs
+                      ):
+        grs = self.split_channel_groups()
+        self.channel_sample_paths = natsorted([grs[grname][0]
+                                        for grname in grs])
+        managers = {path: delayed(ArrayManager)(path,
+                                            series = series,
+                                            metadata_reader = metadata_reader,
+                                            **kwargs
+                                            ) for
+                         path in self.channel_sample_paths
+                         }
 
-        if self.managers is None:
-            self.managers = self.read_metadata()
-        channels_ = {}
-        for path, manager in self.managers.items():
+        self.channel_managers = build_managers_dict(**managers).compute()
+        # channels_ = {}
+        for path, manager in self.channel_managers.items():
             manager._ensure_correct_channels()
             manager.fix_bad_channels()
-            channels_[manager.path] = manager.channels
+            # channels_[manager.path] = manager.channels
+        return self.channel_managers
 
-        channelslist = []
-        channels = {}
+
+    def _complete_process(self,
+                          axes: Iterable[int] = [],
+                          ):
+
+        if self.managers is None:
+            raise ValueError("Managers have not been constructed in advance.")
+        if self.channel_managers is None:
+            raise ValueError("Channel managers have not been constructed in advance.")
+        # for axis in axes:
+        #     self.fileset.concatenate_along(axis)
         if 1 in axes:
-            for chkey in natsorted(channels_.keys()):
-                channelslist.extend(channels_[chkey])
-            for chkey in natsorted(channels_.keys()):
-                channels[chkey] = channelslist
-        else:
-            channels = channels_
+            self._fuse_channels()
 
-        self.channels = channels
+        self.channels_per_output = {
+            manager.path: manager.channels
+            for
+            manager in self.managers.values()
+        }
 
 
     def _update_nonunique_channel_colors(self,
@@ -572,13 +603,12 @@ class BatchFile:
             sample_paths[new_key] = key
 
             ### Update colors if they are not unique
-            self.channels[key] = self._update_nonunique_channel_colors(self.channels[key])
+            self.channels_per_output[key] = self._update_nonunique_channel_colors(self.channels_per_output[key])
             ###
 
-            channels[new_key] = self.channels[key]
+            channels[new_key] = self.channels_per_output[key]
             managers[new_key] = self.managers[key]
-            managers[new_key]._channels = self.channels[key]
-
+            managers[new_key]._channels = self.channels_per_output[key]
 
         return (arrays,
                 sample_paths,

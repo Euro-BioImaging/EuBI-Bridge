@@ -29,7 +29,7 @@ We are working on supporting a wider range of Python versions in future releases
 
 ```bash
 conda activate eubizarr
-pip install --no-cache-dir eubi-bridge==0.0.8b3
+pip install --no-cache-dir eubi-bridge==0.0.8b7
 ```
 
 #### Troubleshooting
@@ -48,7 +48,9 @@ then try the following:
 ```bash
 # In the `eubizarr` environment
 mamba install cmake zlib boost # preinstall dependencies that can help build from source
-pip install --no-cache-dir eubi-bridge==0.0.8b3 # try installing again with the dependencies available
+pip install --no-cache-dir eubi-bridge==0.0.8b7 # try installing again with the dependencies available
+# If a previous version of eubi-bridge was installed before, reset the configuration:
+eubi reset_config
 ````
 
 ## Documentation
