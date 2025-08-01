@@ -68,7 +68,7 @@ def readme():
 
 setuptools.setup(
     name='eubi_bridge',
-    version='0.0.8b3',
+    version='0.0.8b6',
     author='Bugra Özdemir',
     author_email='bugraa.ozdemir@gmail.com',
     description='A package for converting datasets to OME-Zarr format.',

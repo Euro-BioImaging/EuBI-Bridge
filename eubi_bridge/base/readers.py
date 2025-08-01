@@ -9,6 +9,17 @@ import dask
 import dask.array as da
 from eubi_bridge.ngff.multiscales import Pyramid
 
+from bioio_bioformats import utils
+
+# The block below moved to the 'ebridge.py' module in the 'to_zarr' method.
+# import scyjava
+# import jpype
+# # IMPORTANT: jvm must be started before importing bioio_bioformats readers
+# if not scyjava.jvm_started():
+#     scyjava.config.endpoints.append("ome:formats-gpl:6.7.0")
+#     scyjava.start_jvm()
+
+
 readable_formats = ('.ome.tiff', '.ome.tif', '.czi', '.lif',
                     '.nd2', '.tif', '.tiff', '.lsm',
                     '.png', '.jpg', '.jpeg')
@@ -27,7 +38,9 @@ def read_tiff(input_path, **kwargs):
 
 
 @delayed
-def read_single_image_asarray(input_path, **kwargs):
+def read_single_image_asarray(input_path,
+                              use_bioformats_readers = False,
+                              **kwargs):
     """
     Reads a single image file with Dask and returns the array.
 
@@ -49,33 +62,36 @@ def read_single_image_asarray(input_path, **kwargs):
     dimensions = 'TCZYX'
     if input_path.endswith('.zarr'):
         reader = Pyramid().from_ngff
-    elif input_path.endswith(('ome.tiff', 'ome.tif')):
-        from bioio_ome_tiff.reader import Reader as reader # pip install bioio-ome-tiff --no-deps
-    elif input_path.endswith(('.tif', '.tiff', '.lsm')):
-        reader = read_tiff
-    elif input_path.endswith('.czi'):
-        from eubi_bridge.base.czi_reader import read_czi as reader
-        reader_kwargs = dict(
-            as_mosaic = False,
-            view_index = 0,
-            phase_index = 0,
-            illumination_index = 0,
-            scene_index = 0,
-            rotation_index = 0,
-            mosaic_tile_index = 0,
-            sample_index = 0
-        )
-        for k, v in reader_kwargs.items():
-            if k in kwargs:
-                reader_kwargs[k] = kwargs[k]
-    elif input_path.endswith('.lif'):
-        from bioio_lif.reader import Reader as reader
-    elif input_path.endswith('.nd2'):
-        from bioio_nd2.reader import Reader as reader
-    elif input_path.endswith(('.png','.jpg','.jpeg')):
-        from bioio_imageio.reader import Reader as reader
     else:
-        from bioio_bioformats.reader import Reader as reader
+        if use_bioformats_readers:
+            from bioio_bioformats.reader import Reader as reader
+        elif input_path.endswith(('ome.tiff', 'ome.tif')):
+            from bioio_ome_tiff.reader import Reader as reader # pip install bioio-ome-tiff --no-deps
+        elif input_path.endswith(('.tif', '.tiff', '.lsm')):
+            reader = read_tiff
+        elif input_path.endswith('.czi'):
+            from eubi_bridge.base.czi_reader import read_czi as reader
+            reader_kwargs = dict(
+                as_mosaic = False,
+                view_index = 0,
+                phase_index = 0,
+                illumination_index = 0,
+                scene_index = 0,
+                rotation_index = 0,
+                mosaic_tile_index = 0,
+                sample_index = 0
+            )
+            for k, v in reader_kwargs.items():
+                if k in kwargs:
+                    reader_kwargs[k] = kwargs[k]
+        elif input_path.endswith('.lif'):
+            from bioio_lif.reader import Reader as reader
+        elif input_path.endswith('.nd2'):
+            from bioio_nd2.reader import Reader as reader
+        elif input_path.endswith(('.png','.jpg','.jpeg')):
+            from bioio_imageio.reader import Reader as reader
+        else:
+            from bioio_bioformats.reader import Reader as reader
     verbose = kwargs.get('verbose', False)
     if verbose:
         logger.info(f"Reading with {reader.__qualname__}.")

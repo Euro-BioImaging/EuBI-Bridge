@@ -410,62 +410,109 @@ def take_filepaths(input_path: str,
 
 # res = take_filepaths(f"/home/oezdemir/PycharmProjects/TIM2025/data/targets.csv")
 
+# def autocompute_chunk_shape(
+#     array_shape: Tuple[int, ...],
+#     axes: str,
+#     target_chunk_mb: float = 1.0,
+#     dtype: type = np.uint16,
+#     block_size: int = 72
+# ) -> Tuple[int, ...]:
+#     if len(array_shape) != len(axes):
+#         raise ValueError("Length of array_shape must match length of axes.")
+#
+#     chunk_bytes = int(target_chunk_mb * 1024 * 1024)
+#     element_size = np.dtype(dtype).itemsize
+#     max_elements = chunk_bytes // element_size
+#
+#     chunk_shape = [1] * len(array_shape)
+#     spatial_axes = [i for i, ax in enumerate(axes) if ax not in 'tc']
+#     spatial_dims = [array_shape[i] for i in spatial_axes]
+#
+#     # Start: Z stays at array size (if small), X/Y grow squarely
+#     for i in spatial_axes:
+#         chunk_shape[i] = min(block_size, array_shape[i])
+#
+#     # Prefer to fully include Z (if small)
+#     z_index = None
+#     for i, ax in enumerate(axes):
+#         if ax == 'z':
+#             z_index = i
+#             if array_shape[i] <= 32:
+#                 chunk_shape[i] = array_shape[i]
+#
+#     def chunk_elements(shape):
+#         return np.prod([shape[i] for i in range(len(shape))])
+#
+#     # Now grow X and Y symmetrically
+#     x_index = axes.index('x') if 'x' in axes else None
+#     y_index = axes.index('y') if 'y' in axes else None
+#
+#     while True:
+#         trial_shape = list(chunk_shape)
+#         grew = False
+#         for i in [x_index, y_index]:
+#             if i is None:
+#                 continue
+#             if trial_shape[i] + block_size <= array_shape[i]:
+#                 trial_shape[i] += block_size
+#                 grew = True
+#         if not grew:
+#             break
+#         if chunk_elements(trial_shape) <= max_elements:
+#             chunk_shape = trial_shape
+#         else:
+#             break
+#
+#     return tuple(chunk_shape)
+
+
 def autocompute_chunk_shape(
-        array_shape: Tuple[int, ...],
-        axes: str,
-        target_chunk_mb: float = 1.0,
-        dtype: type = np.uint16
+    array_shape: Tuple[int, ...],
+    axes: str,
+    target_chunk_mb: float = 1.0,
+    dtype: type = np.uint16,
 ) -> Tuple[int, ...]:
-    """
-    Compute an appropriate chunk shape for a multi-dimensional array.
-
-    The function calculates chunk dimensions such that:
-    - Time ('t') and channel ('c') dimensions are always chunked as 1
-    - Spatial dimensions are chunked to approximately reach the target chunk size
-    - Chunk dimensions never exceed array dimensions
-
-    Args:
-        array_shape: Tuple of integers representing the shape of the array
-        axes: String specifying the axis order (e.g., 'tczyx', 'zyx', 'cyx')
-        target_chunk_mb: Target chunk size in megabytes (default: 1MB)
-        dtype: Data type of the array (default: uint16)
-
-    Returns:
-        Tuple of chunk sizes matching the input array dimensions
-
-    Example:
-        >>> autocompute_chunk_shape((1, 3, 512, 512, 512), 'tczyx')
-        (1, 1, 64, 64, 64)  # For 1MB chunks with uint16 data
-    """
     if len(array_shape) != len(axes):
-        raise ValueError(f"Length of array_shape ({len(array_shape)}) must match length of axes ({len(axes)})")
+        raise ValueError("Length of array_shape must match length of axes.")
 
-    # Convert target size to bytes
     chunk_bytes = int(target_chunk_mb * 1024 * 1024)
     element_size = np.dtype(dtype).itemsize
     max_elements = chunk_bytes // element_size
 
-    # Identify spatial axes (everything except 't' and 'c')
+    chunk_shape = [1] * len(array_shape)
     spatial_axes = [i for i, ax in enumerate(axes) if ax not in 'tc']
 
-    if not spatial_axes:
-        # If no spatial axes, just return ones
-        return (1,) * len(axes)
+    # Default: start with 1 for all spatial dims
+    for i in spatial_axes:
+        chunk_shape[i] = 1
 
-    # Calculate base chunk size for spatial dimensions
-    spatial_dims = [array_shape[i] for i in spatial_axes]
-    base_chunk = int(round((max_elements) ** (1.0 / len(spatial_axes))))
+    # Use full Z if small
+    z_index = axes.index('z')
+    if z_index != -1 and array_shape[z_index] <= 32:
+        chunk_shape[z_index] = array_shape[z_index]
 
-    # Adjust chunks to fit within array dimensions
-    chunks = []
-    for i, (dim, ax) in enumerate(zip(array_shape, axes)):
-        if ax in 'tc':
-            # Time and channel dimensions are always 1
-            chunks.append(1)
-        else:
-            # For spatial dimensions, use base_chunk but not larger than dimension size
-            chunk_size = min(base_chunk, dim)
-            # Ensure chunk size is at least 1
-            chunks.append(max(1, chunk_size))
+    # Grow x and y together
+    x_index = axes.index('x')
+    y_index = axes.index('y')
 
-    return tuple(chunks)
+    step = 1
+    while True:
+        trial_shape = list(chunk_shape)
+        grew = False
+        for i in [x_index, y_index]:
+            if i == -1:
+                continue
+            if trial_shape[i] + step <= array_shape[i]:
+                trial_shape[i] += step
+                grew = True
+        if not grew or np.prod([trial_shape[i] for i in spatial_axes]) > max_elements:
+            break
+        chunk_shape = trial_shape
+
+    # Final safety trim if over budget
+    while np.prod([chunk_shape[i] for i in spatial_axes]) > max_elements:
+        for i in [x_index, y_index]:
+            if chunk_shape[i] > 1:
+                chunk_shape[i] -= 1
+
+    return tuple(chunk_shape)

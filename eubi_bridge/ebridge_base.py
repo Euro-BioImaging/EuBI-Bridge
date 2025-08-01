@@ -116,7 +116,7 @@ class BridgeBase:
     def read_dataset(self,
                      verified_for_cluster,
                      chunks_yx = None,
-                     readers_params = {}
+                     readers_params = {},
                      ):
         """
         - If the input path is a directory, can read single or multiple files from it.
@@ -221,10 +221,9 @@ class BridgeBase:
                                axis_tag2=z_tag,
                                axis_tag3=y_tag,
                                axis_tag4=x_tag,
-                               )
-        managers = self.batchfile.read_metadata(series=self._series,
-                                                metadata_reader=metadata_reader,
-                                                **kwargs)
+                         )
+
+        # TODO: UPDATE WITH CONSTRUCT_MANAGERS
 
         axdict = dict(zip(axes, tags))
 
@@ -233,7 +232,14 @@ class BridgeBase:
 
         axlist = [axes.index(x) for x in axes_of_concatenation if x in axes]
 
-        self.batchfile.batch_concatenate(axlist)
+        self.batchfile._construct_managers(axes=axlist,
+                                           series=self._series,
+                                           metadata_reader=metadata_reader,
+                                           **kwargs)
+        self.batchfile._construct_channel_managers(series=self._series,
+                                                metadata_reader=metadata_reader,
+                                                **kwargs)
+        self.batchfile._complete_process(axlist)
         # Get the refined arrays and sample paths
         (self.digested_arrays,
          self.digested_arrays_sample_paths,
@@ -241,7 +247,6 @@ class BridgeBase:
          ) = self.batchfile.get_output_dicts(self._input_path)
         self._compute_pixel_metadata(**kwargs)
         return self
-
 
     def _compute_pixel_metadata(self,
                                **kwargs
