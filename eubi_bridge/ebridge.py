@@ -342,7 +342,7 @@ class EuBIBridge:
             'distributed.client.scheduler-info-interval': '5s',
 
             # Compression
-            'distributed.comm.compression': 'lz4',  # Faster compression
+            # 'distributed.comm.compression': 'lz4',  # Faster compression
             'distributed.comm.zstd.level': 1,  # Faster compression level
 
             # I/O optimization
