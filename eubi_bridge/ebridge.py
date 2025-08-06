@@ -210,7 +210,7 @@ class EuBIBridge:
             ),                
             conversion = dict(
                 zarr_format = 2,
-                auto_chunk = True,
+                auto_chunk = False,
                 target_chunk_mb = 1,
                 time_chunk = 1,
                 channel_chunk = 1,

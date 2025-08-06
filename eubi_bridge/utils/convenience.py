@@ -408,63 +408,8 @@ def take_filepaths(input_path: str,
         raise ValueError(f"No valid paths found for {original_input_path}")
     return sorted(paths)
 
-# res = take_filepaths(f"/home/oezdemir/PycharmProjects/TIM2025/data/targets.csv")
-
-# def autocompute_chunk_shape(
-#     array_shape: Tuple[int, ...],
-#     axes: str,
-#     target_chunk_mb: float = 1.0,
-#     dtype: type = np.uint16,
-#     block_size: int = 72
-# ) -> Tuple[int, ...]:
-#     if len(array_shape) != len(axes):
-#         raise ValueError("Length of array_shape must match length of axes.")
-#
-#     chunk_bytes = int(target_chunk_mb * 1024 * 1024)
-#     element_size = np.dtype(dtype).itemsize
-#     max_elements = chunk_bytes // element_size
-#
-#     chunk_shape = [1] * len(array_shape)
-#     spatial_axes = [i for i, ax in enumerate(axes) if ax not in 'tc']
-#     spatial_dims = [array_shape[i] for i in spatial_axes]
-#
-#     # Start: Z stays at array size (if small), X/Y grow squarely
-#     for i in spatial_axes:
-#         chunk_shape[i] = min(block_size, array_shape[i])
-#
-#     # Prefer to fully include Z (if small)
-#     z_index = None
-#     for i, ax in enumerate(axes):
-#         if ax == 'z':
-#             z_index = i
-#             if array_shape[i] <= 32:
-#                 chunk_shape[i] = array_shape[i]
-#
-#     def chunk_elements(shape):
-#         return np.prod([shape[i] for i in range(len(shape))])
-#
-#     # Now grow X and Y symmetrically
-#     x_index = axes.index('x') if 'x' in axes else None
-#     y_index = axes.index('y') if 'y' in axes else None
-#
-#     while True:
-#         trial_shape = list(chunk_shape)
-#         grew = False
-#         for i in [x_index, y_index]:
-#             if i is None:
-#                 continue
-#             if trial_shape[i] + block_size <= array_shape[i]:
-#                 trial_shape[i] += block_size
-#                 grew = True
-#         if not grew:
-#             break
-#         if chunk_elements(trial_shape) <= max_elements:
-#             chunk_shape = trial_shape
-#         else:
-#             break
-#
-#     return tuple(chunk_shape)
-
+import numpy as np
+from typing import Tuple
 
 def autocompute_chunk_shape(
     array_shape: Tuple[int, ...],
@@ -480,39 +425,32 @@ def autocompute_chunk_shape(
     max_elements = chunk_bytes // element_size
 
     chunk_shape = [1] * len(array_shape)
-    spatial_axes = [i for i, ax in enumerate(axes) if ax not in 'tc']
+    spatial_indices = [i for i, ax in enumerate(axes) if ax in 'xyz']
 
-    # Default: start with 1 for all spatial dims
-    for i in spatial_axes:
-        chunk_shape[i] = 1
+    if spatial_indices:
+        # Estimate isotropic side length
+        s = int(np.floor(max_elements ** (1.0 / len(spatial_indices))))
+        for i in spatial_indices:
+            chunk_shape[i] = min(s, array_shape[i])
 
-    # Use full Z if small
-    z_index = axes.index('z')
-    if z_index != -1 and array_shape[z_index] <= 32:
-        chunk_shape[z_index] = array_shape[z_index]
+        # Safely grow dimensions while staying within the element budget
+        while True:
+            trial_shape = list(chunk_shape)
+            for i in spatial_indices:
+                if trial_shape[i] < array_shape[i]:
+                    trial_shape[i] += 1
 
-    # Grow x and y together
-    x_index = axes.index('x')
-    y_index = axes.index('y')
+            trial_elements = np.prod([trial_shape[i] for i in spatial_indices])
+            if trial_elements <= max_elements and trial_shape != chunk_shape:
+                chunk_shape = trial_shape
+            else:
+                break
 
-    step = 1
-    while True:
-        trial_shape = list(chunk_shape)
-        grew = False
-        for i in [x_index, y_index]:
-            if i == -1:
-                continue
-            if trial_shape[i] + step <= array_shape[i]:
-                trial_shape[i] += step
-                grew = True
-        if not grew or np.prod([trial_shape[i] for i in spatial_axes]) > max_elements:
-            break
-        chunk_shape = trial_shape
-
-    # Final safety trim if over budget
-    while np.prod([chunk_shape[i] for i in spatial_axes]) > max_elements:
-        for i in [x_index, y_index]:
-            if chunk_shape[i] > 1:
-                chunk_shape[i] -= 1
+        # Final safety trim if somehow over
+        while np.prod([chunk_shape[i] for i in spatial_indices]) > max_elements:
+            for i in reversed(spatial_indices):  # Trim z first
+                if chunk_shape[i] > 1:
+                    chunk_shape[i] -= 1
 
     return tuple(chunk_shape)
+
