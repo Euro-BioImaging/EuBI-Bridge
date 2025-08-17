@@ -280,8 +280,10 @@ def write_level(grp,
 
     # compute slices for subsampling
     sl = subsample_slice(scales_for_level, axes_map)
+    print(f"sl: {sl}")
     # open view of arr_in with slicing (this returns a zarr.Array if arr_in is zarr)
     view = arr_in[sl]
+    print(f"view.shape: {view.shape}")
     # possibly cast dtype
     if dtype_target is not None:
         # create target array and copy chunk-wise to avoid memory spikes
@@ -292,6 +294,7 @@ def write_level(grp,
     compressor_obj = compressor
     # use view.chunks if available
     chunks = getattr(view, 'chunks', None)
+    print(f"chunks: {chunks}")
     if chunks is None:
         # choose heuristic chunking (per-plane)
         # put small chunks on x/y axes when possible
