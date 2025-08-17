@@ -887,6 +887,55 @@ class EuBIBridge:
     #         local_directory=str(self._dask_temp_dir.name),
     #     )
 
+    def tiff_to_zarr(self,
+                            input_tiff,
+                            output_zarr_dir,
+                            **kwargs
+                            # dtype=None,
+                            # compressor="blosc",
+                            # x_scale=2,
+                            # y_scale=2,
+                            # z_scale=2,
+                            # time_scale=1,
+                            # channel_scale=1,
+                            # min_dimension_size=64,
+                            # n_layers=None,
+                            # auto_chunk=False,
+                            # overwrite=False,
+                            # save_omexml=False,
+                            # zarr_format=2
+                            ):
+        """Convert a BigTIFF to OME-Zarr format with optional downscaling.
+
+        Args:
+            input_tiff: Path to input TIFF (BigTIFF)
+            output_zarr_dir: Path to output directory (will be treated as zarr store root)
+            dtype: Optional target dtype (e.g. "uint8"). If None, source dtype is used.
+            compressor_name: Compression method ("blosc" or "none")
+            x_scale: Downscale factor in X (select every n-th pixel)
+            y_scale: Downscale factor in Y
+            z_scale: Downscale factor in Z
+            time_scale: Downscale factor in Time
+            channel_scale: Downscale factor in Channel
+            min_dimension_size: Stop building pyramid when smallest dimension < this
+            n_layers: Max number of pyramid levels (None = unlimited until min size)
+            auto_chunk: Let zarr choose chunking if True
+            overwrite: Overwrite output directory if exists
+            save_omexml: Attempt to copy/save OME-XML metadata if present
+            zarr_format: Zarr format version (2 or 3)
+        """
+        from eubi_bridge.bigtiff_to_omezarr import convert_bigtiff_to_omezarr
+        self.cluster_params = self._collect_params('cluster', **kwargs)
+        self.readers_params = self._collect_params('readers', **kwargs)
+        self.conversion_params = self._collect_params('conversion', **kwargs)
+        self.downscale_params = self._collect_params('downscale', **kwargs)
+
+        convert_bigtiff_to_omezarr(input_tiff=input_tiff,
+                                   output_zarr_dir=output_zarr_dir,
+                                   # dimension_order='tczyx',
+                                   **self.conversion_params,
+                                   **self.downscale_params
+                                   )        
 
     def to_zarr(self,
                 input_path: Union[Path, str],
@@ -941,6 +990,9 @@ class EuBIBridge:
         paths = take_filepaths(input_path, includes = includes, excludes = excludes)
 
         filepaths = sorted(list(paths))
+
+        ### If a single tiff file, consider special conversion !!!!! TODO
+        # self.convert_single_tiff()
 
         ###### Start the cluster
         verified_for_cluster = verify_filepaths_for_cluster(filepaths) ### Ensure non-bioformats conversion. If bioformats is needed, fall back on local conversion.
