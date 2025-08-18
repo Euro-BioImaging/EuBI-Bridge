@@ -972,6 +972,7 @@ class EuBIBridge:
         convert_bigtiff_to_omezarr(input_tiff=input_tiff,
                                    output_zarr_dir=output_zarr_dir,
                                    # dimension_order='tczyx',
+                                   **self.cluster_params,
                                    **self.conversion_params,
                                    **self.downscale_params
                                    )
