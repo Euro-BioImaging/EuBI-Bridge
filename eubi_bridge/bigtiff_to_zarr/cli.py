@@ -49,6 +49,7 @@ def convert_bigtiff_to_omezarr(
         overwrite=False,
         save_omexml=False,
         zarr_format=2,
+        on_slurm=False,
         **kwargs
 ):
     """
@@ -68,12 +69,98 @@ def convert_bigtiff_to_omezarr(
         overwrite: Overwrite existing output directory
         save_omexml: Save OME-XML metadata alongside Zarr
         zarr_format: Zarr format version (2 or 3)
+        on_slurm: Enable SLURM-based distributed processing across compute nodes
         **kwargs: Additional configuration options
 
     Returns:
         bool: True if conversion successful, False otherwise
     """
-    return asyncio.run(_convert_async(
+    if on_slurm:
+        # Handle SLURM-based distributed processing
+        return _convert_with_slurm(
+            input_tiff=input_tiff,
+            output_zarr_dir=output_zarr_dir,
+            dimension_order=dimension_order,
+            dtype=dtype,
+            compressor=compressor,
+            time_scale=time_scale,
+            channel_scale=channel_scale,
+            z_scale=z_scale,
+            y_scale=y_scale,
+            x_scale=x_scale,
+            time_chunk=time_chunk,
+            channel_chunk=channel_chunk,
+            z_chunk=z_chunk,
+            y_chunk=y_chunk,
+            x_chunk=x_chunk,
+            min_dimension_size=min_dimension_size,
+            n_layers=n_layers,
+            auto_chunk=auto_chunk,
+            overwrite=overwrite,
+            save_omexml=save_omexml,
+            zarr_format=zarr_format,
+            **kwargs
+        )
+    else:
+        # Standard single-node processing
+        return asyncio.run(_convert_async(
+            input_tiff=input_tiff,
+            output_zarr_dir=output_zarr_dir,
+            dimension_order=dimension_order,
+            dtype=dtype,
+            compressor=compressor,
+            time_scale=time_scale,
+            channel_scale=channel_scale,
+            z_scale=z_scale,
+            y_scale=y_scale,
+            x_scale=x_scale,
+            time_chunk=time_chunk,
+            channel_chunk=channel_chunk,
+            z_chunk=z_chunk,
+            y_chunk=y_chunk,
+            x_chunk=x_chunk,
+            min_dimension_size=min_dimension_size,
+            n_layers=n_layers,
+            auto_chunk=auto_chunk,
+            overwrite=overwrite,
+            save_omexml=save_omexml,
+            zarr_format=zarr_format,
+            **kwargs
+        ))
+
+
+def _convert_with_slurm(
+        input_tiff,
+        output_zarr_dir,
+        dimension_order="tczyx",
+        dtype=None,
+        compressor="blosc",
+        time_scale=1,
+        channel_scale=1,
+        z_scale=2,
+        y_scale=2,
+        x_scale=2,
+        time_chunk=1,
+        channel_chunk=1,
+        z_chunk=96,
+        y_chunk=96,
+        x_chunk=96,
+        min_dimension_size=64,
+        n_layers=None,
+        auto_chunk=False,
+        overwrite=False,
+        save_omexml=False,
+        zarr_format=2,
+        **kwargs
+):
+    """SLURM-based distributed conversion implementation."""
+    from utils.slurm_manager import SlurmJobManager
+
+    # Initialize SLURM job manager
+    slurm_manager = SlurmJobManager()
+
+    # Submit and coordinate distributed conversion jobs
+    return slurm_manager.submit_conversion_job(
         input_tiff=input_tiff,
         output_zarr_dir=output_zarr_dir,
         dimension_order=dimension_order,
@@ -96,7 +183,7 @@ def convert_bigtiff_to_omezarr(
         save_omexml=save_omexml,
         zarr_format=zarr_format,
         **kwargs
-    ))
+    )
 
 
 async def _convert_async(
@@ -447,6 +534,8 @@ Examples:
     parser.add_argument("--save-omexml", action="store_true", help="Save OME-XML metadata")
     parser.add_argument("--zarr-format", type=int, default=2, choices=[2, 3],
                         help="Zarr format version (default: 2)")
+    parser.add_argument("--on-slurm", action="store_true",
+                        help="Enable SLURM-based distributed processing")
 
     # Information commands
     parser.add_argument("--system-info", action="store_true", help="Show system information and exit")
@@ -509,6 +598,7 @@ Examples:
         overwrite=args.overwrite,
         save_omexml=args.save_omexml,
         zarr_format=args.zarr_format,
+        on_slurm=args.on_slurm,
         # Additional performance options
         workers=args.workers,
         chunk_memory_mb=args.chunk_memory_mb,

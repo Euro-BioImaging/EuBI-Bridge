@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Set, Tuple
 import numpy as np
 import tifffile
 import zarr
-from utils.ngff_metadata import OMENGFFMetadataGenerator
+from .ngff_metadata import OMENGFFMetadataGenerator
 
 
 def initialize_zarr_store(input_tiff: str, output_zarr_dir: str, config: Dict[str, Any]):
