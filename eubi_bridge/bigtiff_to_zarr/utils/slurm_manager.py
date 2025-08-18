@@ -48,8 +48,8 @@ class SlurmJobManager:
             console.print(f"[blue]📁 Created work directory: {self.work_dir}[/blue]")
 
             # Analyze input file and create processing plan
-            input_tiff = kwargs["input_tiff"]
-            processing_plan = self._analyze_input_and_create_plan(input_tiff, **kwargs)
+            # input_tiff = kwargs["input_tiff"]
+            processing_plan = self._analyze_input_and_create_plan(**kwargs)
 
             console.print(f"[green]📊 Analysis complete: {processing_plan['total_chunks']} chunks across {processing_plan['recommended_nodes']} nodes[/green]")
 
