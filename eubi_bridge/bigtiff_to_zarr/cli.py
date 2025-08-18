@@ -154,7 +154,7 @@ def _convert_with_slurm(
         **kwargs
 ):
     """SLURM-based distributed conversion implementation."""
-    from utils.slurm_manager import SlurmJobManager
+    from .utils.slurm_manager import SlurmJobManager
 
     # Initialize SLURM job manager
     slurm_manager = SlurmJobManager()
@@ -666,7 +666,7 @@ async def _run_benchmark():
     """Run performance benchmark."""
     console.print(Panel("[bold blue]Performance Benchmark[/bold blue]"))
 
-    from core.benchmark import BenchmarkSuite
+    from .core.benchmark import BenchmarkSuite
 
     benchmark = BenchmarkSuite()
     results = await benchmark.run_full_benchmark()
