@@ -154,7 +154,7 @@ def _convert_with_slurm(
         **kwargs
 ):
     """Dask-Jobqueue SLURM distributed conversion implementation."""
-    from utils.dask_slurm_processor import process_with_dask_slurm
+    from .utils.dask_slurm_processor import process_with_dask_slurm
     from rich.console import Console
 
     console = Console()
