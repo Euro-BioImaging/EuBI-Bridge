@@ -26,6 +26,48 @@ except ImportError:
 console = Console()
 
 
+def _setup_worker_environment_func():
+    """Setup environment on each worker (standalone function for pickling)."""
+    import sys
+    import os
+
+    # Add project root to Python path
+    project_root = os.environ.get('PROJECT_ROOT')
+    if not project_root:
+        # Try to find project root by looking for main.py or app.py
+        cwd = os.getcwd()
+        if os.path.exists(os.path.join(cwd, 'main.py')) or os.path.exists(os.path.join(cwd, 'app.py')):
+            project_root = cwd
+        else:
+            # Fallback to current working directory
+            project_root = cwd
+
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    # Change to project directory
+    try:
+        os.chdir(project_root)
+    except:
+        pass
+
+    return f"Worker setup complete on {os.uname().nodename}, project_root: {project_root}"
+
+
+def _test_imports_func():
+    """Test importing core modules on each worker (standalone function for pickling)."""
+    import sys
+
+    try:
+        from eubi_bridge.bigtiff_to_zarr.core.converter import HighPerformanceConverter
+        import tifffile
+        import zarr
+        import numpy
+        return "All imports successful"
+    except ImportError as e:
+        return f"Import failed: {e}, sys.path: {sys.path[:3]}"
+
+
 class DaskSlurmProcessor:
     """Robust SLURM distributed processing using dask-jobqueue."""
 
@@ -216,11 +258,11 @@ class DaskSlurmProcessor:
             console.print("[blue]🔄 Starting distributed conversion...[/blue]")
 
             # Set up the distributed environment properly
-            setup_results = self.client.run(self._setup_worker_environment)
+            setup_results = self.client.run(_setup_worker_environment_func)
             console.print(f"[blue]📊 Worker setup results: {len(setup_results)} workers configured[/blue]")
 
             # Test imports on all workers
-            import_results = self.client.run(self._test_imports)
+            import_results = self.client.run(_test_imports_func)
             console.print(f"[blue]📊 Import test results: {import_results}[/blue]")
 
             # Create distributed tasks for conversion
@@ -245,9 +287,9 @@ class DaskSlurmProcessor:
     def _create_conversion_task(self, input_tiff: str, output_zarr_dir: str, **kwargs):
         """Create dask delayed task for conversion."""
 
-        @delayed
-        def distributed_convert():
-            """Distributed conversion function."""
+        # Create standalone conversion function for pickling
+        def distributed_convert_func():
+            """Distributed conversion function (standalone for pickling)."""
             # Ensure proper environment setup
             import sys
             import os
@@ -283,8 +325,11 @@ class DaskSlurmProcessor:
             )
             return success
 
+        # Create delayed version
+        delayed_convert = delayed(distributed_convert_func)
+
         # Submit task to cluster
-        future = self.client.compute(distributed_convert(), sync=False)
+        future = self.client.compute(delayed_convert(), sync=False)
         return future
 
     def _cleanup(self):
@@ -351,45 +396,7 @@ class DaskSlurmProcessor:
         except:
             return None
 
-    def _setup_worker_environment(self):
-        """Setup environment on each worker."""
-        import sys
-        import os
 
-        # Add project root to Python path
-        project_root = os.environ.get('PROJECT_ROOT')
-        if not project_root:
-            # Try to find project root by looking for main.py or app.py
-            cwd = os.getcwd()
-            if os.path.exists(os.path.join(cwd, 'main.py')) or os.path.exists(os.path.join(cwd, 'app.py')):
-                project_root = cwd
-            else:
-                # Fallback to current working directory
-                project_root = cwd
-
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-
-        # Change to project directory
-        try:
-            os.chdir(project_root)
-        except:
-            pass
-
-        return f"Worker setup complete on {os.uname().nodename}, project_root: {project_root}"
-
-    def _test_imports(self):
-        """Test importing core modules on each worker."""
-        import sys
-
-        try:
-            from eubi_bridge.bigtiff_to_zarr.core.converter import HighPerformanceConverter
-            import tifffile
-            import zarr
-            import numpy
-            return "All imports successful"
-        except ImportError as e:
-            return f"Import failed: {e}, sys.path: {sys.path[:3]}"
 
 
 def process_with_dask_slurm(input_tiff: str, output_zarr_dir: str, **kwargs) -> bool:
