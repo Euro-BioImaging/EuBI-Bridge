@@ -153,14 +153,15 @@ def _convert_with_slurm(
         zarr_format=2,
         **kwargs
 ):
-    """SLURM-based distributed conversion implementation."""
-    from .utils.slurm_manager import SlurmJobManager
+    """Dask-Jobqueue SLURM distributed conversion implementation."""
+    from utils.dask_slurm_processor import process_with_dask_slurm
+    from rich.console import Console
 
-    # Initialize SLURM job manager
-    slurm_manager = SlurmJobManager()
+    console = Console()
+    console.print("[blue]🚀 Using Dask-Jobqueue for robust SLURM distributed processing[/blue]")
 
-    # Submit and coordinate distributed conversion jobs
-    return slurm_manager.submit_conversion_job(
+    # Process with dask-jobqueue SLURM cluster
+    success = process_with_dask_slurm(
         input_tiff=input_tiff,
         output_zarr_dir=output_zarr_dir,
         dimension_order=dimension_order,
@@ -184,6 +185,20 @@ def _convert_with_slurm(
         zarr_format=zarr_format,
         **kwargs
     )
+
+    if success:
+        console.print("[green]✅ Dask SLURM distributed conversion completed successfully[/green]")
+        return True
+    else:
+        console.print("[yellow]⚠️ Dask SLURM processing failed, falling back to single-node processing[/yellow]")
+        # Fall back to regular async conversion
+        return asyncio.run(_convert_async(
+            input_tiff, output_zarr_dir, dimension_order, dtype, compressor,
+            time_scale, channel_scale, z_scale, y_scale, x_scale,
+            time_chunk, channel_chunk, z_chunk, y_chunk, x_chunk,
+            min_dimension_size, n_layers, auto_chunk, overwrite, save_omexml,
+            zarr_format, **kwargs
+        ))
 
 
 async def _convert_async(
@@ -666,7 +681,7 @@ async def _run_benchmark():
     """Run performance benchmark."""
     console.print(Panel("[bold blue]Performance Benchmark[/bold blue]"))
 
-    from .core.benchmark import BenchmarkSuite
+    from core.benchmark import BenchmarkSuite
 
     benchmark = BenchmarkSuite()
     results = await benchmark.run_full_benchmark()
