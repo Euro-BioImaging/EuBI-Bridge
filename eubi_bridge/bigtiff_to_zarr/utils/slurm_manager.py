@@ -29,6 +29,7 @@ class SlurmJobManager:
         self.job_ids = []
         self.temp_dir = None
         self.work_dir = None
+        self.available_partition = None
 
     def submit_conversion_job(self, **kwargs) -> bool:
         """Submit and coordinate distributed conversion across SLURM cluster."""
@@ -47,11 +48,10 @@ class SlurmJobManager:
             console.print(f"[blue]📁 Created work directory: {self.work_dir}[/blue]")
 
             # Analyze input file and create processing plan
-            # input_tiff = kwargs["input_tiff"]
-            processing_plan = self._analyze_input_and_create_plan(**kwargs)
+            input_tiff = kwargs["input_tiff"]
+            processing_plan = self._analyze_input_and_create_plan(input_tiff, **kwargs)
 
-            console.print(
-                f"[green]📊 Analysis complete: {processing_plan['total_chunks']} chunks across {processing_plan['recommended_nodes']} nodes[/green]")
+            console.print(f"[green]📊 Analysis complete: {processing_plan['total_chunks']} chunks across {processing_plan['recommended_nodes']} nodes[/green]")
 
             # Submit coordinator job
             coordinator_job_id = self._submit_coordinator_job(processing_plan, **kwargs)
@@ -90,10 +90,55 @@ class SlurmJobManager:
                 return False
 
             console.print(f"[green]✅ SLURM detected: {result.stdout.strip()}[/green]")
+
+            # Detect available partitions
+            self.available_partition = self._detect_available_partition()
+            if not self.available_partition:
+                console.print("[yellow]⚠️ Warning: No accessible SLURM partitions found[/yellow]")
+                return False
+
+            console.print(f"[green]📊 Using partition: {self.available_partition}[/green]")
             return True
 
         except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
             return False
+
+    def _detect_available_partition(self) -> Optional[str]:
+        """Detect the first available SLURM partition for job submission."""
+        try:
+            # Get list of partitions and their states
+            result = subprocess.run(
+                ["sinfo", "-h", "-o", "%P %a"],
+                capture_output=True, text=True, timeout=10
+            )
+
+            if result.returncode != 0:
+                return None
+
+            # Parse partition information
+            partitions = []
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        partition_name = parts[0].rstrip('*')  # Remove default partition marker
+                        partition_state = parts[1]
+
+                        # Prefer 'up' partitions, but accept others as fallback
+                        if partition_state.lower() == 'up':
+                            return partition_name
+                        else:
+                            partitions.append((partition_name, partition_state))
+
+            # If no 'up' partition found, return the first available one
+            if partitions:
+                console.print(f"[yellow]⚠️ No 'up' partitions found, using: {partitions[0][0]} ({partitions[0][1]})[/yellow]")
+                return partitions[0][0]
+
+            return None
+
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+            return None
 
     def _analyze_input_and_create_plan(self, input_tiff: str, **kwargs) -> Dict[str, Any]:
         """Analyze input file and create distributed processing plan."""
@@ -101,7 +146,7 @@ class SlurmJobManager:
 
         # Get file information
         input_path = Path(input_tiff)
-        file_size_gb = input_path.stat().st_size / (1024 ** 3)
+        file_size_gb = input_path.stat().st_size / (1024**3)
 
         # Analyze TIFF structure
         with tifffile.TiffFile(input_tiff) as tiff:
@@ -110,8 +155,8 @@ class SlurmJobManager:
             dtype = page.dtype
 
             # Calculate total data size
-            total_elements = int(np.prod(shape) * len(tiff.pages))
-            total_size_gb = total_elements * np.dtype(dtype).itemsize / (1024 ** 3)
+            total_elements = int(np.prod(shape)) * len(tiff.pages)
+            total_size_gb = total_elements * np.dtype(dtype).itemsize / (1024**3)
 
         # Determine optimal chunking strategy for distributed processing
         chunk_sizes = {
@@ -143,10 +188,10 @@ class SlurmJobManager:
         processing_plan = {
             "file_size_gb": float(file_size_gb),
             "total_size_gb": float(total_size_gb),
-            "shape": [int(dim) for dim in shape],
+            "shape": [int(dim) for dim in shape],  # Convert to regular Python list of ints
             "dtype": str(dtype),
             "total_chunks": int(total_chunks),
-            "chunks_per_dim": [int(chunk) for chunk in chunks_per_dim],
+            "chunks_per_dim": [int(chunk) for chunk in chunks_per_dim],  # Convert to regular Python list
             "chunks_per_node": int(chunks_per_node),
             "recommended_nodes": int(recommended_nodes),
             "chunk_sizes": chunk_sizes,
@@ -183,7 +228,7 @@ class SlurmJobManager:
             "--ntasks=1",
             f"--mem={max(8, processing_plan['estimated_memory_per_node_gb'])}G",
             f"--time={processing_plan['estimated_runtime_hours']:02d}:00:00",
-            "--partition=compute",
+            f"--partition={self.available_partition}",
             str(script_path)
         ]
 
@@ -224,7 +269,7 @@ class SlurmJobManager:
                 f"--mem={processing_plan['estimated_memory_per_node_gb']}G",
                 f"--time={processing_plan['estimated_runtime_hours']:02d}:00:00",
                 f"--dependency=after:{coordinator_job_id}",
-                "--partition=compute",
+                f"--partition={self.available_partition}",
                 str(script_path)
             ]
 
@@ -314,11 +359,11 @@ echo "✅ Worker {worker_id} completed at $(date)"
         console.print("[blue]📊 Monitoring job progress...[/blue]")
 
         with Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeRemainingColumn(),
-                console=console
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=console
         ) as progress:
 
             task = progress.add_task("SLURM Jobs", total=len(self.job_ids))
