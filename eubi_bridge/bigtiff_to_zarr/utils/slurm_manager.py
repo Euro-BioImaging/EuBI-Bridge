@@ -110,7 +110,7 @@ class SlurmJobManager:
             dtype = page.dtype
 
             # Calculate total data size
-            total_elements = np.prod(shape) * len(tiff.pages)
+            total_elements = int(np.prod(shape) * len(tiff.pages))
             total_size_gb = total_elements * np.dtype(dtype).itemsize / (1024 ** 3)
 
         # Determine optimal chunking strategy for distributed processing
@@ -123,17 +123,17 @@ class SlurmJobManager:
         # Calculate number of chunks
         if len(shape) == 2:
             chunks_per_dim = [
-                max(1, shape[0] // chunk_sizes["y"]),
-                max(1, shape[1] // chunk_sizes["x"])
+                max(1, int(shape[0]) // chunk_sizes["y"]),
+                max(1, int(shape[1]) // chunk_sizes["x"])
             ]
-            total_chunks = np.prod(chunks_per_dim) * len(tiff.pages)
+            total_chunks = int(np.prod(chunks_per_dim) * len(tiff.pages))
         else:
             chunks_per_dim = [
-                max(1, shape[0] // chunk_sizes["z"]),
-                max(1, shape[1] // chunk_sizes["y"]),
-                max(1, shape[2] // chunk_sizes["x"])
+                max(1, int(shape[0]) // chunk_sizes["z"]),
+                max(1, int(shape[1]) // chunk_sizes["y"]),
+                max(1, int(shape[2]) // chunk_sizes["x"])
             ]
-            total_chunks = np.prod(chunks_per_dim)
+            total_chunks = int(np.prod(chunks_per_dim))
 
         # Determine optimal number of nodes based on data size and chunk count
         # Rule: 1 node per 10GB of data, minimum 2 nodes, maximum based on chunks
@@ -141,17 +141,17 @@ class SlurmJobManager:
         chunks_per_node = max(1, total_chunks // recommended_nodes)
 
         processing_plan = {
-            "file_size_gb": file_size_gb,
-            "total_size_gb": total_size_gb,
-            "shape": shape,
+            "file_size_gb": float(file_size_gb),
+            "total_size_gb": float(total_size_gb),
+            "shape": [int(dim) for dim in shape],
             "dtype": str(dtype),
-            "total_chunks": total_chunks,
-            "chunks_per_dim": chunks_per_dim,
-            "chunks_per_node": chunks_per_node,
-            "recommended_nodes": recommended_nodes,
+            "total_chunks": int(total_chunks),
+            "chunks_per_dim": [int(chunk) for chunk in chunks_per_dim],
+            "chunks_per_node": int(chunks_per_node),
+            "recommended_nodes": int(recommended_nodes),
             "chunk_sizes": chunk_sizes,
-            "estimated_memory_per_node_gb": max(8, int(total_size_gb / recommended_nodes * 1.5)),
-            "estimated_runtime_hours": max(1, int(total_size_gb / (recommended_nodes * 2)))  # ~2GB/hour per node
+            "estimated_memory_per_node_gb": int(max(8, int(total_size_gb / recommended_nodes * 1.5))),
+            "estimated_runtime_hours": int(max(1, int(total_size_gb / (recommended_nodes * 2))))  # ~2GB/hour per node
         }
 
         # Save processing plan to work directory

@@ -209,10 +209,10 @@ def create_task_queue(work_dir: str, processing_plan: Dict[str, Any]):
 
     # Generate coordination metadata
     coordination_metadata = {
-        "total_workers": len(tasks),
-        "total_chunks": total_chunks,
-        "chunk_assignments": chunk_assignments,
-        "overlapping_chunks": overlapping_chunks,
+        "total_workers": int(len(tasks)),
+        "total_chunks": int(total_chunks),
+        "chunk_assignments": {str(k): v for k, v in chunk_assignments.items()},
+        "overlapping_chunks": {str(k): v for k, v in overlapping_chunks.items()},
         "processing_plan": processing_plan
     }
 
