@@ -59,7 +59,7 @@ def _test_imports_func():
     import sys
 
     try:
-        from eubi_bridge.bigtiff_to_zarr.core.converter import HighPerformanceConverter
+        from eubi_bridge.bigtiff_to_zarr.cli import convert_bigtiff_to_omezarr
         import tifffile
         import zarr
         import numpy
@@ -307,18 +307,17 @@ class DaskSlurmProcessor:
             except:
                 pass
 
-            from eubi_bridge.bigtiff_to_zarr.core.converter import HighPerformanceConverter
-
-            # Initialize converter with single-node settings (prevent recursion)
-            converter = HighPerformanceConverter()
+            # Import the standalone conversion function from cli
+            import sys
+            sys.path.insert(0, os.getcwd())
+            from eubi_bridge.bigtiff_to_zarr.cli import convert_bigtiff_to_omezarr
 
             # Run conversion with distributed disabled to prevent recursive calls
             kwargs_copy = kwargs.copy()
             kwargs_copy['on_slurm'] = False  # Disable distributed processing within workers
-            kwargs_copy['use_dask'] = False  # Disable any dask usage to prevent conflicts
 
-            # Run conversion using the correct method name
-            success = converter.convert_bigtiff_to_omezarr(
+            # Run conversion using the standalone function
+            success = convert_bigtiff_to_omezarr(
                 input_tiff=input_tiff,
                 output_zarr_dir=output_zarr_dir,
                 **kwargs_copy
