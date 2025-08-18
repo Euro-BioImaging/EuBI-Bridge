@@ -262,7 +262,7 @@ cd {self.work_dir}
 python3 << 'EOF'
 import sys
 sys.path.append('{os.getcwd()}')
-from utils.slurm_coordinator import initialize_zarr_store
+from eubi_bridge.bigtiff_to_zarr.utils.slurm_coordinator import initialize_zarr_store
 initialize_zarr_store('{kwargs["input_tiff"]}', '{kwargs["output_zarr_dir"]}', {json.dumps(kwargs)})
 EOF
 
@@ -272,7 +272,7 @@ echo "✅ Zarr store initialized"
 python3 << 'EOF'
 import sys
 sys.path.append('{os.getcwd()}')
-from utils.slurm_coordinator import create_task_queue
+from eubi_bridge.bigtiff_to_zarr.utils.slurm_coordinator import create_task_queue
 create_task_queue('{self.work_dir}', {json.dumps(processing_plan)})
 EOF
 
@@ -301,7 +301,7 @@ cd {self.work_dir}
 python3 << 'EOF'
 import sys
 sys.path.append('{os.getcwd()}')
-from utils.slurm_worker import process_worker_chunks
+from eubi_bridge.bigtiff_to_zarr.utils.slurm_worker import process_worker_chunks
 process_worker_chunks({worker_id}, '{self.work_dir}', '{kwargs["input_tiff"]}', '{kwargs["output_zarr_dir"]}', {json.dumps(kwargs)})
 EOF
 
@@ -422,7 +422,7 @@ echo "✅ Worker {worker_id} completed at $(date)"
 
         # Import and call standard conversion
         import asyncio
-        from cli import _convert_async
+        from eubi_bridge.bigtiff_to_zarr.cli import _convert_async
 
         # Remove on_slurm parameter to avoid recursion
         fallback_kwargs = kwargs.copy()
