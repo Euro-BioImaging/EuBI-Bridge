@@ -28,6 +28,7 @@ from ..utils.ngff_metadata import NGFFMetadataBuilder
 
 from eubi_bridge.base.data_manager import ArrayManager
 
+
 class HighPerformanceConverter:
     """High-performance converter with parallel processing and memory optimization."""
 
@@ -180,6 +181,11 @@ class HighPerformanceConverter:
             shape, dtype, axes
         )
 
+        # Override with user-specified chunk sizes if provided
+        user_chunks = self.config.get("chunk_sizes", {})
+        if user_chunks:
+            optimal_chunks = self._apply_user_chunk_sizes(optimal_chunks, axes, user_chunks)
+
         # Calculate pyramid levels
         pyramid_levels = self._calculate_pyramid_levels(shape, axes)
 
@@ -197,42 +203,96 @@ class HighPerformanceConverter:
         return analysis
 
     def _calculate_pyramid_levels(self, shape: Tuple[int, ...], axes: str) -> List[Dict[str, Any]]:
-        """Calculate pyramid levels with optimal downsampling."""
+        """Calculate pyramid levels with user-specified downsampling parameters."""
         levels = []
         current_shape = list(shape)
         level = 0
 
-        # Get spatial axes indices
-        spatial_axes = {'x': axes.find('x'), 'y': axes.find('y'), 'z': axes.find('z')}
-        spatial_axes = {k: v for k, v in spatial_axes.items() if v >= 0}
+        # Get all axes indices
+        axis_indices = {}
+        for i, axis in enumerate(axes):
+            if axis == 't':
+                axis_indices['time'] = i
+            elif axis == 'c':
+                axis_indices['channel'] = i
+            elif axis == 'z':
+                axis_indices['z'] = i
+            elif axis == 'y':
+                axis_indices['y'] = i
+            elif axis == 'x':
+                axis_indices['x'] = i
 
-        downsample_factor = self.config.get("downsample_factor", 2)
+        # Get user-specified scale factors from pyramid_scales config
+        pyramid_scales = self.config.get("pyramid_scales", {})
+        scale_factors = {
+            'time': pyramid_scales.get('time', 1),      # Default: no time downsampling
+            'channel': pyramid_scales.get('channel', 1), # Default: no channel downsampling
+            'z': pyramid_scales.get('z', 2),            # Default: 2x z downsampling
+            'y': pyramid_scales.get('y', 2),            # Default: 2x y downsampling
+            'x': pyramid_scales.get('x', 2)             # Default: 2x x downsampling
+        }
+
         min_size = self.config.get("min_dimension_size", 64)
         max_levels = self.config.get("pyramid_levels", None)
 
         # Handle None pyramid_levels by calculating reasonable default
         if max_levels is None:
-            # Calculate max levels based on smallest spatial dimension
-            min_spatial = min(shape[i] for i in spatial_axes.values()) if spatial_axes else min(shape)
-            max_levels = max(1, int(np.log2(min_spatial / min_size)) + 1)
+            # Calculate max levels based on smallest spatial dimension with custom scaling
+            spatial_dims = []
+            if 'y' in axis_indices:
+                spatial_dims.append(shape[axis_indices['y']])
+            if 'x' in axis_indices:
+                spatial_dims.append(shape[axis_indices['x']])
+            if 'z' in axis_indices:
+                spatial_dims.append(shape[axis_indices['z']])
+
+            if spatial_dims:
+                min_spatial = min(spatial_dims)
+                # Use the largest scale factor for estimation
+                max_scale = max(scale_factors.get('y', 2), scale_factors.get('x', 2), scale_factors.get('z', 2))
+                max_levels = max(1, int(np.log2(min_spatial / min_size) / np.log2(max_scale)) + 1)
+            else:
+                max_levels = 1
+
+        print(f"Pyramid generation: {max_levels} levels, scale factors: {scale_factors}")
 
         while level < max_levels:
+            # Calculate downsample factors for this level
+            level_factors = {}
+            for axis_name in scale_factors:
+                if scale_factors[axis_name] > 1:
+                    level_factors[axis_name] = scale_factors[axis_name] ** level
+                else:
+                    level_factors[axis_name] = 1
+
             levels.append({
                 "level": level,
                 "shape": tuple(current_shape),
-                "downsample_factors": {ax: downsample_factor ** level for ax in spatial_axes.keys()}
+                "downsample_factors": level_factors
             })
 
-            # Check if we should continue
-            min_spatial = min(current_shape[i] for i in spatial_axes.values())
-            if min_spatial < min_size:
+            # Check if we should continue (based on spatial dimensions)
+            spatial_sizes = []
+            if 'y' in axis_indices:
+                spatial_sizes.append(current_shape[axis_indices['y']])
+            if 'x' in axis_indices:
+                spatial_sizes.append(current_shape[axis_indices['x']])
+            if 'z' in axis_indices:
+                spatial_sizes.append(current_shape[axis_indices['z']])
+
+            if spatial_sizes and min(spatial_sizes) < min_size:
                 break
 
-            # Calculate next level shape
-            for ax, idx in spatial_axes.items():
-                current_shape[idx] = max(1, current_shape[idx] // downsample_factor)
+            # Calculate next level shape using custom scale factors
+            for axis_name, axis_idx in axis_indices.items():
+                if axis_name in scale_factors and scale_factors[axis_name] > 1:
+                    current_shape[axis_idx] = max(1, current_shape[axis_idx] // scale_factors[axis_name])
 
             level += 1
+
+        print(f"Generated {len(levels)} pyramid levels")
+        for i, level_info in enumerate(levels):
+            print(f"  Level {i}: shape={level_info['shape']}, factors={level_info['downsample_factors']}")
 
         return levels
 
@@ -250,7 +310,24 @@ class HighPerformanceConverter:
             elif ax.lower() in manager.scaledict:
                 pixel_sizes[ax.lower()] = manager.scaledict[ax.lower()]
 
+        print(f"Extracted pixel sizes: {pixel_sizes}")
         return pixel_sizes
+
+    def _apply_user_chunk_sizes(self, optimal_chunks: Tuple[int, ...], axes: str, user_chunks: Dict[str, int]) -> Tuple[int, ...]:
+        """Apply user-specified chunk sizes to override optimal chunks."""
+        chunk_list = list(optimal_chunks)
+
+        # Map axis names to indices
+        axis_mapping = {'t': 'time', 'c': 'channel', 'z': 'z', 'y': 'y', 'x': 'x'}
+
+        for i, axis in enumerate(axes):
+            axis_name = axis_mapping.get(axis, axis)
+            if axis_name in user_chunks and user_chunks[axis_name] > 0:
+                if i < len(chunk_list):
+                    chunk_list[i] = user_chunks[axis_name]
+                    print(f"Applied user chunk size for {axis} ({axis_name}): {user_chunks[axis_name]}")
+
+        return tuple(chunk_list)
 
     def _estimate_output_size(self, shape: Tuple[int, ...], dtype: np.dtype,
                             pyramid_levels: List[Dict[str, Any]]) -> int:
@@ -280,12 +357,11 @@ class HighPerformanceConverter:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Create Zarr store - use simple path for compatibility with Zarr 3.x
+        print(f"Creating output store with config: {self.config}")
         zarr_format = self.config.get("zarr_format", 2)
 
         # Use path-based store creation for Zarr 3.x compatibility
-        root_group = zarr.group(store=str(output_dir),
-                                zarr_format=zarr_format,
-                                overwrite=True)
+        root_group = zarr.group(store=str(output_dir), overwrite=True, zarr_format=zarr_format)
         return root_group
 
     async def _convert_pyramid_levels(self, tiff_file: tifffile.TiffFile, tiff_store: Any,
@@ -330,7 +406,7 @@ class HighPerformanceConverter:
                                    output_store: zarr.Group, analysis: Dict[str, Any],
                                    level_info: Dict[str, Any],
                                    progress_monitor: Optional[ProgressMonitor]) -> bool:
-        """Process a single pyramid level with parallel chunk processing."""
+        """Process a single pyramid level with race condition protection."""
         level = level_info["level"]
         level_shape = level_info["shape"]
 
@@ -347,14 +423,32 @@ class HighPerformanceConverter:
         # Calculate chunk processing plan
         chunks_plan = self._calculate_chunk_plan(level_shape, analysis["optimal_chunks"])
 
-        # Process chunks in parallel
+        # Create write coordination system to prevent race conditions
+        # Each output chunk gets a unique lock to ensure sequential writes to overlapping regions
+        output_chunk_locks = {}
+        output_chunk_size = analysis["optimal_chunks"]
+
+        # Calculate output chunk coordinates for each processing chunk
+        for chunk_info in chunks_plan:
+            chunk_slice = chunk_info["slice"]
+            overlapping_output_chunks = self._get_overlapping_output_chunks(
+                chunk_slice, output_chunk_size, level_shape
+            )
+            chunk_info["output_chunks"] = overlapping_output_chunks
+
+            # Create locks for overlapping output chunks
+            for output_coord in overlapping_output_chunks:
+                if output_coord not in output_chunk_locks:
+                    output_chunk_locks[output_coord] = asyncio.Lock()
+
+        # Process chunks with write coordination
         chunk_tasks = []
         for chunk_info in chunks_plan:
             if self.is_cancelled:
                 return False
 
-            task = self._process_chunk(
-                tiff_store, level_array, chunk_info, level_info, analysis
+            task = self._process_chunk_with_coordination(
+                tiff_store, level_array, chunk_info, level_info, analysis, output_chunk_locks
             )
             chunk_tasks.append(task)
 
@@ -405,6 +499,55 @@ class HighPerformanceConverter:
             })
 
         return chunks
+
+    def _get_overlapping_output_chunks(self, input_slice: Tuple[slice, ...],
+                                     output_chunk_size: Tuple[int, ...],
+                                     level_shape: Tuple[int, ...]) -> List[Tuple[int, ...]]:
+        """Calculate which output chunks overlap with an input slice."""
+        overlapping_chunks = []
+
+        # Calculate the range of output chunks that this input slice touches
+        for dim_ranges in range(len(input_slice)):
+            start_idx = input_slice[dim_ranges].start // output_chunk_size[dim_ranges]
+            stop_idx = (input_slice[dim_ranges].stop - 1) // output_chunk_size[dim_ranges]
+
+        # Generate all combinations of overlapping chunk coordinates
+        import itertools
+        chunk_ranges = []
+        for i in range(len(input_slice)):
+            start_chunk = input_slice[i].start // output_chunk_size[i]
+            end_chunk = (input_slice[i].stop - 1) // output_chunk_size[i]
+            chunk_ranges.append(range(start_chunk, end_chunk + 1))
+
+        for chunk_coord in itertools.product(*chunk_ranges):
+            overlapping_chunks.append(chunk_coord)
+
+        return overlapping_chunks
+
+    async def _process_chunk_with_coordination(self, tiff_store: Any, level_array: zarr.Array,
+                                             chunk_info: Dict[str, Any], level_info: Dict[str, Any],
+                                             analysis: Dict[str, Any], output_locks: Dict[Tuple[int, ...], asyncio.Lock]):
+        """Process chunk with write coordination to prevent race conditions."""
+        chunk_slice = chunk_info["slice"]
+        overlapping_output_chunks = chunk_info["output_chunks"]
+        level = level_info["level"]
+
+        # Acquire all necessary locks in a consistent order to prevent deadlocks
+        sorted_chunks = sorted(overlapping_output_chunks)
+        locks_to_acquire = [output_locks[coord] for coord in sorted_chunks]
+
+        try:
+            # Acquire all locks for overlapping output chunks
+            for lock in locks_to_acquire:
+                await lock.acquire()
+
+            # Now safely process the chunk
+            await self._process_chunk(tiff_store, level_array, chunk_info, level_info, analysis)
+
+        finally:
+            # Release all locks in reverse order
+            for lock in reversed(locks_to_acquire):
+                lock.release()
 
     async def _process_chunk(self, tiff_store: Any, level_array: zarr.Array,
                            chunk_info: Dict[str, Any], level_info: Dict[str, Any],
