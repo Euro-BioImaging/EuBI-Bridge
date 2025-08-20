@@ -204,6 +204,18 @@ class ProgressMonitor:
     async def report_error(self, error_message: str):
         """Report an error during conversion."""
         self.stats.errors.append(f"{time.time()}: {error_message}")
+
+    async def report_status(self, status: str, level: Optional[int] = None):
+        """Report a status update during processing."""
+        # Add status to statistics for tracking
+        if not hasattr(self.stats, 'status_updates'):
+            self.stats.status_updates = []
+
+        self.stats.status_updates.append({
+            'timestamp': time.time(),
+            'status': status,
+            'level': level
+        })
     
     async def report_warning(self, warning_message: str):
         """Report a warning during conversion."""

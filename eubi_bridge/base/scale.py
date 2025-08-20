@@ -66,10 +66,11 @@ class DownscaleManager:
         return np.power(self.scale_factor, self._scale_ids)
 
     @property
-    def output_shapes(self):
-        shapes = np.floor_divide(self.base_shape, self._theoretical_scale_factors)
+    def output_shapes(self): # TODO: parameterize this for floor or ceil
+        # shapes = np.floor_divide(self.base_shape, self._theoretical_scale_factors)
+        shapes = np.ceil(np.divide(self.base_shape, self._theoretical_scale_factors))
         shapes[shapes == 0] = 1
-        return shapes
+        return shapes.astype(int)
 
     @property
     def scale_factors(self):

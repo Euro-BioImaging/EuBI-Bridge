@@ -19,10 +19,10 @@ from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.panel import Panel
 
-from .core.converter import HighPerformanceConverter
-from .core.progress_monitor import ProgressMonitor
-from .utils.hardware_detection import HardwareDetector
-from .utils.config_profiles import ConfigProfileManager
+from eubi_bridge.bigtiff_to_zarr.core.converter import HighPerformanceConverter
+from eubi_bridge.bigtiff_to_zarr.core.progress_monitor import ProgressMonitor
+from eubi_bridge.bigtiff_to_zarr.utils.hardware_detection import HardwareDetector
+from eubi_bridge.bigtiff_to_zarr.utils.config_profiles import ConfigProfileManager
 
 console = Console()
 
@@ -50,6 +50,7 @@ def convert_bigtiff_to_omezarr(
         save_omexml=False,
         zarr_format=2,
         on_slurm=False,
+        use_tensorstore=False,
         **kwargs
 ):
     """
@@ -70,6 +71,7 @@ def convert_bigtiff_to_omezarr(
         save_omexml: Save OME-XML metadata alongside Zarr
         zarr_format: Zarr format version (2 or 3)
         on_slurm: Enable SLURM-based distributed processing across compute nodes
+        use_tensorstore: Use tensorstore backend for data saving and downscaling operations
         **kwargs: Additional configuration options
 
     Returns:
@@ -99,6 +101,7 @@ def convert_bigtiff_to_omezarr(
             overwrite=overwrite,
             save_omexml=save_omexml,
             zarr_format=zarr_format,
+            use_tensorstore=use_tensorstore,
             **kwargs
         )
     else:
@@ -125,6 +128,7 @@ def convert_bigtiff_to_omezarr(
             overwrite=overwrite,
             save_omexml=save_omexml,
             zarr_format=zarr_format,
+            use_tensorstore=use_tensorstore,
             **kwargs
         ))
 
@@ -151,10 +155,11 @@ def _convert_with_slurm(
         overwrite=False,
         save_omexml=False,
         zarr_format=2,
+        use_tensorstore=False,
         **kwargs
 ):
     """Dask-Jobqueue SLURM distributed conversion implementation."""
-    from .utils.dask_slurm_processor import process_with_dask_slurm
+    from eubi_bridge.bigtiff_to_zarr.utils.dask_slurm_processor import process_with_dask_slurm
     from rich.console import Console
 
     console = Console()
@@ -183,6 +188,7 @@ def _convert_with_slurm(
         overwrite=overwrite,
         save_omexml=save_omexml,
         zarr_format=zarr_format,
+        use_tensorstore=use_tensorstore,
         **kwargs
     )
 
@@ -197,7 +203,7 @@ def _convert_with_slurm(
             time_scale, channel_scale, z_scale, y_scale, x_scale,
             time_chunk, channel_chunk, z_chunk, y_chunk, x_chunk,
             min_dimension_size, n_layers, auto_chunk, overwrite, save_omexml,
-            zarr_format, **kwargs
+            zarr_format, use_tensorstore, **kwargs
         ))
 
 
@@ -223,6 +229,7 @@ async def _convert_async(
         overwrite=False,
         save_omexml=False,
         zarr_format=2,
+        use_tensorstore=False,
         **kwargs
 ):
     """Async implementation of the conversion function."""
@@ -277,6 +284,7 @@ async def _convert_async(
         "overwrite": overwrite,
         "save_omexml": save_omexml,
         "zarr_format": zarr_format,
+        "use_tensorstore": use_tensorstore,
         **kwargs
     }
 
@@ -681,7 +689,7 @@ async def _run_benchmark():
     """Run performance benchmark."""
     console.print(Panel("[bold blue]Performance Benchmark[/bold blue]"))
 
-    from core.benchmark import BenchmarkSuite
+    from eubi_bridge.bigtiff_to_zarr.core.benchmark import BenchmarkSuite
 
     benchmark = BenchmarkSuite()
     results = await benchmark.run_full_benchmark()

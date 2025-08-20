@@ -86,7 +86,9 @@ class NGFFMetadataBuilder:
         
         return ngff_metadata
     
-    def _build_axes_metadata(self, axes: str, pixel_sizes: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
+    def _build_axes_metadata(self,
+                             axes: str,
+                             pixel_sizes: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
         """Build axes metadata array."""
         axes_list = []
         

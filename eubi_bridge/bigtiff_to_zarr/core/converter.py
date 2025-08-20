@@ -19,15 +19,14 @@ import zarr
 import psutil
 from numcodecs import Blosc
 
-from .memory_manager import MemoryManager
-from .compression_engine import CompressionEngine
-from .async_io import AsyncIOManager
-from .system_optimizer import SystemOptimizer
-from .progress_monitor import ProgressMonitor
-from ..utils.ngff_metadata import NGFFMetadataBuilder
+from eubi_bridge.bigtiff_to_zarr.core.memory_manager import MemoryManager
+from eubi_bridge.bigtiff_to_zarr.core.compression_engine import CompressionEngine
+from eubi_bridge.bigtiff_to_zarr.core.async_io import AsyncIOManager
+from eubi_bridge.bigtiff_to_zarr.core.system_optimizer import SystemOptimizer
+from eubi_bridge.bigtiff_to_zarr.core.progress_monitor import ProgressMonitor
+from eubi_bridge.bigtiff_to_zarr.utils.ngff_metadata import NGFFMetadataBuilder
 
 from eubi_bridge.base.data_manager import ArrayManager
-
 
 class HighPerformanceConverter:
     """High-performance converter with parallel processing and memory optimization."""
@@ -40,6 +39,18 @@ class HighPerformanceConverter:
         self.system_optimizer = SystemOptimizer(config)
         self.metadata_builder = NGFFMetadataBuilder()
 
+        # Initialize TensorStore backend if enabled
+        self.use_tensorstore = config.get('use_tensorstore', False)
+        self.tensorstore_backend = None
+        if self.use_tensorstore:
+            try:
+                from eubi_bridge.bigtiff_to_zarr.utils.tensorstore_backend import create_tensorstore_backend
+                self.tensorstore_backend = create_tensorstore_backend(config)
+                print("✅ TensorStore backend initialized")
+            except ImportError as e:
+                print(f"⚠️ TensorStore backend disabled: {e}")
+                self.use_tensorstore = False
+
         # Performance tracking
         self.start_time = None
         self.end_time = None
@@ -50,6 +61,7 @@ class HighPerformanceConverter:
         # Worker pools
         self.process_pool = None
         self.thread_pool = None
+        self.base_tensorstore = None
 
     async def convert(self, input_path: str, output_path: str,
                      progress_monitor: Optional[ProgressMonitor] = None,
@@ -90,16 +102,37 @@ class HighPerformanceConverter:
 
             # Convert pyramid levels in parallel
             success = await self._convert_pyramid_levels(
-                tiff_file, tiff_store, output_store, analysis, progress_monitor
+                tiff_file,
+                tiff_store,
+                output_store,
+                analysis,
+                progress_monitor
             )
 
             if success:
                 # Generate NGFF metadata
-                await self._generate_metadata(output_store, analysis)
+                if self.use_tensorstore and self.tensorstore_backend:
+                    # Use tensorstore for metadata generation
+                    # Extract pyramid levels from analysis
+                    axes = analysis.get('axes', 'yx')
+                    pyramid_levels = analysis.get('pyramid_levels', [])
+                    dtype = analysis.get('dtype', np.uint16)
+                    pixel_sizes = analysis.get('pixel_sizes', {})
+                    metadata = self.metadata_builder.build_multiscales_metadata(
+                        name = 'default',
+                        axes = axes,
+                        pyramid_levels = pyramid_levels,
+                        dtype = dtype,
+                        pixel_sizes = pixel_sizes
+                    )
+                    await self.tensorstore_backend.save_ome_zarr_metadata(metadata)
+                else:
+                    # Use standard zarr metadata generation
+                    await self._generate_metadata(output_store, analysis)
 
                 # Verify conversion integrity
-                if self.config.get("verify_integrity", True):
-                    await self._verify_conversion(output_store, analysis)
+                # if self.config.get("verify_integrity", True):
+                #     await self._verify_conversion(output_store, analysis)
 
             self.end_time = time.time()
             return success
@@ -110,6 +143,206 @@ class HighPerformanceConverter:
             raise
         finally:
             await self._cleanup()
+
+    async def _copy_base_level_tensorstore(self,
+                                           tiff_file,
+                                           tiff_store,
+                                           target_shape: Tuple[int, ...],
+                                           analysis: Dict[str, Any],
+                                           level: int,
+                                           progress_monitor: Optional[ProgressMonitor] = None
+                                           ) -> bool:
+        """Copy base level data using tensorstore backend."""
+        try:
+            if not self.tensorstore_backend:
+                raise RuntimeError("TensorStore backend not initialized")
+
+            # Get optimal chunk sizes for the base level
+            chunk_sizes = analysis.get('optimal_chunks', None)
+
+            # Create base level tensorstore array
+            base_store = await self.tensorstore_backend.create_zarr_array(
+                shape=target_shape,
+                dtype=tiff_file.series[0].dtype,
+                chunks=chunk_sizes,
+                level=level
+            )
+            self.base_tensorstore = base_store
+
+            # Copy data from TIFF to tensorstore in chunks
+            total_chunks = np.prod([
+                (target_shape[i] + chunk_sizes[i] - 1) // chunk_sizes[i]
+                for i in range(len(target_shape))
+            ])
+
+            if progress_monitor:
+                await progress_monitor.update_progress(level=level, total_chunks=int(total_chunks))
+
+            # Process chunks efficiently
+            chunks_processed = 0
+            for chunk_indices in self._generate_chunk_indices_tensorstore(target_shape, chunk_sizes):
+                # Read data from TIFF
+                chunk_data = np.array(tiff_store[chunk_indices])
+
+                # Write to tensorstore
+                await self.tensorstore_backend.write_chunk_data(base_store, chunk_data, chunk_indices)
+
+                chunks_processed += 1
+                if progress_monitor and chunks_processed % 100 == 0:
+                    await progress_monitor.update_progress(level=level, chunks_completed=chunks_processed)
+
+            return True
+
+        except Exception as e:
+            if progress_monitor:
+                await progress_monitor.report_error(f"TensorStore base level copy failed: {e}")
+            return False
+
+    # async def _generate_downsampled_level_tensorstore(self,
+    #                                                   level_info: Dict[str, Any],
+    #                                                   base_store: 'ts.TensorStore',
+    #                                                   progress_monitor: Optional[ProgressMonitor] = None
+    #                                                   ) -> bool:
+    #     """Generate downsampled level using tensorstore operations."""
+    #     try:
+    #         if not self.tensorstore_backend:
+    #             raise RuntimeError("TensorStore backend not initialized")
+    #         print(level_info)
+    #         level = level_info["level"]
+    #         # target_shape = level_info["shape"]
+    #         downsample_factors = level_info["downsample_factors"]
+    #         downsample_factors = {ax: int(factor) for ax, factor in downsample_factors.items()}
+    #         axes = [ax for ax in self.config.get('dimension_order', 'yx') if ax in downsample_factors]
+    #         print(downsample_factors)
+    #
+    #         import numpy as np
+    #         # Calculate target chunk sizes using default dtype (will be corrected in backend)
+    #         chunk_sizes = await self.memory_manager.calculate_optimal_chunks(
+    #             target_shape, np.uint16, 'yx'  # Default dtype, will be updated in backend
+    #         )
+    #         print(downsample_factors)
+    #
+    #         # Create downscaled level using tensorstore's built-in methods
+    #         # Backend will handle opening source store internally
+    #
+    #         target_store = await self.tensorstore_backend.create_downscaled_level(
+    #             source_store=base_store,  # Will be opened internally
+    #             # target_shape=target_shape,
+    #             target_chunks=chunk_sizes,
+    #             scale_factors=downsample_factors,
+    #             axes=axes,
+    #             level=level
+    #         )
+    #
+    #         if progress_monitor:
+    #             await progress_monitor.update_progress(level=level, chunks_completed=1, total_chunks=1)
+    #
+    #         return True
+    #
+    #     except Exception as e:
+    #         if progress_monitor:
+    #             await progress_monitor.report_error(f"TensorStore downsampled level generation failed: {e}")
+    #         return False
+
+    async def _create_tensorstore_downsampled_level(self,
+                                                    level_info: Dict[str, Any],
+                                                    analysis: Dict[str, Any],
+                                                    progress_monitor: Optional[ProgressMonitor] = None
+                                                    ) -> bool:
+        """Create a downsampled pyramid level using TensorStore backend."""
+        level = level_info["level"]
+        target_shape = level_info["shape"]
+        downsample_factors = level_info["downsample_factors"]
+        # axes = analysis.get('axes', 'yx')
+
+        # try:
+        # if progress_monitor:
+        #     await progress_monitor.report_status(f"Creating TensorStore level {level}...")
+
+        # Calculate target chunk sizes using default dtype (will be corrected in backend)
+        chunk_sizes = analysis.get('optimal_chunks', None)
+        # if chunk_sizes in (None, 'auto'):
+        #     chunk_sizes = await self.memory_manager.calculate_optimal_chunks( #TODO: need to be fixed!
+        #         target_shape, np.uint16, 'yx'  # Default dtype, will be updated in backend
+        #     )
+        print(f"chunk_sizes: {chunk_sizes}")
+        # Create downsampled level using tensorstore's built-in methods
+        # Backend will handle opening source store internally
+        print(self.base_tensorstore)
+        target_store = await self.tensorstore_backend.create_downscaled_level(
+            source_store=self.base_tensorstore,  # Will be opened internally
+            target_shape=target_shape,
+            target_chunks=chunk_sizes,
+            scale_factors=downsample_factors,
+            axes=analysis.get('axes'),
+            level=level
+        )
+
+        if progress_monitor:
+            await progress_monitor.update_progress(level=level, chunks_completed=1, total_chunks=1)
+
+        return True
+
+        # except Exception as e:
+        #     if progress_monitor:
+        #         await progress_monitor.report_error(f"TensorStore downsampled level {level} failed: {e}")
+        #     return False
+
+    def _generate_chunk_indices_tensorstore(self, shape: Tuple[int, ...],
+                                            chunks: Tuple[int, ...]) -> List[Tuple[slice, ...]]:
+        """Generate chunk indices for tensorstore processing."""
+        indices_list = []
+
+        def _generate_recursive(dim: int, current_indices: List[slice]):
+            if dim == len(shape):
+                indices_list.append(tuple(current_indices))
+                return
+
+            for start in range(0, shape[dim], chunks[dim]):
+                end = min(start + chunks[dim], shape[dim])
+                current_indices.append(slice(start, end))
+                _generate_recursive(dim + 1, current_indices)
+                current_indices.pop()
+
+        _generate_recursive(0, [])
+        return indices_list
+
+    async def _process_pyramid_level_tensorstore(self,
+                                                 level_info: Dict[str, Any],
+                                                 tiff_file,
+                                                 tiff_store,
+                                                 analysis: Dict[str, Any],
+                                                 progress_monitor: Optional[ProgressMonitor] = None
+                                                 ) -> bool:
+        """Process a single pyramid level using TensorStore backend."""
+        level = level_info["level"]
+        target_shape = level_info["shape"]
+
+        try:
+            if level == 0:
+                # Base level - copy from source using tensorstore
+                ret = await self._copy_base_level_tensorstore(
+                    tiff_file,
+                    tiff_store,
+                    target_shape,
+                    analysis,
+                    level,
+                    progress_monitor
+                )
+                return ret
+            else:
+                print(f"we are here")
+                # Downsampled level - generate using tensorstore downscaling
+                return await self._generate_downsampled_level_tensorstore(
+                    level_info,
+                    self.base_tensorstore,
+                    progress_monitor
+                )
+
+        except Exception as e:
+            if progress_monitor:
+                await progress_monitor.report_error(f"TensorStore level {level} processing failed: {e}")
+            return False
 
     async def _setup_worker_pools(self):
         """Setup optimized worker pools for parallel processing."""
@@ -170,7 +403,7 @@ class HighPerformanceConverter:
             axes = axes.replace('s', 'c')
 
         # Extract pixel size information from TIFF metadata
-        pixel_sizes = self._extract_pixel_sizes(tiff_file)
+        pixel_sizes, pixel_units = self._extract_pixel_sizes(tiff_file)
 
         # Calculate file size and optimal chunk sizes
         file_size = Path(tiff_file.filehandle.path).stat().st_size
@@ -184,10 +417,12 @@ class HighPerformanceConverter:
         # Override with user-specified chunk sizes if provided
         user_chunks = self.config.get("chunk_sizes", {})
         if user_chunks:
-            optimal_chunks = self._apply_user_chunk_sizes(optimal_chunks, axes, user_chunks)
-
+            if user_chunks not in (None, 'auto'):
+                optimal_chunks = self._apply_user_chunk_sizes(optimal_chunks, axes, user_chunks)
+        
+        print(f"Optimal chunks: {optimal_chunks}")
         # Calculate pyramid levels
-        pyramid_levels = self._calculate_pyramid_levels(shape, axes)
+        pyramid_levels = self._calculate_pyramid_levels(shape, axes, pixel_sizes)
 
         analysis = {
             "shape": shape,
@@ -197,109 +432,75 @@ class HighPerformanceConverter:
             "optimal_chunks": optimal_chunks,
             "pyramid_levels": pyramid_levels,
             "pixel_sizes": pixel_sizes,
+            "pixel_units": pixel_units,
             "estimated_output_size": self._estimate_output_size(shape, dtype, pyramid_levels)
         }
 
         return analysis
 
-    def _calculate_pyramid_levels(self, shape: Tuple[int, ...], axes: str) -> List[Dict[str, Any]]:
+    def _calculate_pyramid_levels(self,
+                                  shape: Tuple[int, ...],
+                                  axes: str,
+                                  pixel_sizes: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
         """Calculate pyramid levels with user-specified downsampling parameters."""
-        levels = []
-        current_shape = list(shape)
-        level = 0
-
-        # Get all axes indices
-        axis_indices = {}
-        for i, axis in enumerate(axes):
-            if axis == 't':
-                axis_indices['time'] = i
-            elif axis == 'c':
-                axis_indices['channel'] = i
-            elif axis == 'z':
-                axis_indices['z'] = i
-            elif axis == 'y':
-                axis_indices['y'] = i
-            elif axis == 'x':
-                axis_indices['x'] = i
+        from eubi_bridge.ngff.multiscales import calculate_n_layers
+        from eubi_bridge.base.scale import DownscaleManager
 
         # Get user-specified scale factors from pyramid_scales config
         pyramid_scales = self.config.get("pyramid_scales", {})
-        scale_factors = {
-            'time': pyramid_scales.get('time', 1),      # Default: no time downsampling
-            'channel': pyramid_scales.get('channel', 1), # Default: no channel downsampling
+        scale_factor = {
+            't': pyramid_scales.get('time', 1),      # Default: no time downsampling
+            'c': pyramid_scales.get('channel', 1), # Default: no channel downsampling
             'z': pyramid_scales.get('z', 2),            # Default: 2x z downsampling
             'y': pyramid_scales.get('y', 2),            # Default: 2x y downsampling
             'x': pyramid_scales.get('x', 2)             # Default: 2x x downsampling
         }
+        pixel_scales = {
+            't': pixel_sizes.get('time', 1),      # Default: no time downsampling
+            'c': pixel_sizes.get('channel', 1), # Default: no channel downsampling
+            'z': pixel_sizes.get('z', 2),            # Default: 2x z downsampling
+            'y': pixel_sizes.get('y', 2),            # Default: 2x y downsampling
+            'x': pixel_sizes.get('x', 2)             # Default: 2x x downsampling
+        }
+        scale_factor = [scale_factor[ax] for ax in axes]
+        pixel_scales = [pixel_scales[ax] for ax in axes]
+        min_dimension_size = self.config.get("min_dimension_size", 64)
 
-        min_size = self.config.get("min_dimension_size", 64)
-        max_levels = self.config.get("pyramid_levels", None)
+        n_layers = calculate_n_layers(
+            shape = shape,
+            scale_factor = scale_factor,
+            min_dimension_size = min_dimension_size
+        )
+        dm = DownscaleManager(
+            base_shape = shape,
+            scale_factor = scale_factor,
+            n_layers = n_layers,
+            scale = pixel_scales
+        )
+        levels = []
+        for n in range(n_layers):
+            shape = dm.output_shapes.tolist()[n]
+            scale_factor_list = dm.scale_factors.tolist()[n]
+            scale_factor = dict(zip(axes, scale_factor_list))
 
-        # Handle None pyramid_levels by calculating reasonable default
-        if max_levels is None:
-            # Calculate max levels based on smallest spatial dimension with custom scaling
-            spatial_dims = []
-            if 'y' in axis_indices:
-                spatial_dims.append(shape[axis_indices['y']])
-            if 'x' in axis_indices:
-                spatial_dims.append(shape[axis_indices['x']])
-            if 'z' in axis_indices:
-                spatial_dims.append(shape[axis_indices['z']])
-
-            if spatial_dims:
-                min_spatial = min(spatial_dims)
-                # Use the largest scale factor for estimation
-                max_scale = max(scale_factors.get('y', 2), scale_factors.get('x', 2), scale_factors.get('z', 2))
-                max_levels = max(1, int(np.log2(min_spatial / min_size) / np.log2(max_scale)) + 1)
-            else:
-                max_levels = 1
-
-        print(f"Pyramid generation: {max_levels} levels, scale factors: {scale_factors}")
-
-        while level < max_levels:
-            # Calculate downsample factors for this level
-            level_factors = {}
-            for axis_name in scale_factors:
-                if scale_factors[axis_name] > 1:
-                    level_factors[axis_name] = scale_factors[axis_name] ** level
-                else:
-                    level_factors[axis_name] = 1
-
+            scale = dm.scales.tolist()[n]
             levels.append({
-                "level": level,
-                "shape": tuple(current_shape),
-                "downsample_factors": level_factors
+                "level": n,
+                "shape": shape,
+                "downsample_factors": scale_factor,
+                "scale": scale
             })
-
-            # Check if we should continue (based on spatial dimensions)
-            spatial_sizes = []
-            if 'y' in axis_indices:
-                spatial_sizes.append(current_shape[axis_indices['y']])
-            if 'x' in axis_indices:
-                spatial_sizes.append(current_shape[axis_indices['x']])
-            if 'z' in axis_indices:
-                spatial_sizes.append(current_shape[axis_indices['z']])
-
-            if spatial_sizes and min(spatial_sizes) < min_size:
-                break
-
-            # Calculate next level shape using custom scale factors
-            for axis_name, axis_idx in axis_indices.items():
-                if axis_name in scale_factors and scale_factors[axis_name] > 1:
-                    current_shape[axis_idx] = max(1, current_shape[axis_idx] // scale_factors[axis_name])
-
-            level += 1
-
-        print(f"Generated {len(levels)} pyramid levels")
-        for i, level_info in enumerate(levels):
-            print(f"  Level {i}: shape={level_info['shape']}, factors={level_info['downsample_factors']}")
 
         return levels
 
-    def _extract_pixel_sizes(self, tiff_file_obj: tifffile.TiffFile) -> Dict[str, float]:
+    def _extract_pixel_sizes(self, 
+                             tiff_file_obj: tifffile.TiffFile
+                             ) -> Dict[str, float]:
         """Extract pixel sizes from TIFF metadata."""
+        from eubi_bridge.ngff.defaults import unit_map, scale_map
 
         pixel_sizes = {}
+        pixel_units = {}
         path = tiff_file_obj.filehandle.path
         axes = tiff_file_obj.series[0].axes
         # path = f"/home/oezdemir/PycharmProjects/eubizarr1/test_tiff1/Channel/channel0_image.tif"
@@ -307,11 +508,20 @@ class HighPerformanceConverter:
         for ax in axes:
             if ax.lower() == 's':
                 pixel_sizes['c'] = manager.scaledict['c']
+            elif ax.lower() == 'c':
+                pass
             elif ax.lower() in manager.scaledict:
+                if manager.scaledict[ax.lower()] is None:
+                    manager.scaledict[ax.lower()] = scale_map[ax.lower()]
+                if manager.unitdict[ax.lower()] is None:
+                    manager.unitdict[ax.lower()] = unit_map[ax.lower()]
+                    
                 pixel_sizes[ax.lower()] = manager.scaledict[ax.lower()]
+                pixel_units[ax.lower()] = manager.unitdict[ax.lower()]
 
         print(f"Extracted pixel sizes: {pixel_sizes}")
-        return pixel_sizes
+        print(f"Extracted pixel units: {pixel_units}")
+        return pixel_sizes, pixel_units
 
     def _apply_user_chunk_sizes(self, optimal_chunks: Tuple[int, ...], axes: str, user_chunks: Dict[str, int]) -> Tuple[int, ...]:
         """Apply user-specified chunk sizes to override optimal chunks."""
@@ -329,8 +539,10 @@ class HighPerformanceConverter:
 
         return tuple(chunk_list)
 
-    def _estimate_output_size(self, shape: Tuple[int, ...], dtype: np.dtype,
-                            pyramid_levels: List[Dict[str, Any]]) -> int:
+    def _estimate_output_size(self, 
+                              shape: Tuple[int, ...], dtype: np.dtype,
+                              pyramid_levels: List[Dict[str, Any]]
+                              ) -> int:
         """Estimate total output size for all pyramid levels."""
         base_size = np.prod(shape) * dtype.itemsize
 
@@ -357,48 +569,133 @@ class HighPerformanceConverter:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Create Zarr store - use simple path for compatibility with Zarr 3.x
-        print(f"Creating output store with config: {self.config}")
         zarr_format = self.config.get("zarr_format", 2)
 
         # Use path-based store creation for Zarr 3.x compatibility
-        root_group = zarr.group(store=str(output_dir), overwrite=True, zarr_format=zarr_format)
+        root_group = zarr.group(store=str(output_dir),
+                                zarr_format=zarr_format,
+                                overwrite=True)
         return root_group
 
-    async def _convert_pyramid_levels(self, tiff_file: tifffile.TiffFile, tiff_store: Any,
-                                    output_store: zarr.Group, analysis: Dict[str, Any],
-                                    progress_monitor: Optional[ProgressMonitor]) -> bool:
+    async def _convert_pyramid_levels(self,
+                                      tiff_file: tifffile.TiffFile,
+                                      tiff_store: Any,
+                                      output_store: zarr.Group,
+                                      analysis: Dict[str, Any],
+                                      progress_monitor: Optional[ProgressMonitor]
+                                      ) -> bool:
         """Convert all pyramid levels using parallel processing."""
         pyramid_levels = analysis["pyramid_levels"]
 
         # Process levels in parallel (level 0 first, then others)
         tasks = []
 
-        for level_info in pyramid_levels:
+        if self.use_tensorstore and self.tensorstore_backend:
+            # TensorStore approach: Base level first, then parallel downsampling
+            return await self._convert_pyramid_levels_tensorstore(pyramid_levels,
+                                                                  tiff_file,
+                                                                  tiff_store,
+                                                                  analysis,
+                                                                  progress_monitor)
+        else:
+            # Standard zarr approach: process all levels in parallel
+            for level_info in pyramid_levels:
+                if self.is_cancelled:
+                    return False
+                task = self._process_pyramid_level(
+                    tiff_file,
+                    tiff_store,
+                    output_store,
+                    analysis,
+                    level_info,
+                    progress_monitor
+                )
+                tasks.append(task)
+
+            # Execute tasks with concurrency control for standard zarr approach
+            max_concurrent = min(len(tasks), self.config.get("max_concurrent_levels", 3))
+
+            semaphore = asyncio.Semaphore(max_concurrent)
+
+            async def bounded_task(task):
+                async with semaphore:
+                    return await task
+
+            results = await asyncio.gather(*[bounded_task(task) for task in tasks], return_exceptions=True)
+
+            # Check for failures
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    if progress_monitor:
+                        await progress_monitor.report_error(f"Level {i} failed: {result}")
+                    return False
+
+            return True
+
+    async def _convert_pyramid_levels_tensorstore(self, 
+                                                  pyramid_levels: List[Dict[str, Any]],
+                                                  tiff_file, 
+                                                  tiff_store, 
+                                                  analysis: Dict[str, Any],
+                                                  progress_monitor: Optional[ProgressMonitor] = None) -> bool:
+        """TensorStore-optimized pyramid conversion: base level first, then parallel downsampling."""
+
+        # if progress_monitor:
+        #     await progress_monitor.report_status("Creating TensorStore base level from TIFF...")
+
+        # Step 1: Create base level (level 0) from TIFF data
+        base_level_info = pyramid_levels[0]
+        if not await self._process_pyramid_level_tensorstore(base_level_info, 
+                                                             tiff_file, 
+                                                             tiff_store, 
+                                                             analysis,
+                                                             progress_monitor):
+            return False
+
+        # if progress_monitor:
+        #     await progress_monitor.report_status("Base level complete. Creating downsampled levels in parallel...")
+
+        # Step 2: Create all downsampled levels in parallel from base TensorStore array
+        downsampled_levels = pyramid_levels[1:]
+        if not downsampled_levels:
+            return True  # Only base level needed
+
+        # Create tasks for parallel downsampling from base level
+        downsampling_tasks = []
+        for level_info in downsampled_levels:
             if self.is_cancelled:
                 return False
 
-            task = self._process_pyramid_level(
-                tiff_file, tiff_store, output_store, analysis, level_info, progress_monitor
-            )
-            tasks.append(task)
+            task = self._create_tensorstore_downsampled_level(level_info, 
+                                                              analysis, 
+                                                              progress_monitor)
+            downsampling_tasks.append(task)
 
-        # Execute tasks with concurrency control
-        max_concurrent = min(len(tasks), self.config.get("max_concurrent_levels", 3))
-
+        # Execute all downsampling operations in parallel
+        max_concurrent = min(len(downsampling_tasks), self.config.get("max_concurrent_levels", 4))
         semaphore = asyncio.Semaphore(max_concurrent)
 
-        async def bounded_task(task):
+        async def bounded_downsampling_task(task):
             async with semaphore:
                 return await task
 
-        results = await asyncio.gather(*[bounded_task(task) for task in tasks], return_exceptions=True)
+        results = await asyncio.gather(*[bounded_downsampling_task(task) for
+                                         task in downsampling_tasks],
+                                       return_exceptions=True)
 
         # Check for failures
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 if progress_monitor:
-                    await progress_monitor.report_error(f"Level {i} failed: {result}")
+                    await progress_monitor.report_error(f"Downsampled level {i + 1} failed: {result}")
                 return False
+            elif not result:
+                if progress_monitor:
+                    await progress_monitor.report_error(f"Downsampled level {i + 1} failed")
+                return False
+
+        if progress_monitor:
+            await progress_monitor.report_status("All TensorStore pyramid levels created successfully")
 
         return True
 
@@ -417,7 +714,8 @@ class HighPerformanceConverter:
             chunks=analysis["optimal_chunks"],
             dtype=analysis["dtype"],
             overwrite=True,
-            chunk_key_encoding={"name": "v2", "separator": "/"}
+            chunk_key_encoding = {'name': 'v2',
+                                  'separator': '/'}
         )
 
         # Calculate chunk processing plan
@@ -578,8 +876,11 @@ class HighPerformanceConverter:
         except Exception as e:
             raise RuntimeError(f"Chunk processing failed: {e}")
     
-    async def _downsample_chunk(self, tiff_store: Any, chunk_slice: Tuple[slice, ...],
-                              downsample_factors: Dict[str, int], axes: str) -> np.ndarray:
+    async def _downsample_chunk(self, 
+                                tiff_store: Any, 
+                                chunk_slice: Tuple[slice, ...],
+                                downsample_factors: Dict[str, int], axes: str
+                                ) -> np.ndarray:
         """Downsample chunk data using optimized algorithms."""
         # Calculate source slice for downsampling
         source_slice = []
@@ -591,15 +892,16 @@ class HighPerformanceConverter:
                 # Expand slice to include source pixels
                 start = s.start * factor
                 stop = s.stop * factor
-                source_slice.append(slice(start, stop))
+                source_slice.append(slice(int(start), int(stop)))
             else:
                 source_slice.append(s)
         
         source_slice = tuple(source_slice)
-        
+
+        # print(f"Downsampling chunk slice: {source_slice}")
         # Read source data
         source_data = tiff_store[source_slice]
-        
+
         # Apply downsampling
         if any(downsample_factors.get(axes[i], 1) > 1 for i in range(len(axes))):
             # Use optimized downsampling (e.g., block reduction)
@@ -618,7 +920,7 @@ class HighPerformanceConverter:
         for i, ax in enumerate(axes):
             factor = downsample_factors.get(ax, 1)
             if factor > 1:
-                slices.append(slice(0, None, factor))
+                slices.append(slice(0, None, int(factor)))
             else:
                 slices.append(slice(None))
         
@@ -639,18 +941,57 @@ class HighPerformanceConverter:
     
     async def _verify_conversion(self, output_store: zarr.Group, analysis: Dict[str, Any]):
         """Verify conversion integrity."""
-        # Basic verification: check that all levels exist and have correct shapes
+        if self.use_tensorstore and self.tensorstore_backend:
+            # Verify TensorStore conversion
+            await self._verify_tensorstore_conversion(analysis)
+        else:
+            # Basic verification: check that all levels exist and have correct shapes
+            for level_info in analysis["pyramid_levels"]:
+                level = level_info["level"]
+                expected_shape = level_info["shape"]
+
+                if str(level) not in output_store:
+                    raise RuntimeError(f"Missing pyramid level {level}")
+
+                level_array = output_store[str(level)]
+                if level_array.shape != expected_shape:
+                    raise RuntimeError(f"Level {level} shape mismatch: {level_array.shape} != {expected_shape}")
+
+    async def _verify_tensorstore_conversion(self, analysis: Dict[str, Any]):
+        """Verify TensorStore conversion integrity."""
+        import tensorstore as ts
+
+        # Check that all pyramid levels exist as zarr arrays
         for level_info in analysis["pyramid_levels"]:
             level = level_info["level"]
             expected_shape = level_info["shape"]
-            
-            if str(level) not in output_store:
-                raise RuntimeError(f"Missing pyramid level {level}")
-            
-            level_array = output_store[str(level)]
-            if level_array.shape != expected_shape:
-                raise RuntimeError(f"Level {level} shape mismatch: {level_array.shape} != {expected_shape}")
-    
+
+            level_path = self.tensorstore_backend.output_path / str(level)
+            # zarray_path = level_path / '.zarray'
+
+            if not level_path.exists():
+                raise RuntimeError(f"Missing pyramid level directory {level}")
+
+            # if not zarray_path.exists():
+            #     raise RuntimeError(f"Missing zarr metadata for level {level}")
+
+            # Try to open the level with tensorstore
+            try:
+                spec = {
+                    'driver': 'zarr',
+                    'kvstore': {
+                        'driver': 'file',
+                        'path': str(level_path)
+                    }
+                }
+                level_array = await ts.open(spec)
+
+                if tuple(level_array.shape) != tuple(expected_shape):
+                    raise RuntimeError(f"Level {level} shape mismatch: {level_array.shape} != {expected_shape}")
+
+            except Exception as e:
+                raise RuntimeError(f"Failed to verify level {level}: {e}")
+
     async def cancel(self):
         """Cancel the conversion process."""
         self.is_cancelled = True

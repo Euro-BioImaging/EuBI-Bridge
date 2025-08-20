@@ -67,13 +67,17 @@ class MemoryManager:
         
         return max(64, chunk_mb)  # Minimum 64MB chunks
     
-    async def calculate_optimal_chunks(self, shape: Tuple[int, ...], 
-                                     dtype: np.dtype, axes: str) -> Tuple[int, ...]:
+    async def calculate_optimal_chunks(self,
+                                       shape: Tuple[int, ...],
+                                       dtype: np.dtype,
+                                       axes: str) -> Tuple[int, ...]:
         """Calculate optimal chunk sizes for given array shape and data type."""
         # Target chunk size in bytes
         target_chunk_bytes = self.chunk_memory_mb * 1024 * 1024
-        dtype_size = dtype.itemsize
-        
+        dtype_size = np.dtype(dtype).itemsize
+
+        print(f"Target chunk size: {target_chunk_bytes} bytes")
+        print(f"Data type size: {dtype_size} bytes")
         # Start with a base chunk that fits in target memory
         total_elements = target_chunk_bytes // dtype_size
         
