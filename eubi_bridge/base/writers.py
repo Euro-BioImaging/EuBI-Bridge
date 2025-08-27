@@ -583,7 +583,7 @@ async def write_region_with_tensorstore(
     print(f"The region {slices} written.")
 
 
-def write_with_tensorstore_regionwise(
+async def write_with_tensorstore_regionwise(
     arr: da.Array,
     store_path: Union[str, Path],
     chunks: Optional[Tuple[int, ...]] = None,
@@ -696,19 +696,12 @@ def write_with_tensorstore_regionwise(
     block_shape = shards
     print(f"block_shape: {block_shape}")
 
-    # from distributed import get_client
-    # client = get_client()
     blocks = compute_blocks(arr, block_shape)
-    # @delayed
-    def _write_block(block_slices):
-        # async with sem:
-        print(type(arr))
-        write_block(arr, ts_store, block_slices)
-        print(f"Block {block_slices} written.")
     futures = []
     for b in blocks:
         # futures.append(sem_write_block(b))
-        _write_block(b)
+        print(f"Block {b} written.")
+        await write_block(arr, ts_store, b)
     # await asyncio.gather(*coros)
     return ts_store
 
@@ -889,18 +882,21 @@ async def write_with_tensorstore_async(
 
 
 
+# def write_with_tensorstore_sync(arr, store_path, **kwargs):
+#     from distributed import get_client
+#     client = get_client()
+#
+#     # If client is asynchronous, use run_coroutine; else run normally
+#     if client.asynchronous:
+#         # This will schedule the coroutine inside the async client
+#         return client.run_coroutine(write_block, arr, store_path, **kwargs)
+#     else:
+#         # Synchronous client — safe to use asyncio.run
+#         return asyncio.run(write_with_tensorstore_async(arr, store_path, **kwargs))
+
+
 def write_with_tensorstore_sync(arr, store_path, **kwargs):
-    from distributed import get_client
-    client = get_client()
-
-    # If client is asynchronous, use run_coroutine; else run normally
-    if client.asynchronous:
-        # This will schedule the coroutine inside the async client
-        return client.run_coroutine(write_with_tensorstore_async, arr, store_path, **kwargs)
-    else:
-        # Synchronous client — safe to use asyncio.run
-        return asyncio.run(write_with_tensorstore_async(arr, store_path, **kwargs))
-
+    return asyncio.run(write_with_tensorstore_regionwise(arr, store_path, **kwargs))
 
 def compute_blocks(arr, block_shape):
     """Return slices defining large blocks over the array."""
@@ -912,13 +908,22 @@ def compute_blocks(arr, block_shape):
         blocks.append(block_slices)
     return blocks
 
-def write_block(arr, ts_store, block_slices):
+# def write_block(arr, ts_store, block_slices):
+#     # Compute block in memory
+#     block = arr[block_slices]#.compute()#.persist()  # or persist() if needed
+#     # Option 1: Write the whole block at once
+#     ts_store[block_slices] = block
+#     # Option 2: Split block into small chunks and write asynchronously inside the block
+#     return ts_store
+
+
+async def write_block(arr, ts_store, block_slices):
     # Compute block in memory
     block = arr[block_slices]#.compute()#.persist()  # or persist() if needed
     # Option 1: Write the whole block at once
-    ts_store[block_slices] = block
+    await ts_store[block_slices].write(block)
     # Option 2: Split block into small chunks and write asynchronously inside the block
-    return ts_store
+    # return ts_store
 
 
 @delayed
@@ -982,7 +987,7 @@ def store_arrays(arrays: Dict[str, Dict[str, da.Array]], # flatarrays
     output_shards = kwargs.get('output_shards', None)
     target_chunk_mb = kwargs.get('target_chunk_mb', 1)
 
-    writer_func = write_with_tensorstore_regionwise if use_tensorstore else write_with_zarrpy
+    writer_func = write_with_tensorstore_sync if use_tensorstore else write_with_zarrpy
     #
     # writer_func = write_with_tensorstore_sync if use_tensorstore else write_with_zarrpy
 
