@@ -204,7 +204,7 @@ class ProgressMonitor:
     async def report_error(self, error_message: str):
         """Report an error during conversion."""
         self.stats.errors.append(f"{time.time()}: {error_message}")
-
+    
     async def report_status(self, status: str, level: Optional[int] = None):
         """Report a status update during processing."""
         # Add status to statistics for tracking
@@ -216,7 +216,10 @@ class ProgressMonitor:
             'status': status,
             'level': level
         })
-    
+
+        # Print status to console for CLI users
+        print(f"Status: {status}")
+
     async def report_warning(self, warning_message: str):
         """Report a warning during conversion."""
         self.stats.warnings.append(f"{time.time()}: {warning_message}")

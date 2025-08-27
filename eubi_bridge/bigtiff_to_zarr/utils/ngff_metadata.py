@@ -25,6 +25,7 @@ class NGFFMetadataBuilder:
                                  pyramid_levels: List[Dict[str, Any]],
                                  dtype: np.dtype,
                                  pixel_sizes: Optional[Dict[str, float]] = None,
+                                 pixel_units: Optional[Dict[str, str]] = None,
                                  channel_names: Optional[List[str]] = None,
                                  time_points: Optional[List[float]] = None) -> Dict[str, Any]:
         """
@@ -36,6 +37,7 @@ class NGFFMetadataBuilder:
             pyramid_levels: List of pyramid level information
             dtype: Data type of the arrays
             pixel_sizes: Physical pixel sizes for spatial axes
+            pixel_units: Physical pixel units for spatial axes
             channel_names: Names for channels (if C axis present)
             time_points: Time points (if T axis present)
         
@@ -43,13 +45,20 @@ class NGFFMetadataBuilder:
             Complete NGFF metadata dictionary
         """
         # Build axes metadata
-        axes_metadata = self._build_axes_metadata(axes, pixel_sizes)
+        axes_metadata = self._build_axes_metadata(axes,
+                                                  pixel_units,
+                                                  pixel_sizes)
         
         # Build datasets metadata for all pyramid levels
         datasets = self._build_datasets_metadata(pyramid_levels, axes, pixel_sizes)
         
         # Build coordinate transformations
-        self._add_coordinate_transformations(datasets, pyramid_levels, axes, pixel_sizes)
+        self._add_coordinate_transformations(datasets,
+                                             pyramid_levels,
+                                             axes,
+                                             pixel_sizes,
+                                             pixel_units
+                                             )
         
         # Main multiscales entry
         multiscale_entry = {
@@ -88,7 +97,9 @@ class NGFFMetadataBuilder:
     
     def _build_axes_metadata(self,
                              axes: str,
-                             pixel_sizes: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
+                             pixel_units: Optional[Dict[str, str]] = None,
+                             pixel_sizes: Optional[Dict[str, float]] = None
+                             ) -> List[Dict[str, Any]]:
         """Build axes metadata array."""
         axes_list = []
         
@@ -96,12 +107,11 @@ class NGFFMetadataBuilder:
             axis_entry = self._get_axis_metadata(axis)
             
             # Add physical units for spatial axes
-            if pixel_sizes and axis in pixel_sizes and axis in 'xyz':
+            if pixel_sizes and axis in pixel_sizes:
                 # Physical size is handled in coordinate transformations
-                # Here we just ensure the unit is specified
-                if "unit" not in axis_entry:
-                    axis_entry["unit"] = "micrometer"
-            
+                # Here axis order and units are handled
+                axis_entry["unit"] = pixel_units.get(axis, "micrometer")
+
             axes_list.append(axis_entry)
         
         return axes_list
@@ -134,9 +144,13 @@ class NGFFMetadataBuilder:
         
         return datasets
     
-    def _add_coordinate_transformations(self, datasets: List[Dict[str, Any]], 
-                                      pyramid_levels: List[Dict[str, Any]],
-                                      axes: str, pixel_sizes: Optional[Dict[str, float]] = None):
+    def _add_coordinate_transformations(self,
+                                        datasets: List[Dict[str, Any]],
+                                        pyramid_levels: List[Dict[str, Any]],
+                                        axes: str,
+                                        pixel_sizes: Optional[Dict[str, float]] = None,
+                                        pixel_units: Optional[Dict[str, str]] = None
+                                        ):
         """Add coordinate transformations to dataset entries."""
         for i, (dataset, level_info) in enumerate(zip(datasets, pyramid_levels)):
             level = level_info["level"]

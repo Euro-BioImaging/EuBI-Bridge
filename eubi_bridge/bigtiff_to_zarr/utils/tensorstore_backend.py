@@ -113,8 +113,11 @@ class TensorStoreBackend:
             }
         return None
 
-    async def write_chunk_data(self, store: ts.TensorStore, data: np.ndarray,
-                             chunk_indices: Tuple[slice, ...]) -> None:
+    async def write_chunk_data(self,
+                               store: ts.TensorStore,
+                               data: np.ndarray,
+                               chunk_indices: Tuple[slice, ...]
+                               ) -> None:
         """Write chunk data to tensorstore array."""
         try:
             # Write data using tensorstore indexing
@@ -242,8 +245,10 @@ class TensorStoreBackend:
         mapping = {'t': 'time', 'c': 'channel', 'z': 'z', 'y': 'y', 'x': 'x'}
         return mapping.get(axis, axis)
 
-    def _generate_chunk_indices(self, shape: Tuple[int, ...],
-                              chunks: Tuple[int, ...]) -> List[Tuple[slice, ...]]:
+    def _generate_chunk_indices(self,
+                                shape: Tuple[int, ...],
+                                chunks: Tuple[int, ...]
+                                ) -> List[Tuple[slice, ...]]:
         """Generate all chunk indices for the given shape and chunk sizes."""
         indices_list = []
 
@@ -261,9 +266,10 @@ class TensorStoreBackend:
         _generate_recursive(0, [])
         return indices_list
 
-    def _calculate_source_indices(self, target_indices: Tuple[slice, ...],
-                                scale_factors: Dict[str, int],
-                                axes: str) -> Tuple[slice, ...]:
+    def _calculate_source_indices(self, 
+                                  target_indices: Tuple[slice, ...],
+                                  scale_factors: Dict[str, int],
+                                  axes: str) -> Tuple[slice, ...]:
         """Calculate source indices from target indices and scale factors."""
         source_indices = []
 

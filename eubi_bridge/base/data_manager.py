@@ -16,6 +16,11 @@ from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.ngff.defaults import unit_map, scale_map, default_axes
 from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, autocompute_chunk_shape
 from eubi_bridge.base.readers import read_metadata_via_bioio_bioformats, read_metadata_via_extension, read_metadata_via_bfio
+from eubi_bridge.utils.logging_config import get_logger
+
+# Set up logger for this module
+logger = get_logger(__name__)
+
 
 
 def abbreviate_units(measure: str) -> str:
@@ -338,6 +343,77 @@ class PFFImageMeta:
                 ))
         return channels
 
+
+
+class TIFFImageMeta:
+    essential_omexml_fields = {
+        "physical_size_x", "physical_size_x_unit",
+        "physical_size_y", "physical_size_y_unit",
+        "physical_size_z", "physical_size_z_unit",
+        "time_increment", "time_increment_unit",
+        "size_x", "size_y", "size_z", "size_t", "size_c"
+    }
+
+    def __init__(self,
+                 path,
+                 series,
+                 meta_reader="bioio",
+                 **kwargs
+                 ):
+
+        if not path.endswith('.tif') and not path.endswith('.tiff'):
+            raise Exception(f"The given path does not contain a TIFF file.")
+
+        # path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images/pff/filament.tif"
+        self.path = path
+        import tifffile
+        tif = tifffile.TiffFile(path)
+        self.tiffzarrstore = tif.aszarr()
+        self._zarrdata = zarr.open(self.tiffzarrstore, mode = 'r')
+        self._zarrmeta = self.tiffzarrstore._data[series]
+        self._meta = tif.series[series]
+        self._pff = PFFImageMeta(path, series, meta_reader)
+        self.omemeta = self._pff.omemeta
+        self.pixels = self.omemeta.images[0].pixels
+        missing_fields = self.essential_omexml_fields - self.pixels.model_fields_set
+        self.pixels.model_fields_set.update(missing_fields)
+        self.omemeta.images[0].pixels = self.pixels
+        self.pyr = self._pff.pyr
+
+    def get_axes(self):
+        return self._meta.axes.lower()
+
+    def get_scaledict(self):
+        scaledict = self._pff.get_scaledict()
+        axes = self.get_axes()
+        return {ax: scaledict[ax]
+                for ax in axes
+                if ax in scaledict
+                }
+
+    def get_scales(self):
+        scaledict = self.get_scaledict()
+        caxes = [ax for ax in self.get_axes() if ax != 'c']
+        return [scaledict[ax] for ax in caxes]
+
+    def get_unitdict(self):
+        unitdict = self._pff.get_unitdict()
+        caxes = [ax for ax in self.get_axes() if ax != 'c']
+        # print(caxes, self.get_axes())
+        return {ax: unitdict[ax]
+                for ax in caxes
+                if ax in unitdict
+                }
+
+    def get_units(self):
+        unitdict = self.get_unitdict()
+        caxes = [ax for ax in self.get_axes() if ax != 'c']
+        return [unitdict[ax] for ax in caxes]
+
+    def get_channels(self):
+        return self._pff.get_channels()
+
+
 def expand_hex_shorthand(hex_color):
     """
     Expands a shorthand hex color of any valid length (e.g., #abc → #aabbcc, #1234 → #11223344).
@@ -398,6 +474,7 @@ class ArrayManager:
                  path: Union[str, Path] = None,
                  series: int = None,
                  metadata_reader='bfio',  # bfio or aicsimageio
+                 skip_dask = False,
                  **kwargs
                  ):
         self.path = path
@@ -413,18 +490,28 @@ class ArrayManager:
 
         self._meta_reader = metadata_reader
         self.omemeta = None
+        self._skip_dask = skip_dask
 
         if not path is None:
             if is_zarr_group(path):
                 self.img = NGFFImageMeta(self.path)
-            else:
+            elif not self._skip_dask:
                 self.img = PFFImageMeta(self.path, self.series, self._meta_reader)
+            else:
+                if self.path.endswith('tif') or self.path.endswith('tiff'):
+                    self.img = TIFFImageMeta(self.path, self.series, self._meta_reader)
+                else:
+                    logger.warning(f"The given path does not contain a TIFF file. Using PFFImageMeta.")
+                    self.img = PFFImageMeta(self.path, self.series, self._meta_reader)
 
         self.axes = self.img.get_axes()
         self.array = None
         self.pyr = self.img.pyr
         self._channels = None
-        self.set_arraydata()
+        if hasattr(self.img, '_zarrdata'):
+            self.set_arraydata(self.img._zarrdata)
+        else:
+            self.set_arraydata()
 
     def fill_default_meta(self):
         if self.array is None:
@@ -554,7 +641,13 @@ class ArrayManager:
 
         self.caxes = ''.join([ax for ax in axes if ax != 'c'])
         if self.array is not None:
-            self.chunkdict = dict(zip(list(self.axes), self.array.chunksize))
+            if isinstance(self.array, zarr.Array):
+                chunks = self.array.chunks
+            elif isinstance(self.array, da.Array):
+                chunks = self.array.chunksize
+            else:
+                raise Exception(f"Array type {type(self.array)} is not supported.")
+            self.chunkdict = dict(zip(list(self.axes), chunks))
             self.shapedict = dict(zip(list(self.axes), self.array.shape))
             if 'c' in self.shapedict:
                 self._ensure_correct_channels()

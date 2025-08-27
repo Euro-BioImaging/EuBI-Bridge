@@ -14,7 +14,7 @@ unit_map = {
 scale_factor_map = {
     't': 1,
     'c': 1,
-    'z': 2,
+    'z': 1,
     'y': 2,
     'x': 2
 }

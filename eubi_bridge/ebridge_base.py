@@ -117,6 +117,7 @@ class BridgeBase:
                      verified_for_cluster,
                      chunks_yx = None,
                      readers_params = {},
+                     skip_dask = False
                      ):
         """
         - If the input path is a directory, can read single or multiple files from it.
@@ -134,6 +135,7 @@ class BridgeBase:
         verbose = self._verbose
 
         _input_is_csv = False
+        _input_is_tiff = False
         if input_path.endswith('.csv'):
             _input_is_csv = True
             self.filepaths = take_filepaths(input_path, includes, excludes)
@@ -167,6 +169,32 @@ class BridgeBase:
         else:
             self.metadata_path = metadata_path
 
+    def _digest_skip_dask(self,
+                          path,
+                          metadata_reader = 'bfio',
+                          **kwargs
+                          ):
+        # n_filepaths = len(self.filepaths)
+        # if n_filepaths != 1:
+        #     raise Exception(f"Skipping dask digest is only supported for single filepaths. Got {n_filepaths} filepaths.")
+        # path = self.filepaths[0]
+        # if not path.endswith('.tif') or not path.endswith('.tiff'):
+        #     raise Exception(f"Skipping dask digest is only supported for tif files. Got {path}.")
+        from eubi_bridge.base.data_manager import ArrayManager
+        manager = ArrayManager(path,
+                               series = self._series,
+                               metadata_reader=metadata_reader,
+                               skip_dask = True,
+                               **kwargs
+                               )
+        # name = ### KALDIM
+        import os
+        name = os.path.basename(path).split('.')[0]
+        self.digested_arrays = {name: manager.array}
+        self.digested_arrays_sample_paths = {name: path}
+        self.managers = {name: manager}
+        self._compute_pixel_metadata(**kwargs)
+
     def digest(self, # TODO: refactor to "assimilate_tags" and "concatenate?"
                time_tag: Union[str, tuple] = None,
                channel_tag: Union[str, tuple] = None,
@@ -176,6 +204,7 @@ class BridgeBase:
                axes_of_concatenation: Union[int, tuple, str] = None,
                ###
                metadata_reader: str = 'bfio',
+               skip_dask: bool = True,
                **kwargs
                ):
         """
@@ -210,6 +239,25 @@ class BridgeBase:
             ...     axes_of_concatenation='tz'  # Concatenate only time and z dimensions
             ... )
         """
+
+        # n_filepaths = len(self.filepaths)
+        if len(self.filepaths) == 1:
+            _path = self.filepaths[0]
+            if not _path.endswith('.tif') and not _path.endswith('.tiff'):
+                # print(f"passing.")
+                if skip_dask:
+                    logger.info("Ignoring skip_dask for non-tif files.")
+            else:
+                if skip_dask:
+                    # print(f"skipping dask digest for {self.filepaths}")
+                    self._digest_skip_dask(_path,
+                                           metadata_reader=metadata_reader,
+                                           **kwargs)
+                    return self
+                else:
+                    # print(f"using dask digest for {self.filepaths}")
+                    pass
+
         axes = 'tczyx'
         tags = (time_tag, channel_tag, z_tag, y_tag, x_tag)
 
@@ -430,7 +478,8 @@ class BridgeBase:
         if storage_options.get('squeeze', False):
             self.squeeze_dataset()
         if storage_options.get('dimension_order'):
-            self.transpose_dataset(storage_options['dimension_order'])
+            if not storage_options.get('dimension_order') in (None, 'auto'):
+                self.transpose_dataset(storage_options['dimension_order'])
 
         # Update storage options with format and verbosity
         storage_options.update({

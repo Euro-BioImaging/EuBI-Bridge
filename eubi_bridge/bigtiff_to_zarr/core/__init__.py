@@ -1,1 +1,0 @@
-# Core modules for high-performance BigTIFF to OME-NGFF conversion

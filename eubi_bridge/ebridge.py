@@ -804,7 +804,7 @@ class EuBIBridge:
                     # **worker_options
                 )
             cluster.scale(n_jobs)
-            self.client = Client(cluster)
+            self.client = Client(cluster, asynchronous=False)
             if verbose:
                 logger.info(self.client.cluster)
         return self

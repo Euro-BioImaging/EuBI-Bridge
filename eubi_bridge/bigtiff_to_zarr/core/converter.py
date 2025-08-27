@@ -63,9 +63,12 @@ class HighPerformanceConverter:
         self.thread_pool = None
         self.base_tensorstore = None
 
-    async def convert(self, input_path: str, output_path: str,
-                     progress_monitor: Optional[ProgressMonitor] = None,
-                     resume: bool = False) -> bool:
+    async def convert(self,
+                      input_path: str,
+                      output_path: str,
+                      progress_monitor: Optional[ProgressMonitor] = None,
+                      resume: bool = False
+                      ) -> bool:
         """
         Convert BigTIFF to OME-NGFF with high-performance optimizations.
 
@@ -118,12 +121,14 @@ class HighPerformanceConverter:
                     pyramid_levels = analysis.get('pyramid_levels', [])
                     dtype = analysis.get('dtype', np.uint16)
                     pixel_sizes = analysis.get('pixel_sizes', {})
+                    pixel_units = analysis.get('pixel_units', {})
                     metadata = self.metadata_builder.build_multiscales_metadata(
                         name = 'default',
                         axes = axes,
                         pyramid_levels = pyramid_levels,
                         dtype = dtype,
-                        pixel_sizes = pixel_sizes
+                        pixel_sizes = pixel_sizes,
+                        pixel_units = pixel_units
                     )
                     await self.tensorstore_backend.save_ome_zarr_metadata(metadata)
                 else:
@@ -391,7 +396,10 @@ class HighPerformanceConverter:
         except Exception as e:
             raise RuntimeError(f"Failed to open input file {input_path}: {e}")
 
-    async def _analyze_input(self, tiff_file: tifffile.TiffFile, tiff_store: Any) -> Dict[str, Any]:
+    async def _analyze_input(self, 
+                             tiff_file: tifffile.TiffFile, 
+                             tiff_store: Any
+                             ) -> Dict[str, Any]:
         """Analyze input file structure and determine optimal processing strategy."""
         # Get basic info
         shape = tiff_file.series[0].shape
@@ -404,6 +412,7 @@ class HighPerformanceConverter:
 
         # Extract pixel size information from TIFF metadata
         pixel_sizes, pixel_units = self._extract_pixel_sizes(tiff_file)
+        # print(f"Pixel sizes extracted: {pixel_sizes}")
 
         # Calculate file size and optimal chunk sizes
         file_size = Path(tiff_file.filehandle.path).stat().st_size
@@ -419,7 +428,13 @@ class HighPerformanceConverter:
         if user_chunks:
             if user_chunks not in (None, 'auto'):
                 optimal_chunks = self._apply_user_chunk_sizes(optimal_chunks, axes, user_chunks)
-        
+
+        user_pixel_sizes = self.config.get("pixel_sizes", {})
+        # if user_pixel_sizes:
+
+        user_pixel_units = self.config.get("pixel_units", {})
+        # if user_pixel_units:
+
         print(f"Optimal chunks: {optimal_chunks}")
         # Calculate pyramid levels
         pyramid_levels = self._calculate_pyramid_levels(shape, axes, pixel_sizes)
@@ -441,29 +456,19 @@ class HighPerformanceConverter:
     def _calculate_pyramid_levels(self,
                                   shape: Tuple[int, ...],
                                   axes: str,
-                                  pixel_sizes: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
+                                  pixel_sizes: Optional[Dict[str, float]] = None
+                                  ) -> List[Dict[str, Any]]:
         """Calculate pyramid levels with user-specified downsampling parameters."""
         from eubi_bridge.ngff.multiscales import calculate_n_layers
         from eubi_bridge.base.scale import DownscaleManager
 
         # Get user-specified scale factors from pyramid_scales config
         pyramid_scales = self.config.get("pyramid_scales", {})
-        scale_factor = {
-            't': pyramid_scales.get('time', 1),      # Default: no time downsampling
-            'c': pyramid_scales.get('channel', 1), # Default: no channel downsampling
-            'z': pyramid_scales.get('z', 2),            # Default: 2x z downsampling
-            'y': pyramid_scales.get('y', 2),            # Default: 2x y downsampling
-            'x': pyramid_scales.get('x', 2)             # Default: 2x x downsampling
-        }
-        pixel_scales = {
-            't': pixel_sizes.get('time', 1),      # Default: no time downsampling
-            'c': pixel_sizes.get('channel', 1), # Default: no channel downsampling
-            'z': pixel_sizes.get('z', 2),            # Default: 2x z downsampling
-            'y': pixel_sizes.get('y', 2),            # Default: 2x y downsampling
-            'x': pixel_sizes.get('x', 2)             # Default: 2x x downsampling
-        }
-        scale_factor = [scale_factor[ax] for ax in axes]
-        pixel_scales = [pixel_scales[ax] for ax in axes]
+        # print(f"Axes: {axes}")
+        # print(f"Pyramid scales: {pyramid_scales}")
+        # print(f"Pixel sizes: {pixel_sizes}")
+        scale_factor = [pyramid_scales[ax] for ax in axes]
+        pixel_scales = [pixel_sizes[ax] if ax != 'c' else 1 for ax in axes]
         min_dimension_size = self.config.get("min_dimension_size", 64)
 
         n_layers = calculate_n_layers(
@@ -933,7 +938,8 @@ class HighPerformanceConverter:
             axes=analysis["axes"],
             pyramid_levels=analysis["pyramid_levels"],
             dtype=analysis["dtype"],
-            pixel_sizes=analysis.get("pixel_sizes", {})
+            pixel_sizes=analysis.get("pixel_sizes", {}),
+            pixel_units=analysis.get("pixel_units", {}),
         )
         
         # Write metadata to zarr attributes
