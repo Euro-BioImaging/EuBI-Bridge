@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np, zarr
 import dask.array as da
 from typing import Callable
+import tensorstore as ts
 
 
 def simple_downscale(
@@ -46,6 +47,15 @@ def median_downscale(arr: da.Array,
                                 axes = axes, trim_excess = True).astype(arr.dtype)
     return downscaled_arr
 
+def ts_downscale(arr: (zarr.Array, str),
+                          scale_factor: (tuple, list, np.ndarray) = None
+                          ):
+    # Method 1: Try using tensorstore's virtual downsampling if available
+    print(scale_factor)
+    return ts.downsample(arr,
+                         [int(np.round(factor)) for factor in scale_factor],
+                         method='stride')
+
 @dataclasses.dataclass
 class DownscaleManager:
     base_shape: (list, tuple)
@@ -83,7 +93,7 @@ class DownscaleManager:
 
 @dataclasses.dataclass
 class Downscaler:
-    array: da.Array
+    array: (da.Array, zarr.Array, str)
     scale_factor: (list, tuple)
     n_layers: int
     scale: (list, tuple) = None
@@ -92,40 +102,68 @@ class Downscaler:
     downscale_method: str = 'simple'
 
     def __post_init__(self):
+        # if self.output_chunks is None:
+        #     self.output_chunks = [self.array.chunksize] * self.n_layers
+        if isinstance(self.array, str):
+            self.base_array_root = self.array
+            self.downscale_method = 'ts'
+            self.array = ts.open(
+                {
+                    "driver": "zarr",
+                    "kvstore": {
+                        "driver": "file",
+                        "path": self.base_array_root
+                    }
+                },
+                open=True,
+            ).result()
+        elif isinstance(self.array, zarr.Array):
+            self.base_array_root = str(self.array.store_path)
+            self.downscale_method = 'ts'
+            self.array = ts.open(
+                self.base_array_root,
+                open=True,
+            ).result()
+        else:
+            self.base_array_root = None
+
         self.param_names = ['array', 'scale_factor', 'n_layers', 'scale', 'output_chunks', 'backend', 'downscale_method']
         self.update()
 
     def get_method(self):
-        if self.downscale_method == 'simple':
-            method = simple_downscale
-        elif self.downscale_method == "mean":
-            method = mean_downscale
-        elif self.downscale_method == "median":
-            method = mean_downscale
+        if self.base_array_root is None: # array is dask array
+            if self.downscale_method == 'simple':
+                method = simple_downscale
+            elif self.downscale_method == "mean":
+                method = mean_downscale
+            elif self.downscale_method == "median":
+                method = mean_downscale
+            else:
+                raise NotImplementedError(f"Currently, only 'simple', 'mean' and 'median' methods are implemented.")
         else:
-            raise NotImplementedError(f"Currently, only 'simple', 'mean' and 'median' methods are implemented.")
+            method = ts_downscale
         return method
 
     def run(self):
         self.method = self.get_method()
-        assert isinstance(self.array, da.Array)
+        # assert isinstance(self.array, da.Array)
         self.dm = DownscaleManager(self.array.shape,
                                    self.scale_factor,
                                    self.n_layers,
                                    self.scale
                                    )
-        if self.output_chunks is None:
-            self.output_chunks = [self.array.chunksize] * self.n_layers
 
         downscaled = []
-        for idx, (scale_factor, chunks) in enumerate(zip(self.dm.scale_factors, self.output_chunks)):
+        for (idx,
+             scale_factor) in enumerate(self.dm.scale_factors):
             if idx == 0:
                 downscaled.append(self.array)
             else:
-                factor = tuple(int(x) for x in scale_factor)
+                factor = tuple(int(np.round(x)) for x in scale_factor)
                 res1 = self.method(self.array, scale_factor = factor)
                 downscaled.append(res1)
-        self.downscaled_arrays = {str(i): arr for i, arr in enumerate(downscaled)}
+        self.downscaled_arrays = {str(i): arr
+                                  for i, arr in enumerate(downscaled)}
         return self
 
     def update(self, **kwargs):

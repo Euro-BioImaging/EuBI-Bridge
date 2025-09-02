@@ -809,8 +809,9 @@ class Pyramid:
                           **kwargs
                           ):
         min_dimension_size = kwargs.get('min_dimension_size', 64)
+        use_tensorstore = kwargs.get('use_tensorstore', False)
 
-        darr = self.base_array
+        darr = self.base_array if not use_tensorstore else self.layers['0']
         shape = darr.shape
         if n_layers in (None, 'default', 'auto'):
             n_layers = calculate_n_layers(shape, scale_factor, min_dimension_size)

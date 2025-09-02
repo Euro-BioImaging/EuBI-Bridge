@@ -8,7 +8,7 @@ from dask_jobqueue import SLURMCluster
 from pathlib import Path
 from typing import Union
 
-from eubi_bridge.bigtiff_to_zarr.cli import convert_bigtiff_to_omezarr
+# from eubi_bridge.bigtiff_to_zarr.cli import convert_bigtiff_to_omezarr
 
 # from eubi_bridge.ngff.multiscales import Pyramid
 # from eubi_bridge.ngff import defaults
@@ -925,59 +925,59 @@ class EuBIBridge:
     #         local_directory=str(self._dask_temp_dir.name),
     #     )
 
-    def tiff_to_zarr(self,
-                     input_tiff,
-                     output_zarr_dir,
-                     **kwargs
-                     # dtype=None,
-                     # compressor="blosc",
-                     # x_scale=2,
-                     # y_scale=2,
-                     # z_scale=2,
-                     # time_scale=1,
-                     # channel_scale=1,
-                     # min_dimension_size=64,
-                     # n_layers=None,
-                     # auto_chunk=False,
-                     # overwrite=False,
-                     # save_omexml=False,
-                     # zarr_format=2
-                     ):
-        """Convert a BigTIFF to OME-Zarr format with optional downscaling.
+    # def tiff_to_zarr(self,
+    #                  input_tiff,
+    #                  output_zarr_dir,
+    #                  **kwargs
+    #                  # dtype=None,
+    #                  # compressor="blosc",
+    #                  # x_scale=2,
+    #                  # y_scale=2,
+    #                  # z_scale=2,
+    #                  # time_scale=1,
+    #                  # channel_scale=1,
+    #                  # min_dimension_size=64,
+    #                  # n_layers=None,
+    #                  # auto_chunk=False,
+    #                  # overwrite=False,
+    #                  # save_omexml=False,
+    #                  # zarr_format=2
+    #                  ):
+    #     """Convert a BigTIFF to OME-Zarr format with optional downscaling.
+    #
+    #     Args:
+    #         input_tiff: Path to input TIFF (BigTIFF)
+    #         output_zarr_dir: Path to output directory (will be treated as zarr store root)
+    #         dtype: Optional target dtype (e.g. "uint8"). If None, source dtype is used.
+    #         compressor_name: Compression method ("blosc" or "none")
+    #         x_scale: Downscale factor in X (select every n-th pixel)
+    #         y_scale: Downscale factor in Y
+    #         z_scale: Downscale factor in Z
+    #         time_scale: Downscale factor in Time
+    #         channel_scale: Downscale factor in Channel
+    #         min_dimension_size: Stop building pyramid when smallest dimension < this
+    #         n_layers: Max number of pyramid levels (None = unlimited until min size)
+    #         auto_chunk: Let zarr choose chunking if True
+    #         overwrite: Overwrite output directory if exists
+    #         save_omexml: Attempt to copy/save OME-XML metadata if present
+    #         zarr_format: Zarr format version (2 or 3)
+    #     """
+    #     # from eubi_bridge.bigtiff_to_omezarr import convert_bigtiff_to_omezarr
+    #     self.cluster_params = self._collect_params('cluster', **kwargs)
+    #     self.readers_params = self._collect_params('readers', **kwargs)
+    #     self.conversion_params = self._collect_params('conversion', **kwargs)
+    #     self.downscale_params = self._collect_params('downscale', **kwargs)
+    #
+    #     print(self.conversion_params)
+    #     convert_bigtiff_to_omezarr(input_tiff=input_tiff,
+    #                                output_zarr_dir=output_zarr_dir,
+    #                                # dimension_order='tczyx',
+    #                                **self.cluster_params,
+    #                                **self.conversion_params,
+    #                                **self.downscale_params
+    #                                )
 
-        Args:
-            input_tiff: Path to input TIFF (BigTIFF)
-            output_zarr_dir: Path to output directory (will be treated as zarr store root)
-            dtype: Optional target dtype (e.g. "uint8"). If None, source dtype is used.
-            compressor_name: Compression method ("blosc" or "none")
-            x_scale: Downscale factor in X (select every n-th pixel)
-            y_scale: Downscale factor in Y
-            z_scale: Downscale factor in Z
-            time_scale: Downscale factor in Time
-            channel_scale: Downscale factor in Channel
-            min_dimension_size: Stop building pyramid when smallest dimension < this
-            n_layers: Max number of pyramid levels (None = unlimited until min size)
-            auto_chunk: Let zarr choose chunking if True
-            overwrite: Overwrite output directory if exists
-            save_omexml: Attempt to copy/save OME-XML metadata if present
-            zarr_format: Zarr format version (2 or 3)
-        """
-        # from eubi_bridge.bigtiff_to_omezarr import convert_bigtiff_to_omezarr
-        self.cluster_params = self._collect_params('cluster', **kwargs)
-        self.readers_params = self._collect_params('readers', **kwargs)
-        self.conversion_params = self._collect_params('conversion', **kwargs)
-        self.downscale_params = self._collect_params('downscale', **kwargs)
-
-        print(self.conversion_params)
-        convert_bigtiff_to_omezarr(input_tiff=input_tiff,
-                                   output_zarr_dir=output_zarr_dir,
-                                   # dimension_order='tczyx',
-                                   **self.cluster_params,
-                                   **self.conversion_params,
-                                   **self.downscale_params
-                                   )
-
-    def to_zarr(self,
+    async def to_zarr_async(self,
                 input_path: Union[Path, str],
                 output_path: Union[Path, str],
                 includes=None,
@@ -1020,6 +1020,7 @@ class EuBIBridge:
         self.cluster_params = self._collect_params('cluster', **kwargs)
         self.readers_params = self._collect_params('readers', **kwargs)
         self.conversion_params = self._collect_params('conversion', **kwargs)
+        print(self.conversion_params)
         self.downscale_params = self._collect_params('downscale', **kwargs)
 
         if self.conversion_params['use_gpu'] and self.conversion_params['use_tensorstore']:
@@ -1072,7 +1073,7 @@ class EuBIBridge:
                           readers_params=self.readers_params
                           )
 
-        base.digest(
+        await base.digest(
             time_tag=time_tag,
             channel_tag=channel_tag,
             z_tag=z_tag,
@@ -1104,9 +1105,10 @@ class EuBIBridge:
         if self.client is not None:
             base.client = self.client
         base.set_dask_temp_dir(self._dask_temp_dir)
+        base.set_dask_temp_dir(self._dask_temp_dir)
 
         ###### Write
-        self.base_results = base.write_arrays(output_path,
+        self.base_results = await base.write_arrays(output_path,
                                               compute=True,
                                               verbose=verbose,
                                               **self.conversion_params
@@ -1119,11 +1121,12 @@ class EuBIBridge:
 
         if n_layers in (None, 'default', 'auto') or n_layers > 1:
             logger.info(f"Downscaling initiated.")
-            _ = downscale(
+            _ = await downscale(
                 self.base_results,
                 **self.downscale_params,
                 auto_chunk=kwargs.get('auto_chunk', self.conversion_params['auto_chunk']),
                 target_chunk_mb=kwargs.get('target_chunk_mb', self.conversion_params['target_chunk_mb']),
+                # output_chunks = kwargs.get('output_chunks', self.conversion_params['output_chunks']),
                 zarr_format=self.conversion_params['zarr_format'],
                 rechunk_method=self.conversion_params['rechunk_method'],
                 use_tensorstore=self.conversion_params['use_tensorstore'],
@@ -1146,6 +1149,19 @@ class EuBIBridge:
 
         t1 = time.time()
         logger.info(f"Elapsed for conversion + downscaling: {(t1 - t0) / 60} min.")
+
+    # In ebridge.py
+    def to_zarr(self,
+                input_path,
+                output_path,
+                **kwargs):
+        """Synchronous wrapper for the async to_zarr_async method."""
+        import asyncio
+        return asyncio.run(self.to_zarr_async(input_path,
+                                              output_path,
+                                              **kwargs
+                                              )
+                           )
 
     def show_pixel_meta(self,
                         input_path: Union[Path, str],

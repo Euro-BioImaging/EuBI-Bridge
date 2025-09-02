@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Tuple, Union
 
 # Third-party imports
-import dask
+import dask, asyncio
 import dask.array as da
 import numpy as np
 
@@ -169,134 +169,108 @@ class BridgeBase:
         else:
             self.metadata_path = metadata_path
 
-    def _digest_skip_dask(self,
-                          path,
-                          metadata_reader = 'bfio',
-                          **kwargs
-                          ):
-        # n_filepaths = len(self.filepaths)
-        # if n_filepaths != 1:
-        #     raise Exception(f"Skipping dask digest is only supported for single filepaths. Got {n_filepaths} filepaths.")
-        # path = self.filepaths[0]
-        # if not path.endswith('.tif') or not path.endswith('.tiff'):
-        #     raise Exception(f"Skipping dask digest is only supported for tif files. Got {path}.")
+    async def _digest_skip_dask(
+            self,
+            path,
+            metadata_reader: str = 'bfio',
+            **kwargs
+    ):
+        """
+        Async version of skip-dask digest.
+        """
         from eubi_bridge.base.data_manager import ArrayManager
-        manager = ArrayManager(path,
-                               series = self._series,
-                               metadata_reader=metadata_reader,
-                               skip_dask = True,
-                               **kwargs
-                               )
-        # name = ### KALDIM
+
+        manager = ArrayManager(
+            path,
+            series=self._series,
+            metadata_reader=metadata_reader,
+            skip_dask=True,
+            **kwargs
+        )
+        await manager.init()  # async initialization
+
         import os
         name = os.path.basename(path).split('.')[0]
+
         self.digested_arrays = {name: manager.array}
         self.digested_arrays_sample_paths = {name: path}
         self.managers = {name: manager}
+
+        # remains sync unless it also needs async
         self._compute_pixel_metadata(**kwargs)
 
-    def digest(self, # TODO: refactor to "assimilate_tags" and "concatenate?"
-               time_tag: Union[str, tuple] = None,
-               channel_tag: Union[str, tuple] = None,
-               z_tag: Union[str, tuple] = None,
-               y_tag: Union[str, tuple] = None,
-               x_tag: Union[str, tuple] = None,
-               axes_of_concatenation: Union[int, tuple, str] = None,
-               ###
-               metadata_reader: str = 'bfio',
-               skip_dask: bool = True,
-               **kwargs
-               ):
+    async def digest(
+            self,
+            time_tag: Union[str, tuple] = None,
+            channel_tag: Union[str, tuple] = None,
+            z_tag: Union[str, tuple] = None,
+            y_tag: Union[str, tuple] = None,
+            x_tag: Union[str, tuple] = None,
+            axes_of_concatenation: Union[int, tuple, str] = None,
+            metadata_reader: str = 'bfio',
+            skip_dask: bool = True,
+            **kwargs
+    ):
         """
-        Digest the input data. This optionally involves
-        concatenating multiple images along specified axes.
-
-        Parameters
-        ----------
-        time_tag : Union[str, tuple], optional
-            The tag for the time axis. Defaults to None.
-        channel_tag : Union[str, tuple], optional
-            The tag for the channel axis. Defaults to None.
-        z_tag : Union[str, tuple], optional
-            The tag for the z axis. Defaults to None.
-        y_tag : Union[str, tuple], optional
-            The tag for the y axis. Defaults to None.
-        x_tag : Union[str, tuple], optional
-            The tag for the x axis. Defaults to None.
-        axes_of_concatenation : Union[int, tuple, str], optional
-            The axes to concatenate. Defaults to None.
-
-
-        Examples
-        --------
-            >>> # For a set of files with patterns in the file path in the following format:
-            >>> # ["timepoint0_channel0_slice0.tif",...,"timepoint12_channel2_slice25.tif"] ]
-            >>> # Concatenate only along specific axes:
-            >>> bridge.digest(
-            ...     time_tag='timepoint',
-            ...     channel_tag='channel',
-            ...     z_tag='slice_',
-            ...     axes_of_concatenation='tz'  # Concatenate only time and z dimensions
-            ... )
+        Async digest with optional skip_dask.
         """
-
-        # n_filepaths = len(self.filepaths)
         if len(self.filepaths) == 1:
             _path = self.filepaths[0]
-            if not _path.endswith('.tif') and not _path.endswith('.tiff'):
-                # print(f"passing.")
-                if skip_dask:
-                    logger.info("Ignoring skip_dask for non-tif files.")
-            else:
-                if skip_dask:
-                    # print(f"skipping dask digest for {self.filepaths}")
-                    self._digest_skip_dask(_path,
-                                           metadata_reader=metadata_reader,
-                                           **kwargs)
-                    return self
-                else:
-                    # print(f"using dask digest for {self.filepaths}")
-                    pass
+            if _path.endswith((".tif", ".tiff")) and skip_dask:
+                await self._digest_skip_dask(
+                    _path,
+                    metadata_reader=metadata_reader,
+                    **kwargs
+                )
+                return self
+            elif skip_dask:
+                logger.info("Ignoring skip_dask for non-tif files.")
 
+        # --- keep the rest sync (BatchFile logic) ---
+        # --- the part below must also be async ---
         axes = 'tczyx'
         tags = (time_tag, channel_tag, z_tag, y_tag, x_tag)
 
-        # Create a FileSet object
-        self.batchfile = BatchFile(self.filepaths,
-                               arrays=self.arrays,
-                               axis_tag0=time_tag,
-                               axis_tag1=channel_tag,
-                               axis_tag2=z_tag,
-                               axis_tag3=y_tag,
-                               axis_tag4=x_tag,
-                         )
-
-        # TODO: UPDATE WITH CONSTRUCT_MANAGERS
+        self.batchfile = BatchFile(
+            self.filepaths,
+            arrays=self.arrays,
+            axis_tag0=time_tag,
+            axis_tag1=channel_tag,
+            axis_tag2=z_tag,
+            axis_tag3=y_tag,
+            axis_tag4=x_tag,
+        )
 
         axdict = dict(zip(axes, tags))
-
         if axes_of_concatenation is None:
             axes_of_concatenation = []
+        axlist = [axes.index(x)
+                  for x in axes_of_concatenation
+                  if x in axes]
 
-        axlist = [axes.index(x) for x in axes_of_concatenation if x in axes]
+        await self.batchfile._construct_managers(
+            axes=axlist,
+            series=self._series,
+            metadata_reader=metadata_reader,
+            **kwargs
+        )
+        await self.batchfile._construct_channel_managers(
+            series=self._series,
+            metadata_reader=metadata_reader,
+            **kwargs
+        )
+        await self.batchfile._complete_process(axlist)
 
-        self.batchfile._construct_managers(axes=axlist,
-                                           series=self._series,
-                                           metadata_reader=metadata_reader,
-                                           **kwargs)
-        self.batchfile._construct_channel_managers(series=self._series,
-                                                metadata_reader=metadata_reader,
-                                                **kwargs)
-        self.batchfile._complete_process(axlist)
-        # Get the refined arrays and sample paths
         (self.digested_arrays,
          self.digested_arrays_sample_paths,
          self.managers
-         ) = self.batchfile.get_output_dicts(self._input_path)
-        self._compute_pixel_metadata(**kwargs)
+         ) = await self.batchfile.get_output_dicts(self._input_path)
+
+        await self._compute_pixel_metadata(**kwargs)
         return self
 
-    def _compute_pixel_metadata(self,
+
+    async def _compute_pixel_metadata(self,
                                **kwargs
                                ):
         """Compute and update pixel metadata for the digested arrays.
@@ -333,13 +307,14 @@ class BridgeBase:
                 new_scaledict=update_scaledict
             )
 
-        self.batchdata = BatchManager(self.managers)
-        self.batchdata.fill_default_meta()
+        self.batchdata = BatchManager()
+        await self.batchdata.init(self.managers)
+        await self.batchdata.fill_default_meta()
 
     def squeeze_dataset(self):
         self.batchdata.squeeze()
 
-    def transpose_dataset(self,
+    async def transpose_dataset(self,
                           dimension_order=Union[str, tuple, list]
                           ):
         """
@@ -353,10 +328,10 @@ class BridgeBase:
         """
         self.batchdata.transpose(newaxes = dimension_order)
 
-    def crop_dataset(self, **kwargs):
+    async def crop_dataset(self, **kwargs):
         self.batchdata.crop(**kwargs)
 
-    def to_cupy(self):
+    async def to_cupy(self):
         self.batchdata.to_cupy()
 
 
@@ -451,7 +426,7 @@ class BridgeBase:
         return processed_chunk_sizes, processed_shard_coeffs
 
 
-    def write_arrays(self,
+    async def write_arrays(self,
                      output_dir,
                      compute=True,
                      use_tensorstore=False,
@@ -472,14 +447,28 @@ class BridgeBase:
         output_dir = os.path.abspath(output_dir)
         storage_options = kwargs.copy()
 
+        # Ensure we've properly initialized the base class
+        if not hasattr(self, 'batchdata') or self.batchdata is None:
+            # Initialize with empty managers dict if needed
+            self.batchdata = BatchManager()
+            await self.batchdata.init({})
+
+        # Ensure digest has been called
+        if not hasattr(self, 'managers') or not self.managers:
+            await self.digest(**storage_options)
+
+        # Now update batchdata with the managers
+        if hasattr(self, 'managers') and self.managers:
+            await self.batchdata.init(self.managers)
+
         # Apply transformations
         if storage_options.get('use_gpu', False):
             self.to_cupy()
         if storage_options.get('squeeze', False):
-            self.squeeze_dataset()
+            await self.squeeze_dataset()
         if storage_options.get('dimension_order'):
             if not storage_options.get('dimension_order') in (None, 'auto'):
-                self.transpose_dataset(storage_options['dimension_order'])
+                await self.transpose_dataset(storage_options['dimension_order'])
 
         # Update storage options with format and verbosity
         storage_options.update({
@@ -488,7 +477,7 @@ class BridgeBase:
         })
 
         # Apply cropping (will not do anything if no cropping parameter is provided)
-        self.crop_dataset(**storage_options)
+        await self.crop_dataset(**storage_options)
 
         # Prepare data for storage
         batch_manager = self.batchdata
@@ -541,7 +530,7 @@ class BridgeBase:
         )
 
         # Store arrays
-        storage_results = store_arrays(
+        storage_results = await store_arrays(
             path_mappings['arrays'],
             output_dir,
             axes=path_mappings['axes'],
@@ -555,6 +544,13 @@ class BridgeBase:
             channel_meta = path_mappings['channels'] or None,
             **storage_options
         )
+
+        # storage_results = await store_arrays(
+        #     flatarrays,
+        #     output_path=output_path,
+        #     writer_func=write_with_tensorstore_async if use_tensorstore else None,
+        #     **storage_options
+        # )
 
         self.flatarrays = path_mappings['arrays']
         
@@ -573,7 +569,7 @@ class BridgeBase:
 
         return storage_results
 
-def downscale(
+async def downscale(
         gr_paths,
         time_scale_factor,
         channel_scale_factor,
@@ -600,13 +596,15 @@ def downscale(
     result_collection = []
 
     min_dimension_size = kwargs.get('min_dimension_size', None)
+    use_tensorstore = kwargs.get('use_tensorstore', False)
     for pyr in pyrs:
         scale_factor = [scale_factor_dict[ax] for ax in pyr.meta.axis_order]
 
         pyr.update_downscaler(scale_factor=scale_factor,
                               n_layers=n_layers,
                               downscale_method=downscale_method,
-                              min_dimension_size=min_dimension_size
+                              min_dimension_size=min_dimension_size,
+                              use_tensorstore=use_tensorstore
                               )
         grpath = pyr.gr.store.root
         grname = os.path.basename(grpath)
@@ -629,6 +627,10 @@ def downscale(
                     sharddict[grname][key] = tuple(pyr.meta.zarr_group)
                     basepath = pyr.meta.resolution_paths[0]
                     sharddict[grname][key] = tuple(pyr.layers[basepath].shards)
+                else:
+                    basepath = pyr.meta.resolution_paths[0]
+                    sharddict[grname][key] = tuple(pyr.layers[basepath].chunks)
+
 
         output_path = os.path.dirname(grpath)
         arrays = {k: {'0': v} if not isinstance(v, dict) else v for k, v in grdict.items()}
@@ -663,8 +665,8 @@ def downscale(
         else:
             flatshards = None
         ### TODO ends
-
-        results = store_arrays(flatarrays,
+        # print(flatshards)
+        results = await store_arrays(flatarrays,
                                output_path=output_path,
                                axes = flataxes,
                                scales=flatscales,

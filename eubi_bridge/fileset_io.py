@@ -403,6 +403,56 @@ class FileSet:
 
         return group
 
+    def get_concatenated_array_paths(self):
+        unique_paths = []
+        unique_input_paths = []
+        unique_ids = []
+
+        # Process paths in natural sort order
+        for key in natsorted(self.path_dict):
+            path = self.path_dict[key]
+            if path not in unique_paths:
+                unique_input_paths.append(key)
+                unique_paths.append(path)
+                unique_ids.append(key)
+
+        # Get arrays for unique paths
+        # unique_arrays = [self.array_dict[path] for path in unique_ids]
+        return {
+            key: path
+            for key, path in zip(unique_input_paths, unique_paths)
+        }
+
+    def get_concatenated_arrs(self) -> Dict[str, tuple]:
+        """
+        Get a dictionary of concatenated arrays with their metadata.
+
+        Returns:
+            dict: A dictionary where keys are input paths and values are tuples of
+                (updated_path, array_data).
+        """
+        # Get unique paths and their corresponding keys
+        unique_paths = []
+        unique_input_paths = []
+        unique_ids = []
+
+        # Process paths in natural sort order
+        for key in natsorted(self.path_dict):
+            path = self.path_dict[key]
+            if path not in unique_paths:
+                unique_input_paths.append(key)
+                unique_paths.append(path)
+                unique_ids.append(key)
+
+        # Get arrays for unique paths
+        unique_arrays = [self.array_dict[path] for path in unique_ids]
+
+        # Create result dictionary
+        return {
+            key: arr
+            for key, arr in zip(unique_input_paths, unique_arrays)
+        }
+
     def get_concatenated_arrays(self) -> Dict[str, tuple]:
         """
         Get a dictionary of concatenated arrays with their metadata.
@@ -434,9 +484,9 @@ class FileSet:
         }
 
 
-@delayed
-def build_managers_dict(**delayed_managers):
-    return delayed_managers
+# @delayed
+# def build_managers_dict(**delayed_managers):
+#     return delayed_managers
 
 
 class BatchFile:
@@ -480,7 +530,7 @@ class BatchFile:
             groups = fileset._split_by(fileset.axis_tags[1])
         return groups
 
-    def _construct_managers(self,
+    async def _construct_managers(self,
                           axes: Iterable[int] = [],
                           series: int = None,
                           metadata_reader: str = 'bfio',
@@ -489,15 +539,20 @@ class BatchFile:
         for axis in axes:
             self.fileset.concatenate_along(axis)
         arrays_ = self.fileset.get_concatenated_arrays()
+        print(f"arrays_: {arrays_}")
         self.sample_paths = natsorted(arrays_.keys())
-        managers = {path: delayed(ArrayManager)(path,
+        print(f"sample_paths: {self.sample_paths}")
+        self.managers = {path: ArrayManager(path,
                                             series = series,
                                             metadata_reader = metadata_reader,
                                             **kwargs
                                             ) for
                          path in self.sample_paths
                          }
-        self.managers = build_managers_dict(**managers).compute()
+
+        # self.managers = build_managers_dict(**managers).compute()
+        for name, manager in self.managers.items():
+            await manager.init()
         return self.managers
 
     def _fuse_channels(self):
@@ -513,7 +568,7 @@ class BatchFile:
             manager._channels = channelslist
             self.managers[path] = manager
 
-    def _construct_channel_managers(self,
+    async def _construct_channel_managers(self,
                       series: int = None,
                       metadata_reader: str = 'bfio',
                       **kwargs
@@ -521,7 +576,7 @@ class BatchFile:
         grs = self.split_channel_groups()
         self.channel_sample_paths = natsorted([grs[grname][0]
                                         for grname in grs])
-        managers = {path: delayed(ArrayManager)(path,
+        self.channel_managers = {path: ArrayManager(path,
                                             series = series,
                                             metadata_reader = metadata_reader,
                                             **kwargs
@@ -529,7 +584,10 @@ class BatchFile:
                          path in self.channel_sample_paths
                          }
 
-        self.channel_managers = build_managers_dict(**managers).compute()
+        # self.channel_managers = build_managers_dict(**managers).compute()
+        for name, manager in self.channel_managers.items():
+            await manager.init()
+
         # channels_ = {}
         for path, manager in self.channel_managers.items():
             manager._ensure_correct_channels()
@@ -538,7 +596,7 @@ class BatchFile:
         return self.channel_managers
 
 
-    def _complete_process(self,
+    async def _complete_process(self,
                           axes: Iterable[int] = [],
                           ):
 
@@ -568,11 +626,112 @@ class BatchFile:
                 channel['color'] = _channel['color']
         return channels
 
-
-    def get_output_dicts(self,
+    async def get_output_paths_managers(self,
                          root_path,
                          path_separator: str = '-',
                          ):
+        # TODO: split the path finding and the array costruction.
+        # Make the path finding async, then.
+        fileset = self.fileset
+        root_path_ = os.path.normpath(root_path).split(os.sep)
+        root_path_top = []
+        for item in root_path_:
+            if '*' in item:
+                break
+            root_path_top.append(item)
+
+        if os.name == 'nt':
+            # Use os.path.splitdrive to handle any drive letter
+            drive, _ = os.path.splitdrive(root_path)
+            root_path = os.path.join(drive + os.sep, *root_path_top)
+        else:
+            root_path = os.path.join(os.sep, *root_path_top)
+
+        # arrays_ = fileset.get_concatenated_arrays()  ### ! Careful here
+        arraypaths = fileset.get_concatenated_array_paths()
+
+        arrays, channels, sample_paths, managers = {}, {}, {}, {}
+
+        for key, updated_key in arraypaths.items():
+            # (updated_key, arr, ) = vals
+            new_key = os.path.relpath(updated_key, root_path)
+            new_key = os.path.splitext(new_key)[0]
+            new_key = new_key.replace(os.sep, path_separator)
+            # arrays[new_key] = arrays_[key][1]
+            sample_paths[new_key] = key
+
+            ### Update colors if they are not unique
+            self.channels_per_output[key] = self._update_nonunique_channel_colors(self.channels_per_output[key])
+            ###
+
+            channels[new_key] = self.channels_per_output[key]
+            managers[new_key] = self.managers[key]
+            managers[new_key]._channels = self.channels_per_output[key]
+
+        return (#arrays,
+                sample_paths,
+                managers
+                )
+
+    async def get_output_arraydicts(self,
+                         root_path,
+                         path_separator: str = '-',
+                         ):
+        # TODO: split the path finding and the array costruction.
+        # Make the path finding async, then.
+        fileset = self.fileset
+        root_path_ = os.path.normpath(root_path).split(os.sep)
+        root_path_top = []
+        for item in root_path_:
+            if '*' in item:
+                break
+            root_path_top.append(item)
+
+        if os.name == 'nt':
+            # Use os.path.splitdrive to handle any drive letter
+            drive, _ = os.path.splitdrive(root_path)
+            root_path = os.path.join(drive + os.sep, *root_path_top)
+        else:
+            root_path = os.path.join(os.sep, *root_path_top)
+
+        # arrays_ = fileset.get_concatenated_arrays()  ### ! Careful here
+
+        sample_paths, managers = await self.get_output_paths_managers(root_path,
+                                                                      path_separator
+                                                                      )
+        arraydicts = fileset.get_concatenated_arrs()
+
+        arrays, channels, sample_paths, managers = {}, {}, {}, {}
+
+        for key in arraydicts.keys():
+            # (updated_key, arr, ) = vals
+            arr = arraydicts[key]
+            updated_key = sample_paths[key]
+            new_key = os.path.relpath(updated_key, root_path)
+            new_key = os.path.splitext(new_key)[0]
+            new_key = new_key.replace(os.sep, path_separator)
+            # arrays[new_key] = arrays_[key][1]
+            arrays[new_key] = key
+
+            ### Update colors if they are not unique
+            # self.channels_per_output[key] = self._update_nonunique_channel_colors(self.channels_per_output[key])
+            ###
+
+            # channels[new_key] = self.channels_per_output[key]
+            # managers[new_key] = self.managers[key]
+            # managers[new_key]._channels = self.channels_per_output[key]
+
+        return (arrays,
+                # sample_paths,
+                # managers
+                )
+
+    async def get_output_dicts(self,
+                         root_path,
+                         path_separator: str = '-',
+                         ):
+        # TODO: split the path finding and the array costruction.
+        # Make the path finding async, then.
         fileset = self.fileset
         root_path_ = os.path.normpath(root_path).split(os.sep)
         root_path_top = []
@@ -590,12 +749,10 @@ class BatchFile:
 
         arrays_ = fileset.get_concatenated_arrays()  ### ! Careful here
 
-
         arrays, channels, sample_paths, managers = {}, {}, {}, {}
 
         for key, vals in arrays_.items():
-            (updated_key, arr,
-             ) = vals
+            (updated_key, arr, ) = vals
             new_key = os.path.relpath(updated_key, root_path)
             new_key = os.path.splitext(new_key)[0]
             new_key = new_key.replace(os.sep, path_separator)
