@@ -235,7 +235,11 @@ class EuBIBridge:
                 verbose=False,
                 no_distributed=False,
                 on_slurm=False,
-            ),
+                #
+                max_concurrency = 16,  # limit how many writes run at once
+                executor_kind = "processes",  # "threads" for I/O, "processes" for CPU-bound compression
+                max_workers = 16,  # size of the pool for sync writer
+                ),
             readers=dict(
                 as_mosaic=False,
                 view_index=0,
@@ -1054,8 +1058,8 @@ class EuBIBridge:
                               )
 
         # self._optimize_dask_config()
-
-        self._start_cluster(**self.cluster_params)
+        if cluster_is_true:
+            self._start_cluster(**self.cluster_params)
 
         series = self.readers_params['scene_index']
 
@@ -1108,9 +1112,15 @@ class EuBIBridge:
         base.set_dask_temp_dir(self._dask_temp_dir)
 
         ###### Write
+        _subcluster = {
+            'max_concurrency': self.cluster_params.get('max_concurrency'),
+            'n_jobs': self.cluster_params.get('n_jobs'),
+            'executor_kind': self.cluster_params.get('executor_kind'),
+        }
         self.base_results = await base.write_arrays(output_path,
                                               compute=True,
                                               verbose=verbose,
+                                              subcluster=_subcluster,
                                               **self.conversion_params
                                               )
         ###### Downscale

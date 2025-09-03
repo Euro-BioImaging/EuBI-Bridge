@@ -444,7 +444,7 @@ def write_chunk_with_tensorstore(chunk: np.ndarray,
 #     block_shape = shards
 #     print(f"block_shape: {block_shape}")
 #
-#     blocks = compute_blocks(arr, block_shape)
+#     blocks = compute_block_slices(arr, block_shape)
 #     for block in blocks:
 #         region = arr[block]#.compute()
 #         print(f"block {block} read")
@@ -575,18 +575,6 @@ def write_with_tensorstore(
     return arr.map_blocks(write_chunk_with_tensorstore, ts_store=ts_store, dtype=dtype)
 
 
-
-async def write_region_with_tensorstore(
-        array,
-        ts_store,
-        slices
-        ):
-    region = array[slices]
-    print(f"The region {slices} read.")
-    await ts_store[slices].save(region)
-    print(f"The region {slices} written.")
-
-
 async def write_with_tensorstore_async(
     arr: da.Array,
     store_path: Union[str, Path],
@@ -637,12 +625,13 @@ async def write_with_tensorstore_async(
     shards = tuple(int(size) for size in np.ravel(shards))
 
     # Rechunk if needed
-    # if zarr_format == 2:
-    #     if not np.equal(arr.chunksize, chunks).all():
-    #         arr = arr.rechunk(shards, method=rechunk_method)
-    # else:  # zarr_format == 3
-    #     if shards is not None and not np.equal(arr.chunksize, shards).all():
-    #         arr = arr.rechunk(shards, method=rechunk_method)
+    if isinstance(arr, da.Array):
+        if zarr_format == 2:
+            if not np.equal(arr.chunksize, chunks).all():
+                arr = arr.rechunk(shards, method=rechunk_method)
+        else:  # zarr_format == 3
+            if shards is not None and not np.equal(arr.chunksize, shards).all():
+                arr = arr.rechunk(shards, method=rechunk_method)
 
     # Prepare zarr metadata
     if zarr_format == 3:
@@ -705,16 +694,8 @@ async def write_with_tensorstore_async(
     block_shape = shards
     print(f"block_shape: {block_shape}")
 
-    blocks = compute_blocks(arr, block_shape)
-    # futures = []
-    # for b in blocks:
-    #     # futures.append(sem_write_block(b))
-    #     print(f"Block {b} written.")
-    #     task = write_block(arr, ts_store, b)
-    #     futures.append(task)
-    # await asyncio.gather(*futures)
-    #     sem = asyncio.Semaphore(max_concurrent)
-    #
+    blocks = compute_block_slices(arr, block_shape)
+
     max_concurrent_blocks = 10
     sem = asyncio.Semaphore(max_concurrent_blocks)
     async def sem_write(arr, ts_store, b):
@@ -728,223 +709,7 @@ async def write_with_tensorstore_async(
     return ts_store
 
 
-
-######
-
-async def write_chunk_with_tensorstore_async(chunk, ts_store, loc):
-    """Async write of a single chunk into a tensorstore array."""
-    # Make sure chunk is concrete (if it’s delayed)
-    if hasattr(chunk, "compute"):
-        chunk = chunk.compute()
-    if hasattr(chunk, "get"):  # handle CuPy → NumPy
-        chunk = chunk.get()
-
-    await ts_store[tuple(slice(*b) for b in loc)].write(chunk)
-
-
-# async def write_chunks_batch(ts_store, chunks, offsets):
-#     """Write multiple chunks concurrently using TensorStore async API."""
-#     from distributed import get_client
-#     client = get_client()
-#
-#     # Convert Delayed -> futures
-#     futures = client.compute(list(chunks))
-#
-#     # Await TensorStore writes as soon as each chunk is ready
-#     coros = [
-#         ts_store[offset].write(fut.result()) for fut, offset in zip(futures, offsets)
-#     ]
-#     await asyncio.gather(*coros)
-
-
-# async def write_chunks_batch(ts_store, chunks, offsets, max_concurrent=16):
-#     """Write multiple chunks concurrently to TensorStore with a concurrency limit."""
-#     client = get_client()
-#
-#     # Persist the chunks in distributed memory
-#     futures = client.compute(list(chunks), sync=False)
-#
-#     sem = asyncio.Semaphore(max_concurrent)
-#
-#     async def sem_write(fut, offset):
-#         async with sem:
-#             data = fut.result()
-#             if hasattr(data, "get"):  # handle CuPy -> NumPy
-#                 data = data.get()
-#             await ts_store[offset].write(data)
-#
-#     coros = [sem_write(fut, offset) for fut, offset in zip(futures, offsets)]
-#     await asyncio.gather(*coros)
-
-# async def write_with_tensorstore_async(
-#     arr: da.Array,
-#     store_path,
-#     chunks=None,
-#     shards=None,
-#     dimension_names=None,
-#     dtype=None,
-#     compressor="blosc",
-#     compressor_params=None,
-#     rechunk_method="tasks",
-#     overwrite=True,
-#     zarr_format=2,
-#     **kwargs
-# ):
-#     """
-#     Write a Dask array into a TensorStore-backed Zarr store asynchronously.
-#     Supports both Zarr v2 and v3 metadata.
-#     """
-#     try:
-#         import tensorstore as ts
-#         from distributed import get_client
-#     except ImportError:
-#         raise ModuleNotFoundError(
-#             "The module tensorstore has not been found. "
-#             "Try 'conda install -c conda-forge tensorstore'"
-#         )
-#
-#     compressor_params = compressor_params or {}
-#     if dtype is not None:
-#         dtype = dtype
-#         dtype_name = np.dtype(dtype).str
-#     else:
-#         if isinstance(arr, da.Array):
-#             dtype_name = np.dtype(arr.dtype).str
-#         elif isinstance(arr, zarr.Array):
-#             dtype_name = np.dtype(arr.dtype).str
-#         elif isinstance(arr, ts.TensorStore):
-#             dtype_name = np.dtype(arr.dtype.name).str
-#
-#     fill_value = kwargs.get("fill_value", 0)
-#
-#     # Normalize chunking
-#     if chunks is None:
-#         chunks = arr.chunksize
-#     chunks = tuple(int(size) for size in chunks)
-#
-#     if shards is None:
-#         shards = copy.deepcopy(chunks)
-#
-#     if not np.allclose(np.mod(shards, chunks), 0):
-#         multiples = np.floor_divide(shards, chunks)
-#         shards = np.multiply(multiples, chunks)
-#     shards = tuple(int(size) for size in np.ravel(shards))
-#
-#     # Rechunk if needed
-#     # if zarr_format == 2:
-#     #     if not np.equal(arr.chunksize, chunks).all():
-#     #         arr = arr.rechunk(chunks, method=rechunk_method)
-#     # else:  # zarr_format == 3
-#     #     if shards is not None and not np.equal(arr.chunksize, shards).all():
-#     #         arr = arr.rechunk(shards, method=rechunk_method)
-#
-#     # Prepare metadata
-#     if zarr_format == 3:
-#         zarr_metadata = {
-#             "data_type": np.dtype(dtype).name,
-#             "shape": arr.shape,
-#             "chunk_grid": {
-#                 "name": "regular",
-#                 "configuration": {"chunk_shape": shards},
-#             },
-#             "dimension_names": list(dimension_names) if dimension_names else None,
-#             "codecs": [
-#                 {
-#                     "name": "sharding_indexed",
-#                     "configuration": {
-#                         "chunk_shape": chunks,
-#                         "codecs": [
-#                             {"name": "bytes", "configuration": {"endian": "little"}},
-#                             {"name": compressor, "configuration": compressor_params},
-#                         ],
-#                         "index_codecs": [
-#                             {"name": "bytes", "configuration": {"endian": "little"}},
-#                             {"name": "crc32c"},
-#                         ],
-#                         "index_location": "end",
-#                     },
-#                 }
-#             ],
-#             "node_type": "array",
-#         }
-#     else:  # zarr_format == 2
-#         print(dtype)
-#         zarr_metadata = {
-#             "compressor": {"id": compressor, **compressor_params},
-#             "dtype": dtype_name, #np.dtype(dtype).str,
-#             "shape": arr.shape,
-#             "chunks": chunks,
-#             "fill_value": fill_value,
-#             "dimension_separator": "/",
-#         }
-#
-#     zarr_spec = {
-#         "driver": "zarr" if zarr_format == 2 else "zarr3",
-#         "kvstore": {"driver": "file", "path": str(store_path)},
-#         "metadata": zarr_metadata,
-#         "create": True,
-#         "delete_existing": overwrite,
-#     }
-#
-#     # Open the TensorStore array asynchronously
-#     ts_store = await ts.open(zarr_spec)
-#
-#     # # Get an async Dask client
-#     # client = get_client()  # assumes you're already in async context
-#     #
-#     # # Build tasks for each chunk
-#     block_shape = shards
-#     print(f"block_shape: {block_shape}")
-#     max_concurrent_blocks = 16
-#
-#     blocks = compute_blocks(arr, block_shape)
-#
-#     client = get_client()
-#     sem = asyncio.Semaphore(max_concurrent_blocks)
-#
-#     async def sem_write_block(block_slices):
-#         # async with sem:
-#         await write_block(arr, ts_store, block_slices)
-#
-#     # Launch all blocks
-#     coros = [sem_write_block(b)
-#              for b in blocks]
-#     await asyncio.gather(*coros)
-#
-#     return ts_store
-
-
-
-# def write_with_tensorstore_sync(arr, store_path, **kwargs):
-#     from distributed import get_client
-#     client = get_client()
-#
-#     # If client is asynchronous, use run_coroutine; else run normally
-#     if client.asynchronous:
-#         # This will schedule the coroutine inside the async client
-#         return client.run_coroutine(write_block, arr, store_path, **kwargs)
-#     else:
-#         # Synchronous client — safe to use asyncio.run
-#         return asyncio.run(write_with_tensorstore_async(arr, store_path, **kwargs))
-
-
-# def write_with_tensorstore_sync(arr, store_path, **kwargs):
-#     return asyncio.run(write_with_tensorstore_async(arr, store_path, **kwargs))
-
-
-def write_with_tensorstore_sync(arr, store_path, **kwargs):
-    """Synchronous wrapper for tensorstore write that works with or without an event loop."""
-    try:
-        # First try to get the running event loop
-        loop = asyncio.get_running_loop()
-        # If we get here, we're in an async context
-        return loop.run_until_complete(write_with_tensorstore_async(arr, store_path, **kwargs))
-    except RuntimeError:
-        # No running event loop, create a new one
-        return asyncio.run(write_with_tensorstore_async(arr, store_path, **kwargs))
-
-
-def compute_blocks(arr, block_shape):
+def compute_block_slices(arr, block_shape):
     """Return slices defining large blocks over the array."""
     slices_per_dim = [range(0, s, b) for
                       s, b in zip(arr.shape, block_shape)]
@@ -1009,167 +774,150 @@ def _get_or_create_multimeta(gr: zarr.Group,
         handler.parse_axes(axis_order=axis_order, units=unit_list)
     return handler
 
-async def store_arrays(
-                 arrays: Dict[str, Dict[str, da.Array]], # flatarrays
-                 output_path: Union[Path, str],
-                 axes: list, # flataxes
-                 scales: Dict[str, Dict[str, Tuple[float, ...]]], # flatscales
-                 units: list, # flatunits
-                 auto_chunk: bool = True,
-                 output_chunks: Dict[str,Tuple[int, ...]] = None,
-                 output_shard_coefficients: Tuple[int, ...] = None,
-                 compute: bool = False,
-                 overwrite: bool = False,
-                 channel_meta: dict = None,
-                 **kwargs # shard_to_chunk_ratio and zarr_format should specified inside kwargs
-                 ) -> Dict[str, da.Array]:
-
-    rechunk_method = kwargs.get('rechunk_method', 'tasks')
-    if rechunk_method == 'rechunker':
-        raise ValueError(f"This version of EuBI-Bridge does not support rechunker. Choose either of 'tasks' or 'p2p'.")
-    assert rechunk_method in ('tasks', 'p2p')
-    use_tensorstore = kwargs.get('use_tensorstore', False)
-    verbose = kwargs.get('verbose', False)
-    zarr_format = kwargs.get('zarr_format', 2)
-    output_shards = kwargs.get('output_shards', None)
-    target_chunk_mb = kwargs.get('target_chunk_mb', 1)
-
-    # writer_func = write_with_tensorstore_sync if use_tensorstore else write_with_zarrpy
-    #
-    writer_func = write_with_tensorstore_async if use_tensorstore else write_with_zarrpy
-
-    zarr.group(output_path, overwrite=overwrite, zarr_version = zarr_format)
-    results = {}
-
-    for key, arr in arrays.items():
-        dtype = kwargs.get('dtype', arr.dtype)
-        if dtype is None:
-            dtype = arr.dtype
-        else:
-            if isinstance(dtype, str):
-                dtype = np.dtype(dtype)
-            arr = arr.astype(dtype)
-
-        flataxes = axes[key]
-        flatscale = scales[key]
-        flatunit = units[key]
-        flatchunks = output_chunks[key]
-
-        if auto_chunk:
-            flatchunks = autocompute_chunk_shape(arr.shape,
-                                                 axes=flataxes,
-                                                 target_chunk_mb=target_chunk_mb,
-                                                 dtype=dtype
-                                                 )
-            if verbose:
-                logger.info(f"Auto-chunking {key} to {flatchunks}")
-
-        flatchannels = channel_meta[key] if channel_meta is not None else None
-
-        chunks = np.minimum(flatchunks or arr.chunksize, arr.shape).tolist()
-        chunks = tuple([int(item) for item in chunks])
-
-        # if zarr_format == 3:
-        if output_shards is not None:
-            shards = output_shards[key]
-        elif output_shard_coefficients is not None:
-            flatshardcoefs = output_shard_coefficients[key]
-            shards = np.multiply(chunks, flatshardcoefs)
-        else:
-            shards = chunks
-
-            shards = tuple([int(item) for item in shards])
-        # else:
-        #     shards = None
-
-        dirpath = os.path.dirname(key)
-        arrpath = os.path.basename(key)
-
-        if is_zarr_group(dirpath):
-            gr = zarr.open_group(dirpath, mode='a')
-        else:
-            gr = zarr.group(dirpath, overwrite=overwrite, zarr_version = zarr_format)
-
-        version = '0.5' if zarr_format == 3 else '0.4'
-
-        meta = _get_or_create_multimeta(gr,
-                                        axis_order=flataxes,
-                                        unit_list=flatunit,
-                                        version=version
-                                        )
-
-        meta.add_dataset(path=arrpath,
-                         scale=flatscale,
-                         overwrite=True)
-        meta.retag(os.path.basename(dirpath))
-
-        if flatchannels == 'auto':
-            if 'c' in flataxes:
-                idx = flataxes.index('c')
-                size = arr.shape[idx]
-            else:
-                size = 1
-            meta.autocompute_omerometa(size, arr.dtype)
-        elif flatchannels is None:
-            pass
-        else:
-            for channel in flatchannels:
-                meta.add_channel(color = channel['color'],
-                                 label = channel['label'],
-                                 dtype = dtype.str
-                                 )
-        meta.save_changes()
-
-        if verbose:
-            logger.info(f"Writer function: {writer_func}")
-            logger.info(f"Rechunk method: {rechunk_method}")
-
-        # if asyncio.iscoroutinefunction(writer_func):
-        results[key] = writer_func(arr=arr,
-                                         store_path=key,  # compressor = compressor, dtype = dtype,
-                                         chunks=chunks,
-                                         shards=shards,
-                                         dimension_names=flataxes,
-                                         overwrite=overwrite,
-                                         **kwargs)
-        # else:
-        #     results[key] = writer_func(arr=arr,
-        #                                store_path=key,  # compressor = compressor, dtype = dtype,
-        #                                chunks=chunks,
-        #                                shards=shards,
-        #                                dimension_names=flataxes,
-        #                                overwrite=overwrite,
-        #                                **kwargs)
-
-        # results[key] = writer_func(arr=arr,
-        #                            store_path=key,  # compressor = compressor, dtype = dtype,
-        #                            chunks=chunks,
-        #                            shards = shards,
-        #                            dimension_names = flataxes,
-        #                            overwrite=overwrite,
-        #                            **kwargs
-        #                            )
-
-    # try:
-    await asyncio.gather(*(list(results.values())))
-    return results
-    # except:
-    #     pass
-
-    if compute:
-        # try:
-            # dask.compute(list(results.values()), retries = 6)
-
-        dask.compute(
-            list(results.values()),
-            retries=6,
-        )
-        # except Exception as e:
-        #     # print(e)
-        #     pass
-    else:
-        return results
-    return results
+# async def store_arrays(
+#                  arrays: Dict[str, Dict[str, da.Array]], # flatarrays
+#                  output_path: Union[Path, str],
+#                  axes: list, # flataxes
+#                  scales: Dict[str, Dict[str, Tuple[float, ...]]], # flatscales
+#                  units: list, # flatunits
+#                  auto_chunk: bool = True,
+#                  output_chunks: Dict[str,Tuple[int, ...]] = None,
+#                  output_shard_coefficients: Tuple[int, ...] = None,
+#                  compute: bool = False,
+#                  overwrite: bool = False,
+#                  channel_meta: dict = None,
+#                  **kwargs # shard_to_chunk_ratio and zarr_format should specified inside kwargs
+#                  ) -> Dict[str, da.Array]:
+#
+#     rechunk_method = kwargs.get('rechunk_method', 'tasks')
+#     if rechunk_method == 'rechunker':
+#         raise ValueError(f"This version of EuBI-Bridge does not support rechunker. Choose either of 'tasks' or 'p2p'.")
+#     assert rechunk_method in ('tasks', 'p2p')
+#     use_tensorstore = kwargs.get('use_tensorstore', False)
+#     verbose = kwargs.get('verbose', False)
+#     zarr_format = kwargs.get('zarr_format', 2)
+#     output_shards = kwargs.get('output_shards', None)
+#     target_chunk_mb = kwargs.get('target_chunk_mb', 1)
+#
+#     # writer_func = write_with_tensorstore_sync if use_tensorstore else write_with_zarrpy
+#     #
+#     writer_func = write_with_tensorstore_async if use_tensorstore else write_with_zarrpy
+#
+#     zarr.group(output_path, overwrite=overwrite, zarr_version = zarr_format)
+#     results = {}
+#
+#     for key, arr in arrays.items():
+#         dtype = kwargs.get('dtype', arr.dtype)
+#         if dtype is None:
+#             dtype = arr.dtype
+#         else:
+#             if isinstance(dtype, str):
+#                 dtype = np.dtype(dtype)
+#             arr = arr.astype(dtype)
+#
+#         flataxes = axes[key]
+#         flatscale = scales[key]
+#         flatunit = units[key]
+#         flatchunks = output_chunks[key]
+#
+#         if auto_chunk:
+#             flatchunks = autocompute_chunk_shape(arr.shape,
+#                                                  axes=flataxes,
+#                                                  target_chunk_mb=target_chunk_mb,
+#                                                  dtype=dtype
+#                                                  )
+#             if verbose:
+#                 logger.info(f"Auto-chunking {key} to {flatchunks}")
+#
+#         flatchannels = channel_meta[key] if channel_meta is not None else None
+#
+#         chunks = np.minimum(flatchunks or arr.chunksize, arr.shape).tolist()
+#         chunks = tuple([int(item) for item in chunks])
+#
+#         # if zarr_format == 3:
+#         if output_shards is not None:
+#             shards = output_shards[key]
+#         elif output_shard_coefficients is not None:
+#             flatshardcoefs = output_shard_coefficients[key]
+#             shards = np.multiply(chunks, flatshardcoefs)
+#         else:
+#             shards = chunks
+#
+#             shards = tuple([int(item) for item in shards])
+#         # else:
+#         #     shards = None
+#
+#         dirpath = os.path.dirname(key)
+#         arrpath = os.path.basename(key)
+#
+#         if is_zarr_group(dirpath):
+#             gr = zarr.open_group(dirpath, mode='a')
+#         else:
+#             gr = zarr.group(dirpath, overwrite=overwrite, zarr_version = zarr_format)
+#
+#         version = '0.5' if zarr_format == 3 else '0.4'
+#
+#         meta = _get_or_create_multimeta(gr,
+#                                         axis_order=flataxes,
+#                                         unit_list=flatunit,
+#                                         version=version
+#                                         )
+#         print(flatscale)
+#         meta.add_dataset(path=arrpath,
+#                          scale=flatscale,
+#                          overwrite=True)
+#         meta.retag(os.path.basename(dirpath))
+#
+#         if flatchannels == 'auto':
+#             if 'c' in flataxes:
+#                 idx = flataxes.index('c')
+#                 size = arr.shape[idx]
+#             else:
+#                 size = 1
+#             meta.autocompute_omerometa(size, arr.dtype)
+#         elif flatchannels is None:
+#             pass
+#         else:
+#             for channel in flatchannels:
+#                 meta.add_channel(color = channel['color'],
+#                                  label = channel['label'],
+#                                  dtype = dtype.str
+#                                  )
+#         meta.save_changes()
+#
+#         if verbose:
+#             logger.info(f"Writer function: {writer_func}")
+#             logger.info(f"Rechunk method: {rechunk_method}")
+#
+#         # if asyncio.iscoroutinefunction(writer_func):
+#         results[key] = writer_func(arr=arr,
+#                                          store_path=key,  # compressor = compressor, dtype = dtype,
+#                                          chunks=chunks,
+#                                          shards=shards,
+#                                          dimension_names=flataxes,
+#                                          overwrite=overwrite,
+#                                          **kwargs)
+#
+#     # try:
+#     await asyncio.gather(*(list(results.values())))
+#     return results
+#     # except:
+#     #     pass
+#
+#     if compute:
+#         # try:
+#             # dask.compute(list(results.values()), retries = 6)
+#
+#         dask.compute(
+#             list(results.values()),
+#             retries=6,
+#         )
+#         # except Exception as e:
+#         #     # print(e)
+#         #     pass
+#     else:
+#         return results
+#     return results
 
 
 # async def store_arrays(arrays,
@@ -1191,3 +939,226 @@ async def store_arrays(
 #             results[key] = writer_func(arr=arr, store_path=store_path, **kwargs)
 #
 #     return results
+
+
+
+import asyncio
+import os
+from pathlib import Path
+from typing import Dict, Tuple, Union, Optional
+import numpy as np
+import zarr
+import dask.array as da
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+
+# ... assume your helpers: autocompute_chunk_shape, is_zarr_group, _get_or_create_multimeta, logger, etc.
+
+async def store_arrays(
+    arrays: Dict[str, Dict[str, da.Array]],  # flatarrays (key -> dask array)
+    output_path: Union[Path, str],
+    axes: dict,  # flataxes per key
+    scales: dict,  # flatscales per key
+    units: dict,  # flatunits per key
+    auto_chunk: bool = True,
+    output_chunks: Optional[Dict[str, Tuple[int, ...]]] = None,
+    output_shard_coefficients: Optional[Dict[str, Tuple[int, ...]]] = None,
+    compute: bool = False,
+    overwrite: bool = False,
+    channel_meta: Optional[dict] = None,
+    *,
+    max_concurrency: int = 16,          # limit how many writes run at once
+    executor_kind: str = "processes",    # "threads" for I/O, "processes" for CPU-bound compression
+    max_workers: Optional[int] = None, # size of the pool for sync writer
+    **kwargs
+) -> Dict[str, "asyncio.Task"]:
+
+    rechunk_method = kwargs.get('rechunk_method', 'tasks')
+    if rechunk_method == 'rechunker':
+        raise ValueError("This version does not support rechunker. Choose 'tasks' or 'p2p'.")
+    assert rechunk_method in ('tasks', 'p2p')
+
+    use_tensorstore = kwargs.get('use_tensorstore', False)
+    verbose = kwargs.get('verbose', False)
+    zarr_format = kwargs.get('zarr_format', 2)
+    output_shards = kwargs.get('output_shards', None)
+    target_chunk_mb = kwargs.get('target_chunk_mb', 1)
+
+    # Choose writer
+    writer_func = write_with_tensorstore_async if use_tensorstore else write_with_zarrpy
+
+    # Make (or overwrite) the top-level group
+    zarr.group(output_path, overwrite=overwrite, zarr_version=zarr_format)
+
+    # Pool for sync writer (optional)
+    pool = None
+    if not asyncio.iscoroutinefunction(writer_func):
+        if executor_kind == "threads":
+            pool = ThreadPoolExecutor(max_workers=max_workers)
+        elif executor_kind == "processes":
+            pool = ProcessPoolExecutor(max_workers=max_workers)
+        else:
+            raise ValueError("executor_kind must be 'threads' or 'processes'")
+
+    sem = asyncio.Semaphore(max_concurrency)
+    tasks: Dict[str, asyncio.Task] = {}
+
+    async def run_one(
+        key: str,
+        arr: da.Array,
+        dtype,
+        flataxes,
+        flatscale,
+        flatunit,
+        flatchunks,
+        flatchannels,
+        shards,
+        overwrite: bool,
+    ):
+        # Limit concurrent writers
+        async with sem:
+            # Do the actual write
+            if asyncio.iscoroutinefunction(writer_func):
+                # Async writer: await directly
+                return await writer_func(
+                    arr=arr,
+                    store_path=key,
+                    chunks=flatchunks,
+                    shards=shards,
+                    dimension_names=flataxes,
+                    overwrite=overwrite,
+                    **kwargs,
+                )
+            else:
+                # Sync writer: offload to thread/process so we don't block the loop
+                if pool is None:
+                    # lightweight fallback to_thread (threads only)
+                    return await asyncio.to_thread(
+                        writer_func,
+                        arr=arr,
+                        store_path=key,
+                        chunks=flatchunks,
+                        shards=shards,
+                        dimension_names=flataxes,
+                        overwrite=overwrite,
+                        **kwargs,
+                    )
+                else:
+                    loop = asyncio.get_running_loop()
+                    return await loop.run_in_executor(
+                        pool,
+                        lambda: writer_func(
+                            arr=arr,
+                            store_path=key,
+                            chunks=flatchunks,
+                            shards=shards,
+                            dimension_names=flataxes,
+                            overwrite=overwrite,
+                            **kwargs,
+                        ),
+                    )
+
+    # Build metadata + schedule tasks
+    for key, arr in arrays.items():
+        dtype = kwargs.get('dtype', arr.dtype)
+        if dtype is None:
+            dtype = arr.dtype
+        else:
+            if isinstance(dtype, str):
+                dtype = np.dtype(dtype)
+            arr = arr.astype(dtype)
+
+        flataxes = axes[key]
+        flatscale = scales[key]
+        flatunit = units[key]
+        flatchunks = output_chunks[key] if output_chunks is not None else None
+
+        if auto_chunk or flatchunks is None:
+            flatchunks = autocompute_chunk_shape(
+                arr.shape, axes=flataxes, target_chunk_mb=target_chunk_mb, dtype=dtype
+            )
+            if verbose:
+                logger.info(f"Auto-chunking {key} to {flatchunks}")
+
+        flatchannels = channel_meta[key] if channel_meta is not None else None
+
+        chunks = np.minimum(flatchunks or arr.chunksize, arr.shape).tolist()
+        chunks = tuple(int(item) for item in chunks)
+
+        if output_shards is not None:
+            shards = output_shards[key]
+        elif output_shard_coefficients is not None:
+            flatshardcoefs = output_shard_coefficients[key]
+            shards = tuple(int(c * s) for c, s in zip(chunks, flatshardcoefs))
+        else:
+            shards = chunks
+        shards = tuple(int(item) for item in shards)
+
+        dirpath = os.path.dirname(key)
+        arrpath = os.path.basename(key)
+
+        if is_zarr_group(dirpath):
+            gr = zarr.open_group(dirpath, mode='a')
+        else:
+            gr = zarr.group(dirpath, overwrite=overwrite, zarr_version=zarr_format)
+
+        version = '0.5' if zarr_format == 3 else '0.4'
+
+        meta = _get_or_create_multimeta(
+            gr, axis_order=flataxes, unit_list=flatunit, version=version
+        )
+        meta.add_dataset(path=arrpath, scale=flatscale, overwrite=True)
+        meta.retag(os.path.basename(dirpath))
+
+        if flatchannels == 'auto':
+            if 'c' in flataxes:
+                idx = flataxes.index('c')
+                size = arr.shape[idx]
+            else:
+                size = 1
+            meta.autocompute_omerometa(size, arr.dtype)
+        elif flatchannels is not None:
+            for channel in flatchannels:
+                meta.add_channel(
+                    color=channel['color'],
+                    label=channel['label'],
+                    dtype=dtype.str,
+                )
+        meta.save_changes()
+
+        if verbose:
+            logger.info(f"Writer function: {writer_func}")
+            logger.info(f"Rechunk method: {rechunk_method}")
+
+        # Schedule immediately; keep iterating without blocking
+        tasks[key] = asyncio.create_task(
+            run_one(
+                key=key,
+                arr=arr,
+                dtype=dtype,
+                flataxes=flataxes,
+                flatscale=flatscale,
+                flatunit=flatunit,
+                flatchunks=chunks,
+                flatchannels=flatchannels,
+                shards=shards,
+                overwrite=overwrite,
+            ),
+            name=f"store:{key}",
+        )
+
+    # Wait for all to finish; keep mapping to keys
+    results_list = await asyncio.gather(*tasks.values(), return_exceptions=False)
+    results_by_key = {k: v for k, v in zip(tasks.keys(), results_list)}
+
+    # Dask compute hook (if you want to trigger lazy computations afterwards)
+    if compute:
+        # Note: If writer_func pulls from arr (dask), many writers compute on the fly.
+        # This optional compute triggers any remaining graphs you collected, if applicable.
+        import dask
+        dask.compute(list(results_by_key.values()), retries=6)
+
+    # Cleanup pools
+    if pool is not None:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+    return results_by_key

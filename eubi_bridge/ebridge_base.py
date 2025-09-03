@@ -197,7 +197,7 @@ class BridgeBase:
         self.managers = {name: manager}
 
         # remains sync unless it also needs async
-        self._compute_pixel_metadata(**kwargs)
+        await self._compute_pixel_metadata(**kwargs)
 
     async def digest(
             self,
@@ -431,6 +431,7 @@ class BridgeBase:
                      compute=True,
                      use_tensorstore=False,
                      rechunk_method='tasks',
+                     subcluster = None,
                      **kwargs):
         """Write processed arrays to storage.
 
