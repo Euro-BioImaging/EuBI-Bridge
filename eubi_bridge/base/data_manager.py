@@ -525,8 +525,10 @@ class H5ImageMeta:
         scaledict = {}
         axes = self.get_axes()
         axlist = axistags.get('axes', [])
-        axes = self.get_axes()
+
         for idx, ax in enumerate(axlist):
+            if ax['key'] == 'c':
+                continue
             if 'key' in ax:
                 if ax['key'] in axes:
                     if 'scale' in ax:
@@ -553,6 +555,8 @@ class H5ImageMeta:
         axes = self.get_axes()
         for idx, ax in enumerate(axlist):
             if 'key' in ax:
+                if ax['key'] == 'c':
+                    continue
                 if ax['key'] in axes:
                     if 'unit' in ax:
                         unitdict[ax['key']] = ax['scale']
