@@ -123,7 +123,7 @@ class BridgeBase:
                      verified_for_cluster,
                      chunks_yx = None,
                      readers_params = {},
-                     skip_dask = False
+                     # skip_dask = False
                      ):
         """
         - If the input path is a directory, can read single or multiple files from it.
@@ -190,10 +190,9 @@ class BridgeBase:
         manager = ArrayManager(path,
                                series = self._series,
                                metadata_reader=metadata_reader,
-                               skip_dask = True,
+                               # skip_dask = False,
                                **kwargs
                                )
-        # name = ### KALDIM
         import os
         name = os.path.basename(path).split('.')[0]
         self.digested_arrays = {name: manager.array}
@@ -210,7 +209,7 @@ class BridgeBase:
                axes_of_concatenation: Union[int, tuple, str] = None,
                ###
                metadata_reader: str = 'bfio',
-               skip_dask: bool = True,
+               # skip_dask: bool = True,
                **kwargs
                ):
         """
@@ -245,24 +244,6 @@ class BridgeBase:
             ...     axes_of_concatenation='tz'  # Concatenate only time and z dimensions
             ... )
         """
-
-        # n_filepaths = len(self.filepaths)
-        if len(self.filepaths) == 1:
-            _path = self.filepaths[0]
-            if not _path.endswith('.tif') and not _path.endswith('.tiff'):
-                # print(f"passing.")
-                if skip_dask:
-                    logger.info("Ignoring skip_dask for non-tif files.")
-            else:
-                if skip_dask:
-                    # print(f"skipping dask digest for {self.filepaths}")
-                    self._digest_skip_dask(_path,
-                                           metadata_reader=metadata_reader,
-                                           **kwargs)
-                    return self
-                else:
-                    # print(f"using dask digest for {self.filepaths}")
-                    pass
 
         axes = 'tczyx'
         tags = (time_tag, channel_tag, z_tag, y_tag, x_tag)
