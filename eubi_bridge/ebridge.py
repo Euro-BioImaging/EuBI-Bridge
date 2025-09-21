@@ -1407,21 +1407,26 @@ class EuBIBridge:
 
                 if channel_idx is None:
                     logger.warning(f"Channel index is not specified. Channel update is done with default values.")
-                if any([idx > n_channels for idx in channel_idx]):
-                    logger.warning(f"Channel index is out of range for the path {path}. Channel update is done with default values.")
+                else:
+                    if not isinstance(channel_idx, (list, tuple)):
+                        channel_idx = [channel_idx]
+                    if any([idx > n_channels for idx in channel_idx]):
+                        logger.warning(f"Channel index is out of range for the path {path}. Channel update is done with default values.")
+                    if len(channel_idx) != n_channels:
+                        logger.warning(f"Channel index is not specified for all channels. Non-specified channels will be updated with default values.")
+                    if not isinstance(label, (list, tuple)):
+                        label = [label]
+                    if not isinstance(color, (list, tuple)):
+                        color = [color]
+                    if not (len(channel_idx) == len(label) == len(color)):
+                        raise ValueError("Channel index, label, and color must have the same length.")
 
-                if not isinstance(channel_idx, (list, tuple)):
-                    channel_idx = [channel_idx]
-                if not isinstance(label, (list, tuple)):
-                    label = [label]
-                if not isinstance(color, (list, tuple)):
-                    color = [color]
-                for idx, lbl, cl in zip(channel_idx, label, color):
-                    pyr.meta.add_channel(channel_idx = idx,
-                                         label = lbl,
-                                         color = cl,
-                                         dtype = dtype)
-                pyr.meta.save_changes()
+                    for idx, lbl, cl in zip(channel_idx, label, color):
+                        pyr.meta.add_channel(channel_idx = idx,
+                                             label = lbl,
+                                             color = cl,
+                                             dtype = dtype)
+                    pyr.meta.save_changes()
             else:
                 logger.info(f"Cannot update metadata for non-zarr path: {path}")
 
