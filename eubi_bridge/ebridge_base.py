@@ -24,6 +24,12 @@ from eubi_bridge.utils.convenience import (
     take_filepaths
 )
 
+from eubi_bridge.utils.logging_config import get_logger
+
+# Set up logger for this module
+logger = get_logger(__name__)
+
+
 # Configure logging
 logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
 warnings.filterwarnings('ignore')
@@ -626,6 +632,7 @@ def downscale(
                 chunkdict[grname][key] = tuple(pyr.base_array.chunksize)
                 # channeldict[grname][key] = tuple(pyr.meta.channels)
                 if pyr.meta.zarr_format == 3:
+                    # print(f"pyr: {pyr}")
                     sharddict[grname][key] = tuple(pyr.meta.zarr_group)
                     basepath = pyr.meta.resolution_paths[0]
                     sharddict[grname][key] = tuple(pyr.layers[basepath].shards)
@@ -656,13 +663,17 @@ def downscale(
                       for level, chunk in subchunks.items()}
 
         if len(sharddict) > 0:
+            # print(f"sharddict: {sharddict}")
             flatshards = {os.path.join(output_path, f"{key}.zarr"
                           if not key.endswith('zarr') else key, str(level)): shard
                           for key, subshards in sharddict.items()
                           for level, shard in subshards.items()}
+            if len(flatshards) == 0:
+                flatshards = None
         else:
             flatshards = None
         ### TODO ends
+        # print(f"flatshards: {flatshards}")
 
         results = store_arrays(flatarrays,
                                output_path=output_path,

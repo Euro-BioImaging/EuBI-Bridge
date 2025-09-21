@@ -17,6 +17,7 @@ from eubi_bridge.ebridge_base import BridgeBase, downscale
 from eubi_bridge.utils.convenience import take_filepaths, is_zarr_group
 from eubi_bridge.utils.metadata_utils import print_printable, get_printables
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.ngff.multiscales import generate_channel_metadata, Pyramid
 
 import logging, warnings
 
@@ -46,7 +47,7 @@ def verify_filepaths_for_cluster(filepaths):
                'nd2',
                'ome.tiff', 'ome.tif',
                'tiff', 'tif', 'zarr',
-               'png', 'jpg', 'jpeg']
+               'png', 'jpg', 'jpeg', 'h5']
 
     for filepath in filepaths:
         verified = any(list(map(lambda path, ext: path.endswith(ext), [filepath] * len(formats), formats)))
@@ -968,7 +969,6 @@ class EuBIBridge:
         self.conversion_params = self._collect_params('conversion', **kwargs)
         self.downscale_params = self._collect_params('downscale', **kwargs)
 
-        print(self.conversion_params)
         convert_bigtiff_to_omezarr(input_tiff=input_tiff,
                                    output_zarr_dir=output_zarr_dir,
                                    # dimension_order='tczyx',
@@ -1335,5 +1335,99 @@ class EuBIBridge:
         else:
             shutil.rmtree(self._dask_temp_dir)
 
+    def update_channel_meta(self,
+                          input_path: Union[Path, str],
+                          includes=None,
+                          excludes=None,
+                          channel_idx=None, #autoincrement
+                          label = "Channel_1",
+                          color = "Red",
+                          **kwargs
+                          ):
+        """
+        Updates pixel metadata for image files located at the specified input path.
+
+        Args:
+            input_path (Union[Path, str]): Path to input file or directory.
+            includes (optional): Filename patterns to include.
+            excludes (optional): Filename patterns to exclude.
+            series (int, optional): Series index to process.
+            channel_idx (int, optional): Channel index to update.
+            label (str, optional): Channel label.
+            color (str, optional): Channel color.
+            **kwargs: Additional parameters for cluster and conversion configuration.
+        Returns:
+            None
+        """
+
+        # Collect cluster and conversion parameters
+        self.cluster_params = self._collect_params('cluster', **kwargs)
+        self.readers_params = self._collect_params('readers', **kwargs)
+        self.conversion_params = self._collect_params('conversion', **kwargs)
+
+        # Collect file paths based on inclusion and exclusion patterns
+        paths = take_filepaths(input_path, includes=includes, excludes=excludes)
+
+        filepaths = sorted(list(paths))
+
+        series = self.readers_params['scene_index']
+
+        base = BridgeBase(input_path,
+                          excludes=excludes,
+                          includes=includes,
+                          series=series
+                          )
+
+        # Read and digest the dataset
+        base.read_dataset(verified_for_cluster = False,
+                          readers_params=self.readers_params
+                          )
+
+        # Prepare channel metadata arguments
+
+        base.digest()
+        logger.info(f"Metadata was extracted")
+
+        if self.client is not None:
+            base.client = self.client
+        base.set_dask_temp_dir(self._dask_temp_dir)
+
+        # Update metadata for each dataset manager
+        for path, manager in base.batchdata.managers.items():
+            if is_zarr_group(manager.path):
+                # manager.sync_pyramid(self.conversion_params['save_omexml'])
+                pyr = manager.pyr
+                dtype = pyr.base_array.dtype
+
+                n_channels = manager.shapedict.get('c', 0)
+                channel_meta = generate_channel_metadata(n_channels, dtype)
+                pyr.meta.omero['channels'] = channel_meta['omero']['channels']
+                pyr.meta._pending_changes = True
+                pyr.meta.save_changes()
+
+                if channel_idx is None:
+                    logger.warning(f"Channel index is not specified. Channel update is done with default values.")
+                if channel_idx > n_channels:
+                    logger.warning(f"Channel index is out of range for the path {path}. Channel update is done with default values.")
+
+                pyr.meta.add_channel(channel_idx = channel_idx,
+                                     label = label,
+                                     color = color,
+                                     dtype = dtype)
+                pyr.meta.save_changes()
+            else:
+                logger.info(f"Cannot update metadata for non-zarr path: {path}")
+
+        logger.info(f"Metadata was updated successfully")
+        # Shutdown the cluster and clean up temporary directories
+        if self.client is not None:
+            self.client.shutdown()
+            self.client.close()
+
+        if isinstance(self._dask_temp_dir, tempfile.TemporaryDirectory):
+            shutil.rmtree(self._dask_temp_dir.name)
+        else:
+            if self._dask_temp_dir is not None:
+                shutil.rmtree(self._dask_temp_dir)
 
 

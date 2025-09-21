@@ -322,141 +322,11 @@ def write_chunk_with_tensorstore(chunk: np.ndarray,
                                  ts_store,
                                  block_info: Dict
                                  ) -> None:
-    # BUNU ASYNCIO ILE YAP. Alttaki örnege bak.
     if hasattr(chunk, "get"):
         chunk = chunk.get()  # Convert CuPy -> NumPy
-    ts_store[tuple(slice(*b) for b in block_info[0]["array-location"])].write(chunk)
-
-# def write_with_tensorstore(
-#     arr: da.Array,
-#     store_path: Union[str, Path],
-#     chunks: Optional[Tuple[int, ...]] = None,
-#     shards: Optional[Tuple[int, ...]] = None,
-#     dimension_names: str = None,
-#     dtype: Any = None,
-#     compressor: str = 'blosc',
-#     compressor_params: dict = None,
-#     rechunk_method: str = 'tasks',
-#     overwrite: bool = True,
-#     zarr_format: int = 2,
-#     **kwargs
-# ) -> da.Array:
-#     """
-#     Write dask array to zarr storage using tensorstore with support for both zarr v2 and v3 formats.
-#     """
-#     try:
-#         import tensorstore as ts
-#     except ImportError:
-#         raise ModuleNotFoundError(
-#             "The module tensorstore has not been found. "
-#             "Try 'conda install -c conda-forge tensorstore'"
-#         )
-#
-#     compressor_params = compressor_params or {}
-#     # shard_to_chunk_ratio = kwargs.get('shard_to_chunk_ratio', 3)
-#     dtype = dtype or arr.dtype
-#     fill_value = kwargs.get('fill_value', get_default_fill_value(dtype))
-#
-#     if chunks is None:
-#         chunks = arr.chunksize
-#
-#     chunks = tuple(int(size) for size in chunks)
-#
-#     if shards is None:
-#         shards = copy.deepcopy(chunks)
-#
-#     if not np.allclose(np.mod(shards, chunks), 0):
-#         multiples = np.floor_divide(shards, chunks)
-#         shards = np.multiply(multiples, chunks)
-#
-#     shards = tuple(int(size) for size in np.ravel(shards))
-#
-#     # Rechunk if needed
-#     # if zarr_format == 2:
-#     #     if not np.equal(arr.chunksize, chunks).all():
-#     #         arr = arr.rechunk(shards, method=rechunk_method)
-#     # else:  # zarr_format == 3
-#     #     if shards is not None and not np.equal(arr.chunksize, shards).all():
-#     #         arr = arr.rechunk(shards, method=rechunk_method)
-#
-#     # Prepare zarr metadata
-#     if zarr_format == 3:
-#         # Only include array-to-array codecs such as blosc
-#         zarr_metadata = {
-#             "data_type": np.dtype(dtype).name,
-#             "shape": arr.shape,
-#             "chunk_grid": {
-#                 "name": "regular",
-#                 "configuration": {
-#                     "chunk_shape": shards if zarr_format == 3 else chunks,
-#                 }
-#             },
-#             "dimension_names": list(dimension_names),
-#             "codecs": [
-#                 {
-#                     "name": "sharding_indexed",
-#                     "configuration": {
-#                         "chunk_shape": chunks,
-#                         "codecs": [{"name": "bytes",
-#                                     "configuration": {"endian": "little"}},
-#                                    {"name": compressor,
-#                                     "configuration": compressor_params or {}}],
-#                         "index_codecs": [{"name": "bytes",
-#                                           "configuration": {"endian": "little"}},
-#                                          {"name": "crc32c"}],
-#                         "index_location": "end"
-#                     }
-#                 }
-#             ],
-#             "node_type": "array"
-#         }
-#
-#     else:  # zarr_format == 2
-#         zarr_metadata = {
-#             "compressor": {
-#                 "id": compressor,
-#                 **compressor_params
-#             },
-#             "dtype": np.dtype(dtype).str,
-#             "shape": arr.shape,
-#             "chunks": chunks,
-#             "fill_value": fill_value,
-#             "dimension_separator": '/',
-#         }
-#
-#     zarr_spec = {
-#         "driver": "zarr" if zarr_format == 2 else "zarr3",
-#         "kvstore": {
-#             "driver": "file",
-#             "path": str(store_path),
-#         },
-#         "metadata": zarr_metadata,
-#         "create": True,
-#         "delete_existing": overwrite,
-#     }
-#
-#     ts_store = ts.open(zarr_spec).result()
-#
-#     block_shape = shards
-#     print(f"block_shape: {block_shape}")
-#
-#     blocks = compute_blocks(arr, block_shape)
-#     for block in blocks:
-#         region = arr[block]#.compute()
-#         print(f"block {block} read")
-#         ts_store[block] = region
-#         print(f"block {block} written")
-#
-#     # return arr.map_blocks(write_chunk_with_tensorstore, ts_store=ts_store, dtype=dtype)
-
-def write_chunk_with_tensorstore(chunk: np.ndarray,
-                                 ts_store,
-                                 block_info: Dict
-                                 ) -> None:
-    # BUNU ASYNCIO ILE YAP. Alttaki örnege bak.
-    if hasattr(chunk, "get"):
-        chunk = chunk.get()  # Convert CuPy -> NumPy
-    ts_store[tuple(slice(*b) for b in block_info[0]["array-location"])].write(chunk)
+    fut = ts_store[tuple(slice(*b) for b in block_info[0]["array-location"])].write(chunk)
+    fut.result()
+    return
 
 def write_with_tensorstore(
     arr: da.Array,
@@ -568,335 +438,10 @@ def write_with_tensorstore(
 
     ts_store = ts.open(zarr_spec).result()
 
-    return arr.map_blocks(write_chunk_with_tensorstore, ts_store=ts_store, dtype=dtype)
+    return arr.map_blocks(write_chunk_with_tensorstore,
+                          ts_store=ts_store,
+                          dtype=dtype)
 
-
-
-async def write_region_with_tensorstore(
-        array,
-        ts_store,
-        slices
-        ):
-    region = array[slices]
-    print(f"The region {slices} read.")
-    await ts_store[slices].save(region)
-    print(f"The region {slices} written.")
-
-
-async def write_with_tensorstore_regionwise(
-    arr: da.Array,
-    store_path: Union[str, Path],
-    chunks: Optional[Tuple[int, ...]] = None,
-    shards: Optional[Tuple[int, ...]] = None,
-    dimension_names: str = None,
-    dtype: Any = None,
-    compressor: str = 'blosc',
-    compressor_params: dict = None,
-    rechunk_method: str = 'tasks',
-    overwrite: bool = True,
-    zarr_format: int = 2,
-    **kwargs
-) -> da.Array:
-    """
-    Write dask array to zarr storage using tensorstore with support for both zarr v2 and v3 formats.
-    """
-    try:
-        import tensorstore as ts
-    except ImportError:
-        raise ModuleNotFoundError(
-            "The module tensorstore has not been found. "
-            "Try 'conda install -c conda-forge tensorstore'"
-        )
-
-    compressor_params = compressor_params or {}
-    # shard_to_chunk_ratio = kwargs.get('shard_to_chunk_ratio', 3)
-    dtype = dtype or arr.dtype
-    fill_value = kwargs.get('fill_value', get_default_fill_value(dtype))
-
-    if chunks is None:
-        chunks = arr.chunksize
-
-    chunks = tuple(int(size) for size in chunks)
-
-    if shards is None:
-        shards = copy.deepcopy(chunks)
-
-    if not np.allclose(np.mod(shards, chunks), 0):
-        multiples = np.floor_divide(shards, chunks)
-        shards = np.multiply(multiples, chunks)
-
-    shards = tuple(int(size) for size in np.ravel(shards))
-
-    # Rechunk if needed
-    # if zarr_format == 2:
-    #     if not np.equal(arr.chunksize, chunks).all():
-    #         arr = arr.rechunk(shards, method=rechunk_method)
-    # else:  # zarr_format == 3
-    #     if shards is not None and not np.equal(arr.chunksize, shards).all():
-    #         arr = arr.rechunk(shards, method=rechunk_method)
-
-    # Prepare zarr metadata
-    if zarr_format == 3:
-        # Only include array-to-array codecs such as blosc
-        zarr_metadata = {
-            "data_type": np.dtype(dtype).name,
-            "shape": arr.shape,
-            "chunk_grid": {
-                "name": "regular",
-                "configuration": {
-                    "chunk_shape": shards if zarr_format == 3 else chunks,
-                }
-            },
-            "dimension_names": list(dimension_names),
-            "codecs": [
-                {
-                    "name": "sharding_indexed",
-                    "configuration": {
-                        "chunk_shape": chunks,
-                        "codecs": [{"name": "bytes",
-                                    "configuration": {"endian": "little"}},
-                                   {"name": compressor,
-                                    "configuration": compressor_params or {}}],
-                        "index_codecs": [{"name": "bytes",
-                                          "configuration": {"endian": "little"}},
-                                         {"name": "crc32c"}],
-                        "index_location": "end"
-                    }
-                }
-            ],
-            "node_type": "array"
-        }
-
-    else:  # zarr_format == 2
-        zarr_metadata = {
-            "compressor": {
-                "id": compressor,
-                **compressor_params
-            },
-            "dtype": np.dtype(dtype).str,
-            "shape": arr.shape,
-            "chunks": chunks,
-            "fill_value": fill_value,
-            "dimension_separator": '/',
-        }
-
-    zarr_spec = {
-        "driver": "zarr" if zarr_format == 2 else "zarr3",
-        "kvstore": {
-            "driver": "file",
-            "path": str(store_path),
-        },
-        "metadata": zarr_metadata,
-        "create": True,
-        "delete_existing": overwrite,
-    }
-
-    ts_store = ts.open(zarr_spec).result()
-
-    block_shape = shards
-    print(f"block_shape: {block_shape}")
-
-    blocks = compute_blocks(arr, block_shape)
-    futures = []
-    for b in blocks:
-        # futures.append(sem_write_block(b))
-        print(f"Block {b} written.")
-        await write_block(arr, ts_store, b)
-    # await asyncio.gather(*coros)
-    return ts_store
-
-
-
-######
-
-async def write_chunk_with_tensorstore_async(chunk, ts_store, loc):
-    """Async write of a single chunk into a tensorstore array."""
-    # Make sure chunk is concrete (if it’s delayed)
-    if hasattr(chunk, "compute"):
-        chunk = chunk.compute()
-    if hasattr(chunk, "get"):  # handle CuPy → NumPy
-        chunk = chunk.get()
-
-    await ts_store[tuple(slice(*b) for b in loc)].write(chunk)
-
-
-# async def write_chunks_batch(ts_store, chunks, offsets):
-#     """Write multiple chunks concurrently using TensorStore async API."""
-#     from distributed import get_client
-#     client = get_client()
-#
-#     # Convert Delayed -> futures
-#     futures = client.compute(list(chunks))
-#
-#     # Await TensorStore writes as soon as each chunk is ready
-#     coros = [
-#         ts_store[offset].write(fut.result()) for fut, offset in zip(futures, offsets)
-#     ]
-#     await asyncio.gather(*coros)
-
-
-async def write_chunks_batch(ts_store, chunks, offsets, max_concurrent=16):
-    """Write multiple chunks concurrently to TensorStore with a concurrency limit."""
-    client = get_client()
-
-    # Persist the chunks in distributed memory
-    futures = client.compute(list(chunks), sync=False)
-
-    sem = asyncio.Semaphore(max_concurrent)
-
-    async def sem_write(fut, offset):
-        async with sem:
-            data = fut.result()
-            if hasattr(data, "get"):  # handle CuPy -> NumPy
-                data = data.get()
-            await ts_store[offset].write(data)
-
-    coros = [sem_write(fut, offset) for fut, offset in zip(futures, offsets)]
-    await asyncio.gather(*coros)
-
-async def write_with_tensorstore_async(
-    arr: da.Array,
-    store_path,
-    chunks=None,
-    shards=None,
-    dimension_names=None,
-    dtype=None,
-    compressor="blosc",
-    compressor_params=None,
-    rechunk_method="tasks",
-    overwrite=True,
-    zarr_format=2,
-    **kwargs
-):
-    """
-    Write a Dask array into a TensorStore-backed Zarr store asynchronously.
-    Supports both Zarr v2 and v3 metadata.
-    """
-    try:
-        import tensorstore as ts
-        from distributed import get_client
-    except ImportError:
-        raise ModuleNotFoundError(
-            "The module tensorstore has not been found. "
-            "Try 'conda install -c conda-forge tensorstore'"
-        )
-
-    compressor_params = compressor_params or {}
-    dtype = dtype or arr.dtype
-    fill_value = kwargs.get("fill_value", 0)
-
-    # Normalize chunking
-    if chunks is None:
-        chunks = arr.chunksize
-    chunks = tuple(int(size) for size in chunks)
-
-    if shards is None:
-        shards = copy.deepcopy(chunks)
-
-    if not np.allclose(np.mod(shards, chunks), 0):
-        multiples = np.floor_divide(shards, chunks)
-        shards = np.multiply(multiples, chunks)
-    shards = tuple(int(size) for size in np.ravel(shards))
-
-    # Rechunk if needed
-    # if zarr_format == 2:
-    #     if not np.equal(arr.chunksize, chunks).all():
-    #         arr = arr.rechunk(chunks, method=rechunk_method)
-    # else:  # zarr_format == 3
-    #     if shards is not None and not np.equal(arr.chunksize, shards).all():
-    #         arr = arr.rechunk(shards, method=rechunk_method)
-
-    # Prepare metadata
-    if zarr_format == 3:
-        zarr_metadata = {
-            "data_type": np.dtype(dtype).name,
-            "shape": arr.shape,
-            "chunk_grid": {
-                "name": "regular",
-                "configuration": {"chunk_shape": shards},
-            },
-            "dimension_names": list(dimension_names) if dimension_names else None,
-            "codecs": [
-                {
-                    "name": "sharding_indexed",
-                    "configuration": {
-                        "chunk_shape": chunks,
-                        "codecs": [
-                            {"name": "bytes", "configuration": {"endian": "little"}},
-                            {"name": compressor, "configuration": compressor_params},
-                        ],
-                        "index_codecs": [
-                            {"name": "bytes", "configuration": {"endian": "little"}},
-                            {"name": "crc32c"},
-                        ],
-                        "index_location": "end",
-                    },
-                }
-            ],
-            "node_type": "array",
-        }
-    else:  # zarr_format == 2
-        zarr_metadata = {
-            "compressor": {"id": compressor, **compressor_params},
-            "dtype": np.dtype(dtype).str,
-            "shape": arr.shape,
-            "chunks": chunks,
-            "fill_value": fill_value,
-            "dimension_separator": "/",
-        }
-
-    zarr_spec = {
-        "driver": "zarr" if zarr_format == 2 else "zarr3",
-        "kvstore": {"driver": "file", "path": str(store_path)},
-        "metadata": zarr_metadata,
-        "create": True,
-        "delete_existing": overwrite,
-    }
-
-    # Open the TensorStore array asynchronously
-    ts_store = await ts.open(zarr_spec)
-
-    # # Get an async Dask client
-    # client = get_client()  # assumes you're already in async context
-    #
-    # # Build tasks for each chunk
-    block_shape = shards
-    print(f"block_shape: {block_shape}")
-    max_concurrent_blocks = 16
-
-    blocks = compute_blocks(arr, block_shape)
-
-    client = get_client()
-    sem = asyncio.Semaphore(max_concurrent_blocks)
-
-    async def sem_write_block(block_slices):
-        # async with sem:
-        await write_block(arr, ts_store, block_slices)
-
-    # Launch all blocks
-    coros = [sem_write_block(b)
-             for b in blocks]
-    await asyncio.gather(*coros)
-
-    return ts_store
-
-
-
-# def write_with_tensorstore_sync(arr, store_path, **kwargs):
-#     from distributed import get_client
-#     client = get_client()
-#
-#     # If client is asynchronous, use run_coroutine; else run normally
-#     if client.asynchronous:
-#         # This will schedule the coroutine inside the async client
-#         return client.run_coroutine(write_block, arr, store_path, **kwargs)
-#     else:
-#         # Synchronous client — safe to use asyncio.run
-#         return asyncio.run(write_with_tensorstore_async(arr, store_path, **kwargs))
-
-
-def write_with_tensorstore_sync(arr, store_path, **kwargs):
-    return asyncio.run(write_with_tensorstore_regionwise(arr, store_path, **kwargs))
 
 def compute_blocks(arr, block_shape):
     """Return slices defining large blocks over the array."""
@@ -907,24 +452,6 @@ def compute_blocks(arr, block_shape):
         block_slices = tuple(slice(start, min(start+b, dim)) for start, b, dim in zip(starts, block_shape, arr.shape))
         blocks.append(block_slices)
     return blocks
-
-# def write_block(arr, ts_store, block_slices):
-#     # Compute block in memory
-#     block = arr[block_slices]#.compute()#.persist()  # or persist() if needed
-#     # Option 1: Write the whole block at once
-#     ts_store[block_slices] = block
-#     # Option 2: Split block into small chunks and write asynchronously inside the block
-#     return ts_store
-
-
-async def write_block(arr, ts_store, block_slices):
-    # Compute block in memory
-    block = arr[block_slices]#.compute()#.persist()  # or persist() if needed
-    # Option 1: Write the whole block at once
-    await ts_store[block_slices].write(block)
-    # Option 2: Split block into small chunks and write asynchronously inside the block
-    # return ts_store
-
 
 @delayed
 def count_threads():
@@ -987,11 +514,12 @@ def store_arrays(arrays: Dict[str, Dict[str, da.Array]], # flatarrays
     output_shards = kwargs.get('output_shards', None)
     target_chunk_mb = kwargs.get('target_chunk_mb', 1)
 
-    writer_func = write_with_tensorstore_sync if use_tensorstore else write_with_zarrpy
-    #
-    # writer_func = write_with_tensorstore_sync if use_tensorstore else write_with_zarrpy
-
-    zarr.group(output_path, overwrite=overwrite, zarr_version = zarr_format)
+    writer_func = write_with_tensorstore if use_tensorstore else write_with_zarrpy
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+    zarr.group(output_path, 
+               overwrite=overwrite, 
+               zarr_version = zarr_format)
     results = {}
 
     for key, arr in arrays.items():
@@ -1041,7 +569,11 @@ def store_arrays(arrays: Dict[str, Dict[str, da.Array]], # flatarrays
         if is_zarr_group(dirpath):
             gr = zarr.open_group(dirpath, mode='a')
         else:
-            gr = zarr.group(dirpath, overwrite=overwrite, zarr_version = zarr_format)
+            if not os.path.exists(dirpath):
+                os.makedirs(dirpath)
+            gr = zarr.group(dirpath, 
+                            overwrite=overwrite, 
+                            zarr_version = zarr_format)
 
         version = '0.5' if zarr_format == 3 else '0.4'
 

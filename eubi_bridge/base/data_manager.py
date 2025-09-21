@@ -1,6 +1,6 @@
 import zarr, natsort
 
-import shutil, time, os, zarr, psutil, dask, gc
+import shutil, time, os, zarr, psutil, dask, gc, json
 import numpy as np, os, glob, tempfile, importlib
 
 from ome_types.model import OME, Image, Pixels, Channel #TiffData, Plane
@@ -17,6 +17,7 @@ from eubi_bridge.ngff.defaults import unit_map, scale_map, default_axes
 from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, autocompute_chunk_shape
 from eubi_bridge.base.readers import read_metadata_via_bioio_bioformats, read_metadata_via_extension, read_metadata_via_bfio
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.ngff.defaults import default_axes, unit_map, scale_map
 
 # Set up logger for this module
 logger = get_logger(__name__)
@@ -462,6 +463,165 @@ class NGFFImageMeta:
         return self._meta.channels
 
 
+class H5ImageMeta:
+    essential_omexml_fields = {
+        "physical_size_x", "physical_size_x_unit",
+        "physical_size_y", "physical_size_y_unit",
+        "physical_size_z", "physical_size_z_unit",
+        "time_increment", "time_increment_unit",
+        "size_x", "size_y", "size_z", "size_t", "size_c"
+    }
+
+    def __init__(self,
+                 path,
+                 series,
+                 meta_reader="bioio", # placeholder
+                 **kwargs
+                 ):
+
+        if not path.endswith('.h5'):
+            raise Exception(f"The given path does not contain a TIFF file.")
+
+        self.path = path
+        import h5py
+        f = h5py.File(path)
+        dset_name = list(f.keys())[0]
+        ds = f[dset_name]
+        self._ds = ds
+        self._attrs = dict(ds.attrs)
+
+        # self.omemeta = self._pff.omemeta
+        # self.pixels = self.omemeta.images[0].pixels
+        # missing_fields = self.essential_omexml_fields - self.pixels.model_fields_set
+        # self.pixels.model_fields_set.update(missing_fields)
+        # self.omemeta.images[0].pixels = self.pixels
+        # self.pyr = self._pff.pyr
+        self.pyr = None
+
+
+    def get_axes(self):
+        attrs = self._attrs
+        axistags = attrs.get('axistags', {})
+        if isinstance(axistags, str):
+            axistags = json.loads(axistags)
+        axlist = axistags.get('axes', [])
+        axes = []
+        for idx, ax in enumerate(axlist):
+            if 'key' in ax:
+                if ax['key'] in 'tczyx':
+                    axes.append(ax['key'])
+                else:
+                    axes.append(default_axes[idx])
+            else:
+                axes.append(default_axes[idx])
+        axes = ''.join(axes)
+        return axes
+
+    def get_scaledict(self):
+        attrs = self._attrs
+        axistags = attrs.get('axistags', {})
+        if isinstance(axistags, str):
+            axistags = json.loads(axistags)
+        scaledict = {}
+        axes = self.get_axes()
+        axlist = axistags.get('axes', [])
+        axes = self.get_axes()
+        for idx, ax in enumerate(axlist):
+            if 'key' in ax:
+                if ax['key'] in axes:
+                    if 'scale' in ax:
+                        scaledict[ax['key']] = ax['scale']
+                    elif 'resolution' in ax:
+                        scaledict[ax['key']] = ax['resolution']
+                    else:
+                        scaledict[ax['key']] = scale_map[ax['key']]
+        return scaledict
+
+    def get_scales(self):
+        scaledict = self.get_scaledict()
+        caxes = [ax for ax in self.get_axes() if ax != 'c']
+        return [scaledict[ax] for ax in caxes]
+
+    def get_unitdict(self):
+        attrs = self._attrs
+        axistags = attrs.get('axistags', {})
+        if isinstance(axistags, str):
+            axistags = json.loads(axistags)
+        unitdict = {}
+        axes = self.get_axes()
+        axlist = axistags.get('axes', [])
+        axes = self.get_axes()
+        for idx, ax in enumerate(axlist):
+            if 'key' in ax:
+                if ax['key'] in axes:
+                    if 'unit' in ax:
+                        unitdict[ax['key']] = ax['scale']
+                    else:
+                        unitdict[ax['key']] = unit_map[ax['key']]
+        return unitdict
+
+    def get_units(self):
+        unitdict = self.get_unitdict()
+        caxes = [ax for ax in self.get_axes() if ax != 'c']
+        return [unitdict[ax] for ax in caxes]
+
+    def get_channels(self):
+        return []
+
+# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/h5/ilastik_img/Patient1_001.h5"
+# h5 = H5ImageMeta(path, series = 0)
+# h5.get_axes()
+# h5.get_scales()
+# h5.get_units()
+
+def expand_hex_shorthand(hex_color):
+    """
+    Expands a shorthand hex color of any valid length (e.g., #abc → #aabbcc, #1234 → #11223344).
+    """
+    if not hex_color.startswith('#'):
+        raise ValueError("Hex color must start with '#'")
+
+    shorthand = hex_color[1:]
+
+    if not all(c in '0123456789ABCDEFabcdef' for c in shorthand):
+        raise ValueError("Invalid hex digits")
+
+    expanded = '#' + ''.join([c * 2 for c in shorthand])
+    return expanded
+
+class NGFFImageMeta:
+    def __init__(self,
+                 path
+                 ):
+        if is_zarr_group(path):
+            self.pyr = Pyramid().from_ngff(path)
+            meta = self.pyr.meta
+            self._meta = meta
+            self._base_path = self._meta.resolution_paths[0]
+        else:
+            raise Exception(f"The given path does not contain an NGFF group.")
+
+    def get_axes(self):
+        return self._meta.axis_order
+
+    def get_scales(self):
+        return self._meta.get_scale(self._base_path)
+
+    def get_scaledict(self):
+        return self._meta.get_scaledict(self._base_path)
+
+    def get_units(self):
+        return self._meta.unit_list
+
+    def get_unitdict(self):
+        return self._meta.unit_dict
+
+    def get_channels(self):
+        if not hasattr(self._meta, 'channels'):
+            return None
+        return self._meta.channels
+
+
 class ArrayManager:
     essential_omexml_fields = {
         "physical_size_x", "physical_size_x_unit",
@@ -495,6 +655,8 @@ class ArrayManager:
         if not path is None:
             if is_zarr_group(path):
                 self.img = NGFFImageMeta(self.path)
+            elif self.path.endswith('h5'):
+                self.img = H5ImageMeta(self.path, self.series, self._meta_reader)
             elif not self._skip_dask:
                 self.img = PFFImageMeta(self.path, self.series, self._meta_reader)
             else:
@@ -572,7 +734,8 @@ class ArrayManager:
 
     def update_meta(self,
                     new_scaledict = {},
-                    new_unitdict = {}
+                    new_unitdict = {},
+                    # new_channels = [],
                     ):
 
         scaledict = self.img.get_scaledict()
@@ -610,8 +773,10 @@ class ArrayManager:
         channelsize = len(self.channels)
 
         if channelsize > csize:
-            self._channels = [channel for channel in self.channels
-                        if channel['label'] is not None]
+            self._channels = [channel for
+                              channel in self.channels
+                              if channel['label'] is not None
+                              ]
 
     def fix_bad_channels(self):
         ### Update channel labels
@@ -626,6 +791,7 @@ class ArrayManager:
                       axes = None,
                       units = None,
                       scales = None,
+                      channels = None,
                       **kwargs # placehold
                       ):
 
@@ -665,6 +831,9 @@ class ArrayManager:
             self.scaledict['c'] = 1
         else:
             raise Exception(f"Scale length is invalid")
+
+        if channels is not None:
+            self._channels = channels
 
     @property
     def scales(self):
