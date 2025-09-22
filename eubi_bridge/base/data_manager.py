@@ -574,12 +574,6 @@ class H5ImageMeta:
         return []
 
 
-# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/h5/ilastik_img/Patient1_001.h5"
-# h5 = H5ImageMeta(path, series = 0)
-# h5.get_axes()
-# h5.get_scales()
-# h5.get_units()
-
 def expand_hex_shorthand(hex_color):
     """
     Expands a shorthand hex color of any valid length (e.g., #abc → #aabbcc, #1234 → #11223344).
