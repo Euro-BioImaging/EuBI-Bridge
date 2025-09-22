@@ -151,11 +151,8 @@ class BridgeBase:
             input_path_ = f"{dirname}/*{basename}"
             self._input_path = input_path_
 
-        print(self._input_path)
-
         if not _input_is_csv:
             self.filepaths = take_filepaths(input_path, includes, excludes)
-        print(self.filepaths)
 
         if series is None or series == 0:  # TODO: parallelize with cluster setting. Keep serial for no-cluster
             try:
