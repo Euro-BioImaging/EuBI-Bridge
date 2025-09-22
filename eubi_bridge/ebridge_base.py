@@ -146,11 +146,11 @@ class BridgeBase:
             _input_is_csv = True
             self.filepaths = take_filepaths(input_path, includes, excludes)
 
-        if os.path.isfile(input_path) or input_path.endswith('.zarr'):
-            dirname = os.path.dirname(input_path)
-            basename = os.path.basename(input_path)
-            input_path = f"{dirname}/*{basename}"
-            self._input_path = input_path
+        # if os.path.isfile(input_path) or input_path.endswith('.zarr'):
+        #     dirname = os.path.dirname(input_path)
+        #     basename = os.path.basename(input_path)
+        #     input_path = f"{dirname}/*{basename}"
+        #     self._input_path = input_path
 
         if not _input_is_csv:
             self.filepaths = take_filepaths(input_path, includes, excludes)
