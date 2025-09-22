@@ -57,6 +57,7 @@ def get_requirements():
         "rich>=14.1.0",
         "uvicorn>=0.35.0",
         "websockets>=15.0.1",
+        "h5py"
     ]
 
     # Optionally still try to read from requirements.txt if it exists
@@ -78,7 +79,7 @@ def readme():
 
 setuptools.setup(
     name='eubi_bridge',
-    version='0.0.8c1',
+    version='0.0.8c2',
     author='Bugra Özdemir',
     author_email='bugraa.ozdemir@gmail.com',
     description='A package for converting datasets to OME-Zarr format.',
