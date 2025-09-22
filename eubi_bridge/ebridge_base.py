@@ -29,7 +29,6 @@ from eubi_bridge.utils.logging_config import get_logger
 # Set up logger for this module
 logger = get_logger(__name__)
 
-
 # Configure logging
 logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
 warnings.filterwarnings('ignore')
@@ -121,8 +120,8 @@ class BridgeBase:
 
     def read_dataset(self,
                      verified_for_cluster,
-                     chunks_yx = None,
-                     readers_params = {},
+                     chunks_yx=None,
+                     readers_params={},
                      # skip_dask = False
                      ):
         """
@@ -132,7 +131,7 @@ class BridgeBase:
         - If the input path is a csv file with filepaths and conversion parameters, can read the filepaths and conversion parameters from it.
         :return:
         """
-        input_path = self._input_path # todo: make them settable from this method?
+        input_path = self._input_path  # todo: make them settable from this method?
         includes = self._includes
         excludes = self._excludes
         metadata_path = self._metadata_path
@@ -146,27 +145,30 @@ class BridgeBase:
             _input_is_csv = True
             self.filepaths = take_filepaths(input_path, includes, excludes)
 
-        # if os.path.isfile(input_path) or input_path.endswith('.zarr'):
-        #     dirname = os.path.dirname(input_path)
-        #     basename = os.path.basename(input_path)
-        #     input_path = f"{dirname}/*{basename}"
-        #     self._input_path = input_path
+        if os.path.isfile(input_path) or input_path.endswith('.zarr'):
+            dirname = os.path.dirname(input_path)
+            basename = os.path.basename(input_path)
+            input_path_ = f"{dirname}/*{basename}"
+            self._input_path = input_path_
+
+        print(self._input_path)
 
         if not _input_is_csv:
             self.filepaths = take_filepaths(input_path, includes, excludes)
+        print(self.filepaths)
 
-        if series is None or series==0: # TODO: parallelize with cluster setting. Keep serial for no-cluster
+        if series is None or series == 0:  # TODO: parallelize with cluster setting. Keep serial for no-cluster
             try:
                 readers_params.pop('scene_index')
             except:
                 pass
 
         futures = [read_single_image_asarray(path,
-                                              chunks_yx=chunks_yx,
-                                              verified_for_cluster=verified_for_cluster,
-                                              zarr_format = zarr_format,
-                                              verbose = verbose,
-                                              **readers_params)
+                                             chunks_yx=chunks_yx,
+                                             verified_for_cluster=verified_for_cluster,
+                                             zarr_format=zarr_format,
+                                             verbose=verbose,
+                                             **readers_params)
                    for path in self.filepaths]
         self.arrays = dask.compute(*futures)
 
@@ -177,7 +179,7 @@ class BridgeBase:
 
     def _digest_skip_dask(self,
                           path,
-                          metadata_reader = 'bfio',
+                          metadata_reader='bfio',
                           **kwargs
                           ):
         # n_filepaths = len(self.filepaths)
@@ -188,7 +190,7 @@ class BridgeBase:
         #     raise Exception(f"Skipping dask digest is only supported for tif files. Got {path}.")
         from eubi_bridge.base.data_manager import ArrayManager
         manager = ArrayManager(path,
-                               series = self._series,
+                               series=self._series,
                                metadata_reader=metadata_reader,
                                # skip_dask = False,
                                **kwargs
@@ -200,7 +202,7 @@ class BridgeBase:
         self.managers = {name: manager}
         self._compute_pixel_metadata(**kwargs)
 
-    def digest(self, # TODO: refactor to "assimilate_tags" and "concatenate?"
+    def digest(self,  # TODO: refactor to "assimilate_tags" and "concatenate?"
                time_tag: Union[str, tuple] = None,
                channel_tag: Union[str, tuple] = None,
                z_tag: Union[str, tuple] = None,
@@ -250,13 +252,13 @@ class BridgeBase:
 
         # Create a FileSet object
         self.batchfile = BatchFile(self.filepaths,
-                               arrays=self.arrays,
-                               axis_tag0=time_tag,
-                               axis_tag1=channel_tag,
-                               axis_tag2=z_tag,
-                               axis_tag3=y_tag,
-                               axis_tag4=x_tag,
-                         )
+                                   arrays=self.arrays,
+                                   axis_tag0=time_tag,
+                                   axis_tag1=channel_tag,
+                                   axis_tag2=z_tag,
+                                   axis_tag3=y_tag,
+                                   axis_tag4=x_tag,
+                                   )
 
         # TODO: UPDATE WITH CONSTRUCT_MANAGERS
 
@@ -272,8 +274,8 @@ class BridgeBase:
                                            metadata_reader=metadata_reader,
                                            **kwargs)
         self.batchfile._construct_channel_managers(series=self._series,
-                                                metadata_reader=metadata_reader,
-                                                **kwargs)
+                                                   metadata_reader=metadata_reader,
+                                                   **kwargs)
         self.batchfile._complete_process(axlist)
         # Get the refined arrays and sample paths
         (self.digested_arrays,
@@ -284,8 +286,8 @@ class BridgeBase:
         return self
 
     def _compute_pixel_metadata(self,
-                               **kwargs
-                               ):
+                                **kwargs
+                                ):
         """Compute and update pixel metadata for the digested arrays.
 
         Args:
@@ -338,7 +340,7 @@ class BridgeBase:
             The order of the dimensions in the transposed array.
 
         """
-        self.batchdata.transpose(newaxes = dimension_order)
+        self.batchdata.transpose(newaxes=dimension_order)
 
     def crop_dataset(self, **kwargs):
         self.batchdata.crop(**kwargs)
@@ -346,11 +348,10 @@ class BridgeBase:
     def to_cupy(self):
         self.batchdata.to_cupy()
 
-
     def _prepare_array_metadata(self,
                                 batch_manager,
                                 sample_path_mapping,
-                                autochunk = True
+                                autochunk=True
                                 ):
         """Prepare metadata dictionaries for array storage.
 
@@ -366,7 +367,7 @@ class BridgeBase:
         dimension_axes = {}
         dimension_units = {}
         chunk_configs = {}
-        channel_meta = {} # a dict of lists, each list being the length of channels per image
+        channel_meta = {}  # a dict of lists, each list being the length of channels per image
 
         for array_name, file_path in sample_path_mapping.items():
             manager = batch_manager.managers[array_name]
@@ -378,7 +379,6 @@ class BridgeBase:
             channel_meta[array_name] = {'0': manager.channels}
 
         return array_data, dimension_scales, dimension_axes, dimension_units, chunk_configs, channel_meta
-
 
     def _create_output_path_mapping(self, output_dir,
                                     nested_data, sample_paths):
@@ -401,7 +401,6 @@ class BridgeBase:
             for array_name, subdict in nested_data.items()
             for level, value in subdict.items()
         }
-
 
     def _process_chunking_configurations(self,
                                          chunk_sizes,
@@ -436,7 +435,6 @@ class BridgeBase:
             processed_shard_coeffs[output_path] = final_shard_coeffs
 
         return processed_chunk_sizes, processed_shard_coeffs
-
 
     def write_arrays(self,
                      output_dir,
@@ -499,7 +497,7 @@ class BridgeBase:
             'axes': self._create_output_path_mapping(output_dir, dimension_axes, sample_path_mapping),
             'units': self._create_output_path_mapping(output_dir, dimension_units, sample_path_mapping),
             'chunks': self._create_output_path_mapping(output_dir, chunk_configs, sample_path_mapping),
-            'channels':self._create_output_path_mapping(output_dir, channel_meta, sample_path_mapping),
+            'channels': self._create_output_path_mapping(output_dir, channel_meta, sample_path_mapping),
         }
 
         # Configure chunking and sharding
@@ -539,12 +537,12 @@ class BridgeBase:
             use_tensorstore=use_tensorstore,
             compute=compute,
             rechunk_method=rechunk_method,
-            channel_meta = path_mappings['channels'] or None,
+            channel_meta=path_mappings['channels'] or None,
             **storage_options
         )
 
         self.flatarrays = path_mappings['arrays']
-        
+
         # Save OME-XML metadata if requested
         if storage_options.get('save_omexml', False):
             manager_paths = {
@@ -560,6 +558,7 @@ class BridgeBase:
 
         return storage_results
 
+
 def downscale(
         gr_paths,
         time_scale_factor,
@@ -569,21 +568,20 @@ def downscale(
         x_scale_factor,
         n_layers,
         downscale_method='simple',
-        **kwargs # a min_dimension_size parameter added
-        ):
-
+        **kwargs  # a min_dimension_size parameter added
+):
     scale_factor_dict = {
-                        't': time_scale_factor,
-                        'c': channel_scale_factor,
-                        'z': z_scale_factor,
-                        'y': y_scale_factor,
-                        'x': x_scale_factor
-                         }
+        't': time_scale_factor,
+        'c': channel_scale_factor,
+        'z': z_scale_factor,
+        'y': y_scale_factor,
+        'x': x_scale_factor
+    }
 
     if isinstance(gr_paths, dict):
         gr_paths = list(set(os.path.dirname(key) for key in gr_paths.keys()))
 
-    pyrs = [Pyramid(path) for path in gr_paths] # TODO: add a to_cupy parameter here.
+    pyrs = [Pyramid(path) for path in gr_paths]  # TODO: add a to_cupy parameter here.
     result_collection = []
 
     min_dimension_size = kwargs.get('min_dimension_size', None)
@@ -623,30 +621,30 @@ def downscale(
 
         ### TODO: make this a separate function? def flatten_pyramids
         flatarrays = {os.path.join(output_path, f"{key}.zarr"
-                      if not key.endswith('zarr') else key, str(level)): arr
+        if not key.endswith('zarr') else key, str(level)): arr
                       for key, subarrays in arrays.items()
                       for level, arr in subarrays.items()}
         flataxes = {os.path.join(output_path, f"{key}.zarr"
-                      if not key.endswith('zarr') else key, str(level)): axes
-                      for key, subaxes in axisdict.items()
-                      for level, axes in subaxes.items()}
+        if not key.endswith('zarr') else key, str(level)): axes
+                    for key, subaxes in axisdict.items()
+                    for level, axes in subaxes.items()}
         flatscales = {os.path.join(output_path, f"{key}.zarr"
-                      if not key.endswith('zarr') else key, str(level)): scale
+        if not key.endswith('zarr') else key, str(level)): scale
                       for key, subscales in scaledict.items()
                       for level, scale in subscales.items()}
         flatunits = {os.path.join(output_path, f"{key}.zarr"
-                      if not key.endswith('zarr') else key, str(level)): unit
-                      for key, subunits in unitdict.items()
-                      for level, unit in subunits.items()}
+        if not key.endswith('zarr') else key, str(level)): unit
+                     for key, subunits in unitdict.items()
+                     for level, unit in subunits.items()}
         flatchunks = {os.path.join(output_path, f"{key}.zarr"
-                      if not key.endswith('zarr') else key, str(level)): chunk
+        if not key.endswith('zarr') else key, str(level)): chunk
                       for key, subchunks in chunkdict.items()
                       for level, chunk in subchunks.items()}
 
         if len(sharddict) > 0:
             # print(f"sharddict: {sharddict}")
             flatshards = {os.path.join(output_path, f"{key}.zarr"
-                          if not key.endswith('zarr') else key, str(level)): shard
+            if not key.endswith('zarr') else key, str(level)): shard
                           for key, subshards in sharddict.items()
                           for level, shard in subshards.items()}
             if len(flatshards) == 0:
@@ -658,11 +656,11 @@ def downscale(
 
         results = store_arrays(flatarrays,
                                output_path=output_path,
-                               axes = flataxes,
+                               axes=flataxes,
                                scales=flatscales,
                                units=flatunits,
-                               output_chunks = flatchunks,
-                               output_shards = flatshards,
+                               output_chunks=flatchunks,
+                               output_shards=flatshards,
                                compute=False,
                                channel_meta=None,
                                **kwargs
