@@ -1436,10 +1436,13 @@ class EuBIBridge:
             self.client.shutdown()
             self.client.close()
 
-        if isinstance(self._dask_temp_dir, tempfile.TemporaryDirectory):
+        # if isinstance(self._dask_temp_dir, tempfile.TemporaryDirectory):
+        #     shutil.rmtree(self._dask_temp_dir.name)
+        # else:
+        #     if self._dask_temp_dir is not None:
+        #         shutil.rmtree(self._dask_temp_dir)
+        try:
             shutil.rmtree(self._dask_temp_dir.name)
-        else:
-            if self._dask_temp_dir is not None:
-                shutil.rmtree(self._dask_temp_dir)
-
+        except:
+            pass
 
