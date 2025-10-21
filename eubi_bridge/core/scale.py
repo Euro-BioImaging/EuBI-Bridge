@@ -7,6 +7,7 @@ import dask.array as da
 from typing import Callable
 import tensorstore as ts
 import asyncio
+from pathlib import Path
 
 
 def simple_downscale(
@@ -120,12 +121,21 @@ class Downscaler:
                 open=True,
             ).result()
         elif isinstance(self.array, zarr.Array):
-            self.base_array_root = str(self.array.store_path)
+            self.base_array_root = os.path.abspath(str(self.array.store.root))
+            arraypath = self.array.path
+            ts_path = os.path.join(self.base_array_root,arraypath)
             self.downscale_method = 'ts'
             self.array = ts.open(
-                self.base_array_root,
+                {
+                    "driver": "zarr",
+                    "kvstore": {
+                        "driver": "file",
+                        "path": ts_path
+                    }
+                },
                 open=True,
             ).result()
+            print(self.base_array_root)
         else:
             self.base_array_root = None
 
