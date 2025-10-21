@@ -135,7 +135,6 @@ class Downscaler:
                 },
                 open=True,
             ).result()
-            print(self.base_array_root)
         else:
             self.base_array_root = None
 
