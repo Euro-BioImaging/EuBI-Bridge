@@ -1,3 +1,5 @@
+import os.path
+
 import zarr, dataclasses
 from pathlib import Path
 import numpy as np, zarr
@@ -105,7 +107,7 @@ class Downscaler:
         # if self.output_chunks is None:
         #     self.output_chunks = [self.array.chunksize] * self.n_layers
         if isinstance(self.array, str):
-            self.base_array_root = self.array
+            self.base_array_root = os.path.abspath(self.array)
             self.downscale_method = 'ts'
             self.array = ts.open(
                 {
