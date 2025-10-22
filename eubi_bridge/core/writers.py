@@ -304,6 +304,7 @@ async def write_block_optimized(arr, ts_store, block_slices):
     write_future.result()
     return 1
 
+
 async def write_with_tensorstore_async(
         arr: (da.Array, zarr.Array, ts.TensorStore),
         store_path: Union[str, os.PathLike],
@@ -317,12 +318,11 @@ async def write_with_tensorstore_async(
         zarr_format: int = 2,
         pixel_sizes: Optional[Tuple[float, ...]] = None,
         max_concurrency: int = 4,
-        compute_batch_size: int = 3,  # Compute this many blocks at once
-        memory_limit_per_batch: int = 1024,  # Limit memory usage to this many MB
+        compute_batch_size: int = 3,
+        memory_limit_per_batch: int = 1024,
         **kwargs
 ) -> 'ts.TensorStore':
     """
-    High-performance version that batches Dask computations for maximum efficiency.
     """
     compressor_params = compressor_params or {}
     try:
@@ -395,7 +395,7 @@ async def write_with_tensorstore_async(
 
     block_size = compute_chunk_batch(arr, dtype, memory_limit_per_batch)
     block_size = tuple([max(bs, cs) for bs, cs in zip(block_size, chunks)])
-    block_size = tuple((math.ceil((bs / cs)) * cs) for bs,cs in zip(block_size, chunks))
+    block_size = tuple((math.ceil((bs / cs)) * cs) for bs, cs in zip(block_size, chunks))
 
     blocks = compute_block_slices(arr, block_size)
     total_blocks = len(blocks)
@@ -404,37 +404,47 @@ async def write_with_tensorstore_async(
     success_count = 0
     sem = asyncio.Semaphore(max_concurrency)
 
-    async def process_compute_batch(batch_blocks):
+    async def compute_and_write_block(block_slices):
+        """Compute and write a single block - fully concurrent."""
         nonlocal success_count
 
-        # Prepare all block slices and data in this batch
-        block_data_pairs = [(block_slices, arr[block_slices]) for block_slices in batch_blocks]
+        # Get block data
+        block_data = arr[block_slices]
+        print(f"Block data computed for {block_slices}. It will be written now.")
 
-        # Compute all blocks in this batch simultaneously (Dask optimization)
-        if hasattr(arr, 'compute'):
-            computed_data = da.compute(*[data for _, data in block_data_pairs])
-        else:
-            computed_data = tuple([data for _, data in block_data_pairs])
-        # computed_data = tuple([data for _, data in block_data_pairs])
+        # Compute based on array type
+        if hasattr(arr, 'compute'):  # Dask array
+            computed_block = await asyncio.to_thread(block_data.compute)
+        else:  # NumPy or Zarr array - slicing is the "compute"
+            computed_block = block_data
+        # print(f"The block with slices {block_slices} computed in memory")
+        # Write with semaphore control
+        async with sem:
+            write_future = ts_store[block_slices].write(computed_block)
+            await asyncio.to_thread(write_future.result)
 
-        # Write all computed blocks
-        write_tasks = []
-        for (block_slices, _), computed_block in zip(block_data_pairs, computed_data):
-            async with sem:
-                write_future = ts_store[block_slices].write(computed_block)
-                write_tasks.append(asyncio.to_thread(write_future.result))
-                # write_tasks.append(write_future)
+        success_count += 1
 
-        await asyncio.gather(*write_tasks)
-        success_count += len(batch_blocks)
+    async def process_compute_batch(batch_blocks):
+        """Process a batch with fully concurrent compute and write operations."""
+        # Launch all compute+write operations concurrently
+        # This allows computation and writing to overlap naturally
+        await asyncio.gather(*[compute_and_write_block(block_slices) for block_slices in batch_blocks])
 
     # Split into compute batches
     compute_batches = [blocks[i:i + compute_batch_size]
                        for i in range(0, len(blocks), compute_batch_size)]
 
-    # Process all compute batches
-    for batch in compute_batches:
-        await process_compute_batch(batch)
+    # CRITICAL OPTIMIZATION: Process multiple compute batches concurrently
+    # This keeps the pipeline full and eliminates hangs
+    batch_semaphore = asyncio.Semaphore(2)  # Allow 2 batches to overlap
+
+    async def process_batch_with_overlap(batch):
+        async with batch_semaphore:
+            await process_compute_batch(batch)
+
+    # Process batches with overlap for continuous writing
+    await asyncio.gather(*[process_batch_with_overlap(batch) for batch in compute_batches])
 
     # ---- Metadata handling last ----
     gr_path = os.path.dirname(store_path)
