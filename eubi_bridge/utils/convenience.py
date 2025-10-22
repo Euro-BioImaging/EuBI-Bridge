@@ -391,7 +391,7 @@ def take_filepaths(
             df = pd.read_excel(input_path)
         else:
             raise ValueError("Unsupported file format. Use .csv or .xlsx")
-    elif os.path.isdir(input_path) or os.path.isfile(input_path):
+    elif os.path.isdir(input_path) or os.path.isfile(input_path) or '*' in input_path:
         filepaths = take_filepaths_from_path(input_path, **global_kwargs)
         df = pd.DataFrame(filepaths, columns=["input_path"])
     else:
