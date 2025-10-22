@@ -20,6 +20,11 @@ import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Dict, Union, Any, Tuple, Optional, Sequence
 from distributed import get_client
+import concurrent.futures
+import tensorstore as ts
+from typing import Union, Optional, Tuple, Any
+
+
 ### internal imports
 from eubi_bridge.ngff.multiscales import Pyramid, NGFFMetadataHandler  #Multimeta
 from eubi_bridge.utils.convenience import (
@@ -30,13 +35,6 @@ from eubi_bridge.utils.convenience import (
     get_chunk_shape,
 )
 from eubi_bridge.utils.logging_config import get_logger
-
-from typing import Union, Optional, Tuple, Any
-import numpy as np
-import zarr
-import numpy as np
-import dask.array as da
-import tensorstore as ts
 
 import logging, warnings
 
@@ -304,6 +302,308 @@ async def write_block_optimized(arr, ts_store, block_slices):
     write_future.result()
     return 1
 
+# async def write_with_tensorstore_async(
+#         arr: (da.Array, zarr.Array, ts.TensorStore),
+#         store_path: Union[str, os.PathLike],
+#         chunks: Optional[Tuple[int, ...]] = None,
+#         shards: Optional[Tuple[int, ...]] = None,
+#         dimension_names: str = None,
+#         dtype: Any = None,
+#         compressor: str = 'blosc',
+#         compressor_params: dict = None,
+#         overwrite: bool = True,
+#         zarr_format: int = 2,
+#         pixel_sizes: Optional[Tuple[float, ...]] = None,
+#         max_concurrency: int = 4,
+#         compute_batch_size: int = 3,  # Compute this many blocks at once
+#         memory_limit_per_batch: int = 1024,  # Limit memory usage to this many MB
+#         **kwargs
+# ) -> 'ts.TensorStore':
+#     """
+#     High-performance version that batches Dask computations for maximum efficiency.
+#     """
+#     compressor_params = compressor_params or {}
+#     try:
+#         dtype = np.dtype(dtype.name)
+#     except:
+#         dtype = np.dtype(dtype)
+#     fill_value = kwargs.get('fill_value', get_default_fill_value(dtype))
+#
+#     if chunks is None:
+#         chunks = get_chunk_shape(arr)
+#     else:
+#         pass
+#
+#     chunks = tuple(int(size) for size in chunks)
+#
+#     if shards is None:
+#         shards = copy.deepcopy(chunks)
+#
+#     if not np.allclose(np.mod(shards, chunks), 0):
+#         multiples = np.floor_divide(shards, chunks)
+#         shards = np.multiply(multiples, chunks)
+#
+#     shards = tuple(int(size) for size in np.ravel(shards))
+#
+#     # Prepare zarr metadata
+#     if zarr_format == 3:
+#         zarr_metadata = {
+#             "data_type": np.dtype(dtype).name,
+#             "shape": arr.shape,
+#             "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": shards}},
+#             "dimension_names": list(dimension_names) if dimension_names else [],
+#             "codecs": [
+#                 {
+#                     "name": "sharding_indexed",
+#                     "configuration": {
+#                         "chunk_shape": chunks,
+#                         "codecs": [
+#                             {"name": "bytes", "configuration": {"endian": "little"}},
+#                             {"name": compressor, "configuration": compressor_params or {}}
+#                         ],
+#                         "index_codecs": [
+#                             {"name": "bytes", "configuration": {"endian": "little"}},
+#                             {"name": "crc32c"}
+#                         ],
+#                         "index_location": "end"
+#                     }
+#                 }
+#             ],
+#             "node_type": "array"
+#         }
+#     else:  # zarr_format == 2
+#         zarr_metadata = {
+#             "compressor": {"id": compressor, **compressor_params},
+#             "dtype": np.dtype(dtype).str,
+#             "shape": arr.shape,
+#             "chunks": chunks,
+#             "fill_value": fill_value,
+#             "dimension_separator": '/',
+#         }
+#
+#     zarr_spec = {
+#         "driver": "zarr" if zarr_format == 2 else "zarr3",
+#         "kvstore": {"driver": "file", "path": str(store_path)},
+#         "metadata": zarr_metadata,
+#         "create": True,
+#         "delete_existing": overwrite,
+#     }
+#
+#     ts_store = ts.open(zarr_spec).result()
+#
+#     block_size = compute_chunk_batch(arr, dtype, memory_limit_per_batch)
+#     block_size = tuple([max(bs, cs) for bs, cs in zip(block_size, chunks)])
+#     block_size = tuple((math.ceil((bs / cs)) * cs) for bs,cs in zip(block_size, chunks))
+#
+#     blocks = compute_block_slices(arr, block_size)
+#     total_blocks = len(blocks)
+#
+#     # Process in compute batches for maximum Dask efficiency
+#     success_count = 0
+#     sem = asyncio.Semaphore(max_concurrency)
+#
+#     async def process_compute_batch(batch_blocks):
+#         nonlocal success_count
+#
+#         # Prepare all block slices and data in this batch
+#         block_data_pairs = [(block_slices, arr[block_slices]) for
+#                             block_slices in batch_blocks]
+#
+#         # Compute all blocks in this batch simultaneously (Dask optimization)
+#         if hasattr(arr, 'compute'):
+#             computed_data = da.compute(*[data for _, data in block_data_pairs])
+#         else:
+#             computed_data = tuple([data for _, data in block_data_pairs])
+#         # computed_data = tuple([data for _, data in block_data_pairs])
+#
+#         # Write all computed blocks
+#         write_tasks = []
+#         for (block_slices, _), computed_block in zip(block_data_pairs, computed_data):
+#             async with sem:
+#                 write_future = ts_store[block_slices].write(computed_block)
+#                 write_tasks.append(asyncio.to_thread(write_future.result))
+#                 # write_tasks.append(write_future)
+#
+#         await asyncio.gather(*write_tasks)
+#         success_count += len(batch_blocks)
+#         logger.info(f"Wrote {success_count}/{total_blocks} blocks")
+#
+#     # Split into compute batches
+#     compute_batches = [blocks[i:i + compute_batch_size]
+#                        for i in range(0, len(blocks), compute_batch_size)]
+#
+#     # Process all compute batches
+#     for batch in compute_batches:
+#         await process_compute_batch(batch)
+#
+#     # ---- Metadata handling last ----
+#     gr_path = os.path.dirname(store_path)
+#     arrpath = os.path.basename(store_path)
+#     gr = zarr.group(gr_path)
+#     handler = NGFFMetadataHandler()
+#     handler.connect_to_group(gr)
+#     handler.read_metadata()
+#     handler.add_dataset(path=arrpath,
+#                         scale=pixel_sizes,
+#                         overwrite=True)
+#     handler.save_changes()
+#     return ts_store
+
+# async def write_with_tensorstore_async(
+#         arr: (da.Array, zarr.Array, ts.TensorStore),
+#         store_path: Union[str, os.PathLike],
+#         chunks: Optional[Tuple[int, ...]] = None,
+#         shards: Optional[Tuple[int, ...]] = None,
+#         dimension_names: str = None,
+#         dtype: Any = None,
+#         compressor: str = 'blosc',
+#         compressor_params: dict = None,
+#         overwrite: bool = True,
+#         zarr_format: int = 2,
+#         pixel_sizes: Optional[Tuple[float, ...]] = None,
+#         max_concurrency: int = 4,
+#         compute_batch_size: int = 3,
+#         memory_limit_per_batch: int = 1024,
+#         **kwargs
+# ) -> 'ts.TensorStore':
+#     """
+#     High-performance version that batches Dask computations for maximum efficiency.
+#     Optimized: uses ThreadPoolExecutor for concurrent I/O writes (optimization #1).
+#     """
+#     compressor_params = compressor_params or {}
+#     try:
+#         dtype = np.dtype(dtype.name)
+#     except:
+#         dtype = np.dtype(dtype)
+#     fill_value = kwargs.get('fill_value', get_default_fill_value(dtype))
+#
+#     if chunks is None:
+#         chunks = get_chunk_shape(arr)
+#     chunks = tuple(int(size) for size in chunks)
+#
+#     if shards is None:
+#         shards = copy.deepcopy(chunks)
+#     if not np.allclose(np.mod(shards, chunks), 0):
+#         multiples = np.floor_divide(shards, chunks)
+#         shards = np.multiply(multiples, chunks)
+#     shards = tuple(int(size) for size in np.ravel(shards))
+#
+#     # Prepare zarr metadata
+#     if zarr_format == 3:
+#         zarr_metadata = {
+#             "data_type": np.dtype(dtype).name,
+#             "shape": arr.shape,
+#             "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": shards}},
+#             "dimension_names": list(dimension_names) if dimension_names else [],
+#             "codecs": [
+#                 {
+#                     "name": "sharding_indexed",
+#                     "configuration": {
+#                         "chunk_shape": chunks,
+#                         "codecs": [
+#                             {"name": "bytes", "configuration": {"endian": "little"}},
+#                             {"name": compressor, "configuration": compressor_params or {}}
+#                         ],
+#                         "index_codecs": [
+#                             {"name": "bytes", "configuration": {"endian": "little"}},
+#                             {"name": "crc32c"}
+#                         ],
+#                         "index_location": "end"
+#                     }
+#                 }
+#             ],
+#             "node_type": "array"
+#         }
+#     else:  # zarr_format == 2
+#         zarr_metadata = {
+#             "compressor": {"id": compressor, **compressor_params},
+#             "dtype": np.dtype(dtype).str,
+#             "shape": arr.shape,
+#             "chunks": chunks,
+#             "fill_value": fill_value,
+#             "dimension_separator": '/',
+#         }
+#
+#     zarr_spec = {
+#         "driver": "zarr" if zarr_format == 2 else "zarr3",
+#         "kvstore": {"driver": "file", "path": str(store_path)},
+#         "metadata": zarr_metadata,
+#         "create": True,
+#         "delete_existing": overwrite,
+#     }
+#
+#     ts_store = ts.open(zarr_spec).result()
+#
+#     block_size = compute_chunk_batch(arr, dtype, memory_limit_per_batch)
+#     block_size = tuple([max(bs, cs) for bs, cs in zip(block_size, chunks)])
+#     block_size = tuple((math.ceil(bs / cs) * cs) for bs, cs in zip(block_size, chunks))
+#
+#     blocks = compute_block_slices(arr, block_size)
+#     total_blocks = len(blocks)
+#
+#     success_count = 0
+#     sem = asyncio.Semaphore(max_concurrency)
+#
+#     # Use a persistent ThreadPoolExecutor for I/O operations
+#     executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrency)
+#     loop = asyncio.get_running_loop()
+#
+#     async def process_compute_batch(batch_blocks):
+#         nonlocal success_count
+#
+#         block_data_pairs = [(block_slices, arr[block_slices]) for block_slices in batch_blocks]
+#
+#         if hasattr(arr, 'compute'):
+#             computed_data = da.compute(*[data for _, data in block_data_pairs])
+#         else:
+#             computed_data = tuple([data for _, data in block_data_pairs])
+#
+#         write_tasks = []
+#         for (block_slices, _), computed_block in zip(block_data_pairs, computed_data):
+#             async with sem:
+#                 # Run TensorStore write in ThreadPoolExecutor
+#                 fut = loop.run_in_executor(
+#                     executor,
+#                     lambda bs=block_slices, cb=computed_block: ts_store[bs].write(cb).result()
+#                 )
+#                 write_tasks.append(fut)
+#
+#         await asyncio.gather(*write_tasks)
+#         success_count += len(batch_blocks)
+#         logger.info(f"Wrote {success_count}/{total_blocks} blocks")
+#
+#     compute_batches = [blocks[i:i + compute_batch_size]
+#                        for i in range(0, len(blocks), compute_batch_size)]
+#
+#     for batch in compute_batches:
+#         await process_compute_batch(batch)
+#
+#     executor.shutdown(wait=True)
+#
+#     # ---- Metadata handling ----
+#     gr_path = os.path.dirname(store_path)
+#     arrpath = os.path.basename(store_path)
+#     gr = zarr.group(gr_path)
+#     handler = NGFFMetadataHandler()
+#     handler.connect_to_group(gr)
+#     handler.read_metadata()
+#     handler.add_dataset(path=arrpath, scale=pixel_sizes, overwrite=True)
+#     handler.save_changes()
+#
+#     return ts_store
+
+
+import asyncio
+import concurrent.futures
+import numpy as np
+import math
+import os
+import copy
+import dask.array as da
+import zarr
+import tensorstore as ts
+from typing import Union, Optional, Tuple, Any
+
 async def write_with_tensorstore_async(
         arr: (da.Array, zarr.Array, ts.TensorStore),
         store_path: Union[str, os.PathLike],
@@ -316,38 +616,42 @@ async def write_with_tensorstore_async(
         overwrite: bool = True,
         zarr_format: int = 2,
         pixel_sizes: Optional[Tuple[float, ...]] = None,
-        max_concurrency: int = 4,
-        compute_batch_size: int = 3,  # Compute this many blocks at once
-        memory_limit_per_batch: int = 1024,  # Limit memory usage to this many MB
+        max_concurrency: int = 8,
+        compute_batch_size: int = 8,
+        memory_limit_per_batch: int = 1024,
+        ts_io_concurrency: Optional[int] = None,
         **kwargs
 ) -> 'ts.TensorStore':
     """
-    High-performance version that batches Dask computations for maximum efficiency.
+    Hybrid writer: da.compute micro-batches + overlap compute(next) with writes(current).
+
+    - compute_batch_size: number of blocks passed to a single da.compute(...) call
+    - max_concurrency: number of parallel write threads (ThreadPoolExecutor)
+    - ts_io_concurrency: optional int to set kvstore file_io_concurrency limit (if desired)
     """
     compressor_params = compressor_params or {}
     try:
         dtype = np.dtype(dtype.name)
-    except:
+    except Exception:
         dtype = np.dtype(dtype)
     fill_value = kwargs.get('fill_value', get_default_fill_value(dtype))
 
     if chunks is None:
         chunks = get_chunk_shape(arr)
-    else:
-        pass
-
     chunks = tuple(int(size) for size in chunks)
 
     if shards is None:
         shards = copy.deepcopy(chunks)
-
     if not np.allclose(np.mod(shards, chunks), 0):
         multiples = np.floor_divide(shards, chunks)
         shards = np.multiply(multiples, chunks)
-
     shards = tuple(int(size) for size in np.ravel(shards))
 
-    # Prepare zarr metadata
+    # Optionally tune TensorStore file I/O concurrency inside kvstore spec
+    kvstore = {"driver": "file", "path": str(store_path)}
+    if ts_io_concurrency:
+        kvstore["file_io_concurrency"] = {"limit": int(ts_io_concurrency)}
+
     if zarr_format == 3:
         zarr_metadata = {
             "data_type": np.dtype(dtype).name,
@@ -373,7 +677,7 @@ async def write_with_tensorstore_async(
             ],
             "node_type": "array"
         }
-    else:  # zarr_format == 2
+    else:
         zarr_metadata = {
             "compressor": {"id": compressor, **compressor_params},
             "dtype": np.dtype(dtype).str,
@@ -385,7 +689,7 @@ async def write_with_tensorstore_async(
 
     zarr_spec = {
         "driver": "zarr" if zarr_format == 2 else "zarr3",
-        "kvstore": {"driver": "file", "path": str(store_path)},
+        "kvstore": kvstore,
         "metadata": zarr_metadata,
         "create": True,
         "delete_existing": overwrite,
@@ -393,63 +697,97 @@ async def write_with_tensorstore_async(
 
     ts_store = ts.open(zarr_spec).result()
 
+    # compute block layout
     block_size = compute_chunk_batch(arr, dtype, memory_limit_per_batch)
     block_size = tuple([max(bs, cs) for bs, cs in zip(block_size, chunks)])
-    block_size = tuple((math.ceil((bs / cs)) * cs) for bs,cs in zip(block_size, chunks))
-
+    block_size = tuple((math.ceil(bs / cs) * cs) for bs, cs in zip(block_size, chunks))
     blocks = compute_block_slices(arr, block_size)
     total_blocks = len(blocks)
 
-    # Process in compute batches for maximum Dask efficiency
-    success_count = 0
-    sem = asyncio.Semaphore(max_concurrency)
-
-    async def process_compute_batch(batch_blocks):
-        nonlocal success_count
-
-        # Prepare all block slices and data in this batch
-        block_data_pairs = [(block_slices, arr[block_slices]) for
-                            block_slices in batch_blocks]
-
-        # Compute all blocks in this batch simultaneously (Dask optimization)
-        if hasattr(arr, 'compute'):
-            computed_data = da.compute(*[data for _, data in block_data_pairs])
-        else:
-            computed_data = tuple([data for _, data in block_data_pairs])
-        # computed_data = tuple([data for _, data in block_data_pairs])
-
-        # Write all computed blocks
-        write_tasks = []
-        for (block_slices, _), computed_block in zip(block_data_pairs, computed_data):
-            async with sem:
-                write_future = ts_store[block_slices].write(computed_block)
-                write_tasks.append(asyncio.to_thread(write_future.result))
-                # write_tasks.append(write_future)
-
-        await asyncio.gather(*write_tasks)
-        success_count += len(batch_blocks)
-        logger.info(f"Wrote {success_count}/{total_blocks} blocks")
-
-    # Split into compute batches
+    # split blocks into micro-batches
     compute_batches = [blocks[i:i + compute_batch_size]
                        for i in range(0, len(blocks), compute_batch_size)]
 
-    # Process all compute batches
-    for batch in compute_batches:
-        await process_compute_batch(batch)
+    loop = asyncio.get_running_loop()
+    write_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_concurrency))
 
-    # ---- Metadata handling last ----
+    success_count = 0
+
+    # helper to write a single block (runs in threadpool)
+    def _write_block(bs, data):
+        # keep writer simple: block slice indexing then write and wait for ts future
+        return ts_store[bs].write(data).result()
+
+    try:
+        # Kick off compute for the first batch in background
+        next_compute_future = None
+        if compute_batches:
+            first_batch_blocks = compute_batches[0]
+            # Prepare Dask objects for that batch
+            dask_objs = [arr[bs] for bs in first_batch_blocks]
+            # run da.compute in executor so we don't block the loop
+            next_compute_future = loop.run_in_executor(
+                None, lambda *objs: da.compute(*objs), *dask_objs
+            )
+
+        # iterate batches, compute current (await previous future) and schedule next compute
+        for i, batch_blocks in enumerate(compute_batches):
+            # schedule compute for the next batch (if any)
+            if i + 1 < len(compute_batches):
+                next_batch_blocks = compute_batches[i + 1]
+                next_dask_objs = [arr[bs] for bs in next_batch_blocks]
+                # Note: None as executor uses default ThreadPoolExecutor from loop.run_in_executor
+                next_future = loop.run_in_executor(None, lambda *objs: da.compute(*objs), *next_dask_objs)
+            else:
+                next_future = None
+
+            # wait for current compute (the previously kicked-off one)
+            if next_compute_future is None:
+                # This can happen if there were no initial compute; compute inline as fallback
+                dask_objs = [arr[bs] for bs in batch_blocks]
+                computed = da.compute(*dask_objs) if hasattr(arr, 'compute') else tuple(dask_objs)
+            else:
+                computed = await next_compute_future  # tuple of numpy arrays
+
+            # Now write all blocks of this batch concurrently using write_executor
+            write_futures = []
+            for bs, data in zip(batch_blocks, computed):
+                # submit to write threadpool
+                write_futures.append(loop.run_in_executor(write_executor, _write_block, bs, data))
+
+            # Wait for all writes in this batch to complete
+            await asyncio.gather(*write_futures)
+
+            success_count += len(batch_blocks)
+            logger.info(f"With the block size {block_size} for the memory limit {memory_limit_per_batch} and dtype {dtype}")
+            logger.info(f"Wrote {success_count}/{total_blocks} blocks (batch {i+1}/{len(compute_batches)})")
+
+            # advance next_compute_future
+            next_compute_future = next_future
+
+        # if there is a leftover compute future (for final scheduled compute) wait and discard (shouldn't happen)
+        if next_compute_future is not None:
+            await next_compute_future
+
+    finally:
+        write_executor.shutdown(wait=True)
+
+    # ---- Metadata handling (unchanged) ----
     gr_path = os.path.dirname(store_path)
     arrpath = os.path.basename(store_path)
     gr = zarr.group(gr_path)
     handler = NGFFMetadataHandler()
     handler.connect_to_group(gr)
     handler.read_metadata()
-    handler.add_dataset(path=arrpath,
-                        scale=pixel_sizes,
-                        overwrite=True)
+    handler.add_dataset(path=arrpath, scale=pixel_sizes, overwrite=True)
     handler.save_changes()
+
     return ts_store
+
+
+
+
+
 
 async def downscale_with_tensorstore_async(
         base_store: Union[str, Path, 'ts.TensorStore'],
@@ -516,7 +854,7 @@ async def downscale_with_tensorstore_async(
                 zarr_format = zarr_format,
                 dimension_names = list(pyr.axes),
                 pixel_sizes = tuple(pyr.downscaler.dm.scales[int(key)]),
-                # dtype = np.dtype(arr.dtype.name),
+                dtype = np.dtype(arr.dtype.name),
                 **kwargs
             )
             coro = write_with_tensorstore_async(**params)
