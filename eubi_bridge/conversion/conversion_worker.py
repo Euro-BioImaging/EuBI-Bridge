@@ -251,8 +251,7 @@ async def unary_worker(input_path: Union[str, ArrayManager],
 
     tasks = []
     for man in manager.loaded_scenes.values(): ### Careful here!
-        output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.'
-                                                        )[0]}_{man.series}.zarr"
+        output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}_{man.series}.zarr"
         tasks.append(asyncio.create_task(run_single_scene(man, output_path_)))
 
     await asyncio.gather(*tasks)
