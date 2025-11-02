@@ -23,8 +23,8 @@ from eubi_bridge.utils.convenience import (
 )
 
 # Configure logging
-logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
-warnings.filterwarnings('ignore')
+# logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
+# warnings.filterwarnings('ignore')
 
 
 

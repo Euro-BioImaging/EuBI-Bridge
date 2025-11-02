@@ -324,12 +324,16 @@ def sensitive_glob(pattern: str,
 
 
 def take_filepaths_from_path(input_path: str,
-                   includes: bool = None,
-                   excludes: bool = None,
+                   includes: (str, tuple, list) = None,
+                   excludes: (str, tuple, list) = None,
                    **kwargs # Placeholder
                    ):
 
     original_input_path = input_path
+    if isinstance(includes, str):
+        includes = includes.split(',')
+    if isinstance(excludes, str):
+        excludes = excludes.split(',')
 
     if os.path.isfile(input_path) or input_path.endswith('.zarr'):
         dirname = os.path.dirname(input_path)
@@ -376,6 +380,31 @@ def take_filepaths(
         input_path: Union[str, os.PathLike],
         **global_kwargs
         ):
+
+    if 'includes' in global_kwargs:
+        if global_kwargs['includes'] is None:
+            pass
+        elif isinstance(global_kwargs['includes'], (tuple, list)):
+            global_kwargs['includes'] = tuple([str(member) for member in global_kwargs['includes']])
+        elif isinstance(global_kwargs['includes'], str):
+            global_kwargs['includes'] = global_kwargs['includes'].split(',')
+        elif np.isscalar(global_kwargs['includes']):
+            global_kwargs['includes'] = str(global_kwargs['includes'])
+        else:
+            raise TypeError(f"Unknown type: {type(global_kwargs['includes'])}")
+
+    if 'excludes' in global_kwargs:
+        if global_kwargs['excludes'] is None:
+            pass
+        elif isinstance(global_kwargs['excludes'], (tuple, list)):
+            global_kwargs['excludes'] = tuple([str(member) for member in global_kwargs['excludes']])
+        elif isinstance(global_kwargs['excludes'], str):
+            global_kwargs['excludes'] = global_kwargs['excludes'].split(',')
+        elif np.isscalar(global_kwargs['excludes']):
+            global_kwargs['excludes'] = str(global_kwargs['excludes'])
+        else:
+            raise TypeError(f"Unknown type: {type(global_kwargs['excludes'])}")
+
     if input_path.endswith(TABLE_FORMATS):
         concatenation_axes = global_kwargs.get('concatenation_axes', None)
         if concatenation_axes is not None:
@@ -417,7 +446,6 @@ def take_filepaths(
 
     mask = df.apply(should_drop, axis=1)
     df = df[mask]
-
     # --- Apply global defaults for any missing parameters ---
 
     for k, v in global_kwargs.items():

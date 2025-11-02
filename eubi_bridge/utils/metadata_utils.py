@@ -55,3 +55,49 @@ def print_printable(printable):
 #         print(f"")
 #         print(f"Metadata for '{path}':")
 #         print_printable(printable)
+
+
+def generate_channel_metadata(num_channels,
+                              dtype='np.uint16'
+                              ):
+    # Standard distinct microscopy colors
+    default_colors = [
+        "FF0000",  # Red
+        "00FF00",  # Green
+        "0000FF",  # Blue
+        "FF00FF",  # Magenta
+        "00FFFF",  # Cyan
+        "FFFF00",  # Yellow
+        "FFFFFF",  # White
+    ]
+
+    channels = []
+    import numpy as np
+
+    if dtype is not None and np.issubdtype(dtype, np.integer):
+        min, max = np.iinfo(dtype).min, np.iinfo(dtype).max
+    elif dtype is not None and np.issubdtype(dtype, np.floating):
+        min, max = np.finfo(dtype).min, np.finfo(dtype).max
+    else:
+        raise ValueError(f"Unsupported dtype {dtype}")
+
+    for i in range(num_channels):
+        color = default_colors[i] if i < len(
+            default_colors) else f"{i * 40 % 256:02X}{i * 85 % 256:02X}{i * 130 % 256:02X}"
+        channel = {
+            "color": color,
+            "coefficient": 1,
+            "active": True,
+            "label": f"Channel {i}",
+            "window": {
+                "min": min,
+                "max": max,
+                "start": min,
+                "end": max
+            },
+            "family": "linear",
+            "inverted": False
+        }
+        channels.append(channel)
+
+    return channels

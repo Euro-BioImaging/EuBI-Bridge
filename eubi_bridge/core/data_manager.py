@@ -439,7 +439,7 @@ class TIFFImageMeta(PFFImageMeta):
                  aszarr=False,
                  ):
         if not path.endswith(('.tif', '.tiff', '.lsm')):
-            raise Exception(f"The given path does not contain a TIFF file.")
+            raise Exception(f"The given path is not a TIFF file: {path}")
 
         super().__init__(path, meta_reader, aszarr)
 
@@ -496,7 +496,7 @@ class H5ImageMeta(PFFImageMeta):
             super().__init__(path, meta_reader,
                              aszarr = False, **kwargs)
         else:
-            raise Exception(f"The given path does not contain an HDF5 file.")
+            raise Exception(f"The given path is not an HDF5 file: {path}")
 
     async def read_omemeta(self, **kwargs): #   This is not real omemeta, just meta.
         import h5py
@@ -585,7 +585,7 @@ class NGFFImageMeta(PFFImageMeta): ### Maybe set_scene can pick particular resol
             super().__init__(path = path, aszarr = aszarr)
             self._base_path = '0' ### This will be represented as series later.
         else:
-            raise Exception(f"The given path does not contain an NGFF group.")
+            raise Exception(f"The given path is not an NGFF group: {path}")
 
     async def read_omemeta(self, **kwargs): # This is not really omemeta, it is just meta.
         if self._img is None:
@@ -726,14 +726,16 @@ class ArrayManager: ### Unify the classes above.
                                                    self._meta_reader,
                                                    self._skip_dask)
             else:
-                if (str(self.path).endswith(('tif', 'tiff')) and
-                        not str(self.path).endswith(('ome.tif', 'ome.tiff'))):
+                if (str(self.path).endswith(('tif', 'tiff'))) :
+                        # and
+                        # not str(self.path).endswith(('ome.tif', 'ome.tiff'))):
                     self.img = await asyncio.to_thread(TIFFImageMeta,
                                                        self.path,
                                                        self._meta_reader,
                                                        self._skip_dask)
                 else:
-                    logger.warning("The given path does not contain a TIFF file. Using PFFImageMeta.")
+                    logger.warning(f"The given path is not a TIFF file: {self.path}.\n"
+                                   f"The 'skip_dask' option is ignored, as its use is currently limited to TIFF files.")
                     self.img = await asyncio.to_thread(PFFImageMeta,
                                                        self.path,
                                                        self._meta_reader,
@@ -764,6 +766,14 @@ class ArrayManager: ### Unify the classes above.
             scene_indices = list(range(self.img.n_scenes))
         elif np.isscalar(scene_indices):
             scene_indices = [scene_indices]
+        scene_indices_ = []
+        for idx in scene_indices:
+            if idx < self.img.n_scenes:
+                scene_indices_.append(idx)
+            else:
+                logger.warning(f"Scene index {idx} is out of bounds for the path {self.path}.\n"
+                               f"Skipping the nonexistent scene {idx}.")
+        scene_indices = scene_indices_
         scenes = []
         async def copy_scene(manager, scene_idx):
             await manager.set_scene(scene_idx)
@@ -851,6 +861,88 @@ class ArrayManager: ### Unify the classes above.
             if channel.get('label') is None:
                 channel = next(chn)
             self.channels[i] = channel
+
+    def compute_intensity_extrema(self,
+                                  dtype
+                                  ):
+        if 'c' in self.axes:
+            c_axis = self.axes.index('c')
+            n_channels = self.array.shape[c_axis]
+        else:
+            c_axis = None
+            n_channels = 1
+        if dtype is None:
+            dtype = self.array.dtype
+        if np.issubdtype(dtype, np.integer):
+            starts = [np.iinfo(dtype).min for _ in range(n_channels)]
+            ends = [np.iinfo(dtype).max for _ in range(n_channels)]
+        elif np.issubdtype(dtype, np.floating):
+            starts = [np.finfo(dtype).min for _ in range(n_channels)]
+            ends = [np.finfo(dtype).max for _ in range(n_channels)]
+        else:
+            raise ValueError(f"Unsupported dtype {dtype}")
+        return starts, ends
+
+    def compute_intensity_limits(self,
+                                  from_array = False,
+                                  dtype = None,
+                                  start_intensity=None,
+                                  end_intensity=None,
+                                  ):
+        if 'c' in self.axes:
+            c_axis = self.axes.index('c')
+            n_channels = self.array.shape[c_axis]
+        else:
+            c_axis = None
+            n_channels = 1
+        starts = None
+        ends = None
+
+        if start_intensity is not None:
+            starts = [start_intensity for _ in range(n_channels)]
+        if end_intensity is not None:
+            ends = [end_intensity for _ in range(n_channels)]
+
+        if starts is not None and ends is not None:
+            return starts,ends
+
+        if from_array and self.array is None:
+            raise Exception(f"Manager needs an array to detect the intensity extrema.")
+        elif dtype is None and self.array is None:
+            raise Exception(f"Manager needs a dtype to detect the intensity extrema.")
+        elif from_array:
+            if 'c' in self.axes:
+                axes_to_compute = tuple([self.axes.index(ax) for ax in self.axes if ax != 'c'])
+            else:
+                axes_to_compute = tuple([self.axes.index(ax) for ax in self.axes])
+            if isinstance(self.array, zarr.Array):
+                arr = da.from_zarr(self.array)
+            else:
+                arr = self.array
+            if starts is None:
+                starts = arr.min(axis=axes_to_compute).compute().tolist()
+                if np.isscalar(starts):
+                    starts = [starts]
+            if ends is None:
+                ends = arr.max(axis=axes_to_compute).compute().tolist()
+                if np.isscalar(ends):
+                    ends = [ends]
+        else:
+            if dtype is None:
+                dtype = self.array.dtype
+            if np.issubdtype(dtype, np.integer):
+                if starts is None:
+                    starts = [np.iinfo(dtype).min for _ in range(n_channels)]
+                if ends is None:
+                    ends = [np.iinfo(dtype).max for _ in range(n_channels)]
+            elif np.issubdtype(dtype, np.floating):
+                if starts is None:
+                    starts = [np.finfo(dtype).min for _ in range(n_channels)]
+                if ends is None:
+                    ends = [np.finfo(dtype).max for _ in range(n_channels)]
+            else:
+                raise ValueError(f"Unsupported dtype {dtype}")
+        return starts, ends
 
     # ------------------------------------------------------------------
     # Array + axes state
@@ -1062,7 +1154,10 @@ class ArrayManager: ### Unify the classes above.
         }
         slicedict = {ax: r for ax, r in slicedict.items() if ax in self.axes}
         slices = tuple([slicedict[ax] for ax in self.axes])
-        array = self.array[slices]
+        logger.info(f"The array with shape {self.array.shape} is cropped to {slicedict}")
+        array = da.from_array(self.array) if isinstance(self.array, zarr.Array) else self.array
+        array = array[slices]
+        logger.info(f"The cropped array shape: {array.shape}")
         self.set_arraydata(array, self.axes, self.units, self.scales)
 
     def to_cupy(self):

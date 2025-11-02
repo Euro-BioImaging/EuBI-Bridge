@@ -305,7 +305,7 @@ class NGFFMetadataHandler:
         self.metadata['omero'] = omero_meta['omero']
         self._pending_changes = True
 
-    def add_channel(self,
+    def add_channel(self, ### TODO: NEED TO BE UPDATED!!!
                     color: str = "808080",
                     label: str = None,
                     dtype=None) -> None:

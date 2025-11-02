@@ -36,15 +36,15 @@ from eubi_bridge.utils.convenience import (
 )
 from eubi_bridge.utils.logging_config import get_logger
 
-import logging, warnings
+# import logging, warnings
 
 logger = get_logger(__name__)
 
 # logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
 
-logging.basicConfig(level=logging.INFO,
-                    stream=sys.stdout,
-                    force=True)
+# logging.basicConfig(level=logging.INFO,
+#                     stream=sys.stdout,
+#                     force=True)
 
 ZARR_V2 = 2
 ZARR_V3 = 3
@@ -698,7 +698,9 @@ async def write_with_tensorstore_async(
     ts_store = ts.open(zarr_spec).result()
 
     # compute block layout
+    # print(f"dtype: {dtype}")
     block_size = compute_chunk_batch(arr, dtype, memory_limit_per_batch)
+    # print(f"block_size: {block_size}")
     block_size = tuple([max(bs, cs) for bs, cs in zip(block_size, chunks)])
     block_size = tuple((math.ceil(bs / cs) * cs) for bs, cs in zip(block_size, chunks))
     blocks = compute_block_slices(arr, block_size)
@@ -855,7 +857,8 @@ async def downscale_with_tensorstore_async(
                 dimension_names = list(pyr.axes),
                 pixel_sizes = tuple(pyr.downscaler.dm.scales[int(key)]),
                 dtype = np.dtype(arr.dtype.name),
-                **kwargs
+                # **kwargs,
+                **{k: v for k, v in kwargs.items() if k not in ('max_concurrency', 'dtype')}
             )
             coro = write_with_tensorstore_async(**params)
             coros.append(coro)
@@ -926,8 +929,7 @@ async def store_multiscale_async(
     # executor_kind: str = "processes",    # "threads" for I/O, "processes" for CPU-bound compression
     **kwargs
 ) -> 'ts.TensorStore':
-
-    logger.info(f"The input array with shape {arr.shape} will be written to {output_path}.")
+    logger.info(f"The array with shape {arr.shape} will be written to {output_path}.")
 
     import tensorstore as ts
     writer_func = write_with_tensorstore_async
@@ -938,6 +940,8 @@ async def store_multiscale_async(
     dtype = kwargs.get('dtype', arr.dtype)
     if dtype is None:
         dtype = arr.dtype
+    elif isinstance(dtype, str):
+        dtype = np.dtype(dtype)
     compressor = kwargs.get('compressor', 'blosc')
     compressor_params = kwargs.get('compressor_params', {})
     ###
@@ -945,7 +949,6 @@ async def store_multiscale_async(
     sem = asyncio.Semaphore(max_concurrency)
     tasks: Dict[str, asyncio.Task] = {}
     dimension_names = list(axes)
-
     ### Parse chunks
     if auto_chunk or output_chunks is None:
         chunks = autocompute_chunk_shape(
@@ -998,17 +1001,17 @@ async def store_multiscale_async(
             size = 1
         meta.autocompute_omerometa(size, arr.dtype)
     elif channels is not None:
-        for channel in channels:
-            meta.add_channel(
-                color = channel['color'],
-                label = channel['label'],
-                dtype = dtype.str,
-            )
+        meta.metadata['omero']['channels'] = channels
+        # for channel in channels:
+        #     meta.add_channel(
+        #         color = channel['color'],
+        #         label = channel['label'],
+        #         dtype = dtype.str,
+        #     )
     meta.save_changes()
 
     if verbose:
         logger.info(f"Writer function: {writer_func}")
-
     # Write base layer with progress and error handling
     logger.info(f"Starting to write base layer to {base_store_path}")
     base_start_time = time.time()
@@ -1027,7 +1030,7 @@ async def store_multiscale_async(
         compute_batch_size=compute_batch_size,
         memory_limit_per_batch = memory_limit_per_batch,
         dimension_names = dimension_names, ### Consider improving this parameter
-        **{k: v for k, v in kwargs.items() if k != 'max_concurrency'}
+        **{k: v for k, v in kwargs.items() if k not in ('max_concurrency', 'dtype')}
     )
 
     base_elapsed = (time.time() - base_start_time) / 60

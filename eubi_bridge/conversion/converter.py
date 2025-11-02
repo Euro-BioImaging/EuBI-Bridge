@@ -6,7 +6,7 @@ import numpy as np, pandas as pd
 import multiprocessing as mp
 from natsort import natsorted
 # from distributed import LocalCluster, Client
-import logging
+# import logging
 from typing import Union, Optional, Any, Dict, List, Tuple, Iterable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
@@ -15,12 +15,6 @@ from eubi_bridge.utils.convenience import take_filepaths
 from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
-# Suppress noisy logs
-# logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
-# logging.getLogger('distributed.worker').setLevel(logging.WARNING)
-# logging.getLogger('distributed.scheduler').setLevel(logging.WARNING)
-logging.basicConfig(level=logging.INFO)
-
 
 async def run_conversions_from_filepaths(
         input_path,
@@ -93,6 +87,7 @@ async def run_conversions_from_filepaths_with_local_cluster(
 
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))
+    memory = global_kwargs.get("memory_per_worker", "10GB")
     verbose = global_kwargs.get('verbose', False)
     if verbose:
         logger.info(f"Parallelization with {max_workers} workers.")
@@ -106,13 +101,18 @@ async def run_conversions_from_filepaths_with_local_cluster(
         job_kwargs.pop('output_path')
         job_params.append((input_path, output_path, job_kwargs))
 
-    with LocalCluster(n_workers=max_workers) as cluster:
+    with LocalCluster(n_workers=max_workers,
+                      memory_limit=memory
+                      ) as cluster:
         with Client(cluster) as client:
             futures = [
                 client.submit(unary_worker_sync,
                                     *paramset)
                 for paramset in job_params
             ]
+            logger.info("Submitted {} jobs to local dask cluster.".format(len(futures)))
+            if verbose:
+                logger.info("Cluster dashboard: %s", client.dashboard_link)
             results = client.gather(futures)
 
     return results
@@ -140,7 +140,6 @@ async def run_conversions_from_filepaths_with_slurm(
     from dask.distributed import Client
     from eubi_bridge.utils.convenience import take_filepaths
     from eubi_bridge.conversion.conversion_worker import unary_worker_sync
-    import logging
 
     logger = logging.getLogger(__name__)
 
@@ -154,10 +153,10 @@ async def run_conversions_from_filepaths_with_slurm(
 
     # --- Cluster configuration ---
     max_workers = int(global_kwargs.get("max_workers", 10))
-    slurm_account = global_kwargs.get("slurm_account", None)
-    slurm_partition = global_kwargs.get("slurm_partition", "general")
+    # slurm_account = global_kwargs.get("slurm_account", None)
+    # slurm_partition = global_kwargs.get("slurm_partition", "general")
     slurm_time = global_kwargs.get("slurm_time", "01:00:00")
-    slurm_mem = global_kwargs.get("memory_limit", "4GB")
+    slurm_mem = global_kwargs.get("memory_per_worker", "4GB")
     slurm_cores = int(global_kwargs.get("slurm_cores", 1))
     verbose = global_kwargs.get("verbose", False)
 
@@ -167,6 +166,7 @@ async def run_conversions_from_filepaths_with_slurm(
     cluster = SLURMCluster(
         # queue=slurm_partition,
         # account=slurm_account,
+        n_workers=max_workers,
         cores = slurm_cores,
         memory = slurm_mem,
         walltime = slurm_time,
@@ -179,9 +179,6 @@ async def run_conversions_from_filepaths_with_slurm(
     cluster.scale(max_workers)
 
     with Client(cluster) as client:
-        if verbose:
-            logger.info("Cluster dashboard: %s", client.dashboard_link)
-
         job_params = []
         for _, row in df.iterrows():
             job_kwargs = row.to_dict()
@@ -195,8 +192,9 @@ async def run_conversions_from_filepaths_with_slurm(
             for paramset in job_params
         ]
 
+        logger.info(f"Submitted {len(futures)} jobs to SLURM cluster.")
         if verbose:
-            logger.info(f"Submitted {len(futures)} jobs to SLURM.")
+            logger.info("Cluster dashboard: %s", client.dashboard_link)
 
         results = client.gather(futures)
 

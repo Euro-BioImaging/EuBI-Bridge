@@ -11,6 +11,10 @@ from eubi_bridge.ngff.multiscales import Pyramid
 
 from bioio_bioformats import utils
 
+from eubi_bridge.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 # The block below moved to the 'ebridge.py' module in the 'to_zarr' method.
 # import scyjava
 # import jpype
@@ -49,7 +53,7 @@ async def read_single_image(input_path,
         kwargs['aszarr'] = aszarr
     elif input_path.endswith('.h5'):
         from eubi_bridge.core.h5_reader import read_h5 as reader
-    elif input_path.endswith(('.ome.tiff', '.ome.tif')):
+    elif input_path.endswith(('.ome.tiff', '.ome.tif')) and not aszarr:
         from eubi_bridge.core.pff_reader import read_pff as reader
     elif input_path.endswith(('.tif', '.tiff')):
         from eubi_bridge.core.tiff_reader import read_tiff_image as reader
@@ -59,9 +63,9 @@ async def read_single_image(input_path,
         kwargs['aszarr'] = False
     else: ### is another kind of pff, will use bioformats for reading
         from eubi_bridge.core.pff_reader import read_pff as reader
+    logger.info(f"Reading with '{reader.__qualname__}': {input_path}.")
     verbose = kwargs.get('verbose', False)
     if verbose:
-        logger.info(f"Reading with {reader.__qualname__}.")
         logger.info(f"The aszarr option is {aszarr}")
 
     img = reader(input_path, **kwargs)
@@ -143,8 +147,6 @@ async def read_single_image_asarray(input_path,
     verbose = kwargs.get('verbose', False)
     if verbose:
         logger.info(f"Reading with {reader.__qualname__}.")
-    # print(reader_kwargs)
-    # im = reader(input_path, **reader_kwargs)
     arrs = read_from_scenes(reader, input_path, **kwargs)
     if isinstance(im, da.Array):
         assert im.ndim == 5

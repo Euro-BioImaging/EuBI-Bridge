@@ -6,6 +6,7 @@ import zarr, os, asyncio
 import numpy as np
 from eubi_bridge.conversion.fileset_io import BatchFile, FileSet
 from eubi_bridge.utils.convenience import take_filepaths, ChannelMap
+from eubi_bridge.utils.metadata_utils import generate_channel_metadata
 from eubi_bridge.core.readers import read_single_image_asarray
 from eubi_bridge.core.data_manager import ArrayManager
 from eubi_bridge.core.writers import write_with_tensorstore_async, _get_or_create_multimeta, _create_zarr_v2_array, CompressorConfig
@@ -143,12 +144,43 @@ def parse_units(manager,
 def parse_channels(manager,
                    **kwargs
                    ):
-    default_channels: [] = manager.channels if manager.channels is not None else []
+    # path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/00001_01.ome.tiff"
+    # manager = ArrayManager(path, skip_dask=True)
+    # await manager.init()
+    # manager._channels = manager.channels
+    # manager.fix_bad_channels()
+    # kwargs = dict(
+    #     channel_intensity_limits='from_array',
+    #     channel_indices='all',
+    # )
+
+    dtype = kwargs.get('dtype', None)
+    if dtype is None:
+        dtype = manager.array.dtype
+    if 'c' not in manager.axes:
+        default_channels = generate_channel_metadata(num_channels=1,
+                                                     dtype=dtype)
+    else:
+        default_channels = manager.channels if manager.channels is not None else []
     channel_count = len(default_channels)
     output = copy.deepcopy(default_channels)
     channel_indices = kwargs.get('channel_indices', [])
-    channel_labels = kwargs.get('channel_labels', [])
-    channel_colors = kwargs.get('channel_colors', [])
+
+    if channel_indices == 'all':
+        channel_indices = list(range(len(output)))
+    # print(f"Channel indices: {channel_indices}")
+    channel_labels = kwargs.get('channel_labels', None)
+    channel_colors = kwargs.get('channel_colors', None)
+    if channel_labels in ('auto', None):
+        channel_labels = [channel_labels] * len(channel_indices)
+    if channel_colors in ('auto', None):
+        channel_colors = [channel_colors] * len(channel_indices)
+
+    #######
+    channel_intensity_limits = kwargs.get('channel_intensity_limits','from_dtype')
+    assert channel_intensity_limits in ('from_dtype', 'from_array'), f"Channel intensity limits must be either 'from_dtype' or 'from_array'"
+    #######
+
     try:
         if np.isnan(channel_indices):
             return default_channels
@@ -164,8 +196,9 @@ def parse_channels(manager,
         channel_labels = [i for i in channel_labels.split(',')]
     if isinstance(channel_colors, str):
         channel_colors = [i for i in channel_colors.split(',')]
+
     channel_indices = [int(i) for i in channel_indices]
-    items = [channel_indices, channel_labels, channel_colors]
+    items = [channel_indices, channel_labels, channel_colors, channel_intensity_limits]
     for idx, item in enumerate(items):
         if not isinstance(item, str) and np.isscalar(item):
             item = [item]
@@ -176,30 +209,68 @@ def parse_channels(manager,
             except:
                 pass
         items[idx] = item
-    channel_indices, channel_labels, channel_colors = items
+    channel_indices, channel_labels, channel_colors, channel_intensity_limits = items
 
     if not len(channel_indices) == len(channel_labels) == len(channel_colors):
-        raise ValueError(f"Channel indices, labels and colors must have the same length. \n"
-                         f"So you need to specify --channel_indices, --channel_labels and --channel_colors with the same number of elements. \n"
+        raise ValueError(f"Channel indices, labels, colors, intensity minima and extrema must have the same length. \n"
+                         f"So you need to specify --channel_indices, --channel_labels, --channel_colors, --channel_intensity_extrema with the same number of elements. \n"
                          f"To keep specific labels or colors unchanged, add 'auto'. E.g. `--channel_indices 0,1 --channel_colors auto,red`")
     cm = ChannelMap()
 
     if len(channel_indices) == 0:
-        return default_channels
+        return output
 
+    from_array = channel_intensity_limits == 'from_array'
+    start_intensities, end_intensities = manager.compute_intensity_limits(
+                                                    from_array = from_array,
+                                                    dtype = dtype)
+    mins, maxes = manager.compute_intensity_extrema(dtype = dtype)
     for idx in range(len(channel_indices)):
         channel_idx = channel_indices[idx]
         if channel_idx >= channel_count:
             raise ValueError(f"Channel index {channel_idx} is out of range -> {0}:{channel_count - 1}")
-        current_channel = default_channels[channel_idx]
+        current_channel = output[channel_idx]
         if channel_labels[idx] not in (None, 'auto'):
             current_channel['label'] = channel_labels[idx]
         colorname = channel_colors[idx]
         if colorname not in (None, 'auto'):
             current_channel['color'] = cm[colorname] if cm[colorname] is not None else colorname
+        ###--------------------------------------------------------------------------------###
+        window = {
+            'min': mins[channel_idx],
+            'max': maxes[channel_idx],
+            'start': start_intensities[channel_idx],
+            'end': end_intensities[channel_idx]
+        }
+        current_channel['window'] = window
+        ###--------------------------------------------------------------------------------###
+        # Add the parameters that are currently hard-coded
+        current_channel['coefficient'] = 1
+        current_channel['active'] = True
+        current_channel['family'] = "linear"
+        current_channel['inverted'] = False
+        ###--------------------------------------------------------------------------------###
         output[channel_idx] = current_channel
-
     return output
+
+# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/PK2_ATH_5to20_20240705_MID_01.czi"
+#
+# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/filament.tif"
+#
+# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/00001_01.ome.tiff"
+#
+# man = ArrayManager(path, skip_dask=True)
+# await man.init()
+# man._channels = man.channels
+# man.fix_bad_channels()
+
+# import dask.array as da
+#
+# chns = parse_channels(man,
+#                    channel_intensity_limits='from_array',
+#                    channel_indices='all')
+# man._channels = chns
+
 
 async def unary_worker(input_path: Union[str, ArrayManager],
                          output_path: str,
@@ -207,7 +278,7 @@ async def unary_worker(input_path: Union[str, ArrayManager],
     max_concurrency = kwargs.get('max_concurrency', 4)
     compute_batch_size = kwargs.get('compute_batch_size', 4)
     memory_limit_per_batch = kwargs.get('memory_limit_per_batch', 1024)
-    series = kwargs.get('series', 'all')
+    series = kwargs.get('scene_index', 'all')
 
     if not isinstance(input_path, ArrayManager):
         manager = ArrayManager(
@@ -221,21 +292,32 @@ async def unary_worker(input_path: Union[str, ArrayManager],
         await manager.load_scenes(scene_indices=series)
     else:
         manager = input_path
-
     # Semaphore to limit concurrent scenes
     sem = asyncio.Semaphore(max_concurrency)
     async def run_single_scene(man, output_path):
         async with sem:
             man.fill_default_meta()
-            man._channels = parse_channels(man, **kwargs)
+            man._channels = man.channels
+            man.fix_bad_channels()
+            ### Additional processing if needed
+            if kwargs.get('squeeze'):
+                man.squeeze()
+            cropping_slices = [kwargs.get(key) for key in kwargs
+                               if key in ('time_range', 'channel_range',
+                                           'z_range', 'y_range',
+                                           'x_range')]
+            if any(cropping_slices):
+                man.crop(*cropping_slices)
+            ###---------------------------------###
             await store_multiscale_async(
                 arr=man.array,
+                dtype = kwargs.get('dtype', None),
                 output_path=output_path,
                 zarr_format = kwargs.get('zarr_format', 2),
                 axes=man.axes,
                 scales=parse_scales(man, **kwargs),
                 units=parse_units(man, **kwargs),
-                channel_meta=man.channels,
+                channel_meta = parse_channels(man, **dict(kwargs, channel_intensity_limits = 'from_dtype')), # man.channels,
                 auto_chunk=kwargs.get('auto_chunk', True),
                 output_chunks=parse_chunks(man, **kwargs),
                 output_shard_coefficients=parse_shard_coefs(man, **kwargs),
@@ -247,11 +329,24 @@ async def unary_worker(input_path: Union[str, ArrayManager],
                 compute_batch_size=compute_batch_size,
                 memory_limit_per_batch=memory_limit_per_batch,
             )
+            ###--------Handle channel metadata at the end for efficiency---###
+            if kwargs.get('channel_intensity_limits', 'from_array'):
+                chman = ArrayManager(output_path)
+                await chman.init()
+                channels = parse_channels(chman, **kwargs)
+                meta = chman.pyr.meta
+                meta.metadata['omero']['channels'] = channels
+                meta._pending_changes = True
+                meta.save_changes()
+            ###------------------------------------------------------------###
             await man.save_omexml(output_path, overwrite=True)
 
     tasks = []
     for man in manager.loaded_scenes.values(): ### Careful here!
-        output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}_{man.series}.zarr"
+        if man.series == 0 and man.img.n_scenes == 1:
+            output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}.zarr"
+        else:
+            output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}_{man.series}.zarr"
         tasks.append(asyncio.create_task(run_single_scene(man, output_path_)))
 
     await asyncio.gather(*tasks)

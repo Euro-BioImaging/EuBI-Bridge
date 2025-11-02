@@ -1,3 +1,17 @@
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="Dask configuration key 'distributed.p2p.disk' has been deprecated",
+    category=FutureWarning,
+    module="dask.config",
+)
+warnings.filterwarnings(
+    "ignore",
+    message="Could not parse tiff pixel size",
+    category=UserWarning,
+    module="bioio_tifffile.reader",
+)
+
 import shutil, ctypes, time, os, zarr, pprint, psutil, dask, copy
 import numpy as np, os, glob, tempfile, sys
 from multiprocessing.pool import ThreadPool
@@ -17,8 +31,6 @@ from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
 from eubi_bridge.conversion.converter import run_conversions
 from eubi_bridge.conversion.updater import run_updates
-
-import logging, warnings
 
 # Set up logger for this module
 logger = get_logger(__name__)
@@ -83,18 +95,13 @@ class EuBIBridge:
 
         self.root_defaults = dict(
             cluster=dict(
-                # n_jobs=4,
-                # threads_per_worker=1,
-                # memory_limit='auto',
-                # temp_dir='auto',
-                # no_worker_restart=False,
-                # no_distributed=False,
                 on_local_cluster = False,
                 on_slurm=False,
                 max_workers=16,  # size of the pool for sync writer
                 compute_batch_size = 4,
-                memory_limit_per_batch = 1024,
+                memory_limit_per_batch = '1GB',
                 max_concurrency = 16,  # limit how many writes run at once
+                memory_per_worker = '10GB'
                 # executor_kind = "processes",  # "threads" for I/O, "processes" for CPU-bound compression
                 ),
             readers=dict(
@@ -134,10 +141,11 @@ class EuBIBridge:
                 compressor_params={},
                 overwrite=False,
                 override_channel_names = False,
+                channel_intensity_limits = None,
                 use_tensorstore=False,
                 use_gpu=False,
-                rechunk_method='tasks',
-                trim_memory=False,
+                # rechunk_method='tasks',
+                # trim_memory=False,
                 metadata_reader='bfio',
                 save_omexml=True,
                 squeeze=False,
@@ -242,6 +250,7 @@ class EuBIBridge:
                           max_workers: int = 'default',
                           compute_batch_size: int = 'default',
                           memory_limit_per_batch: int = 'default',
+                          memory_per_worker: int = 'default',
                           max_concurrency: int = 'default',
                           on_local_cluster: bool = 'default',
                           on_slurm: bool = 'default'
@@ -269,6 +278,7 @@ class EuBIBridge:
             'max_workers': max_workers,
             'compute_batch_size': compute_batch_size,
             'memory_limit_per_batch': memory_limit_per_batch,
+            'memory_per_worker': memory_per_worker,
             'max_concurrency': max_concurrency,
             'on_local_cluster': on_local_cluster,
             'on_slurm': on_slurm
@@ -341,11 +351,7 @@ class EuBIBridge:
                              # dimension_order: str = 'default',
                              overwrite: bool = 'default',
                              override_channel_names: bool = 'default',
-                             # rechunk_method: str = 'default',
-                             # rechunkers_max_mem: str = 'default',
-                             # trim_memory: bool = 'default',
-                             # use_tensorstore: bool = 'default',
-                             # use_gpu: bool = 'default',
+                             channel_intensity_limits = 'default',
                              metadata_reader: str = 'default',
                              save_omexml: bool = 'default',
                              squeeze: bool = 'default',

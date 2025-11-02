@@ -51,7 +51,6 @@ def read_pff(input_path,
     if input_path.endswith(('ome.tiff', 'ome.tif')):
         from bioio_ome_tiff.reader import Reader as reader  # pip install bioio-ome-tiff --no-deps
     elif input_path.endswith(('.tif', '.tiff')):
-        # reader = read_tiff
         from eubi_bridge.core.tiff_reader import read_tiff_image as reader
         reader_kwargs.update(**kwargs)
         reader_kwargs['aszarr'] = aszarr

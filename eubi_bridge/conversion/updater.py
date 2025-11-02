@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 # logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
 # logging.getLogger('distributed.worker').setLevel(logging.WARNING)
 # logging.getLogger('distributed.scheduler').setLevel(logging.WARNING)
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 
 
 async def run_updates_on_filepaths(
