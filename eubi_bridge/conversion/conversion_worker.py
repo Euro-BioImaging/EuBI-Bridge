@@ -158,16 +158,26 @@ def parse_channels(manager,
     if dtype is None:
         dtype = manager.array.dtype
     if 'c' not in manager.axes:
-        default_channels = generate_channel_metadata(num_channels=1,
-                                                     dtype=dtype)
+        channel_count = 1
     else:
-        default_channels = manager.channels if manager.channels is not None else []
-    channel_count = len(default_channels)
+        channel_idx = manager.axes.index('c')
+        channel_count = manager.array.shape[channel_idx]
+        assert channel_count == len(manager.channels), f"Manager constructed incorrectly!"
+    default_channels = generate_channel_metadata(num_channels=channel_count,
+                                                 dtype=dtype)
+    if manager.channels is not None:
+        for idx, channel in enumerate(manager.channels):
+            default_channels[idx].update(channel)
+
     output = copy.deepcopy(default_channels)
+    assert 'coefficient' in output[0].keys(), f"Channels parsed incorrectly!"
+
     channel_indices = kwargs.get('channel_indices', [])
 
     if channel_indices == 'all':
         channel_indices = list(range(len(output)))
+    if not hasattr(channel_indices, '__len__'):
+        channel_indices = [channel_indices]
     # print(f"Channel indices: {channel_indices}")
     channel_labels = kwargs.get('channel_labels', None)
     channel_colors = kwargs.get('channel_colors', None)
@@ -183,11 +193,11 @@ def parse_channels(manager,
 
     try:
         if np.isnan(channel_indices):
-            return default_channels
+            return output
         elif channel_indices is None:
-            return default_channels
+            return output
         elif channel_indices == []:
-            return default_channels
+            return output
     except:
         pass
     if isinstance(channel_indices, str):
@@ -297,8 +307,11 @@ async def unary_worker(input_path: Union[str, ArrayManager],
     async def run_single_scene(man, output_path):
         async with sem:
             man.fill_default_meta()
-            man._channels = man.channels
+            # Add missing metadata to channels:
+            man._channels = parse_channels(man, channel_indices='all', channel_intensity_limits = 'from_dtype')
+            # import pprint
             man.fix_bad_channels()
+            # pprint.pprint(man.channels)
             ### Additional processing if needed
             if kwargs.get('squeeze'):
                 man.squeeze()
