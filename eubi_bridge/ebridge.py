@@ -491,8 +491,8 @@ class EuBIBridge:
                     **self.downscale_params}
         extra_kwargs = {key: kwargs[key] for key in kwargs if key not in combined}
 
-        run_conversions(input_path,
-                        output_path,
+        run_conversions(os.path.abspath(input_path),
+                        os.path.abspath(output_path),
                         includes=includes,
                         excludes=excludes,
                         time_tag = time_tag,

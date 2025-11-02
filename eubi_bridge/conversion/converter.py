@@ -140,8 +140,8 @@ async def run_conversions_from_filepaths_with_slurm(
     from dask.distributed import Client
     from eubi_bridge.utils.convenience import take_filepaths
     from eubi_bridge.conversion.conversion_worker import unary_worker_sync
-
-    logger = logging.getLogger(__name__)
+    from eubi_bridge.utils.logging_config import get_logger
+    logger = get_logger(__name__)
 
     # --- Prepare file list ---
     df = take_filepaths(input_path, **global_kwargs)
