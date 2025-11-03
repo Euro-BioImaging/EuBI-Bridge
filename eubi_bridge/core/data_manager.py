@@ -321,23 +321,33 @@ class PFFImageMeta:
         self.n_scenes = len(self.omemeta.images)
         await self.set_scene(self._series)
 
+    async def get_arraydata(self):
+        return self._img.get_image_dask_data()
+
     async def set_scene(self, scene_index):
         self._series = scene_index
         if self._img is not None:
             self._img.set_scene(self._series)
             self.arraydata = await self.get_arraydata()
-        if self.omemeta is not None:
-            self.pixels = self.omemeta.images[self._series].pixels
-            missing_fields = self.essential_omexml_fields - self.pixels.model_fields_set
-            self.pixels.model_fields_set.update(missing_fields)
+        # if self.omemeta is not None:
+        #     self.pixels = copy.deepcopy(self.omemeta.images[self._series].pixels)
+        #     missing_fields = self.essential_omexml_fields - self.pixels.model_fields_set
+        #     self.pixels.model_fields_set.update(missing_fields)
+
+    def get_pixels(self):
+        pixels = self.omemeta.images[self._series].pixels
+        missing_fields = self.essential_omexml_fields - pixels.model_fields_set
+        pixels.model_fields_set.update(missing_fields)
+        return pixels
+
+    @property
+    def pixels(self):
+        return self.get_pixels()
 
     async def read_img(self, **kwargs):
         self._img = await read_single_image(self.root, aszarr=self._aszarr, **kwargs)
         await self.set_scene(self._series)
         self.arraydata = await self.get_arraydata()
-
-    async def get_arraydata(self):
-        return self._img.get_image_dask_data()
 
     async def get_pyramid(self, version = '0.4'):
         ### add channels from omemeta
@@ -385,20 +395,22 @@ class PFFImageMeta:
         return [unitdict[ax] for ax in caxes]
 
     def get_channels(self):
-        if not hasattr(self.pixels, 'channels'):
+        pixels = self.get_pixels()
+        if not hasattr(pixels, 'channels'):
             return None
-        if len(self.pixels.channels) == 0:
+        if len(pixels.channels) == 0:
             return None
         ###
-        if len(self.pixels.channels) < self.pixels.size_c:
-            chn = ChannelIterator(num_channels=self.pixels.size_c)
+        if len(pixels.channels) < pixels.size_c:
+            chn = ChannelIterator(num_channels=pixels.size_c)
             channels = chn._channels
-        elif len(self.pixels.channels) == self.pixels.size_c:
+        elif len(pixels.channels) == pixels.size_c:
             channels = []
-            for _, channel in enumerate(self.pixels.channels):
+            for _, channel in enumerate(pixels.channels):
                 color = channel.color.as_hex().upper()
                 color = expand_hex_shorthand(color)
                 name = channel.name
+                # print(name)
                 channels.append(dict(
                     label=name,
                     color=color
@@ -742,6 +754,8 @@ class ArrayManager: ### Unify the classes above.
                                                        self._skip_dask)
             await self.img.read_dataset()
             await self.set_scene(self.series)
+            if self.img.omemeta is not None:
+                self.omemeta = self.img.omemeta
         return self
 
     async def set_scene(self, scene_idx):
@@ -755,7 +769,9 @@ class ArrayManager: ### Unify the classes above.
             self.set_arraydata(self.img.arraydata)
             self.series = scene_idx
             self.series_path = self.path + f'_{self.series}'
-            # self.output_path = os.path.splitext(self.path)[0] + f'_{self.series}' + '.zarr'
+            self.omemeta = self.img.omemeta
+            # self.pixels = copy.copy(self.omemeta.images[self.series].pixels)
+            self._channels = self.img.get_channels()
         else:
             raise Exception("Image is missing. An image needs to be read.")
         return self
@@ -777,6 +793,7 @@ class ArrayManager: ### Unify the classes above.
         scenes = []
         async def copy_scene(manager, scene_idx):
             await manager.set_scene(scene_idx)
+            # print(manager.channels)
             return copy.copy(manager)
         for scene_idx in scene_indices:
             scenes.append(copy_scene(self, scene_idx))
@@ -826,6 +843,7 @@ class ArrayManager: ### Unify the classes above.
     def update_meta(self,
                     new_scaledict: Dict[str, Any] = {},
                     new_unitdict: Dict[str, Any] = {}):
+        # await self.set_scene(self.series) # TODO!!! Probably set scene first
         scaledict = self.img.get_scaledict()
         for key, val in new_scaledict.items():
             if key in scaledict and val is not None:
@@ -833,7 +851,7 @@ class ArrayManager: ### Unify the classes above.
 
         scales = [scaledict[ax] for ax in (self.axes if 'c' in scaledict else self.caxes)]
 
-        unitdict = self.img.get_unitdict()
+        unitdict = self.img.get_unitdict() # TODO: remove this and use set values directly.
         for key, val in new_unitdict.items():
             if key in unitdict and val is not None:
                 unitdict[key] = val
@@ -858,7 +876,7 @@ class ArrayManager: ### Unify the classes above.
     def fix_bad_channels(self):
         chn = ChannelIterator()
         for i, channel in enumerate(self.channels):
-            if channel.get('label') is None:
+            if channel.get('label') in (None, ''):
                 channel = next(chn)
             self.channels[i] = channel
 

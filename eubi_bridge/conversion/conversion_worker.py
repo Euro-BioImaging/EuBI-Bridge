@@ -145,6 +145,7 @@ def parse_channels(manager,
                    **kwargs
                    ):
     # path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/00001_01.ome.tiff"
+    # path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/17_03_18.lif"
     # manager = ArrayManager(path, skip_dask=True)
     # await manager.init()
     # manager._channels = manager.channels
@@ -165,6 +166,8 @@ def parse_channels(manager,
         assert channel_count == len(manager.channels), f"Manager constructed incorrectly!"
     default_channels = generate_channel_metadata(num_channels=channel_count,
                                                  dtype=dtype)
+    # import pprint
+    # pprint.pprint(manager.channels)
     if manager.channels is not None:
         for idx, channel in enumerate(manager.channels):
             default_channels[idx].update(channel)
@@ -235,6 +238,7 @@ def parse_channels(manager,
                                                     from_array = from_array,
                                                     dtype = dtype)
     mins, maxes = manager.compute_intensity_extrema(dtype = dtype)
+    # pprint.pprint(output)
     for idx in range(len(channel_indices)):
         channel_idx = channel_indices[idx]
         if channel_idx >= channel_count:
@@ -269,15 +273,33 @@ def parse_channels(manager,
 #
 # path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/00001_01.ome.tiff"
 #
+# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/17_03_18.lif"
 # man = ArrayManager(path, skip_dask=True)
 # await man.init()
+# # await man.set_scene(30)
+# await man.load_scenes((1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21))
+# 
+# scene = man.loaded_scenes['/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/17_03_18.lif_8']
+# scene.img.pixels
+# scene.img.get_channels()
+# img = scene.img
+# 
+# img.pixels.id
+# img._series
+
+# for m in man.loaded_scenes.values():
+    # print(m.array.shape)
+    # print(m.channels)
+# await man.set_scene(4)
+# man.channels
+
 # man._channels = man.channels
 # man.fix_bad_channels()
 
 # import dask.array as da
 #
 # chns = parse_channels(man,
-#                    channel_intensity_limits='from_array',
+#                    channel_intensity_limits='from_dtype',
 #                    channel_indices='all')
 # man._channels = chns
 
@@ -285,6 +307,7 @@ def parse_channels(manager,
 async def unary_worker(input_path: Union[str, ArrayManager],
                          output_path: str,
                          **kwargs):
+    import pprint
     max_concurrency = kwargs.get('max_concurrency', 4)
     compute_batch_size = kwargs.get('compute_batch_size', 4)
     memory_limit_per_batch = kwargs.get('memory_limit_per_batch', 1024)
@@ -298,8 +321,12 @@ async def unary_worker(input_path: Union[str, ArrayManager],
             skip_dask=kwargs.get('skip_dask', True),
         )
         await manager.init()
+        # pprint.pprint(f"1: {manager.channels}")
         manager.fill_default_meta()
+        # pprint.pprint(f"2: {manager.channels}")
         await manager.load_scenes(scene_indices=series)
+        # for man in manager.loaded_scenes.values():
+            # pprint.pprint(f"3: {man.channels}")
     else:
         manager = input_path
     # Semaphore to limit concurrent scenes
@@ -308,7 +335,9 @@ async def unary_worker(input_path: Union[str, ArrayManager],
         async with sem:
             man.fill_default_meta()
             # Add missing metadata to channels:
-            man._channels = parse_channels(man, channel_indices='all', channel_intensity_limits = 'from_dtype')
+            man._channels = parse_channels(man, 
+                                           channel_indices='all', 
+                                           channel_intensity_limits = 'from_dtype')
             # import pprint
             man.fix_bad_channels()
             # pprint.pprint(man.channels)
@@ -356,6 +385,7 @@ async def unary_worker(input_path: Union[str, ArrayManager],
 
     tasks = []
     for man in manager.loaded_scenes.values(): ### Careful here!
+        # pprint.pprint(man.channels)
         if man.series == 0 and man.img.n_scenes == 1:
             output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}.zarr"
         else:
