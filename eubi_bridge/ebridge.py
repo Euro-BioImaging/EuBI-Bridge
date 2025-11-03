@@ -662,9 +662,10 @@ class EuBIBridge:
 
     def update_channel_meta(self,
                           input_path: Union[Path, str],
-                          indices: list,
-                          labels: list,
-                          colors: list,
+                          indices: list = None,
+                          labels: list = None,
+                          colors: list = None,
+                          channel_intensity_limits = None,
                           includes=None,
                           excludes=None,
                           **kwargs
@@ -693,10 +694,18 @@ class EuBIBridge:
 
         # Collect file paths based on inclusion and exclusion patterns
         # Prepare pixel metadata arguments
-        channel_meta_kwargs_ = dict(channel_indices=indices,
-                                   channel_labels=labels,
-                                   channel_colors=colors)
-        channel_meta_kwargs = {key: val for key, val in channel_meta_kwargs_.items() if val is not None}
+        if any(item is not None for item in [indices, labels, colors]):
+            assert all(hasattr(item, '__len__') for item in [indices, labels, colors])
+            assert len(indices) == len(labels) == len(colors)
+            channel_meta_kwargs_ = dict(channel_indices=indices,
+                                       channel_labels=labels,
+                                       channel_colors=colors)
+            channel_meta_kwargs = {key: val for key, val in channel_meta_kwargs_.items() if val is not None}
+        else:
+            channel_meta_kwargs = {}
+        if channel_intensity_limits is not None:
+            assert channel_intensity_limits in ('from_array', 'from_dtype')
+            channel_meta_kwargs['channel_intensity_limits'] = channel_intensity_limits
         run_updates(
                     input_path,
                     includes=includes,

@@ -12,6 +12,7 @@ from eubi_bridge.core.writers import write_with_tensorstore_async, _get_or_creat
 from eubi_bridge.core.writers import store_multiscale_async
 from eubi_bridge.conversion.fileset_io import BatchFile
 from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
+from eubi_bridge.utils.metadata_utils import generate_channel_metadata
 import time
 import multiprocessing as mp
 
@@ -72,31 +73,74 @@ def parse_units(manager,
 def parse_channels(manager,
                    **kwargs
                    ):
-    default_channels: [] = manager.channels if manager.channels is not None else []
-    channel_count = len(default_channels)
+    # path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/00001_01.ome.tiff"
+    # path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/17_03_18.lif"
+    # manager = ArrayManager(path, skip_dask=True)
+    # await manager.init()
+    # manager._channels = manager.channels
+    # manager.fix_bad_channels()
+    # kwargs = dict(
+    #     channel_intensity_limits='from_array',
+    #     channel_indices='all',
+    # )
+
+    dtype = kwargs.get('dtype', None)
+    if dtype is None:
+        dtype = manager.array.dtype
+    if 'c' not in manager.axes:
+        channel_count = 1
+    else:
+        channel_idx = manager.axes.index('c')
+        channel_count = manager.array.shape[channel_idx]
+        assert channel_count == len(manager.channels), f"Manager constructed incorrectly!"
+    default_channels = generate_channel_metadata(num_channels=channel_count,
+                                                 dtype=dtype)
+    # import pprint
+    # pprint.pprint(manager.channels)
+    if manager.channels is not None:
+        for idx, channel in enumerate(manager.channels):
+            default_channels[idx].update(channel)
+
     output = copy.deepcopy(default_channels)
+    assert 'coefficient' in output[0].keys(), f"Channels parsed incorrectly!"
+
     channel_indices = kwargs.get('channel_indices', [])
-    channel_labels = kwargs.get('channel_labels', [])
-    channel_colors = kwargs.get('channel_colors', [])
+
+    if channel_indices == 'all':
+        channel_indices = list(range(len(output)))
+    if not hasattr(channel_indices, '__len__'):
+        channel_indices = [channel_indices]
+    # print(f"Channel indices: {channel_indices}")
+    channel_labels = kwargs.get('channel_labels', None)
+    channel_colors = kwargs.get('channel_colors', None)
+    if channel_labels in ('auto', None):
+        channel_labels = [channel_labels] * len(channel_indices)
+    if channel_colors in ('auto', None):
+        channel_colors = [channel_colors] * len(channel_indices)
+
+    #######
+    channel_intensity_limits = kwargs.get('channel_intensity_limits','from_dtype')
+    assert channel_intensity_limits in ('from_dtype', 'from_array'), f"Channel intensity limits must be either 'from_dtype' or 'from_array'"
+    #######
+
     try:
         if np.isnan(channel_indices):
-            return default_channels
+            return output
         elif channel_indices is None:
-            return default_channels
+            return output
         elif channel_indices == []:
-            return default_channels
+            return output
     except:
         pass
     if isinstance(channel_indices, str):
         channel_indices = [i for i in channel_indices.split(',')]
-    elif isinstance(channel_indices, (int, float)):
-        channel_indices = [channel_indices]
     if isinstance(channel_labels, str):
         channel_labels = [i for i in channel_labels.split(',')]
     if isinstance(channel_colors, str):
         channel_colors = [i for i in channel_colors.split(',')]
+
     channel_indices = [int(i) for i in channel_indices]
-    items = [channel_indices, channel_labels, channel_colors]
+    items = [channel_indices, channel_labels, channel_colors, channel_intensity_limits]
     for idx, item in enumerate(items):
         if not isinstance(item, str) and np.isscalar(item):
             item = [item]
@@ -107,30 +151,49 @@ def parse_channels(manager,
             except:
                 pass
         items[idx] = item
-    channel_indices, channel_labels, channel_colors = items
+    channel_indices, channel_labels, channel_colors, channel_intensity_limits = items
 
     if not len(channel_indices) == len(channel_labels) == len(channel_colors):
-        raise ValueError(f"Channel indices, labels and colors must have the same length. \n"
-                         f"So you need to specify --channel_indices, --channel_labels and --channel_colors with the same number of elements. \n"
+        raise ValueError(f"Channel indices, labels, colors, intensity minima and extrema must have the same length. \n"
+                         f"So you need to specify --channel_indices, --channel_labels, --channel_colors, --channel_intensity_extrema with the same number of elements. \n"
                          f"To keep specific labels or colors unchanged, add 'auto'. E.g. `--channel_indices 0,1 --channel_colors auto,red`")
     cm = ChannelMap()
 
     if len(channel_indices) == 0:
-        return default_channels
+        return output
 
+    from_array = channel_intensity_limits == 'from_array'
+    start_intensities, end_intensities = manager.compute_intensity_limits(
+                                                    from_array = from_array,
+                                                    dtype = dtype)
+    mins, maxes = manager.compute_intensity_extrema(dtype = dtype)
+    # pprint.pprint(output)
     for idx in range(len(channel_indices)):
         channel_idx = channel_indices[idx]
         if channel_idx >= channel_count:
             raise ValueError(f"Channel index {channel_idx} is out of range -> {0}:{channel_count - 1}")
-        current_channel = default_channels[channel_idx]
+        current_channel = output[channel_idx]
         if channel_labels[idx] not in (None, 'auto'):
             current_channel['label'] = channel_labels[idx]
         colorname = channel_colors[idx]
         if colorname not in (None, 'auto'):
             current_channel['color'] = cm[colorname] if cm[colorname] is not None else colorname
+        ###--------------------------------------------------------------------------------###
+        window = {
+            'min': mins[channel_idx],
+            'max': maxes[channel_idx],
+            'start': start_intensities[channel_idx],
+            'end': end_intensities[channel_idx]
+        }
+        current_channel['window'] = window
+        ###--------------------------------------------------------------------------------###
+        # Add the parameters that are currently hard-coded
+        current_channel['coefficient'] = 1
+        current_channel['active'] = True
+        current_channel['family'] = "linear"
+        current_channel['inverted'] = False
+        ###--------------------------------------------------------------------------------###
         output[channel_idx] = current_channel
-    print(output)
-
     return output
 
 async def update_worker(input_path: Union[str, ArrayManager],
@@ -159,6 +222,7 @@ async def update_worker(input_path: Union[str, ArrayManager],
 
     manager.fill_default_meta()
     manager._channels = parse_channels(manager, **kwargs)
+    manager.fix_bad_channels()
     manager.update_meta(new_scaledict = parse_scales(manager, **kwargs),
                     new_unitdict = parse_units(manager, **kwargs)
                     )
