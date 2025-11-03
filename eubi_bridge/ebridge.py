@@ -694,7 +694,7 @@ class EuBIBridge:
 
         # Collect file paths based on inclusion and exclusion patterns
         # Prepare pixel metadata arguments
-        if any(item is not None for item in [indices, labels, colors]):
+        if any(item is not None for item in [labels, colors]):
             assert all(hasattr(item, '__len__') for item in [indices, labels, colors])
             assert len(indices) == len(labels) == len(colors)
             channel_meta_kwargs_ = dict(channel_indices=indices,
