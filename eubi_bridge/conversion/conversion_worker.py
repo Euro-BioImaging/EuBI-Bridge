@@ -250,13 +250,13 @@ def parse_channels(manager,
         if colorname not in (None, 'auto'):
             current_channel['color'] = cm[colorname] if cm[colorname] is not None else colorname
         ###--------------------------------------------------------------------------------###
-        window = {
-            'min': mins[channel_idx],
-            'max': maxes[channel_idx],
-            'start': start_intensities[channel_idx],
-            'end': end_intensities[channel_idx]
-        }
-        current_channel['window'] = window
+        # window = {
+        #     'min': mins[channel_idx],
+        #     'max': maxes[channel_idx],
+        #     'start': start_intensities[channel_idx],
+        #     'end': end_intensities[channel_idx]
+        # }
+        # current_channel['window'] = window
         ###--------------------------------------------------------------------------------###
         # Add the parameters that are currently hard-coded
         current_channel['coefficient'] = 1
@@ -265,6 +265,16 @@ def parse_channels(manager,
         current_channel['inverted'] = False
         ###--------------------------------------------------------------------------------###
         output[channel_idx] = current_channel
+    # The channel intensity window not controlled by the channel_indices parameter.
+    for channel_idx in range(len(output)):
+        current_channel = output[channel_idx]
+        window = {
+            'min': mins[channel_idx],
+            'max': maxes[channel_idx],
+            'start': start_intensities[channel_idx],
+            'end': end_intensities[channel_idx]
+        }
+        current_channel['window'] = window
     return output
 
 # path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/PK2_ATH_5to20_20240705_MID_01.czi"

@@ -141,7 +141,7 @@ class EuBIBridge:
                 compressor_params={},
                 overwrite=False,
                 override_channel_names = False,
-                channel_intensity_limits = None,
+                channel_intensity_limits = 'from_dtype',
                 use_tensorstore=False,
                 use_gpu=False,
                 # rechunk_method='tasks',
@@ -331,8 +331,6 @@ class EuBIBridge:
                              skip_dask: bool = 'default',
                              auto_chunk: bool = 'default',
                              target_chunk_mb: float = 'default',
-                             compressor: str = 'default',
-                             compressor_params: dict = 'default',
                              time_chunk: int = 'default',
                              channel_chunk: int = 'default',
                              z_chunk: int = 'default',
@@ -348,36 +346,55 @@ class EuBIBridge:
                              z_range: int = 'default',
                              y_range: int = 'default',
                              x_range: int = 'default',
-                             # dimension_order: str = 'default',
+                             compressor: str = 'default',
+                             compressor_params: dict = 'default',
                              overwrite: bool = 'default',
                              override_channel_names: bool = 'default',
                              channel_intensity_limits = 'default',
+                             use_tensorstore: bool = 'default',
+                             use_gpu: bool = 'default',
                              metadata_reader: str = 'default',
                              save_omexml: bool = 'default',
                              squeeze: bool = 'default',
                              dtype: str = 'default',
+                             verbose: bool = 'default',
                              ):
         """
-        Updates conversion configuration settings. To update the current default value for a parameter, provide that parameter with a value other than 'default'.
+        Updates conversion configuration settings. To update the current default value for a parameter, 
+        provide that parameter with a value other than 'default'.
 
-        The following parameters can be configured:
-            - compressor (str, optional): Compression algorithm.
-            - compressor_params (dict, optional): Parameters for the compressor.
-            - output_chunks (list, optional): Chunk size for output.
-            - overwrite (bool, optional): Whether to overwrite existing data.
-            - rechunk_method (str, optional): Method used for rechunking.
-            - trim_memory (bool, optional): Whether to trim memory usage.
-            - use_tensorstore (bool, optional): Whether to use TensorStore for writing.
-            - save_omexml (bool, optional): Whether to create a METADATA.ome.xml file.
         Args:
-            compressor (str, optional): Compression algorithm.
+            zarr_format (int, optional): Zarr format version (2 or 3).
+            skip_dask (bool, optional): Whether to skip using Dask for processing.
+            auto_chunk (bool, optional): Whether to automatically determine chunk sizes.
+            target_chunk_mb (float, optional): Target chunk size in MB.
+            time_chunk (int, optional): Chunk size for time dimension.
+            channel_chunk (int, optional): Chunk size for channel dimension.
+            z_chunk (int, optional): Chunk size for Z dimension.
+            y_chunk (int, optional): Chunk size for Y dimension.
+            x_chunk (int, optional): Chunk size for X dimension.
+            time_shard_coef (int, optional): Sharding coefficient for time dimension.
+            channel_shard_coef (int, optional): Sharding coefficient for channel dimension.
+            z_shard_coef (int, optional): Sharding coefficient for Z dimension.
+            y_shard_coef (int, optional): Sharding coefficient for Y dimension.
+            x_shard_coef (int, optional): Sharding coefficient for X dimension.
+            time_range (int, optional): Range for time dimension.
+            channel_range (int, optional): Range for channel dimension.
+            z_range (int, optional): Range for Z dimension.
+            y_range (int, optional): Range for Y dimension.
+            x_range (int, optional): Range for X dimension.
+            compressor (str, optional): Compression algorithm to use.
             compressor_params (dict, optional): Parameters for the compressor.
-            output_chunks (list, optional): Chunk size for output.
             overwrite (bool, optional): Whether to overwrite existing data.
-            rechunk_method (str, optional): Method used for rechunking.
-            trim_memory (bool, optional): Whether to trim memory usage.
+            override_channel_names (bool, optional): Whether to override channel names.
+            channel_intensity_limits: Intensity limits for channels.
             use_tensorstore (bool, optional): Whether to use TensorStore for storage.
-            save_omexml (bool, optional): Whether to create a METADATA.ome.xml file.
+            use_gpu (bool, optional): Whether to use GPU acceleration.
+            metadata_reader (str, optional): Reader to use for metadata.
+            save_omexml (bool, optional): Whether to save OME-XML metadata.
+            squeeze (bool, optional): Whether to squeeze single-dimensional axes.
+            dtype (str, optional): Data type for the output array.
+            verbose (bool, optional): Whether to enable verbose output.
 
         Returns:
             None
@@ -388,28 +405,33 @@ class EuBIBridge:
             'skip_dask': skip_dask,
             'auto_chunk': auto_chunk,
             'target_chunk_mb': target_chunk_mb,
+            'time_chunk': time_chunk,
+            'channel_chunk': channel_chunk,
+            'z_chunk': z_chunk,
+            'y_chunk': y_chunk,
+            'x_chunk': x_chunk,
+            'time_shard_coef': time_shard_coef,
+            'channel_shard_coef': channel_shard_coef,
+            'z_shard_coef': z_shard_coef,
+            'y_shard_coef': y_shard_coef,
+            'x_shard_coef': x_shard_coef,
+            'time_range': time_range,
+            'channel_range': channel_range,
+            'z_range': z_range,
+            'y_range': y_range,
+            'x_range': x_range,
             'compressor': compressor,
-            'compressor_params': compressor_params,
-            "time_chunk": time_chunk,
-            "channel_chunk": channel_chunk,
-            "z_chunk": z_chunk,
-            "y_chunk": y_chunk,
-            "x_chunk": x_chunk,
-            "time_shard_coef": time_shard_coef,
-            "channel_shard_coef": channel_shard_coef,
-            "z_shard_coef": z_shard_coef,
-            "y_shard_coef": y_shard_coef,
-            "x_shard_coef": x_shard_coef,
-            "time_range": time_range,
-            "channel_range": channel_range,
-            "z_range": z_range,
-            "y_range": y_range,
-            "x_range": x_range,
+            'compressor_params': compressor_params or {},
             'overwrite': overwrite,
+            'override_channel_names': override_channel_names,
+            'channel_intensity_limits': channel_intensity_limits,
+            'use_tensorstore': use_tensorstore,
+            'use_gpu': use_gpu,
             'metadata_reader': metadata_reader,
             'save_omexml': save_omexml,
             'squeeze': squeeze,
-            'dtype': dtype
+            'dtype': dtype,
+            'verbose': verbose
         }
 
         for key in params:
@@ -662,10 +684,10 @@ class EuBIBridge:
 
     def update_channel_meta(self,
                           input_path: Union[Path, str],
-                          indices: list = None,
-                          labels: list = None,
-                          colors: list = None,
-                          channel_intensity_limits = None,
+                          channel_indices: list = None,
+                          channel_labels: list = None,
+                          channel_colors: list = None,
+                          channel_intensity_limits = 'dtype',
                           includes=None,
                           excludes=None,
                           **kwargs
@@ -694,18 +716,18 @@ class EuBIBridge:
 
         # Collect file paths based on inclusion and exclusion patterns
         # Prepare pixel metadata arguments
-        if any(item is not None for item in [labels, colors]):
-            assert all(hasattr(item, '__len__') for item in [indices, labels, colors])
+        if any(item is not None for item in [channel_labels, channel_colors]):
+            assert all(hasattr(item, '__len__') for item in [channel_indices, channel_labels, channel_colors])
             assert len(indices) == len(labels) == len(colors)
-            channel_meta_kwargs_ = dict(channel_indices=indices,
+            channel_meta_kwargs_ = dict(channel_indices=channel_indices,
                                        channel_labels=labels,
                                        channel_colors=colors)
             channel_meta_kwargs = {key: val for key, val in channel_meta_kwargs_.items() if val is not None}
         else:
             channel_meta_kwargs = {}
-        if channel_intensity_limits is not None:
-            assert channel_intensity_limits in ('from_array', 'from_dtype')
-            channel_meta_kwargs['channel_intensity_limits'] = channel_intensity_limits
+        # if channel_intensity_limits is not None:
+        #     assert channel_intensity_limits in ('from_array', 'from_dtype')
+        #     channel_meta_kwargs['channel_intensity_limits'] = channel_intensity_limits
         run_updates(
                     input_path,
                     includes=includes,
