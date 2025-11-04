@@ -506,11 +506,15 @@ class EuBIBridge:
         self.cluster_params = self._collect_params('cluster', **kwargs)
         self.readers_params = self._collect_params('readers', **kwargs)
         self.conversion_params = self._collect_params('conversion', **kwargs)
+        # self.conversion_params = self._collect_params('conversion',
+        #                                               channel_intensity_limits = channel_intensity_limits,
+        #                                               **kwargs)
         self.downscale_params = self._collect_params('downscale', **kwargs)
         combined = {**self.cluster_params,
                     **self.readers_params,
                     **self.conversion_params,
                     **self.downscale_params}
+        import pprint
         extra_kwargs = {key: kwargs[key] for key in kwargs if key not in combined}
 
         run_conversions(os.path.abspath(input_path),
@@ -705,7 +709,9 @@ class EuBIBridge:
         # Collect cluster and conversion parameters
         self.cluster_params = self._collect_params('cluster', **kwargs)
         self.readers_params = self._collect_params('readers', **kwargs)
-        self.conversion_params = self._collect_params('conversion', **kwargs)
+        self.conversion_params = self._collect_params('conversion',
+                                                      channel_intensity_limits = channel_intensity_limits,
+                                                      **kwargs)
 
         combined = {**self.cluster_params,
                     **self.readers_params,
@@ -727,9 +733,13 @@ class EuBIBridge:
             channel_meta_kwargs = {}
         # if channel_intensity_limits is not None:
         #     assert channel_intensity_limits in ('from_array', 'from_dtype')
-        #     channel_meta_kwargs['channel_intensity_limits'] = channel_intensity_limits
+        #     combined['channel_intensity_limits'] = channel_intensity_limits
+        # import pprint
+        # pprint.pprint(combined)
+        # pprint.pprint(channel_meta_kwargs)
+        # pprint.pprint(extra_kwargs)
         run_updates(
-                    input_path,
+                    os.path.abspath(input_path),
                     includes=includes,
                     excludes=excludes,
                     **combined,

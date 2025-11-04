@@ -350,6 +350,8 @@ def run_conversions(
             runner = run_conversions_from_filepaths
     else:
         runner = run_conversions_with_concatenation
+    import pprint
+    # pprint.pprint(f"running with: {kwargs}")
     return asyncio.run(runner(filepaths,
                               output_path = output_path,
                               **kwargs

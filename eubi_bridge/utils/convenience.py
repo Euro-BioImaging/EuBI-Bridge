@@ -578,7 +578,10 @@ def compute_chunk_batch(
     memory_per_chunk_mb = memory_per_chunk / (1024 ** 2)
 
     if memory_per_chunk_mb > memory_limit_mb:
-        raise ValueError(f"Single chunk ({memory_per_chunk} megabytes) exceeds memory limit ({memory_limit_mb} megabytes)")
+        logger.warn(f"For the array with shape {array_shape} and dtype {dtype},\n"
+                    f"the size of an input chunk ({memory_per_chunk_mb} megabytes) exceeds target memory ({memory_limit_mb} megabytes).\n"
+                    f"Target memory is temporarily increased to {memory_per_chunk_mb} megabytes.")
+        memory_limit_mb = memory_per_chunk_mb
 
     # Maximum number of chunks that fit in memory
     max_chunks = memory_limit_mb // memory_per_chunk_mb

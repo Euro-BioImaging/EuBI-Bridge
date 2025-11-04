@@ -1,4 +1,6 @@
+from eubi_bridge.utils.logging_config import get_logger
 
+logger = get_logger(__name__)
 
 def get_printables(
                    axes: str,
@@ -101,3 +103,148 @@ def generate_channel_metadata(num_channels,
         channels.append(channel)
 
     return channels
+
+
+class ChannelMap:
+    DEFAULT_COLORS = {
+        'red': "FF0000",
+        'green': "00FF00",
+        'blue': "0000FF",
+        'magenta': "FF00FF",
+        'cyan': "00FFFF",
+        'yellow': "FFFF00",
+        'white': "FFFFFF",
+    }
+    def __getitem__(self, key):
+        if key in self.DEFAULT_COLORS:
+            return self.DEFAULT_COLORS[key]
+        else:
+            return None
+
+
+def parse_channels(manager,
+                   **kwargs
+                   ):
+
+    dtype = kwargs.get('dtype', None)
+    if dtype is None:
+        dtype = manager.array.dtype
+    if 'c' not in manager.axes:
+        channel_count = 1
+    else:
+        channel_idx = manager.axes.index('c')
+        channel_count = manager.array.shape[channel_idx]
+        assert channel_count == len(manager.channels), f"Manager constructed incorrectly!"
+    default_channels = generate_channel_metadata(num_channels=channel_count,
+                                                 dtype=dtype)
+
+    if manager.channels is not None:
+        for idx, channel in enumerate(manager.channels):
+            default_channels[idx].update(channel)
+
+    import copy
+    output = copy.deepcopy(default_channels)
+    assert 'coefficient' in output[0].keys(), f"Channels parsed incorrectly!" # A very basic validation
+
+    #######-----------------------------------##################
+    # Handle channel intensity limits first
+    channel_intensity_limits = kwargs.get('channel_intensity_limits','from_dtype')
+    assert channel_intensity_limits in ('from_dtype', 'from_array'), f"Channel intensity limits must be either 'from_dtype' or 'from_array'"
+    from_array = channel_intensity_limits == 'from_array'
+    start_intensities, end_intensities = manager.compute_intensity_limits(
+                                                    from_array = from_array,
+                                                    dtype = dtype)
+    mins, maxes = manager.compute_intensity_extrema(dtype = dtype)
+    # The channel intensity window not controlled by the channel_indices parameter.
+    # Parse both channel intensity and hexadecimal color code for all channels:
+    for channel_idx in range(len(output)):
+        current_channel = output[channel_idx]
+        color = current_channel['color']
+        if color.startswith('#'):
+            color = color[1:]
+        current_channel['color'] = color[:6]
+        window = {
+            'min': mins[channel_idx],
+            'max': maxes[channel_idx],
+            'start': start_intensities[channel_idx],
+            'end': end_intensities[channel_idx]
+        }
+        current_channel['window'] = window
+        output[channel_idx] = current_channel
+    #######-----------------------------------##################
+
+    channel_indices = kwargs.get('channel_indices', [])
+
+    if channel_indices == 'all':
+        channel_indices = list(range(len(output)))
+    if not hasattr(channel_indices, '__len__'):
+        channel_indices = [channel_indices]
+    channel_labels = kwargs.get('channel_labels', None)
+    channel_colors = kwargs.get('channel_colors', None)
+    if channel_labels in ('auto', None):
+        channel_labels = [channel_labels] * len(channel_indices)
+    if channel_colors in ('auto', None):
+        channel_colors = [channel_colors] * len(channel_indices)
+
+    import numpy as np
+    try:
+        if np.isnan(channel_indices):
+            return output
+        elif channel_indices is None:
+            return output
+        elif channel_indices == []:
+            return output
+    except:
+        pass
+    if isinstance(channel_indices, str):
+        channel_indices = [i for i in channel_indices.split(',')]
+    if isinstance(channel_labels, str):
+        channel_labels = [i for i in channel_labels.split(',')]
+    if isinstance(channel_colors, str):
+        channel_colors = [i for i in channel_colors.split(',')]
+
+    channel_indices = [int(i) for i in channel_indices]
+    items = [channel_indices, channel_labels, channel_colors, channel_intensity_limits]
+    for idx, item in enumerate(items):
+        if not isinstance(item, str) and np.isscalar(item):
+            item = [item]
+        for i, it in enumerate(item):
+            try:
+                if np.isnan(it):
+                    item[i] = 'auto'
+            except:
+                pass
+        items[idx] = item
+    channel_indices, channel_labels, channel_colors, channel_intensity_limits = items
+
+    if not len(channel_indices) == len(channel_labels) == len(channel_colors):
+        raise ValueError(f"Channel indices, labels, colors, intensity minima and extrema must have the same length. \n"
+                         f"So you need to specify --channel_indices, --channel_labels, --channel_colors, --channel_intensity_extrema with the same number of elements. \n"
+                         f"To keep specific labels or colors unchanged, add 'auto'. E.g. `--channel_indices 0,1 --channel_colors auto,red`")
+
+    cm = ChannelMap()
+
+    if len(channel_indices) == 0:
+        return output
+
+    for idx in range(len(channel_indices)):
+        channel_idx = channel_indices[idx]
+        if channel_idx >= channel_count:
+            logger.warn(f"For the dataset {manager.series_path},\n"
+                        f"Channel index {channel_idx} is out of range -> {0}:{channel_count - 1}.\n"
+                        f"Skipping channel {channel_idx}...")
+            continue
+        current_channel = output[channel_idx]
+        if channel_labels[idx] not in (None, 'auto'):
+            current_channel['label'] = channel_labels[idx]
+        colorname = channel_colors[idx]
+        if colorname not in (None, 'auto'):
+            current_channel['color'] = cm[colorname] if cm[colorname] is not None else colorname
+         # Add the parameters that are currently hard-coded
+        # current_channel['coefficient'] = 1
+        # current_channel['active'] = True
+        # current_channel['family'] = "linear"
+        # current_channel['inverted'] = False
+        ###--------------------------------------------------------------------------------###
+        output[channel_idx] = current_channel
+    return output
