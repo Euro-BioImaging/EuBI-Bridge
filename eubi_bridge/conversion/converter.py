@@ -1,9 +1,13 @@
-import os
+import os, multiprocessing
+
+os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
+
+# Ensure the environment is inherited by forked/spawned processes
+multiprocessing.set_start_method("spawn", force=True)
 import time
 import asyncio
 import pickle
 import numpy as np, pandas as pd
-import multiprocessing as mp
 from natsort import natsorted
 # from distributed import LocalCluster, Client
 # import logging

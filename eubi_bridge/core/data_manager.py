@@ -284,11 +284,13 @@ class PFFImageMeta:
         self.omemeta = None
         self.pyr = None
         self._series = 0
+        self._tile = 0
         self._aszarr = aszarr
         self.arraydata = None
         self._img = None
         self._meta_reader = meta_reader
         self.n_scenes = None
+        self._n_tiles = None
         # self._channels = None
 
     def __getstate__(self):
@@ -319,7 +321,9 @@ class PFFImageMeta:
                 raise ValueError(f"Unsupported metadata reader: {sef._meta_reader}")
         self.omemeta = omemeta
         self.n_scenes = len(self.omemeta.images)
+
         await self.set_scene(self._series)
+        await self.set_tile(self._tile)
 
     async def get_arraydata(self):
         return self._img.get_image_dask_data()
@@ -334,6 +338,26 @@ class PFFImageMeta:
         #     missing_fields = self.essential_omexml_fields - self.pixels.model_fields_set
         #     self.pixels.model_fields_set.update(missing_fields)
 
+    async def set_tile(self, mosaic_tile_index):
+        self._tile = 0
+        if self._img is not None:
+            if hasattr(self._img, 'set_tile') and self._img.n_tiles > 1:
+                self._tile = mosaic_tile_index
+                self._img.set_tile(self._tile)
+                self.arraydata = await self.get_arraydata()
+
+        # if self.omemeta is not None:
+        #     self.pixels = copy.deepcopy(self.omemeta.images[self._series].pixels)
+        #     missing_fields = self.essential_omexml_fields - self.pixels.model_fields_set
+        #     self.pixels.model_fields_set.update(missing_fields)
+
+    @property
+    def n_tiles(self):
+        try:
+            return self._img.n_tiles
+        except:
+            self._n_tiles
+
     def get_pixels(self):
         pixels = self.omemeta.images[self._series].pixels
         missing_fields = self.essential_omexml_fields - pixels.model_fields_set
@@ -347,6 +371,7 @@ class PFFImageMeta:
     async def read_img(self, **kwargs):
         self._img = await read_single_image(self.root, aszarr=self._aszarr, **kwargs)
         await self.set_scene(self._series)
+        await self.set_tile(self._tile)
         self.arraydata = await self.get_arraydata()
 
     async def get_pyramid(self, version = '0.4'):
@@ -692,6 +717,9 @@ class ArrayManager: ### Unify the classes above.
         self.path = str(path) if path is not None else None
         self.series = kwargs.get('series', 0)
         self.series_path = self.path + f'_{self.series}'
+        self.mosaic_tile_index = kwargs.get('mosaic_tile_index', None)
+        if self.mosaic_tile_index is not None:
+            self.series_path += f'_tile{self.mosaic_tile_index}'
 
         self._meta_reader = metadata_reader
         self._skip_dask = skip_dask
@@ -711,6 +739,7 @@ class ArrayManager: ### Unify the classes above.
         self.pyr = None
         self.img = None
         self.loaded_scenes = None
+        self.loaded_tiles = None
 
     def __getstate__(self):
         return self.__dict__.copy()
@@ -736,7 +765,8 @@ class ArrayManager: ### Unify the classes above.
                 self.img = await asyncio.to_thread(PFFImageMeta,
                                                    self.path,
                                                    self._meta_reader,
-                                                   self._skip_dask)
+                                                   self._skip_dask,
+                                                   )
             else:
                 if (str(self.path).endswith(('tif', 'tiff'))) :
                         # and
@@ -751,9 +781,13 @@ class ArrayManager: ### Unify the classes above.
                     self.img = await asyncio.to_thread(PFFImageMeta,
                                                        self.path,
                                                        self._meta_reader,
-                                                       self._skip_dask)
+                                                       self._skip_dask,
+                                                       )
+
             await self.img.read_dataset()
             await self.set_scene(self.series)
+            if self.mosaic_tile_index is not None:
+                await self.set_tile(self.mosaic_tile_index)
             if self.img.omemeta is not None:
                 self.omemeta = self.img.omemeta
         return self
@@ -769,6 +803,24 @@ class ArrayManager: ### Unify the classes above.
             self.set_arraydata(self.img.arraydata)
             self.series = scene_idx
             self.series_path = self.path + f'_{self.series}'
+            self.omemeta = self.img.omemeta
+            # self.pixels = copy.copy(self.omemeta.images[self.series].pixels)
+            self._channels = self.img.get_channels()
+        else:
+            raise Exception("Image is missing. An image needs to be read.")
+        return self
+
+    async def set_tile(self, mosaic_tile_index):
+        # if self.series == mosaic_tile_index:
+        #     return self
+        if self.img is not None:
+            await self.img.set_tile(mosaic_tile_index)
+            self.pyr = await self.img.get_pyramid()
+            # Pull basic properties
+            self.axes = self.img.get_axes()
+            self.set_arraydata(self.img.arraydata)
+            self.mosaic_tile_index = self.img._tile
+            self.series_path = self.path + f'_{self.series}' + f'_tile{self.mosaic_tile_index}'
             self.omemeta = self.img.omemeta
             # self.pixels = copy.copy(self.omemeta.images[self.series].pixels)
             self._channels = self.img.get_channels()
@@ -801,6 +853,33 @@ class ArrayManager: ### Unify the classes above.
         scenelist = await asyncio.gather(*scenes)
         self.loaded_scenes = {scene.series_path: scene for scene in scenelist}
         return self.loaded_scenes
+
+    async def load_tiles(self, tile_indices: Union[int, str, List[int]]):
+        """TODO: Maybe make sure it checks and loads only available indices."""
+        n_tiles = self.img.n_tiles or 1
+        if tile_indices == 'all':
+            tile_indices = list(range(n_tiles))
+        elif np.isscalar(tile_indices):
+            tile_indices = [tile_indices]
+        tile_indices_ = []
+        for idx in tile_indices:
+            if idx < n_tiles:
+                tile_indices_.append(idx)
+            else:
+                logger.warning(f"Scene index {idx} is out of bounds for the path {self.path}.\n"
+                               f"Skipping the nonexistent scene {idx}.")
+        tile_indices = tile_indices_
+        tiles = []
+        async def copy_scene(manager, tile_idx):
+            await manager.set_tile(tile_idx)
+            # print(manager.channels)
+            return copy.copy(manager)
+        for tile_idx in tile_indices:
+            tiles.append(copy_scene(self, tile_idx))
+        import asyncio
+        tilelist = await asyncio.gather(*tiles)
+        self.loaded_tiles = {tile.series_path: tile for tile in tilelist}
+        return self.loaded_tiles
 
     # ------------------------------------------------------------------
     # Metadata helpers

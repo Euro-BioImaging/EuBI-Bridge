@@ -1,7 +1,6 @@
 # from concurrent.futures import ProcessPoolExecutor
 import copy
 from typing import Union
-import tensorstore as ts
 import zarr, os, asyncio
 import numpy as np
 from eubi_bridge.conversion.fileset_io import BatchFile, FileSet
@@ -143,43 +142,6 @@ def parse_units(manager,
     return tuple([output[key] for key in manager.caxes])
 
 
-# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/PK2_ATH_5to20_20240705_MID_01.czi"
-#
-# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/filament.tif"
-#
-# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/00001_01.ome.tiff"
-#
-# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/17_03_18.lif"
-# man = ArrayManager(path, skip_dask=True)
-# await man.init()
-# # await man.set_scene(30)
-# await man.load_scenes((1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21))
-# 
-# scene = man.loaded_scenes['/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/pff/17_03_18.lif_8']
-# scene.img.pixels
-# scene.img.get_channels()
-# img = scene.img
-# 
-# img.pixels.id
-# img._series
-
-# for m in man.loaded_scenes.values():
-    # print(m.array.shape)
-    # print(m.channels)
-# await man.set_scene(4)
-# man.channels
-
-# man._channels = man.channels
-# man.fix_bad_channels()
-
-# import dask.array as da
-#
-# chns = parse_channels(man,
-#                    channel_intensity_limits='from_dtype',
-#                    channel_indices='all')
-# man._channels = chns
-
-
 async def unary_worker(input_path: Union[str, ArrayManager],
                          output_path: str,
                          **kwargs):
@@ -187,6 +149,10 @@ async def unary_worker(input_path: Union[str, ArrayManager],
     compute_batch_size = kwargs.get('compute_batch_size', 4)
     memory_limit_per_batch = kwargs.get('memory_limit_per_batch', 1024)
     series = kwargs.get('scene_index', 'all')
+    mosaic_tile_index = kwargs.get('mosaic_tile_index', None)
+    # if hasattr(series, '__len__'):
+        ### TODO: fix the issue in the assertment below.
+        # assert mosaic_tile_index is None, f"Currently, extracting different tiles for different scenes is not supported."
 
     if not isinstance(input_path, ArrayManager):
         manager = ArrayManager(
@@ -198,6 +164,9 @@ async def unary_worker(input_path: Union[str, ArrayManager],
         await manager.init()
         manager.fill_default_meta()
         await manager.load_scenes(scene_indices=series)
+        if mosaic_tile_index is not None:
+            for man in manager.loaded_scenes.values():
+                await man.load_tiles(tile_indices=mosaic_tile_index)
     else:
         manager = input_path
     # Semaphore to limit concurrent scenes
@@ -253,13 +222,23 @@ async def unary_worker(input_path: Union[str, ArrayManager],
             await man.save_omexml(output_path, overwrite=True)
 
     tasks = []
+    add_scene = manager.img.n_scenes > 1
     for man in manager.loaded_scenes.values(): ### Careful here!
-        if man.series == 0 and man.img.n_scenes == 1:
-            output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}.zarr"
+        n_tiles = man.img.n_tiles or 1
+        add_tile = n_tiles > 1
+        suffix = ""
+        if add_scene:
+            suffix += f"_{man.series}"
+        if man.loaded_tiles is not None:
+            suffix_ = suffix
+            for tile in man.loaded_tiles.values():
+                if add_tile:
+                    suffix_ = suffix + f"_tile{tile.mosaic_tile_index}"
+                output_path_ = f"{output_path}/{os.path.basename(tile.series_path).split('.')[0]}{suffix_}.zarr"
+                tasks.append(asyncio.create_task(run_single_scene(tile, output_path_)))
         else:
-            output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}_{man.series}.zarr"
-        tasks.append(asyncio.create_task(run_single_scene(man, output_path_)))
-
+            output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}_{suffix}.zarr"
+            tasks.append(asyncio.create_task(run_single_scene(man, output_path_)))
     await asyncio.gather(*tasks)
 
 

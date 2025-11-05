@@ -101,16 +101,29 @@ def read_czi(
             self.path = path
             self.index_map = index_map
             self.set_scene(0)
+            self.set_tile(0)
             self._set_series_path()
         @property
         def n_scenes(self):
             return len(self.img.scenes)
         @property
+        def n_tiles(self):
+            if hasattr(self.img.dims, 'M'):
+                return self.img.dims.M
+            elif hasattr(self.img._dims, 'M'):
+                return self.img._dims.M
+            else:
+                return 1
+        @property
         def scenes(self):
             return self.img.scenes
-        def _set_series_path(self):
+        def _set_series_path(self, add_tile_index = False):
             # self.series_path = os.path.splitext(self.path)[0] + f'_{self.series}' + os.path.splitext(self.path)[1]
-            self.series_path = self.path + f'_{self.series}'
+            if add_tile_index:
+                tile_index = self.index_map.get('M', 0)
+                self.series_path = self.path + f'_{self.series}' + f'_tile{self.tile}'
+            else:
+                self.series_path = self.path + f'_{self.series}'
         def get_image_dask_data(self, *args, **kwargs):
             try:
                 return self.img.get_image_dask_data(dimension_order_out='TCZYX',
@@ -121,6 +134,10 @@ def read_czi(
             self.index_map['S'] = scene_index
             self.series = scene_index
             self.img.set_scene(scene_index)
+            self._set_series_path()
+        def set_tile(self, mosaic_tile_index: int):
+            self.index_map['M'] = mosaic_tile_index
+            self.tile = mosaic_tile_index
             self._set_series_path()
     mock = MockImg(img, input_path, index_map)
     return mock

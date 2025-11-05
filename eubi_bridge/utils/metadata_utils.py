@@ -176,7 +176,7 @@ def parse_channels(manager,
     channel_indices = kwargs.get('channel_indices', [])
 
     if channel_indices == 'all':
-        channel_indices = list(range(len(output)))
+        channel_indices = list(range(channel_count))
     if not hasattr(channel_indices, '__len__'):
         channel_indices = [channel_indices]
     channel_labels = kwargs.get('channel_labels', None)
@@ -216,9 +216,30 @@ def parse_channels(manager,
                 pass
         items[idx] = item
     channel_indices, channel_labels, channel_colors, channel_intensity_limits = items
+    import pprint
+    pprint.pprint(manager.path)
+    pprint.pprint(manager.series_path)
+    pprint.pprint(manager.array.shape)
+    pprint.pprint(channel_indices)
+    pprint.pprint(channel_labels)
+    pprint.pprint(channel_colors)
+    if len(channel_indices) > channel_count:
+        pprint.pprint(f"For the path {manager.series_path} and array {manager.array.shape}:")
+        pprint.pprint(f"Channel indices wrongly specified as {channel_indices}. Being corrected to {channel_count}")
+        channel_indices = channel_indices[:channel_count]
+    if len(channel_labels) > channel_count:
+        pprint.pprint(f"For the path {manager.series_path} and array {manager.array.shape}:")
+        pprint.pprint(f"Channel labels wrongly specified as {channel_labels}. Being corrected to {channel_count}")
+        channel_labels = channel_labels[:channel_count]
+    if len(channel_colors) > channel_count:
+        pprint.pprint(f"For the path {manager.series_path} and array {manager.array.shape}:")
+        pprint.pprint(f"Channel colors wrongly specified as {channel_colors}. Being corrected to {channel_count}")
+        channel_colors = channel_colors[:channel_count]
+
 
     if not len(channel_indices) == len(channel_labels) == len(channel_colors):
         raise ValueError(f"Channel indices, labels, colors, intensity minima and extrema must have the same length. \n"
+                         f"Currently they are {channel_indices},{channel_labels},{channel_colors} \n"
                          f"So you need to specify --channel_indices, --channel_labels, --channel_colors, --channel_intensity_extrema with the same number of elements. \n"
                          f"To keep specific labels or colors unchanged, add 'auto'. E.g. `--channel_indices 0,1 --channel_colors auto,red`")
 

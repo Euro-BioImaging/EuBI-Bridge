@@ -83,6 +83,8 @@ def read_pff(input_path,
     # print(reader_kwargs)
     # im = reader(input_path, **reader_kwargs)
     img = reader(input_path, **reader_kwargs)
+    if hasattr(img, 'index_map'):
+        return img
 
     class MockImg:
         def __init__(self,

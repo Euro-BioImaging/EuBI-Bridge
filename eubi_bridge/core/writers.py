@@ -1,5 +1,6 @@
 import copy
 import os
+os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
 import time
 import itertools
 import tempfile
@@ -697,10 +698,7 @@ async def write_with_tensorstore_async(
 
     ts_store = ts.open(zarr_spec).result()
 
-    # compute block layout
-    # print(f"dtype: {dtype}")
     block_size = compute_chunk_batch(arr, dtype, memory_limit_per_batch)
-    # print(f"block_size: {block_size}")
     block_size = tuple([max(bs, cs) for bs, cs in zip(block_size, chunks)])
     block_size = tuple((math.ceil(bs / cs) * cs) for bs, cs in zip(block_size, chunks))
     blocks = compute_block_slices(arr, block_size)
