@@ -259,10 +259,6 @@ def parse_series(series: Union[Iterable, int]):
     return series
 
 
-
-
-
-
 class PFFImageMeta:
     essential_omexml_fields = {
         "physical_size_x", "physical_size_x_unit",
@@ -275,7 +271,7 @@ class PFFImageMeta:
     def __init__(self,
                  path,
                  meta_reader="bioio",
-                 aszarr = False
+                 aszarr=False
                  ):
         # series = parse_series(series)
         self.root = path
@@ -289,7 +285,7 @@ class PFFImageMeta:
         self.arraydata = None
         self._img = None
         self._meta_reader = meta_reader
-        self.n_scenes = None
+        self._n_scenes = None
         self._n_tiles = None
         # self._channels = None
 
@@ -316,11 +312,11 @@ class PFFImageMeta:
                     omemeta = read_metadata_via_bfio(self.root)  # don't pass series, will be handled afterwards
                 except:
                     # If not found, try to read the metadata via bioformats
-                    omemeta = read_metadata_via_bioio_bioformats(self.root, series=self._series) ### make series plural
+                    omemeta = read_metadata_via_bioio_bioformats(self.root, series=self._series)  ### make series plural
             else:
                 raise ValueError(f"Unsupported metadata reader: {sef._meta_reader}")
         self.omemeta = omemeta
-        self.n_scenes = len(self.omemeta.images)
+        self._n_scenes = len(self.omemeta.images)
 
         await self.set_scene(self._series)
         await self.set_tile(self._tile)
@@ -356,7 +352,14 @@ class PFFImageMeta:
         try:
             return self._img.n_tiles
         except:
-            self._n_tiles
+            return self._n_tiles
+
+    @property
+    def n_scenes(self):
+        try:
+            return self._img.n_scenes
+        except:
+            return self._n_scenes
 
     def get_pixels(self):
         pixels = self.omemeta.images[self._series].pixels
@@ -374,15 +377,15 @@ class PFFImageMeta:
         await self.set_tile(self._tile)
         self.arraydata = await self.get_arraydata()
 
-    async def get_pyramid(self, version = '0.4'):
+    async def get_pyramid(self, version='0.4'):
         ### add channels from omemeta
         array = await self.get_arraydata()
-        pyr = Pyramid().from_array(array = array,
-                                   axis_order = self.get_axes(),
-                                   unit_list = self.get_units(),
-                                   scale = self.get_scales(),
-                                   version = version,
-                                   name = "Series_0"
+        pyr = Pyramid().from_array(array=array,
+                                   axis_order=self.get_axes(),
+                                   unit_list=self.get_units(),
+                                   scale=self.get_scales(),
+                                   version=version,
+                                   name="Series_0"
                                    )
         return pyr
 
@@ -456,7 +459,6 @@ class PFFImageMeta:
         for key, value in snapshot.items():
             setattr(self, key, copy.deepcopy(value))
 
-
     # async def read_array_data(self):
     #     self._arraydata = await read_single_image_asarray(self.root_path, scene_index=self.series)
 
@@ -513,7 +515,6 @@ class TIFFImageMeta(PFFImageMeta):
                 }
 
 
-
 class H5ImageMeta(PFFImageMeta):
     essential_omexml_fields = {
         "physical_size_x", "physical_size_x_unit",
@@ -531,11 +532,11 @@ class H5ImageMeta(PFFImageMeta):
 
         if path.endswith('.h5'):
             super().__init__(path, meta_reader,
-                             aszarr = False, **kwargs)
+                             aszarr=False, **kwargs)
         else:
             raise Exception(f"The given path is not an HDF5 file: {path}")
 
-    async def read_omemeta(self, **kwargs): #   This is not real omemeta, just meta.
+    async def read_omemeta(self, **kwargs):  # This is not real omemeta, just meta.
         import h5py
         f = h5py.File(self.root)
         dset_name = list(f.keys())[self._series]
@@ -613,18 +614,18 @@ class H5ImageMeta(PFFImageMeta):
 # await h5.read_omemeta()
 
 
-class NGFFImageMeta(PFFImageMeta): ### Maybe set_scene can pick particular resolution layer?
+class NGFFImageMeta(PFFImageMeta):  ### Maybe set_scene can pick particular resolution layer?
     def __init__(self,
                  path,
                  aszarr=False
                  ):
         if is_zarr_group(path):
-            super().__init__(path = path, aszarr = aszarr)
-            self._base_path = '0' ### This will be represented as series later.
+            super().__init__(path=path, aszarr=aszarr)
+            self._base_path = '0'  ### This will be represented as series later.
         else:
             raise Exception(f"The given path is not an NGFF group: {path}")
 
-    async def read_omemeta(self, **kwargs): # This is not really omemeta, it is just meta.
+    async def read_omemeta(self, **kwargs):  # This is not really omemeta, it is just meta.
         if self._img is None:
             self._img = await read_single_image(self.root,
                                                 aszarr=self._aszarr,
@@ -667,10 +668,9 @@ class NGFFImageMeta(PFFImageMeta): ### Maybe set_scene can pick particular resol
     async def get_arraydata(self):
         return self._img.get_image_dask_data()
 
-    async def get_pyramid(self, version = '0.4'):
+    async def get_pyramid(self, version='0.4'):
         ### add channels from omemeta
         return self._img.pyr
-
 
 
 def expand_hex_shorthand(hex_color):
@@ -689,8 +689,7 @@ def expand_hex_shorthand(hex_color):
     return expanded
 
 
-
-class ArrayManager: ### Unify the classes above.
+class ArrayManager:  ### Unify the classes above.
     """Async-friendly version of ArrayManager.
 
     Any potentially blocking I/O is offloaded to a thread via ``asyncio.to_thread``.
@@ -768,9 +767,9 @@ class ArrayManager: ### Unify the classes above.
                                                    self._skip_dask,
                                                    )
             else:
-                if (str(self.path).endswith(('tif', 'tiff'))) :
-                        # and
-                        # not str(self.path).endswith(('ome.tif', 'ome.tiff'))):
+                if (str(self.path).endswith(('tif', 'tiff'))):
+                    # and
+                    # not str(self.path).endswith(('ome.tif', 'ome.tiff'))):
                     self.img = await asyncio.to_thread(TIFFImageMeta,
                                                        self.path,
                                                        self._meta_reader,
@@ -832,6 +831,7 @@ class ArrayManager: ### Unify the classes above.
         """TODO: Maybe make sure it checks and loads only available indices."""
         if scene_indices == 'all':
             scene_indices = list(range(self.img.n_scenes))
+            print(f"scene indices: {scene_indices}")
         elif np.isscalar(scene_indices):
             scene_indices = [scene_indices]
         scene_indices_ = []
@@ -843,10 +843,12 @@ class ArrayManager: ### Unify the classes above.
                                f"Skipping the nonexistent scene {idx}.")
         scene_indices = scene_indices_
         scenes = []
+
         async def copy_scene(manager, scene_idx):
             await manager.set_scene(scene_idx)
             # print(manager.channels)
             return copy.copy(manager)
+
         for scene_idx in scene_indices:
             scenes.append(copy_scene(self, scene_idx))
         import asyncio
@@ -870,10 +872,12 @@ class ArrayManager: ### Unify the classes above.
                                f"Skipping the nonexistent scene {idx}.")
         tile_indices = tile_indices_
         tiles = []
+
         async def copy_scene(manager, tile_idx):
             await manager.set_tile(tile_idx)
             # print(manager.channels)
             return copy.copy(manager)
+
         for tile_idx in tile_indices:
             tiles.append(copy_scene(self, tile_idx))
         import asyncio
@@ -930,7 +934,7 @@ class ArrayManager: ### Unify the classes above.
 
         scales = [scaledict[ax] for ax in (self.axes if 'c' in scaledict else self.caxes)]
 
-        unitdict = self.img.get_unitdict() # TODO: remove this and use set values directly.
+        unitdict = self.img.get_unitdict()  # TODO: remove this and use set values directly.
         for key, val in new_unitdict.items():
             if key in unitdict and val is not None:
                 unitdict[key] = val
@@ -981,11 +985,11 @@ class ArrayManager: ### Unify the classes above.
         return starts, ends
 
     def compute_intensity_limits(self,
-                                  from_array = False,
-                                  dtype = None,
-                                  start_intensity=None,
-                                  end_intensity=None,
-                                  ):
+                                 from_array=False,
+                                 dtype=None,
+                                 start_intensity=None,
+                                 end_intensity=None,
+                                 ):
         if 'c' in self.axes:
             c_axis = self.axes.index('c')
             n_channels = self.array.shape[c_axis]
@@ -1001,7 +1005,7 @@ class ArrayManager: ### Unify the classes above.
             ends = [end_intensity for _ in range(n_channels)]
 
         if starts is not None and ends is not None:
-            return starts,ends
+            return starts, ends
 
         if from_array and self.array is None:
             raise Exception(f"Manager needs an array to detect the intensity extrema.")
@@ -1157,6 +1161,7 @@ class ArrayManager: ### Unify the classes above.
                     image_name=self.pyr.meta.multiscales.get('name', 'Default image'),
                     channel_names=[channel['label'] for channel in self.channels],
                 )
+
             self.omemeta = await asyncio.to_thread(_create_ome)
 
         # Update / write OME XML if exists or requested to create
@@ -1281,9 +1286,6 @@ class ArrayManager: ### Unify the classes above.
         return chunk_shape
 
 
-
-
-
 class ChannelIterator:
     """
     Iterator for generating and managing channel colors.
@@ -1388,13 +1390,13 @@ class BatchManager:
                  ):
         pass
         # self.managers = managers
-        
+
     async def init(self,
                    managers
                    ):
         self.managers = managers
         return self
-        
+
     async def _collect_scaledict(self, **kwargs):
         """
         Retrieves pixel sizes for image dimensions.
@@ -1465,13 +1467,13 @@ class BatchManager:
             manager.to_cupy()
 
     async def crop(self,
-             time_range=None,
-             channel_range=None,
-             z_range=None,
-             y_range=None,
-             x_range=None,
-             **kwargs  # placehold
-             ):
+                   time_range=None,
+                   channel_range=None,
+                   z_range=None,
+                   y_range=None,
+                   x_range=None,
+                   **kwargs  # placehold
+                   ):
         if any([item is not None
                 for item in (time_range,
                              channel_range,

@@ -13,7 +13,6 @@ from eubi_bridge.core.writers import store_multiscale_async
 from eubi_bridge.conversion.fileset_io import BatchFile
 from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
 import time
-import multiprocessing as mp
 from eubi_bridge.utils.metadata_utils import generate_channel_metadata, parse_channels
 
 from eubi_bridge.utils.logging_config import get_logger

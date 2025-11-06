@@ -162,7 +162,18 @@ def parse_channels(manager,
         color = current_channel['color']
         if color.startswith('#'):
             color = color[1:]
-        current_channel['color'] = color[:6]
+        if len(color) == 6:
+            pass
+        elif len(color) == 12:
+            logger.warn(f"The color code is being parsed from 12- to 6-hex format.")
+            print(f"The color code is being parsed from 12- {color} to 6-hex {color[::2]} format.")
+            color = color[::2]
+        else:
+            logger.warn(f"The color code does not follow a hex format."
+                        f"The color code is truncated to the first 6 characters." )
+            print(f"The color code is truncated to the first 6 characters: {color[:6]}.")
+            color = color[:6]
+        current_channel['color'] = color
         window = {
             'min': mins[channel_idx],
             'max': maxes[channel_idx],

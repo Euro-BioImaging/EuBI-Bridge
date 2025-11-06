@@ -1,9 +1,9 @@
-import os, multiprocessing
+import os#, multiprocessing
 
-os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
+# os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
 
 # Ensure the environment is inherited by forked/spawned processes
-multiprocessing.set_start_method("spawn", force=True)
+# multiprocessing.set_start_method("spawn", force=True)
 import time
 import asyncio
 import pickle

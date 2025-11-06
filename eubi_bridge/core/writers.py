@@ -1,6 +1,6 @@
 import copy
 import os
-os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
+# os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
 import time
 import itertools
 import tempfile
