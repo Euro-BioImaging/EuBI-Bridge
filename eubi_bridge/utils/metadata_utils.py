@@ -143,6 +143,7 @@ def parse_channels(manager,
             default_channels[idx].update(channel)
 
     import copy
+    from eubi_bridge.utils.convenience import make_json_safe
     output = copy.deepcopy(default_channels)
     assert 'coefficient' in output[0].keys(), f"Channels parsed incorrectly!" # A very basic validation
 
@@ -279,4 +280,6 @@ def parse_channels(manager,
         # current_channel['inverted'] = False
         ###--------------------------------------------------------------------------------###
         output[channel_idx] = current_channel
-    return output
+    ret = make_json_safe(output)
+    print(f'channels parsed:{ret}')
+    return ret

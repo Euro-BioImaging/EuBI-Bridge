@@ -408,6 +408,7 @@ class FileSet:
                 sorted_paths = [paths[idx] for idx in args]
             else:
                 sorted_paths = paths
+            logger.info(f"Sorted paths for concatenation: {sorted_paths}")
             # Get slices and shapes for each path
             group_slices = [self.slice_dict[path] for path in sorted_paths]
             group_shapes = [self.shape_dict[path] for path in sorted_paths]
@@ -428,6 +429,7 @@ class FileSet:
             # If arrays are present, concatenate them
             if self.array_dict is not None:
                 group_arrays = [self.array_dict[path] for path in sorted_paths]
+                logger.info(f"Arrays being concatenated in the order: {sorted_paths}")
                 new_array = da.concatenate(group_arrays, axis=axis)
 
             # Update dictionaries with new values
@@ -620,16 +622,18 @@ class BatchFile:
             self.managers.update(**manager.loaded_scenes)
         return self.managers
 
-    def _fuse_channels(self):
+    def _fuse_channels(self): # Concatenates channel metadata actually.
         channelsdict = {
             key: self.channel_managers[key].channels
             for
-            key in self.channel_managers.keys()
+            key in self.channel_sample_paths # List that keeps the channel order
         }
         channelslist = []
-        for key in channelsdict.keys():
+        for key in self.channel_sample_paths: # List that keeps the channel order
+            # This is where channel metadata are properly sorted.
             channelslist.extend(channelsdict[key])
-        for path,manager in self.managers.items():
+        for path in self.channel_sample_paths:
+            manager = self.channel_managers[path]
             manager._channels = channelslist
             self.managers[path] = manager
 
@@ -640,7 +644,7 @@ class BatchFile:
                       ):
         if series is None:
             series = 0
-        if np.isscalar(series):
+        if np.isscalar(series) and (series != 'all'):
             series = [series]
 
         grs = self.split_channel_groups()
@@ -649,9 +653,11 @@ class BatchFile:
                                         for grname in grs
                                      ]
 
+        print(f"Channel sample paths: {self.channel_sample_paths}")
+
         channel_managers = {}
         unloaded_paths = []
-        for path in self.channel_sample_paths:
+        for path in self.channel_sample_paths: # List that keeps the channel order
             if path in self.managers: # If loaded already, do not reload!
                 channel_managers[path] = self.managers[path]
             else:
@@ -668,13 +674,13 @@ class BatchFile:
             await manager.load_scenes(series)
             channel_managers.update(**manager.loaded_scenes)
 
-        self.channel_managers = channel_managers
-
-        for path, manager in self.channel_managers.items():
+        self.channel_managers = {key: channel_managers[key] for key in self.channel_sample_paths}
+        print(f"keys: {self.channel_managers.keys()}")
+        for path in self.channel_sample_paths:
+            manager = self.channel_managers[path]
             manager._ensure_correct_channels()
             manager.fix_bad_channels()
         return self.channel_managers
-
 
     async def _complete_process(self,
                           axes: Iterable[int] = [],

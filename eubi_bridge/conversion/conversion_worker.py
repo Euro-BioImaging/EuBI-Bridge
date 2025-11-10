@@ -215,6 +215,7 @@ async def unary_worker(input_path: Union[str, ArrayManager],
                 channels = parse_channels(chman, **kwargs)
                 meta = chman.pyr.meta
                 meta.metadata['omero']['channels'] = channels
+                meta.zarr_group.attrs.update({'omero': []}) # !!! This is critical. Otherwise might throw serialization error.
                 meta._pending_changes = True
                 meta.save_changes()
             ###------------------------------------------------------------###
@@ -257,14 +258,30 @@ async def aggregative_worker(manager: ArrayManager,
     async def run_single_scene(man, output_path):
         async with sem:
             man.fill_default_meta()
+            # Add missing metadata to channels:
+            man._channels = parse_channels(man,
+                                           channel_indices='all',
+                                           channel_intensity_limits = 'from_dtype')
+            man.fix_bad_channels()
+            ### Additional processing if needed
+            if kwargs.get('squeeze'):
+                man.squeeze()
+            cropping_slices = [kwargs.get(key) for key in kwargs
+                               if key in ('time_range', 'channel_range',
+                                           'z_range', 'y_range',
+                                           'x_range')]
+            if any(cropping_slices):
+                man.crop(*cropping_slices)
+            ###---------------------------------###
             await store_multiscale_async(
                 arr=man.array,
+                dtype=kwargs.get('dtype', None),
                 output_path=output_path,
                 zarr_format = kwargs.get('zarr_format', 2),
                 axes=man.axes,
                 scales=parse_scales(man, **kwargs),
                 units=parse_units(man, **kwargs),
-                channel_meta=man.channels if man.channels is not None else 'auto',
+                channel_meta=parse_channels(man, **dict(kwargs, channel_intensity_limits = 'from_dtype')), # man.channels,
                 auto_chunk=kwargs.get('auto_chunk', True),
                 output_chunks=parse_chunks(man, **kwargs),
                 output_shard_coefficients=parse_shard_coefs(man, **kwargs),
@@ -276,6 +293,18 @@ async def aggregative_worker(manager: ArrayManager,
                 compute_batch_size=compute_batch_size,
                 memory_limit_per_batch=memory_limit_per_batch,
             )
+            ###--------Handle channel metadata at the end for efficiency---###
+            print(f"We came to the last stage!")
+            if kwargs.get('channel_intensity_limits', 'from_array'):
+                chman = ArrayManager(output_path)
+                await chman.init()
+                channels = parse_channels(chman, **kwargs)
+                meta = chman.pyr.meta
+                meta.metadata['omero']['channels'] = channels
+                meta.zarr_group.attrs.update({'omero': []}) # !!! This is critical. Otherwise might throw serialization error.
+                meta._pending_changes = True
+                meta.save_changes()
+            ###------------------------------------------------------------###
             await man.save_omexml(output_path, overwrite=True)
 
 
@@ -309,3 +338,9 @@ def aggregative_worker_sync(input_path,
 
 
 
+
+
+# # Example usage
+# data = {'value': np.float32(3.4028235e+38)}
+# json_str = json.dumps(data, cls=NumpyEncoder)
+# print(json_str)

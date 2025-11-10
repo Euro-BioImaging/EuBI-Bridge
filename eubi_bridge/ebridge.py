@@ -12,7 +12,7 @@ warnings.filterwarnings(
     module="bioio_tifffile.reader",
 )
 
-import shutil, ctypes, time, os, zarr, pprint, psutil, dask, copy
+import shutil, ctypes, time, os, zarr, pprint, psutil, dask, copy, s3fs
 import numpy as np, os, glob, tempfile, sys
 from multiprocessing.pool import ThreadPool
 
@@ -68,6 +68,22 @@ def verify_filepaths_for_cluster(filepaths):
         logger.info("File extensions were verified for distributed setup.")
     return verified
 
+# def wrap_output_path(output_path):
+#     if output_path.startswith('https://'):
+#         endpoint_url = 'https://' + output_path.replace('https://', '').split('/')[0]
+#         relpath = output_path.replace(endpoint_url, '')
+#         fs = s3fs.S3FileSystem(
+#             client_kwargs={
+#                 'endpoint_url': endpoint_url,
+#             },
+#             endpoint_url=endpoint_url
+#         )
+#         fs.makedirs(relpath, exist_ok=True)
+#         mapped = fs.get_mapper(relpath)
+#     else:
+#         os.makedirs(output_path, exist_ok=True)
+#         mapped = os.path.abspath(output_path)
+#     return mapped
 
 class EuBIBridge:
     """
@@ -518,7 +534,7 @@ class EuBIBridge:
         extra_kwargs = {key: kwargs[key] for key in kwargs if key not in combined}
 
         run_conversions(os.path.abspath(input_path),
-                        os.path.abspath(output_path),
+                        output_path,
                         includes=includes,
                         excludes=excludes,
                         time_tag = time_tag,

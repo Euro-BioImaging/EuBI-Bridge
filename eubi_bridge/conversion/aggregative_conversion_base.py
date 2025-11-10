@@ -192,6 +192,7 @@ class AggregativeConverter:
         tags = (time_tag, channel_tag, z_tag, y_tag, x_tag)
 
         self.channel_tag = channel_tag # asil burada parse et.
+        self._channel_tag_is_tuple = False
         if isinstance(self.channel_tag, (tuple, list)):
             self._channel_tag_is_tuple = True
 
@@ -264,7 +265,8 @@ class AggregativeConverter:
         update_scaledict = {scale_mapping[k]: v for k, v in kwargs.items() if k in scale_mapping}
 
         # Update arrays and metadata
-        for name, arr in self.digested_arrays.items():
+        for name in self.digested_arrays.keys():
+            arr = self.digested_arrays[name]
             path = self.digested_arrays_sample_paths[name]
             manager = self.managers[name]
             manager.set_arraydata(arr)

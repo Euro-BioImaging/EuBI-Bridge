@@ -356,15 +356,20 @@ class PFFImageMeta:
 
     @property
     def n_scenes(self):
-        try:
-            return self._img.n_scenes
-        except:
-            return self._n_scenes
+        if self.root.endswith('.lsm'):
+            return self._n_scenes # use the one from ome metadata.
+            # With .lsm files, a downscaled version of the image is stored as a second scene. This is not found in the ome metadata.
+        else:
+            return self._img.n_scenes # Use the one from the one from Reader.scenes. Note that this is sometimes (with .lsm images) not consistent with the ome metadata.
+
 
     def get_pixels(self):
-        pixels = self.omemeta.images[self._series].pixels
-        missing_fields = self.essential_omexml_fields - pixels.model_fields_set
-        pixels.model_fields_set.update(missing_fields)
+        try:
+            pixels = self.omemeta.images[self._series].pixels
+            missing_fields = self.essential_omexml_fields - pixels.model_fields_set
+            pixels.model_fields_set.update(missing_fields)
+        except:
+            raise ValueError(f"For the path {self.root} and series{self._series}")
         return pixels
 
     @property
@@ -829,11 +834,14 @@ class ArrayManager:  ### Unify the classes above.
 
     async def load_scenes(self, scene_indices: Union[int, str, List[int]]):
         """TODO: Maybe make sure it checks and loads only available indices."""
+        print(f"Scene indices {scene_indices}")
         if scene_indices == 'all':
             scene_indices = list(range(self.img.n_scenes))
             print(f"scene indices: {scene_indices}")
         elif np.isscalar(scene_indices):
             scene_indices = [scene_indices]
+
+        print(f"Scene indices {scene_indices}")
         scene_indices_ = []
         for idx in scene_indices:
             if idx < self.img.n_scenes:
@@ -990,6 +998,8 @@ class ArrayManager:  ### Unify the classes above.
                                  start_intensity=None,
                                  end_intensity=None,
                                  ):
+        print(f"FROM ARRAY: {from_array}")
+        print(f"AXES: {self.axes}")
         if 'c' in self.axes:
             c_axis = self.axes.index('c')
             n_channels = self.array.shape[c_axis]
@@ -1016,6 +1026,7 @@ class ArrayManager:  ### Unify the classes above.
                 axes_to_compute = tuple([self.axes.index(ax) for ax in self.axes if ax != 'c'])
             else:
                 axes_to_compute = tuple([self.axes.index(ax) for ax in self.axes])
+            print(f"AXES TO COMPUTE: {axes_to_compute}")
             if isinstance(self.array, zarr.Array):
                 arr = da.from_zarr(self.array)
             else:
@@ -1189,15 +1200,19 @@ class ArrayManager:  ### Unify the classes above.
         return self
 
     async def save_omexml(self, base_path: str, overwrite: bool = False):
+        # TODO: Update for s3.
         # if self.img.omemeta is None:
         await self.create_omemeta()
         # else:
         #     self.omemeta = self.img.omemeta
         assert self.omemeta is not None, "No ome-xml exists."
         gr = await asyncio.to_thread(zarr.group, base_path)
+        try:
+            path = os.path.join(gr.store.root, 'OME', 'METADATA.ome.xml')
+        except:
+            logger.warn(f"Writing OME-XML is currently only possible with local stores.")
+            return
         await asyncio.to_thread(gr.create_group, 'OME', overwrite=overwrite)
-
-        path = os.path.join(gr.store.root, 'OME', 'METADATA.ome.xml')
 
         def _write_text_file(p: str, text: str):
             os.makedirs(os.path.dirname(p), exist_ok=True)

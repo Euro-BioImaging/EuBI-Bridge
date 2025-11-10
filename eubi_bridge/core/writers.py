@@ -12,6 +12,7 @@ import dask
 import math
 import sys
 import numcodecs
+import s3fs
 from zarr import codecs
 from zarr.storage import LocalStore
 from dataclasses import dataclass
@@ -649,7 +650,21 @@ async def write_with_tensorstore_async(
     shards = tuple(int(size) for size in np.ravel(shards))
 
     # Optionally tune TensorStore file I/O concurrency inside kvstore spec
-    kvstore = {"driver": "file", "path": str(store_path)}
+    if isinstance(store_path, str) and store_path.startswith('https://'):
+        endpoint = 'https://' + store_path.replace('https://', '').split('/')[0]
+        bucket = store_path.replace('https://', '').split('/')[1]
+        path = os.path.join(*store_path.replace('https://', '').split('/')[2:])
+        path = path.replace(' ', '%20')
+        kvstore = {"driver": "s3",
+                   "endpoint": endpoint,
+                   "bucket": bucket,
+                   "path": str(path),
+                   "aws_region": "us-east-1",  # or any valid region name
+                   }
+    elif isinstance(store_path, str) and store_path.startswith('/'):
+        kvstore = {"driver": "file", "path": str(store_path)}
+    else:
+        raise ValueError(f"Unsupported store path: {store_path}")
     if ts_io_concurrency:
         kvstore["file_io_concurrency"] = {"limit": int(ts_io_concurrency)}
 
@@ -696,7 +711,14 @@ async def write_with_tensorstore_async(
         "delete_existing": overwrite,
     }
 
-    ts_store = ts.open(zarr_spec).result()
+    ctx = ts.Context({
+        "cache_pool": {"total_bytes_limit": 1_000_000_000},  # 1 GB local cache
+        "data_copy_concurrency": {"limit": 64},
+        "s3_request_concurrency": {"limit": 32},
+        "s3_request_retries": {"max_retries": 5},
+    })
+
+    ts_store = ts.open(zarr_spec, context=ctx).result()
 
     block_size = compute_chunk_batch(arr, dtype, memory_limit_per_batch)
     block_size = tuple([max(bs, cs) for bs, cs in zip(block_size, chunks)])
@@ -824,7 +846,10 @@ async def downscale_with_tensorstore_async(
                           use_tensorstore=True
                           )
 
-    grpath = pyr.gr.store.root
+    try:
+        grpath = pyr.gr.store.root
+    except:
+        grpath = pyr.gr.store.path
     basepath = pyr.meta.resolution_paths[0]
     base_layer = pyr.layers[basepath]
     zarr_format = pyr.meta.zarr_format
@@ -901,6 +926,24 @@ def _get_or_create_multimeta(gr: zarr.Group,
     return handler
 
 
+
+def wrap_output_path(output_path):
+    if output_path.startswith('https://'):
+        endpoint_url = 'https://' + output_path.replace('https://', '').split('/')[0]
+        relpath = output_path.replace(endpoint_url, '')
+        fs = s3fs.S3FileSystem(
+            client_kwargs={
+                'endpoint_url': endpoint_url,
+            },
+            endpoint_url=endpoint_url
+        )
+        fs.makedirs(relpath, exist_ok=True)
+        mapped = fs.get_mapper(relpath)
+    else:
+        os.makedirs(output_path, exist_ok=True)
+        mapped = os.path.abspath(output_path)
+    return mapped
+
 async def store_multiscale_async(
     ### base write params
     arr: Union[da.Array, zarr.Array],
@@ -976,7 +1019,9 @@ async def store_multiscale_async(
     shards = tuple(int(item) for item in shards)
     ###
     # Make (or overwrite) the top-level group
-    gr = zarr.group(output_path,
+
+    outpath = wrap_output_path(output_path)
+    gr = zarr.group(outpath,
                overwrite=overwrite,
                zarr_version=zarr_format)
 

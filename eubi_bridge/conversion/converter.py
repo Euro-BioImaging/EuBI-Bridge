@@ -7,6 +7,7 @@ import os#, multiprocessing
 import time
 import asyncio
 import pickle
+import s3fs
 import numpy as np, pandas as pd
 from natsort import natsorted
 # from distributed import LocalCluster, Client
@@ -37,9 +38,9 @@ async def run_conversions_from_filepaths(
 
     df = take_filepaths(input_path, **global_kwargs)
     # Optionally create dirs before running
-    for odir in df["output_path"].unique():
-        if odir and not os.path.exists(odir):
-            os.makedirs(odir, exist_ok=True)
+    # for odir in df["output_path"].unique():
+    #     if odir and not os.path.exists(odir):
+    #         os.makedirs(odir, exist_ok=True)
 
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))

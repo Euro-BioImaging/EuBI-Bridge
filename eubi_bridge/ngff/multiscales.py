@@ -7,6 +7,7 @@ import numpy as np
 import dask.array as da
 from eubi_bridge.ngff import defaults
 from eubi_bridge.core.scale import Downscaler
+from eubi_bridge.utils.convenience import make_json_safe
 
 
 def is_zarr_group(path: (str, Path)
@@ -276,11 +277,19 @@ class NGFFMetadataHandler:
         if self.metadata.get('version', '') == '0.5':
             self.zarr_group.attrs['ome'] = self.metadata
         else:
-            self.zarr_group.attrs['multiscales'] = self.metadata['multiscales']
+            import pprint
+            # pprint.pprint(self.metadata['multiscales'])
+            # safe = make_json_safe(self.metadata['multiscales'])
+            metadata = make_json_safe(self.metadata)
+            # print(f"metadata:")
+            # pprint.pprint(metadata)
+            # print(f"zarr.group.attrs:")
+            # pprint.pprint(dict(self.zarr_group.attrs))
+            self.zarr_group.attrs['multiscales'] = metadata['multiscales']
             if 'omero' in self.metadata:
-                self.zarr_group.attrs['omero'] = self.metadata['omero']
+                self.zarr_group.attrs['omero'] = metadata['omero']
             if '_creator' in self.metadata:
-                self.zarr_group.attrs['_creator'] = self.metadata['_creator']
+                self.zarr_group.attrs['_creator'] = metadata['_creator']
 
         self._pending_changes = False
 
@@ -819,7 +828,8 @@ class Pyramid:
     def layers(self):
         if self.gr is None:
             return self._dask_layers
-        return {path: self.gr[path] for path in self.gr.array_keys()}
+        # return {path: self.gr[path] for path in self.gr.array_keys()}
+        return {path: self.gr[path] for path in self.meta.resolution_paths}
 
     @property
     def scale_factor_dict(self):
@@ -837,7 +847,8 @@ class Pyramid:
     def get_dask_data(self):
         if self.gr is None:
             return self._dask_layers
-        return {str(path): da.from_zarr(self.layers[path]) for path in self.gr.array_keys()}
+        # return {str(path): da.from_zarr(self.layers[path]) for path in self.gr.array_keys()}
+        return {str(path): da.from_zarr(self.layers[path]) for path in self.meta.resolution_paths}
 
     @property
     def dask_arrays(self):

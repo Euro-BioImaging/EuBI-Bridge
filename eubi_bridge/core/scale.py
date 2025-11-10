@@ -94,6 +94,24 @@ class DownscaleManager:
         return np.multiply(self.scale, self.scale_factors)
 
 
+def wrap_kvstore(store_path):
+    if isinstance(store_path, str) and store_path.startswith('https://'):
+        endpoint = 'https://' + store_path.replace('https://', '').split('/')[0]
+        bucket = store_path.replace('https://', '').split('/')[1]
+        path = os.path.join(*store_path.replace('https://', '').split('/')[2:])
+        path = path.replace(' ', '%20')
+        kvstore = {"driver": "s3",
+                   "endpoint": endpoint,
+                   "bucket": bucket,
+                   "path": str(path),
+                   "aws_region": "eu-west-1",  # or any valid region name
+                   }
+    elif isinstance(store_path, str) and store_path.startswith('/'):
+        kvstore = {"driver": "file", "path": str(store_path)}
+    else:
+        raise ValueError(f"Unsupported store path: {store_path}")
+    return kvstore
+
 @dataclasses.dataclass
 class Downscaler:
     array: (da.Array, zarr.Array, str)
@@ -108,30 +126,31 @@ class Downscaler:
         # if self.output_chunks is None:
         #     self.output_chunks = [self.array.chunksize] * self.n_layers
         if isinstance(self.array, str):
+            store_path = self.array
+            kvstore = wrap_kvstore(store_path)
             self.base_array_root = os.path.abspath(self.array)
             self.downscale_method = 'ts'
             self.array = ts.open(
                 {
                     "driver": "zarr",
-                    "kvstore": {
-                        "driver": "file",
-                        "path": self.base_array_root
-                    }
+                    "kvstore": kvstore
                 },
                 open=True,
             ).result()
         elif isinstance(self.array, zarr.Array):
-            self.base_array_root = os.path.abspath(str(self.array.store.root))
+            try:
+                self.base_array_root = os.path.abspath(str(self.array.store.root))
+            except:
+                self.base_array_root = self.array.store.path
             arraypath = self.array.path
             ts_path = os.path.join(self.base_array_root,arraypath)
+            kvstore = wrap_kvstore(ts_path)
+
             self.downscale_method = 'ts'
             self.array = ts.open(
                 {
                     "driver": "zarr",
-                    "kvstore": {
-                        "driver": "file",
-                        "path": ts_path
-                    }
+                    "kvstore": kvstore
                 },
                 open=True,
             ).result()
