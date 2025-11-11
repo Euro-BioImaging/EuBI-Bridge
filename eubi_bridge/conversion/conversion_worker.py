@@ -215,7 +215,11 @@ async def unary_worker(input_path: Union[str, ArrayManager],
                 channels = parse_channels(chman, **kwargs)
                 meta = chman.pyr.meta
                 meta.metadata['omero']['channels'] = channels
-                meta.zarr_group.attrs.update({'omero': []}) # !!! This is critical. Otherwise might throw serialization error.
+                if 'ome' in meta.zarr_group.attrs:
+                    pass
+                    # meta.zarr_group.attrs['ome'].update({'omero': []})  # !!! This is critical. Otherwise might throw serialization error.
+                else:
+                    meta.zarr_group.attrs.update({'omero': []}) # !!! This is critical. Otherwise might throw serialization error.
                 meta._pending_changes = True
                 meta.save_changes()
             ###------------------------------------------------------------###
@@ -294,14 +298,17 @@ async def aggregative_worker(manager: ArrayManager,
                 memory_limit_per_batch=memory_limit_per_batch,
             )
             ###--------Handle channel metadata at the end for efficiency---###
-            print(f"We came to the last stage!")
             if kwargs.get('channel_intensity_limits', 'from_array'):
                 chman = ArrayManager(output_path)
                 await chman.init()
                 channels = parse_channels(chman, **kwargs)
                 meta = chman.pyr.meta
                 meta.metadata['omero']['channels'] = channels
-                meta.zarr_group.attrs.update({'omero': []}) # !!! This is critical. Otherwise might throw serialization error.
+                if 'ome' in meta.zarr_group.attrs:
+                    pass
+                    # meta.zarr_group.attrs['ome'].update({'omero': []})  # !!! This is critical. Otherwise might throw serialization error.
+                else:
+                    meta.zarr_group.attrs.update({'omero': []}) # !!! This is critical. Otherwise might throw serialization error.
                 meta._pending_changes = True
                 meta.save_changes()
             ###------------------------------------------------------------###
@@ -337,10 +344,3 @@ def aggregative_worker_sync(input_path,
                                       **kwargs))
 
 
-
-
-
-# # Example usage
-# data = {'value': np.float32(3.4028235e+38)}
-# json_str = json.dumps(data, cls=NumpyEncoder)
-# print(json_str)

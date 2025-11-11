@@ -427,7 +427,7 @@ class PFFImageMeta:
         caxes = [ax for ax in self.get_axes() if ax != 'c']
         return [unitdict[ax] for ax in caxes]
 
-    def get_channels(self):
+    def get_channels(self): #TODO: Here fix 'things_to_solve' point 10
         pixels = self.get_pixels()
         if not hasattr(pixels, 'channels'):
             return None
@@ -443,7 +443,6 @@ class PFFImageMeta:
                 color = channel.color.as_hex().upper()
                 color = expand_hex_shorthand(color)
                 name = channel.name
-                # print(name)
                 channels.append(dict(
                     label=name,
                     color=color
@@ -834,14 +833,11 @@ class ArrayManager:  ### Unify the classes above.
 
     async def load_scenes(self, scene_indices: Union[int, str, List[int]]):
         """TODO: Maybe make sure it checks and loads only available indices."""
-        print(f"Scene indices {scene_indices}")
         if scene_indices == 'all':
             scene_indices = list(range(self.img.n_scenes))
-            print(f"scene indices: {scene_indices}")
         elif np.isscalar(scene_indices):
             scene_indices = [scene_indices]
 
-        print(f"Scene indices {scene_indices}")
         scene_indices_ = []
         for idx in scene_indices:
             if idx < self.img.n_scenes:
@@ -854,7 +850,6 @@ class ArrayManager:  ### Unify the classes above.
 
         async def copy_scene(manager, scene_idx):
             await manager.set_scene(scene_idx)
-            # print(manager.channels)
             return copy.copy(manager)
 
         for scene_idx in scene_indices:
@@ -883,7 +878,6 @@ class ArrayManager:  ### Unify the classes above.
 
         async def copy_scene(manager, tile_idx):
             await manager.set_tile(tile_idx)
-            # print(manager.channels)
             return copy.copy(manager)
 
         for tile_idx in tile_indices:
@@ -998,8 +992,6 @@ class ArrayManager:  ### Unify the classes above.
                                  start_intensity=None,
                                  end_intensity=None,
                                  ):
-        print(f"FROM ARRAY: {from_array}")
-        print(f"AXES: {self.axes}")
         if 'c' in self.axes:
             c_axis = self.axes.index('c')
             n_channels = self.array.shape[c_axis]
@@ -1026,7 +1018,6 @@ class ArrayManager:  ### Unify the classes above.
                 axes_to_compute = tuple([self.axes.index(ax) for ax in self.axes if ax != 'c'])
             else:
                 axes_to_compute = tuple([self.axes.index(ax) for ax in self.axes])
-            print(f"AXES TO COMPUTE: {axes_to_compute}")
             if isinstance(self.array, zarr.Array):
                 arr = da.from_zarr(self.array)
             else:
@@ -1230,6 +1221,14 @@ class ArrayManager:  ### Unify the classes above.
     # Array ops (in-memory / lazy with Dask)
     # ------------------------------------------------------------------
     def squeeze(self):
+        if all(n > 1 for n in self.array.shape):
+            return
+        if isinstance(self.array, zarr.Array):
+            logger.warn(f"Zarr arrays are not supported for squeeze operation.\n"
+                        f"Zarr array for the path {self.series_path} is being converted to dask array.")
+            array = da.from_array(self.array)
+        else:
+            array = self.array
         singlet_axes = [ax for ax, size in self.shapedict.items() if size == 1]
         newaxes = ''.join(ax for ax in self.axes if ax not in singlet_axes)
         newunits, newscales = [], []
@@ -1240,7 +1239,7 @@ class ArrayManager:  ### Unify the classes above.
                     newunits.append(self.unitdict[ax])
                 if ax in self.scaledict:
                     newscales.append(self.scaledict[ax])
-        newarray = da.squeeze(self.array)
+        newarray = da.squeeze(array)
         self.set_arraydata(newarray, newaxes, newunits, newscales)
 
     def transpose(self, newaxes: str):
@@ -1272,7 +1271,12 @@ class ArrayManager:  ### Unify the classes above.
         slicedict = {ax: r for ax, r in slicedict.items() if ax in self.axes}
         slices = tuple([slicedict[ax] for ax in self.axes])
         logger.info(f"The array with shape {self.array.shape} is cropped to {slicedict}")
-        array = da.from_array(self.array) if isinstance(self.array, zarr.Array) else self.array
+        if isinstance(self.array, zarr.Array):
+            logger.warn(f"The crop option is only supported for dask arrays.\n"
+                        f"Zarr array for the path {self.series_path} is being converted to dask array.")
+            array = da.from_array(self.array)
+        else:
+            array = self.array
         array = array[slices]
         logger.info(f"The cropped array shape: {array.shape}")
         self.set_arraydata(array, self.axes, self.units, self.scales)

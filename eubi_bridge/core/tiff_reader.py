@@ -24,7 +24,6 @@ readable_formats = ('.ome.tiff', '.ome.tif', '.czi', '.lif',
 def read_tiff_with_zarr(input_path, **kwargs):
     import tifffile, zarr
     img = tifffile.TiffFile(input_path)
-    print(f"TIFF image is being read as zarr.")
     class MockImg:
         def __init__(self,
                      img,

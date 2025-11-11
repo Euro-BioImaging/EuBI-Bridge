@@ -80,8 +80,6 @@ def read_pff(input_path,
     verbose = kwargs.get('verbose', False)
     if verbose:
         logger.info(f"Reading with {reader.__qualname__}.")
-    # print(reader_kwargs)
-    # im = reader(input_path, **reader_kwargs)
     img = reader(input_path, **reader_kwargs)
     if hasattr(img, 'index_map'): ### means it is a czi reader
         return img

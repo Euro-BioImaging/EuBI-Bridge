@@ -90,7 +90,6 @@ async def update_worker(input_path: Union[str, ArrayManager],
             skip_dask=kwargs.get('skip_dask', True),
         )
         await manager.init()
-        # print(f"Conversion initialized for {manager.path}")
         manager.fill_default_meta()
     else:
         manager = input_path

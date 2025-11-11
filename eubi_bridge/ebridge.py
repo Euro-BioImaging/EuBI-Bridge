@@ -164,7 +164,7 @@ class EuBIBridge:
                 # trim_memory=False,
                 metadata_reader='bfio',
                 save_omexml=True,
-                squeeze=False,
+                squeeze=True,
                 dtype=None
             ),
             downscale=dict(
@@ -747,13 +747,7 @@ class EuBIBridge:
             channel_meta_kwargs = {key: val for key, val in channel_meta_kwargs_.items() if val is not None}
         else:
             channel_meta_kwargs = {}
-        # if channel_intensity_limits is not None:
-        #     assert channel_intensity_limits in ('from_array', 'from_dtype')
-        #     combined['channel_intensity_limits'] = channel_intensity_limits
-        # import pprint
-        # pprint.pprint(combined)
-        # pprint.pprint(channel_meta_kwargs)
-        # pprint.pprint(extra_kwargs)
+
         run_updates(
                     os.path.abspath(input_path),
                     includes=includes,

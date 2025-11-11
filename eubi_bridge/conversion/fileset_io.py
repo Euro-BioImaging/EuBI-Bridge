@@ -653,8 +653,6 @@ class BatchFile:
                                         for grname in grs
                                      ]
 
-        print(f"Channel sample paths: {self.channel_sample_paths}")
-
         channel_managers = {}
         unloaded_paths = []
         for path in self.channel_sample_paths: # List that keeps the channel order
@@ -675,7 +673,6 @@ class BatchFile:
             channel_managers.update(**manager.loaded_scenes)
 
         self.channel_managers = {key: channel_managers[key] for key in self.channel_sample_paths}
-        print(f"keys: {self.channel_managers.keys()}")
         for path in self.channel_sample_paths:
             manager = self.channel_managers[path]
             manager._ensure_correct_channels()

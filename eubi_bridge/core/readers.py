@@ -229,8 +229,6 @@ async def _read_single_image_asarray(input_path,
     verbose = kwargs.get('verbose', False)
     if verbose:
         logger.info(f"Reading with {reader.__qualname__}.")
-    # print(reader_kwargs)
-    # im = reader(input_path, **reader_kwargs)
     arrs = read_from_scenes(reader, input_path, **kwargs)
     if isinstance(im, da.Array):
         assert im.ndim == 5

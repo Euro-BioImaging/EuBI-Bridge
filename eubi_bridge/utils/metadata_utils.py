@@ -167,12 +167,12 @@ def parse_channels(manager,
             pass
         elif len(color) == 12:
             logger.warn(f"The color code is being parsed from 12- to 6-hex format.")
-            print(f"The color code is being parsed from 12- {color} to 6-hex {color[::2]} format.")
+            # print(f"The color code is being parsed from 12- {color} to 6-hex {color[::2]} format.")
             color = color[::2]
         else:
             logger.warn(f"The color code does not follow a hex format."
                         f"The color code is truncated to the first 6 characters." )
-            print(f"The color code is truncated to the first 6 characters: {color[:6]}.")
+            # print(f"The color code is truncated to the first 6 characters: {color[:6]}.")
             color = color[:6]
         current_channel['color'] = color
         window = {
@@ -229,23 +229,23 @@ def parse_channels(manager,
         items[idx] = item
     channel_indices, channel_labels, channel_colors, channel_intensity_limits = items
     import pprint
-    pprint.pprint(manager.path)
-    pprint.pprint(manager.series_path)
-    pprint.pprint(manager.array.shape)
-    pprint.pprint(channel_indices)
-    pprint.pprint(channel_labels)
-    pprint.pprint(channel_colors)
+    # pprint.pprint(manager.path)
+    # pprint.pprint(manager.series_path)
+    # pprint.pprint(manager.array.shape)
+    # pprint.pprint(channel_indices)
+    # pprint.pprint(channel_labels)
+    # pprint.pprint(channel_colors)
     if len(channel_indices) > channel_count:
-        pprint.pprint(f"For the path {manager.series_path} and array {manager.array.shape}:")
-        pprint.pprint(f"Channel indices wrongly specified as {channel_indices}. Being corrected to {channel_count}")
+        logger.warn(f"For the path {manager.series_path} and array {manager.array.shape}:")
+        logger.warn(f"Channel indices wrongly specified as {channel_indices}. Being corrected to {channel_count}")
         channel_indices = channel_indices[:channel_count]
     if len(channel_labels) > channel_count:
-        pprint.pprint(f"For the path {manager.series_path} and array {manager.array.shape}:")
-        pprint.pprint(f"Channel labels wrongly specified as {channel_labels}. Being corrected to {channel_count}")
+        logger.warn(f"For the path {manager.series_path} and array {manager.array.shape}:")
+        logger.warn(f"Channel labels wrongly specified as {channel_labels}. Being corrected to {channel_count}")
         channel_labels = channel_labels[:channel_count]
     if len(channel_colors) > channel_count:
-        pprint.pprint(f"For the path {manager.series_path} and array {manager.array.shape}:")
-        pprint.pprint(f"Channel colors wrongly specified as {channel_colors}. Being corrected to {channel_count}")
+        logger.warn(f"For the path {manager.series_path} and array {manager.array.shape}:")
+        logger.warn(f"Channel colors wrongly specified as {channel_colors}. Being corrected to {channel_count}")
         channel_colors = channel_colors[:channel_count]
 
 
@@ -281,5 +281,4 @@ def parse_channels(manager,
         ###--------------------------------------------------------------------------------###
         output[channel_idx] = current_channel
     ret = make_json_safe(output)
-    print(f'channels parsed:{ret}')
     return ret

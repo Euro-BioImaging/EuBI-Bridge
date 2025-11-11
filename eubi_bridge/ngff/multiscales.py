@@ -275,16 +275,9 @@ class NGFFMetadataHandler:
             raise RuntimeError("No zarr group connected. Call connect_to_group first.")
 
         if self.metadata.get('version', '') == '0.5':
-            self.zarr_group.attrs['ome'] = self.metadata
+            self.zarr_group.attrs['ome'] = make_json_safe(self.metadata)
         else:
-            import pprint
-            # pprint.pprint(self.metadata['multiscales'])
-            # safe = make_json_safe(self.metadata['multiscales'])
             metadata = make_json_safe(self.metadata)
-            # print(f"metadata:")
-            # pprint.pprint(metadata)
-            # print(f"zarr.group.attrs:")
-            # pprint.pprint(dict(self.zarr_group.attrs))
             self.zarr_group.attrs['multiscales'] = metadata['multiscales']
             if 'omero' in self.metadata:
                 self.zarr_group.attrs['omero'] = metadata['omero']

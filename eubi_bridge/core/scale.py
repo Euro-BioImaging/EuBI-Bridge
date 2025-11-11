@@ -149,7 +149,7 @@ class Downscaler:
             self.downscale_method = 'ts'
             self.array = ts.open(
                 {
-                    "driver": "zarr",
+                    "driver": f"zarr{self.array.metadata.zarr_format}",
                     "kvstore": kvstore
                 },
                 open=True,

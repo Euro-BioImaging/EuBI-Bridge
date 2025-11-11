@@ -264,8 +264,6 @@ async def run_conversions_with_concatenation(
                         metadata_reader = metadata_reader,
                         **kwargs)
 
-    # import pprint
-
     verbose = kwargs.get('verbose', None)
     override_channel_names = kwargs.get('override_channel_names', False)
 
@@ -355,8 +353,6 @@ def run_conversions(
             runner = run_conversions_from_filepaths
     else:
         runner = run_conversions_with_concatenation
-    import pprint
-    # pprint.pprint(f"running with: {kwargs}")
     return asyncio.run(runner(filepaths,
                               output_path = output_path,
                               **kwargs
