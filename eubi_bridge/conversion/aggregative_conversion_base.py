@@ -211,7 +211,8 @@ class AggregativeConverter:
             axes_of_concatenation = []
         axlist = [axes.index(x)
                   for x in axes_of_concatenation
-                  if x in axes]
+                  if x in axes
+                  ]
         await self.batchfile._construct_managers(
             axes=axlist,
             series=self._series,

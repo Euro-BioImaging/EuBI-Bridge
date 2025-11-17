@@ -149,6 +149,7 @@ async def unary_worker(input_path: Union[str, ArrayManager],
     memory_limit_per_batch = kwargs.get('memory_limit_per_batch', 1024)
     series = kwargs.get('scene_index', 'all')
     mosaic_tile_index = kwargs.get('mosaic_tile_index', None)
+    skip_dask = kwargs.get('skip_dask', True)
     # if hasattr(series, '__len__'):
         ### TODO: fix the issue in the assertment below.
         # assert mosaic_tile_index is None, f"Currently, extracting different tiles for different scenes is not supported."
@@ -158,20 +159,22 @@ async def unary_worker(input_path: Union[str, ArrayManager],
             input_path,
             series=0,
             metadata_reader=kwargs.get('metadata_reader', 'bfio'),
-            skip_dask=kwargs.get('skip_dask', True),
+            skip_dask=skip_dask,
         )
         await manager.init()
         manager.fill_default_meta()
         await manager.load_scenes(scene_indices=series)
+        # if mosaic_tile_index is not None: ### THIS PART NEEDS TO BE REVIEWED.
+        #     for man in manager.loaded_scenes.values():
         if mosaic_tile_index is not None:
-            for man in manager.loaded_scenes.values():
-                await man.load_tiles(tile_indices=mosaic_tile_index)
+            await manager.load_tiles(tile_indices=mosaic_tile_index)
     else:
         manager = input_path
     # Semaphore to limit concurrent scenes
     sem = asyncio.Semaphore(max_concurrency)
     async def run_single_scene(man, output_path):
         async with sem:
+            output_chunks = parse_chunks(man, **kwargs),
             man.fill_default_meta()
             # Add missing metadata to channels:
             man._channels = parse_channels(man, 
@@ -210,7 +213,7 @@ async def unary_worker(input_path: Union[str, ArrayManager],
             )
             ###--------Handle channel metadata at the end for efficiency---###
             if kwargs.get('channel_intensity_limits', 'from_array'):
-                chman = ArrayManager(output_path)
+                chman = ArrayManager(output_path, skip_dask=skip_dask)
                 await chman.init()
                 channels = parse_channels(chman, **kwargs)
                 meta = chman.pyr.meta
@@ -241,18 +244,20 @@ async def unary_worker(input_path: Union[str, ArrayManager],
                 output_path_ = f"{output_path}/{os.path.basename(tile.series_path).split('.')[0]}{suffix_}.zarr"
                 tasks.append(asyncio.create_task(run_single_scene(tile, output_path_)))
         else:
-            output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}_{suffix}.zarr"
+            output_path_ = f"{output_path}/{os.path.basename(man.series_path).split('.')[0]}{suffix}.zarr"
             tasks.append(asyncio.create_task(run_single_scene(man, output_path_)))
     await asyncio.gather(*tasks)
 
 
 async def aggregative_worker(manager: ArrayManager,
-                         output_path: str,
-                         **kwargs):
+                             output_path: str,
+                             **kwargs
+                             ):
     max_concurrency = kwargs.get('max_concurrency', 4)
     compute_batch_size = kwargs.get('compute_batch_size', 4)
     memory_limit_per_batch = kwargs.get('memory_limit_per_batch', 1024)
     series = kwargs.get('series', 0) # Here you can only load one scene per file
+    skip_dask = kwargs.get('skip_dask', True)
     if not isinstance(series, int):
         raise TypeError(f"Aggregative conversion does not support multiple series at the moment. \n"
                         f"Please specify an integer as a single series index.")
@@ -261,11 +266,13 @@ async def aggregative_worker(manager: ArrayManager,
     sem = asyncio.Semaphore(max_concurrency)
     async def run_single_scene(man, output_path):
         async with sem:
+            output_chunks = parse_chunks(man, **kwargs),
             man.fill_default_meta()
             # Add missing metadata to channels:
             man._channels = parse_channels(man,
                                            channel_indices='all',
-                                           channel_intensity_limits = 'from_dtype')
+                                           channel_intensity_limits = 'from_dtype'
+                                           )
             man.fix_bad_channels()
             ### Additional processing if needed
             if kwargs.get('squeeze'):
@@ -299,7 +306,7 @@ async def aggregative_worker(manager: ArrayManager,
             )
             ###--------Handle channel metadata at the end for efficiency---###
             if kwargs.get('channel_intensity_limits', 'from_array'):
-                chman = ArrayManager(output_path)
+                chman = ArrayManager(output_path,skip_dask=skip_dask)
                 await chman.init()
                 channels = parse_channels(chman, **kwargs)
                 meta = chman.pyr.meta

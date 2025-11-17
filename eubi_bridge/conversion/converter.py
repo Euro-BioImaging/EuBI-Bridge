@@ -217,6 +217,8 @@ def _parse_tag(tag):
             return tag.split(',')
     elif isinstance(tag, (tuple, list)):
         return tag
+    elif tag is None:
+        return None
     else:
         raise ValueError("tag must be a string, tuple, or list")
 
@@ -232,6 +234,8 @@ def _parse_filepaths_with_tags(filepaths, tags): # VIF
     for path in filepaths:
         path_appended = False
         for tag in tags:
+            if tag is None:
+                continue
             tag = _parse_tag(tag)
             if not isinstance(tag, (tuple, list)):
                 tag = [tag]
@@ -271,7 +275,9 @@ async def run_conversions_with_concatenation(
     if verbose:
         logger.info(f"Parallelization with {max_workers} workers.")
     filepaths = df.input_path.to_numpy().tolist()
-    filepaths_accepted = _parse_filepaths_with_tags(filepaths, channel_tag)
+
+    tags = [time_tag,channel_tag,z_tag,y_tag,x_tag]
+    filepaths_accepted = _parse_filepaths_with_tags(filepaths, tags)
 
     # --- Initialize AggregativeConverter and digest arrays ---
     base = AggregativeConverter(series = scene_index,

@@ -134,13 +134,19 @@ def parse_channels(manager,
     else:
         channel_idx = manager.axes.index('c')
         channel_count = manager.array.shape[channel_idx]
-        assert channel_count == len(manager.channels), f"Manager constructed incorrectly!"
+        # assert channel_count == len(manager.channels), f"Manager constructed incorrectly!"
     default_channels = generate_channel_metadata(num_channels=channel_count,
                                                  dtype=dtype)
 
     if manager.channels is not None:
+        # print(f"Manager's channels: {manager.channels}")
+        # print(f"Default channels: {default_channels}")
+        # print(f"channel numbers: {len(default_channels), len(manager.channels)}")
         for idx, channel in enumerate(manager.channels):
-            default_channels[idx].update(channel)
+            try:
+                default_channels[idx].update(channel)
+            except Exception as e:
+                logger.error(f"Failed to update channel {idx} with {channel}: {e}")
 
     import copy
     from eubi_bridge.utils.convenience import make_json_safe

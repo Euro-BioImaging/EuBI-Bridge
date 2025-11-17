@@ -152,7 +152,7 @@ class EuBIBridge:
                 z_range=None,
                 y_range=None,
                 x_range=None,
-                # dimension_order='tczyx',
+                dimension_order='tczyx',
                 compressor='blosc',
                 compressor_params={},
                 overwrite=False,

@@ -21,6 +21,14 @@ readable_formats = ('.ome.tiff', '.ome.tif', '.czi', '.lif',
 # TODO: Make MockImg objects separate classes.
 
 
+# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/multichannel_timeseries/Channel1-T0003.tif"
+# import tifffile, zarr
+#
+# img = tifffile.TiffFile(path)
+# s = img.series[0]
+# z = s.aszarr()
+
+
 def read_tiff_with_zarr(input_path, **kwargs):
     import tifffile, zarr
     img = tifffile.TiffFile(input_path)
@@ -39,6 +47,16 @@ def read_tiff_with_zarr(input_path, **kwargs):
             self.series_path = self.path + f'_{self.series}'
         def get_image_dask_data(self, *args, **kwargs):
             ### This is not actually dask!!!
+            # axes = self.tiff_file_series.axes
+            # default_axes = 'TCZYX'
+            # newaxes = []
+            # for ax in axes:
+            #     if ax in default_axes:
+            #         newaxes.append(ax)
+            #     else:
+            #         idx = axes.index(ax)
+            #         newaxes.append(default_axes[idx])
+
             self.tiffzarrstore = self.tiff_file_series.aszarr()
             try:
                 array = zarr.open(self.tiffzarrstore,

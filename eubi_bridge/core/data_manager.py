@@ -496,11 +496,21 @@ class TIFFImageMeta(PFFImageMeta):
 
     def get_axes(self):
         axes = self._meta.axes.lower()
-        if 's' in axes:
-            axes = axes.replace('s', 'c')
-        if 'q' in axes:
-            axes = axes.replace('q', 'c')
-        return axes
+        # if 's' in axes:
+        #     axes = axes.replace('s', 'c')
+        # if 'q' in axes:
+        #     axes = axes.replace('q', 'c')
+        default_axes_cut = default_axes[-len(axes):]
+        newaxes = []
+        for ax in axes:
+            if ax == 's':
+                ax = 'c'
+            if ax in default_axes:
+                newaxes.append(ax)
+            else:
+                idx = axes.index(ax)
+                newaxes.append(default_axes_cut[idx])
+        return ''.join(newaxes)
 
     def get_scaledict(self):
         scaledict = super().get_scaledict()
@@ -630,14 +640,16 @@ class NGFFImageMeta(PFFImageMeta):  ### Maybe set_scene can pick particular reso
             raise Exception(f"The given path is not an NGFF group: {path}")
 
     async def read_omemeta(self, **kwargs):  # This is not really omemeta, it is just meta.
-        if self._img is None:
-            self._img = await read_single_image(self.root,
+        if self._img is None: # MockImg from read_pyramid
+            self._img = await read_single_image(self.root, # = read_pyramid
                                                 aszarr=self._aszarr,
                                                 **kwargs)
         self._meta = self._img.pyr.meta
 
     async def read_img(self, **kwargs):
-        self._img = await read_single_image(self.root, aszarr=self._aszarr, **kwargs)
+        self._img = await read_single_image(self.root,
+                                            aszarr=self._aszarr,
+                                            **kwargs)
         # await self.set_scene(self._series)
         self.arraydata = await self.get_arraydata()
 
@@ -831,8 +843,15 @@ class ArrayManager:  ### Unify the classes above.
             raise Exception("Image is missing. An image needs to be read.")
         return self
 
-    async def load_scenes(self, scene_indices: Union[int, str, List[int]]):
+    async def load_scenes(self,
+                          scene_indices: Union[int, str, List[int]]
+                          ):
         """TODO: Maybe make sure it checks and loads only available indices."""
+
+        # if self.img.n_scenes is None:
+        #     self.loaded_scenes = {self.series_path: self}
+        #     return
+
         if scene_indices == 'all':
             scene_indices = list(range(self.img.n_scenes))
         elif np.isscalar(scene_indices):
@@ -1223,6 +1242,8 @@ class ArrayManager:  ### Unify the classes above.
     def squeeze(self):
         if all(n > 1 for n in self.array.shape):
             return
+        # if self.pyr is not None:
+        #     self.pyr.squeeze() # NA yet
         if isinstance(self.array, zarr.Array):
             logger.warn(f"Zarr arrays are not supported for squeeze operation.\n"
                         f"Zarr array for the path {self.series_path} is being converted to dask array.")
@@ -1304,6 +1325,10 @@ class ArrayManager:  ### Unify the classes above.
         chunk_shape = autocompute_chunk_shape(array_shape=array_shape, axes=axes, dtype=dtype)
         return chunk_shape
 
+
+# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/multichannel_timeseries/Channel1-T0003.tif"
+# man = ArrayManager(path)
+# await man.init()
 
 class ChannelIterator:
     """

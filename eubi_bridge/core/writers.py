@@ -28,7 +28,7 @@ from typing import Union, Optional, Tuple, Any
 
 
 ### internal imports
-from eubi_bridge.ngff.multiscales import Pyramid, NGFFMetadataHandler  #Multimeta
+from eubi_bridge.ngff.multiscales import Pyramid, NGFFMetadataHandler
 from eubi_bridge.utils.convenience import (
     get_chunksize_from_array,
     is_zarr_group,
@@ -1003,9 +1003,9 @@ async def store_multiscale_async(
     else:
         chunks = output_chunks
 
-    channels = channel_meta
     chunks = np.minimum(chunks, arr.shape).tolist()
     chunks = tuple(int(item) for item in chunks)
+    channels = channel_meta
 
     ### Parse shards
     if output_shards is not None:

@@ -8,6 +8,7 @@ import dask.array as da
 from eubi_bridge.ngff import defaults
 from eubi_bridge.core.scale import Downscaler
 from eubi_bridge.utils.convenience import make_json_safe
+from natsort import natsorted
 
 
 def is_zarr_group(path: (str, Path)
@@ -748,6 +749,48 @@ class Pyramid:
         self.meta.set_scale(pth = '0', scale = scale)
         # self.meta.metadata['omero'] = omerometa
         return self
+
+    def to5D(self):
+        arrs = self.dask_arrays
+        axes = self.axes
+        channels = copy.copy(self.meta.channels)
+        # print(f"channels copied: {channels}")
+        axes_to_add = [ax for ax in 'tczyx' if ax not in axes]
+        if len(axes_to_add) == 0:
+            return self
+        new_units = []
+        for ax in 'tczyx':
+            if ax in axes:
+                new_units.append(self.meta.unit_dict[ax])
+            else:
+                new_units.append(defaults.unit_map[ax])
+        arrlist = []
+        scalelist = []
+        for key in natsorted(arrs.keys()):
+            arr = arrs[key]
+            new_shape = []
+            new_scale = []
+            for ax in 'tczyx':
+                if ax in axes:
+                    new_shape.append(arr.shape[axes.index(ax)])
+                    new_scale.append(self.meta.scaledict[key][ax])
+                else:
+                    new_shape.append(1)
+                    new_scale.append(defaults.scale_map[ax])
+            arr = arr.reshape(new_shape)
+            arrlist.append(arr)
+            scalelist.append(new_scale)
+        pyr = Pyramid().from_arrays(arrays = arrlist,
+                                    axis_order = 'tczyx',
+                                    unit_list = new_units,
+                                    scales = scalelist,
+                                    version = self.meta.version,
+                                    name = self.meta.multiscales['name']
+                                    )
+        pyr.meta.metadata['omero']['channels'] = channels
+        pyr.meta.zarr_group = self.meta.zarr_group
+        return pyr
+
 
     def from_arrays(self,
                    arrays: List[Union[np.ndarray, da.Array, zarr.Array]],
