@@ -1330,10 +1330,6 @@ class ArrayManager:  ### Unify the classes above.
         return chunk_shape
 
 
-# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/example_images1/multichannel_timeseries/Channel1-T0003.tif"
-# man = ArrayManager(path)
-# await man.init()
-
 class ChannelIterator:
     """
     Iterator for generating and managing channel colors.

@@ -3,6 +3,7 @@ import copy
 from typing import Union
 import zarr, os, asyncio
 import numpy as np
+import pandas as pd
 from eubi_bridge.conversion.fileset_io import BatchFile, FileSet
 from eubi_bridge.utils.convenience import take_filepaths, ChannelMap
 from eubi_bridge.utils.metadata_utils import generate_channel_metadata
@@ -20,9 +21,7 @@ logger = get_logger(__name__)
 
 def _parse_item(kwargs, item_type, item_symbol, defaultitems):
     item = kwargs.get(item_type, None)
-    if item is None:
-        return defaultitems[item_symbol]
-    elif np.isnan(item):
+    if pd.isna(item):
         return defaultitems[item_symbol]
     else:
         try:
