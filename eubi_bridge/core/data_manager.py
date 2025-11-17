@@ -1261,6 +1261,10 @@ class ArrayManager:  ### Unify the classes above.
                 if ax in self.scaledict:
                     newscales.append(self.scaledict[ax])
         newarray = da.squeeze(array)
+        # print(f"newaxes: {newaxes}")
+        # print(f"newunits: {newunits}")
+        # print(f"newscales: {newscales}")
+        
         self.set_arraydata(newarray, newaxes, newunits, newscales)
 
     def transpose(self, newaxes: str):

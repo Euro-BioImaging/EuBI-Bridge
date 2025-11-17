@@ -182,8 +182,11 @@ async def unary_worker(input_path: Union[str, ArrayManager],
                                            channel_intensity_limits = 'from_dtype')
             man.fix_bad_channels()
             ### Additional processing if needed
+            # print(man.array.shape)
             if kwargs.get('squeeze'):
                 man.squeeze()
+                # print(man.scaledict)
+                # print(parse_scales(man, **kwargs))
             cropping_slices = [kwargs.get(key) for key in kwargs
                                if key in ('time_range', 'channel_range',
                                            'z_range', 'y_range',
@@ -212,9 +215,11 @@ async def unary_worker(input_path: Union[str, ArrayManager],
                 memory_limit_per_batch=memory_limit_per_batch,
             )
             ###--------Handle channel metadata at the end for efficiency---###
-            if kwargs.get('channel_intensity_limits', 'from_array'):
+            if kwargs.get('channel_intensity_limits', 'from_array') == 'from_array':
                 chman = ArrayManager(output_path, skip_dask=skip_dask)
                 await chman.init()
+                if kwargs.get('squeeze'):
+                    chman.squeeze()
                 channels = parse_channels(chman, **kwargs)
                 meta = chman.pyr.meta
                 meta.metadata['omero']['channels'] = channels
@@ -305,9 +310,11 @@ async def aggregative_worker(manager: ArrayManager,
                 memory_limit_per_batch=memory_limit_per_batch,
             )
             ###--------Handle channel metadata at the end for efficiency---###
-            if kwargs.get('channel_intensity_limits', 'from_array'):
+            if kwargs.get('channel_intensity_limits', 'from_array') == 'from_array':
                 chman = ArrayManager(output_path,skip_dask=skip_dask)
                 await chman.init()
+                if kwargs.get('squeeze'):
+                    chman.squeeze()
                 channels = parse_channels(chman, **kwargs)
                 meta = chman.pyr.meta
                 meta.metadata['omero']['channels'] = channels
