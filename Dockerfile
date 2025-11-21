@@ -1,21 +1,6 @@
 FROM condaforge/mambaforge:latest
 
 # EuBI-Bridge Docker Container
-#
-# QUICK START:
-#   See the setup script at: https://github.com/your-repo/eubi-docker/setup.sh
-#   Or follow manual setup below.
-#
-# MANUAL SETUP (one-time):
-#   1. Build: docker build --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) -t eubi .
-#   2. Create volume: docker volume create eubi-config
-#   3. Populate volume:
-#      docker run --rm -v eubi-config:/target --entrypoint sh eubi \
-#        -c "cp -r /opt/eubi-config/. /target/ && chown -R $(id -u):$(id -g) /target"
-#
-# RUN:
-#   docker run --rm -u $(id -u):$(id -g) -v eubi-config:/home/eubi \
-#     -v $(pwd):$(pwd) -w $(pwd) eubi to_zarr <input> <o> [options]
 
 WORKDIR /workspace
 
@@ -47,11 +32,6 @@ RUN source activate eubizarr && \
     rm -rf /tmp/dummy_input /tmp/dummy_output && \
     echo "Maven/JGO dependencies fully cached"
 
-#RUN source activate eubizarr && \
-#    echo "Pre-downloading Maven/JGO dependencies (this may take a few minutes)..." && \
-#    (timeout 300 bash -c 'cd /tmp && python -c "try:\n    from bioio_bioformats import Reader\n    print(\"Bioformats initialized\")\nexcept: pass" 2>&1' || true) && \
-#    echo "Dependencies cached in image layer" \
-
 # Store pre-populated config in /opt for easy extraction
 RUN mkdir -p /opt/eubi-config/.eubi_bridge /opt/eubi-config/.jgo /opt/eubi-config/.cache && \
     cp -r /root/.eubi_bridge/* /opt/eubi-config/.eubi_bridge/ 2>/dev/null || true && \
@@ -76,6 +56,8 @@ ENV PATH="/opt/conda/envs/eubizarr/bin:${PATH}"
 ENV CONDA_DEFAULT_ENV=eubizarr
 ENV CONDA_PREFIX=/opt/conda/envs/eubizarr
 ENV HOME=/home/eubi
+
+# This is supposed to speed up the container with java code:
 ENV JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:InitialRAMPercentage=50.0"
 
 ENTRYPOINT ["eubi"]
