@@ -308,6 +308,36 @@ blueredchannels_timeseries_nested_concat_zarr
 └── BlueRed_cset-T_tset.zarr
 ```
 
+## How to run docker container:
+
+Pull the container and run simple conversion:
+
+```bash
+docker run --rm \
+--user $(id -u):$(id -g) \
+-v $HOME:$HOME -w $HOME \
+bugraoezdemir/eubi:latest to_zarr /path/to/input /path/to/output
+```
+
+or run with volume to provide persistent storage for config/cache files:
+
+```bash
+# Create the volume
+docker volume create eubi-config
+
+# Copy configs to the volume
+docker run --rm -v eubi-config:/target --user root --entrypoint sh eubi \
+  -c "cp -r /opt/eubi-config/. /target/ && chown -R $(id -u):$(id -g) /target"
+
+# Run by mounting the volume
+docker run --rm \
+-e HOME=/tmp/eubi_home \
+-v eubi-config:/tmp/eubi_home \
+--user $(id -u):$(id -g) \
+-v $HOME:$HOME -w $HOME \
+eubi to_zarr /path/to/input /path/to/output
+```
+
 ## Additional Notes
 
 - EuBI-Bridge is in the **alpha stage**, and significant updates may be expected.
