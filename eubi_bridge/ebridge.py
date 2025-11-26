@@ -158,14 +158,14 @@ class EuBIBridge:
                 overwrite=False,
                 override_channel_names = False,
                 channel_intensity_limits = 'from_dtype',
-                use_tensorstore=False,
-                use_gpu=False,
+                # use_tensorstore=False,
+                # use_gpu=False,
                 # rechunk_method='tasks',
                 # trim_memory=False,
                 metadata_reader='bfio',
                 save_omexml=True,
                 squeeze=True,
-                dtype=None
+                dtype='auto'
             ),
             downscale=dict(
                 time_scale_factor=1,
@@ -260,6 +260,9 @@ class EuBIBridge:
                 params[key] = kwargs[key]
             else:
                 params[key] = self.config[param_type][key]
+            if key == 'dtype':
+                if params[key] == 'auto':
+                    params[key] = None
         return params
 
     def configure_cluster(self,
@@ -367,8 +370,8 @@ class EuBIBridge:
                              overwrite: bool = 'default',
                              override_channel_names: bool = 'default',
                              channel_intensity_limits = 'default',
-                             use_tensorstore: bool = 'default',
-                             use_gpu: bool = 'default',
+                             # use_tensorstore: bool = 'default',
+                             # use_gpu: bool = 'default',
                              metadata_reader: str = 'default',
                              save_omexml: bool = 'default',
                              squeeze: bool = 'default',
@@ -404,8 +407,6 @@ class EuBIBridge:
             overwrite (bool, optional): Whether to overwrite existing data.
             override_channel_names (bool, optional): Whether to override channel names.
             channel_intensity_limits: Intensity limits for channels.
-            use_tensorstore (bool, optional): Whether to use TensorStore for storage.
-            use_gpu (bool, optional): Whether to use GPU acceleration.
             metadata_reader (str, optional): Reader to use for metadata.
             save_omexml (bool, optional): Whether to save OME-XML metadata.
             squeeze (bool, optional): Whether to squeeze single-dimensional axes.
@@ -441,8 +442,8 @@ class EuBIBridge:
             'overwrite': overwrite,
             'override_channel_names': override_channel_names,
             'channel_intensity_limits': channel_intensity_limits,
-            'use_tensorstore': use_tensorstore,
-            'use_gpu': use_gpu,
+            # 'use_tensorstore': use_tensorstore,
+            # 'use_gpu': use_gpu,
             'metadata_reader': metadata_reader,
             'save_omexml': save_omexml,
             'squeeze': squeeze,
@@ -532,7 +533,6 @@ class EuBIBridge:
                     **self.downscale_params}
         import pprint
         extra_kwargs = {key: kwargs[key] for key in kwargs if key not in combined}
-
         run_conversions(os.path.abspath(input_path),
                         output_path,
                         includes=includes,

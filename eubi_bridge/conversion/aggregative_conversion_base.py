@@ -193,6 +193,8 @@ class AggregativeConverter:
 
         self.channel_tag = channel_tag # asil burada parse et.
         self._channel_tag_is_tuple = False
+        if isinstance(self.channel_tag, str) and ',' in self.channel_tag:
+            self.channel_tag = self.channel_tag.split(',')
         if isinstance(self.channel_tag, (tuple, list)):
             self._channel_tag_is_tuple = True
 
@@ -287,7 +289,6 @@ class AggregativeConverter:
                     channel['label'] = tagitem
                     channels[idx] = channel
                 manager._channels = channels
-
         self.batchdata = BatchManager()
         await self.batchdata.init(self.managers)
         await self.batchdata.fill_default_meta()

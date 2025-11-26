@@ -502,6 +502,126 @@ def autocompute_chunk_shape(
     return tuple(chunk_shape)
 
 
+
+# def autocompute_chunk_shape1(
+#         array_shape: Tuple[int, ...],
+#         axes: str,
+#         target_chunk_mb: float = 1.0,
+#         dtype: type = np.uint16,
+# ) -> Tuple[int, ...]:
+#     """
+#     Compute optimal chunk shape for an array.
+#
+#     For spatial dimensions (x, y, z), aims for cubic/isotropic chunks.
+#     Non-spatial dimensions (t, c, etc.) remain at size 1.
+#
+#     Args:
+#         array_shape: Shape of the array to chunk
+#         axes: String describing axes (e.g., 'tzyx')
+#         target_chunk_mb: Target chunk size in megabytes
+#         dtype: Data type of array elements
+#
+#     Returns:
+#         Tuple representing the chunk shape
+#     """
+#     if len(array_shape) != len(axes):
+#         raise ValueError("Length of array_shape must match length of axes.")
+#
+#     # Calculate budget
+#     chunk_bytes = int(target_chunk_mb * 1024 * 1024)
+#     element_size = np.dtype(dtype).itemsize
+#     max_elements = chunk_bytes // element_size
+#
+#     # Initialize chunk shape (all non-spatial stay at 1)
+#     chunk_shape = [1] * len(array_shape)
+#
+#     # Identify spatial axes only
+#     spatial_indices = [i for i, ax in enumerate(axes) if ax in 'xyz']
+#
+#     if not spatial_indices:
+#         return tuple(chunk_shape)
+#
+#     # Start with isotropic cube
+#     n_spatial = len(spatial_indices)
+#     side_length = int(max_elements ** (1.0 / n_spatial))
+#
+#     for i in spatial_indices:
+#         chunk_shape[i] = min(side_length, array_shape[i])
+#
+#     # Distribute remaining budget to maintain cubic shape
+#     # Repeatedly expand the smallest dimension by the maximum safe amount
+#     while True:
+#         current_elements = np.prod([chunk_shape[i] for i in spatial_indices])
+#         remaining_budget = max_elements - current_elements
+#
+#         if remaining_budget <= 0:
+#             break
+#
+#         # Find spatial dimensions that can still grow
+#         growable = [(chunk_shape[i], i) for i in spatial_indices
+#                     if chunk_shape[i] < array_shape[i]]
+#
+#         if not growable:
+#             break
+#
+#         # Sort by current size to find smallest dimension
+#         growable.sort()
+#         smallest_size, smallest_idx = growable[0]
+#
+#         # Calculate how much we can grow this dimension
+#         other_elements = np.prod([chunk_shape[j] for j in spatial_indices
+#                                   if j != smallest_idx])
+#
+#         # Maximum size this dimension can be given budget
+#         max_size_budget = max_elements // other_elements
+#
+#         # Maximum size given array constraint
+#         max_size_array = array_shape[smallest_idx]
+#
+#         # Grow to the minimum of these constraints
+#         new_size = min(max_size_budget, max_size_array)
+#
+#         if new_size <= chunk_shape[smallest_idx]:
+#             break  # Can't grow any further
+#
+#         chunk_shape[smallest_idx] = new_size
+#
+#     return tuple(chunk_shape)
+
+
+# Example usage and tests
+# if __name__ == "__main__":
+#     # Test 1: 3D
+#     shape1 = (2000, 2000, 1, 100, 1)
+#     axes1 = "xyczt"
+#
+#     for dtype in ['uint8', 'uint16']:
+#         result1 = autocompute_chunk_shape(shape1, axes1, target_chunk_mb=1.0, dtype=dtype)
+#         size1_mb = np.prod(result1) * np.dtype(dtype).itemsize / 1024 / 1024
+#         print(f"3D array, axes {axes1}, shape {shape1}, dtype {dtype}, chunk shape {result1}")
+#         print(f"  Elements: {np.prod(result1):,}, Size: {size1_mb:.2f} MB\n")
+#
+#     # Test 2: 2D
+#     shape2 = (2000, 2000, 1, 1, 1)
+#     axes2 = "xyczt"
+#
+#     for dtype in ['uint8', 'uint16']:
+#         result2 = autocompute_chunk_shape(shape2, axes2, target_chunk_mb=1.0, dtype=dtype)
+#         size2_mb = np.prod(result2) * np.dtype(dtype).itemsize / 1024 / 1024
+#         print(f"2D array, axes {axes2}, shape {shape2} dtype {dtype}, chunk shape {result2}")
+#         print(f"  Elements: {np.prod(result2):,}, Size: {size2_mb:.2f} MB\n")
+#
+#     # Test 3: 3D
+#     shape3 = (2000, 2000, 3, 2000, 10)
+#     axes3 = "xyczt"
+#
+#     for dtype in ['uint8', 'uint16']:
+#         result3 = autocompute_chunk_shape(shape3, axes3, target_chunk_mb=1.0, dtype = dtype)
+#         size3_mb = np.prod(result3) * np.dtype(dtype).itemsize / 1024 / 1024
+#         print(f"\n5D array, axes {axes3}, shape {shape3}, dtype {dtype}, chunk shape {result3}")
+#         print(f"  Elements: {np.prod(result3):,}, Size: {size3_mb:.2f} MB\n")
+
+
 def get_chunk_shape(arr):
     if hasattr(arr, 'chunk_layout'):
         chunks = arr.chunk_layout.read_chunk.shape

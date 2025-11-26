@@ -48,12 +48,14 @@ def read_pff(input_path,
     reader_kwargs = {}
     dimensions = 'TCZYX'
 
+
     if input_path.endswith(('ome.tiff', 'ome.tif')):
         from bioio_ome_tiff.reader import Reader as reader  # pip install bioio-ome-tiff --no-deps
-    elif input_path.endswith(('.tif', '.tiff')):
+        logger.info(f"Actual reader: bioio_ome_tiff.")
+    elif input_path.endswith(('.tif', '.tiff')): ### TODO: Use this until ome.tiff reader is safe
         from eubi_bridge.core.tiff_reader import read_tiff_image as reader
         reader_kwargs.update(**kwargs)
-        reader_kwargs['aszarr'] = aszarr
+        logger.info(f"Actual reader: tifffile.")
     elif input_path.endswith('.czi'):
         from eubi_bridge.core.czi_reader import read_czi as reader
         reader_kwargs = dict(
@@ -69,17 +71,21 @@ def read_pff(input_path,
         for k, v in kwargs.items():
             if k in reader_kwargs:
                 kwargs[k] = kwargs[k]
+        logger.info(f"Actual reader: bioio_czi.")
     elif input_path.endswith('.lif'):
         from bioio_lif.reader import Reader as reader
+        logger.info(f"Actual reader: bioio_lif.")
     elif input_path.endswith('.nd2'):
         from bioio_nd2.reader import Reader as reader
+        logger.info(f"Actual reader: bioio_nd2.")
     elif input_path.endswith(('.png', '.jpg', '.jpeg')):
         from bioio_imageio.reader import Reader as reader
+        logger.info(f"Actual reader: bioio_imageio.")
     else:
         from bioio_bioformats.reader import Reader as reader
+        logger.info(f"Actual reader: bioio_bioformats.")
     verbose = kwargs.get('verbose', False)
-    if verbose:
-        logger.info(f"Reading with {reader.__qualname__}.")
+    # if verbose:
     img = reader(input_path, **reader_kwargs)
     if hasattr(img, 'index_map'): ### means it is a czi reader
         return img
@@ -87,7 +93,8 @@ def read_pff(input_path,
     class MockImg:
         def __init__(self,
                      img,
-                     path
+                     path,
+                     **kwargs
                      ):
             self.img = img
             self.path = path
@@ -101,7 +108,7 @@ def read_pff(input_path,
             self.series_path = self.path + f'_{self.series}'
         def get_image_dask_data(self, *args, **kwargs):
             try:
-                dimensions_to_read = 'TCZYX'
+                dimensions_to_read = kwargs.get('dimensions_to_read', 'TCZYX')
                 return self.img.get_image_dask_data(dimensions_to_read)
             except Exception as e:
                 raise RuntimeError(f"Failed to read image data: {str(e)}") from e
@@ -111,3 +118,10 @@ def read_pff(input_path,
             self._set_series_path()
     mock = MockImg(img, input_path)
     return mock
+
+
+
+# path = f"/home/oezdemir/Desktop/from_local_0_tiff/MVI_1349-00017.ome.tiff"
+#
+# pff = read_pff(path, aszarr = False)
+# pff.get_image_dask_data()

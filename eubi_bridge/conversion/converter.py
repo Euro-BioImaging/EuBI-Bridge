@@ -35,8 +35,10 @@ async def run_conversions_from_filepaths(
             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
         **global_kwargs: global defaults for all conversions
     """
-
-    df = take_filepaths(input_path, **global_kwargs)
+    if hasattr(input_path, 'loc'):
+        df = input_path
+    else:
+        df = take_filepaths(input_path, **global_kwargs)
     # Optionally create dirs before running
     # for odir in df["output_path"].unique():
     #     if odir and not os.path.exists(odir):

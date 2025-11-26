@@ -17,7 +17,7 @@ from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr
 from eubi_bridge.core.readers import (read_metadata_via_bioio_bioformats,
                                       read_metadata_via_extension,
                                       read_metadata_via_bfio,
-                                      read_single_image_asarray,
+                                      # read_single_image_asarray,
                                       read_single_image)
 from eubi_bridge.utils.logging_config import get_logger
 
@@ -283,7 +283,7 @@ class PFFImageMeta:
         self._tile = 0
         self._aszarr = aszarr
         self.arraydata = None
-        self._img = None
+        self.reader = None
         self._meta_reader = meta_reader
         self._n_scenes = None
         self._n_tiles = None
@@ -322,12 +322,32 @@ class PFFImageMeta:
         await self.set_tile(self._tile)
 
     async def get_arraydata(self):
-        return self._img.get_image_dask_data()
+        pix = self.pixels
+        # img = self.reader.img
+        dims = self.reader.img.dims
+        shape = (pix.size_t, pix.size_c, pix.size_z, pix.size_y, pix.size_x)
+
+        if not hasattr(dims, 'S'):
+            dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TCZYX')
+        elif hasattr(dims, 'S') and not hasattr(dims, 'C'):
+            logger.warn(f"As dimension names, 'S' was found but no 'C'. 'S' is being assumed as channel dimension.")
+            dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TSZYX')
+            logger.info(f"Current dask data shape: {dask_data.shape}")
+        elif hasattr(dims, 'S') and hasattr(dims, 'C'):
+            if dims.C != pix.size_c & dims.S == pix.size_c:
+                logger.warn(f"As dimension names, both 'S' and 'C' were found but 'S' seems to match the real dimension number. Assuming 'S' as channel dimension.")
+                dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TSZYX')
+                logger.info(f"Current dask data shape: {dask_data.shape}")
+            else:
+                dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TCZYX')
+        else:
+            dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TCZYX')
+        return dask_data
 
     async def set_scene(self, scene_index):
         self._series = scene_index
-        if self._img is not None:
-            self._img.set_scene(self._series)
+        if self.reader is not None:
+            self.reader.set_scene(self._series)
             self.arraydata = await self.get_arraydata()
         # if self.omemeta is not None:
         #     self.pixels = copy.deepcopy(self.omemeta.images[self._series].pixels)
@@ -336,10 +356,10 @@ class PFFImageMeta:
 
     async def set_tile(self, mosaic_tile_index):
         self._tile = 0
-        if self._img is not None:
-            if hasattr(self._img, 'set_tile') and self._img.n_tiles > 1:
+        if self.reader is not None:
+            if hasattr(self.reader, 'set_tile') and self.reader.n_tiles > 1:
                 self._tile = mosaic_tile_index
-                self._img.set_tile(self._tile)
+                self.reader.set_tile(self._tile)
                 self.arraydata = await self.get_arraydata()
 
         # if self.omemeta is not None:
@@ -350,7 +370,7 @@ class PFFImageMeta:
     @property
     def n_tiles(self):
         try:
-            return self._img.n_tiles
+            return self.reader.n_tiles
         except:
             return self._n_tiles
 
@@ -360,7 +380,7 @@ class PFFImageMeta:
             return self._n_scenes # use the one from ome metadata.
             # With .lsm files, a downscaled version of the image is stored as a second scene. This is not found in the ome metadata.
         else:
-            return self._img.n_scenes # Use the one from the one from Reader.scenes. Note that this is sometimes (with .lsm images) not consistent with the ome metadata.
+            return self.reader.n_scenes # Use the one from the one from Reader.scenes. Note that this is sometimes (with .lsm images) not consistent with the ome metadata.
 
 
     def get_pixels(self):
@@ -377,7 +397,7 @@ class PFFImageMeta:
         return self.get_pixels()
 
     async def read_img(self, **kwargs):
-        self._img = await read_single_image(self.root, aszarr=self._aszarr, **kwargs)
+        self.reader = await read_single_image(self.root, aszarr=self._aszarr, **kwargs)
         await self.set_scene(self._series)
         await self.set_tile(self._tile)
         self.arraydata = await self.get_arraydata()
@@ -453,7 +473,7 @@ class PFFImageMeta:
         """Return a snapshot of safe-to-copy attributes."""
         state = {}
         for key, value in self.__dict__.items():
-            if key in ("_img", "omemeta", "pyr"):  # skip non-copyable stuff
+            if key in ("reader", "omemeta", "pyr"):  # skip non-copyable stuff
                 continue
             state[key] = copy.deepcopy(value)
         return state
@@ -640,26 +660,26 @@ class NGFFImageMeta(PFFImageMeta):  ### Maybe set_scene can pick particular reso
             raise Exception(f"The given path is not an NGFF group: {path}")
 
     async def read_omemeta(self, **kwargs):  # This is not really omemeta, it is just meta.
-        if self._img is None: # MockImg from read_pyramid
-            self._img = await read_single_image(self.root, # = read_pyramid
+        if self.reader is None: # MockImg from read_pyramid
+            self.reader = await read_single_image(self.root, # = read_pyramid
                                                 aszarr=self._aszarr,
                                                 **kwargs)
-        self._meta = self._img.pyr.meta
+        self._meta = self.reader.pyr.meta
 
     async def read_img(self, **kwargs):
-        self._img = await read_single_image(self.root,
+        self.reader = await read_single_image(self.root,
                                             aszarr=self._aszarr,
                                             **kwargs)
         # await self.set_scene(self._series)
         self.arraydata = await self.get_arraydata()
 
-    async def get_arraydata(self):
-        return self._img.get_image_dask_data()
+    # async def get_arraydata(self):
+    #     return self._img.get_image_dask_data()
 
     async def read_dataset(self):
         await self.read_omemeta()
         await self.read_img()
-        self._meta = self._img.pyr.meta
+        self._meta = self.reader.pyr.meta
 
     def get_axes(self):
         return self._meta.axis_order
@@ -681,12 +701,12 @@ class NGFFImageMeta(PFFImageMeta):  ### Maybe set_scene can pick particular reso
             return None
         return self._meta.channels
 
-    async def get_arraydata(self):
-        return self._img.get_image_dask_data()
+    async def get_arraydata(self): ###TODO UPDATE LIKE PFFImageMeta
+        return self.reader.get_image_dask_data()
 
     async def get_pyramid(self, version='0.4'):
         ### add channels from omemeta
-        return self._img.pyr
+        return self.reader.pyr
 
 
 def expand_hex_shorthand(hex_color):
@@ -826,8 +846,6 @@ class ArrayManager:  ### Unify the classes above.
         return self
 
     async def set_tile(self, mosaic_tile_index):
-        # if self.series == mosaic_tile_index:
-        #     return self
         if self.img is not None:
             await self.img.set_tile(mosaic_tile_index)
             self.pyr = await self.img.get_pyramid()
@@ -890,8 +908,8 @@ class ArrayManager:  ### Unify the classes above.
             if idx < n_tiles:
                 tile_indices_.append(idx)
             else:
-                logger.warning(f"Scene index {idx} is out of bounds for the path {self.path}.\n"
-                               f"Skipping the nonexistent scene {idx}.")
+                logger.warning(f"Tile index {idx} is out of bounds for the path {self.path}.\n"
+                               f"Skipping the nonexistent tile {idx}.")
         tile_indices = tile_indices_
         tiles = []
 
@@ -1151,7 +1169,7 @@ class ArrayManager:  ### Unify the classes above.
     # ------------------------------------------------------------------
     # Pyramid + OME-XML
     # ------------------------------------------------------------------
-    async def sync_pyramid(self, create_omexml_if_not_exists: bool = False):
+    async def sync_pyramid(self, create_omexml_if_not_exists: bool = False, save_changes = True):
         """Synchronize scale/unit metadata with pyramid and update/save OME-XML.
         Offloads pyramid + file I/O parts to threads.
         """
@@ -1186,9 +1204,13 @@ class ArrayManager:  ### Unify the classes above.
             self.omemeta = await asyncio.to_thread(_create_ome)
 
         # Update / write OME XML if exists or requested to create
-        if 'OME' in list(self.pyr.gr.keys()) or create_omexml_if_not_exists:
-            await self.save_omexml(self.pyr.gr.store.root, overwrite=True)
-        await asyncio.to_thread(self.pyr.meta.save_changes)
+        try:
+            if 'OME' in list(self.pyr.gr.keys()) or create_omexml_if_not_exists:
+                await self.save_omexml(self.pyr.gr.store.root, overwrite=True)
+        except:
+            pass
+        if save_changes:
+            await asyncio.to_thread(self.pyr.meta.save_changes)
 
     async def create_omemeta(self):
         self.fill_default_meta()
@@ -1242,8 +1264,10 @@ class ArrayManager:  ### Unify the classes above.
     def squeeze(self):
         if all(n > 1 for n in self.array.shape):
             return
-        # if self.pyr is not None:
-        #     self.pyr.squeeze() # NA yet
+        if self.pyr is not None:
+            zgroup = self.pyr.meta.zarr_group
+            self.pyr = self.pyr.squeeze()
+            self.pyr.meta.zarr_group = zgroup
         if isinstance(self.array, zarr.Array):
             logger.warn(f"Zarr arrays are not supported for squeeze operation.\n"
                         f"Zarr array for the path {self.series_path} is being converted to dask array.")
@@ -1264,7 +1288,6 @@ class ArrayManager:  ### Unify the classes above.
         # print(f"newaxes: {newaxes}")
         # print(f"newunits: {newunits}")
         # print(f"newscales: {newscales}")
-        
         self.set_arraydata(newarray, newaxes, newunits, newscales)
 
     def transpose(self, newaxes: str):

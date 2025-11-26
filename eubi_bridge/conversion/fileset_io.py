@@ -149,6 +149,7 @@ def reduce_paths_flexible(paths: Iterable[str],
     - If `dimension_tag` is a tuple/list (e.g., ('blue', 'red')), those are treated as categorical tokens
       and replaced with their joined value plus `replace_with`.
     """
+
     paths = list(paths)
     if not paths:
         return ""

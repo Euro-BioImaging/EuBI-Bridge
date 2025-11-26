@@ -6,7 +6,7 @@ import zarr, os, asyncio
 import numpy as np
 from eubi_bridge.conversion.fileset_io import BatchFile, FileSet
 from eubi_bridge.utils.convenience import take_filepaths, ChannelMap, is_zarr_group
-from eubi_bridge.core.readers import read_single_image_asarray
+# from eubi_bridge.core.readers import read_single_image_asarray
 from eubi_bridge.core.data_manager import ArrayManager
 from eubi_bridge.core.writers import write_with_tensorstore_async, _get_or_create_multimeta, _create_zarr_v2_array, CompressorConfig
 from eubi_bridge.core.writers import store_multiscale_async

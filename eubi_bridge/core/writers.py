@@ -781,9 +781,11 @@ async def write_with_tensorstore_async(
             await asyncio.gather(*write_futures)
 
             success_count += len(batch_blocks)
-            logger.info(f"With the block size {block_size} for the memory limit {memory_limit_per_batch} and dtype {dtype},\n"
-                        f"From the array with shape {arr.shape},\n"
-                        f"wrote {success_count}/{total_blocks} blocks (batch {i+1}/{len(compute_batches)}) to {store_path}")
+            logger.info(
+                f"From the array with shape {arr.shape},\n"
+                f"with the allocated region size {block_size} for the memory limit {memory_limit_per_batch} and dtype {dtype},\n"
+                f"wrote {success_count}/{total_blocks} blocks (batch {i+1}/{len(compute_batches)}) to {store_path}"
+            )
 
             # advance next_compute_future
             next_compute_future = next_future

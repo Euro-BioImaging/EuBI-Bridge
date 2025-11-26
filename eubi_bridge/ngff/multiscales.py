@@ -785,12 +785,52 @@ class Pyramid:
                                     unit_list = new_units,
                                     scales = scalelist,
                                     version = self.meta.version,
-                                    name = self.meta.multiscales['name']
+                                    name = self.meta.tag
                                     )
         pyr.meta.metadata['omero']['channels'] = channels
         pyr.meta.zarr_group = self.meta.zarr_group
         return pyr
 
+    def squeeze(self):
+        arrays = self.dask_arrays
+        basearr = self.base_array
+        if all(n > 1 for n in basearr.shape):
+            return self
+        if isinstance(basearr, zarr.Array):
+            logger.warn(f"Zarr arrays are not supported for squeeze operation.\n"
+                        f"Zarr array for the path {self.series_path} is being converted to dask array.")
+            array = da.from_array(self.array)
+        else:
+            array = basearr
+        shapedict = dict(zip(self.axes, self.shape))
+        singlet_axes = [ax for ax, size in shapedict.items() if size == 1]
+        scaledict = self.meta.scaledict
+        unitdict = self.meta.unit_dict
+        newaxes = ''.join(ax for ax in self.axes if ax not in singlet_axes)
+        newunits, newscales = [], []
+        assert (len(scaledict) - len(unitdict)) <= 1
+        for ax in self.axes:
+            if ax not in singlet_axes:
+                if ax in unitdict:
+                    newunits.append(unitdict[ax])
+        for level in natsorted(scaledict.keys()):
+            scale_level_dict = scaledict[level]
+            scale_level = []
+            for ax in scale_level_dict:
+                if ax not in singlet_axes:
+                    scale_level.append(scale_level_dict[ax])
+            newscales.append(scale_level)
+        singlet_indices = tuple([self.axes.index(ax) for ax in singlet_axes])
+        arrays = []
+        for key in natsorted(self.dask_arrays.keys()):
+            arr = self.dask_arrays[key]
+            newarray = da.squeeze(arr, axis = singlet_indices)
+            arrays.append(newarray)
+        # print(f"newaxes: {newaxes}")
+        # print(f"newunits: {newunits}")
+        # print(f"newscales: {newscales}")
+        squeezed = Pyramid().from_arrays(arrays, axis_order = newaxes, unit_list = newunits, scales = newscales, version = self.meta.version, name = self.meta.tag)
+        return squeezed
 
     def from_arrays(self,
                    arrays: List[Union[np.ndarray, da.Array, zarr.Array]],
@@ -827,7 +867,8 @@ class Pyramid:
         self.meta = NGFFMetadataHandler()
         self.meta.create_new(version=version, name=name)
         self.meta.parse_axes(axis_order, unit_list)
-        self.meta.set_scale(pth = '0', scale = base_scale)
+        # self.meta.set_scale(pth = '0', scale = base_scale)
+        self.meta.add_dataset(path = '0', scale = base_scale)
         if len(arrays) > 1:
             for i, array in enumerate(arrays[1:]):
                 if scales is None:
