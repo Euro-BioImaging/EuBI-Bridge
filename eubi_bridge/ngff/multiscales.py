@@ -38,9 +38,9 @@ def generate_channel_metadata(num_channels,
     import numpy as np
 
     if dtype is not None and np.issubdtype(dtype, np.integer):
-        min, max = int(np.iinfo(dtype).min), int(np.iinfo(dtype).max)
+        min, max = np.iinfo(dtype).min, np.iinfo(dtype).max
     elif dtype is not None and np.issubdtype(dtype, np.floating):
-        min, max = float(np.finfo(dtype).min), float(np.finfo(dtype).max)
+        min, max = np.finfo(dtype).min, np.finfo(dtype).max
     else:
         raise ValueError(f"Unsupported dtype {dtype}")
 
@@ -176,9 +176,7 @@ class NGFFMetadataHandler:
             'name': self.multiscales['name']
         }
 
-    def create_new(self,
-                   version: str = "0.5",
-                   name: str = "Series 0") -> 'NGFFMetadataHandler':
+    def create_new(self, version: str = "0.5", name: str = "Series 0") -> 'NGFFMetadataHandler':
         """Create a new metadata handler with empty metadata of specified version."""
         self._validate_version_and_format(version, 3 if version == "0.5" else 2)
 
@@ -313,9 +311,7 @@ class NGFFMetadataHandler:
     def add_channel(self, ### TODO: NEED TO BE UPDATED!!!
                     color: str = "808080",
                     label: str = None,
-                    dtype=None,
-                    channel_idx = None
-                    ) -> None:
+                    dtype=None) -> None:
         """Add a channel to the OMERO metadata."""
         assert dtype is not None, f"dtype cannot be None"
         min = 0
@@ -346,10 +342,7 @@ class NGFFMetadataHandler:
             'inverted': False
         }
 
-        if channel_idx is None:
-            self.metadata['omero']['channels'].append(channel)
-        else:
-            self.metadata['omero']['channels'][channel_idx] = channel
+        self.metadata['omero']['channels'].append(channel)
         self._pending_changes = True
 
     def get_channels(self) -> List[Dict[str, Any]]:

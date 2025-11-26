@@ -54,7 +54,7 @@ def verify_filepaths_for_cluster(filepaths):
                'nd2', '.h5'
                'ome.tiff', 'ome.tif',
                'tiff', 'tif', 'zarr',
-               'png', 'jpg', 'jpeg', 'h5']
+               'png', 'jpg', 'jpeg']
 
     for filepath in filepaths:
         verified = any(list(map(lambda path, ext: path.endswith(ext),
@@ -757,84 +757,4 @@ class EuBIBridge:
                     **extra_kwargs
                     )
 
-        # Collect file paths based on inclusion and exclusion patterns
-        paths = take_filepaths(input_path, includes=includes, excludes=excludes)
-
-        filepaths = sorted(list(paths))
-
-        series = self.readers_params['scene_index']
-
-        base = BridgeBase(input_path,
-                          excludes=excludes,
-                          includes=includes,
-                          series=series
-                          )
-
-        # Read and digest the dataset
-        base.read_dataset(verified_for_cluster = False,
-                          readers_params=self.readers_params
-                          )
-
-        # Prepare channel metadata arguments
-
-        base.digest()
-        logger.info(f"Metadata was extracted")
-
-        if self.client is not None:
-            base.client = self.client
-        base.set_dask_temp_dir(self._dask_temp_dir)
-
-        # Update metadata for each dataset manager
-        for path, manager in base.batchdata.managers.items():
-            if is_zarr_group(manager.path):
-                # manager.sync_pyramid(self.conversion_params['save_omexml'])
-                pyr = manager.pyr
-                dtype = pyr.base_array.dtype
-
-                n_channels = manager.shapedict.get('c', 0)
-                channel_meta = generate_channel_metadata(n_channels, dtype)
-                pyr.meta.omero['channels'] = channel_meta['omero']['channels']
-                pyr.meta._pending_changes = True
-                pyr.meta.save_changes()
-
-                if channel_idx is None:
-                    logger.warning(f"Channel index is not specified. Channel update is done with default values.")
-                else:
-                    if not isinstance(channel_idx, (list, tuple)):
-                        channel_idx = [channel_idx]
-                    if any([idx > n_channels for idx in channel_idx]):
-                        logger.warning(f"Channel index is out of range for the path {path}. Channel update is done with default values.")
-                    if len(channel_idx) != n_channels:
-                        logger.warning(f"Channel index is not specified for all channels. Non-specified channels will be updated with default values.")
-                    if not isinstance(label, (list, tuple)):
-                        label = [label]
-                    if not isinstance(color, (list, tuple)):
-                        color = [color]
-                    if not (len(channel_idx) == len(label) == len(color)):
-                        raise ValueError("Channel index, label, and color must have the same length.")
-
-                    for idx, lbl, cl in zip(channel_idx, label, color):
-                        pyr.meta.add_channel(channel_idx = idx,
-                                             label = lbl,
-                                             color = cl,
-                                             dtype = dtype)
-                    pyr.meta.save_changes()
-            else:
-                logger.info(f"Cannot update metadata for non-zarr path: {path}")
-
-        logger.info(f"Metadata was updated successfully")
-        # Shutdown the cluster and clean up temporary directories
-        if self.client is not None:
-            self.client.shutdown()
-            self.client.close()
-
-        # if isinstance(self._dask_temp_dir, tempfile.TemporaryDirectory):
-        #     shutil.rmtree(self._dask_temp_dir.name)
-        # else:
-        #     if self._dask_temp_dir is not None:
-        #         shutil.rmtree(self._dask_temp_dir)
-        try:
-            shutil.rmtree(self._dask_temp_dir.name)
-        except:
-            pass
 
