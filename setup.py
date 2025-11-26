@@ -34,7 +34,7 @@ def get_requirements():
         "nd2>=0.0.0",
         "numpy>=0.0.0",
         # "openjdk==8.*",
-        "pydantic>=0.0.0",
+        "pydantic>=2.11.7",
         "pylibczirw>=0.0.0",
         "readlif==0.6.5",
         "s3fs>=0.0.0",
@@ -46,7 +46,18 @@ def get_requirements():
         "xmlschema>=0.0.0",
         "xmltodict==0.14.2",
         "zarr>=3.0",
-        "zstandard>=0.0.0"
+        "zstandard>=0.0.0",
+        #
+        "aiofiles>=24.1.0",
+        "blosc2>=3.7.1",
+        "fastapi>=0.116.1",
+        "lz4>=4.4.4",
+        "numpy>=2.3.2",
+        "psutil>=7.0.0",
+        "rich>=14.1.0",
+        "uvicorn>=0.35.0",
+        "websockets>=15.0.1",
+        "h5py"
     ]
 
     # Optionally still try to read from requirements.txt if it exists
@@ -68,7 +79,7 @@ def readme():
 
 setuptools.setup(
     name='eubi_bridge',
-    version='0.0.8b8',
+    version='0.0.8c2',
     author='Bugra Özdemir',
     author_email='bugraa.ozdemir@gmail.com',
     description='A package for converting datasets to OME-Zarr format.',

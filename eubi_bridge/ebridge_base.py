@@ -24,6 +24,12 @@ from eubi_bridge.utils.convenience import (
     take_filepaths
 )
 
+from eubi_bridge.utils.logging_config import get_logger
+
+# Set up logger for this module
+logger = get_logger(__name__)
+
+
 # Configure logging
 logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
 warnings.filterwarnings('ignore')
@@ -117,6 +123,7 @@ class BridgeBase:
                      verified_for_cluster,
                      chunks_yx = None,
                      readers_params = {},
+                     # skip_dask = False
                      ):
         """
         - If the input path is a directory, can read single or multiple files from it.
@@ -134,6 +141,7 @@ class BridgeBase:
         verbose = self._verbose
 
         _input_is_csv = False
+        _input_is_tiff = False
         if input_path.endswith('.csv'):
             _input_is_csv = True
             self.filepaths = take_filepaths(input_path, includes, excludes)
@@ -141,11 +149,14 @@ class BridgeBase:
         if os.path.isfile(input_path) or input_path.endswith('.zarr'):
             dirname = os.path.dirname(input_path)
             basename = os.path.basename(input_path)
-            input_path = f"{dirname}/*{basename}"
-            self._input_path = input_path
-
+            input_path_ = f"{dirname}/*{basename}"
+            self._input_path = input_path_
+        
+        print(self._input_path)
+        
         if not _input_is_csv:
             self.filepaths = take_filepaths(input_path, includes, excludes)
+        print(self.filepaths)
 
         if series is None or series==0: # TODO: parallelize with cluster setting. Keep serial for no-cluster
             try:
@@ -167,6 +178,31 @@ class BridgeBase:
         else:
             self.metadata_path = metadata_path
 
+    def _digest_skip_dask(self,
+                          path,
+                          metadata_reader = 'bfio',
+                          **kwargs
+                          ):
+        # n_filepaths = len(self.filepaths)
+        # if n_filepaths != 1:
+        #     raise Exception(f"Skipping dask digest is only supported for single filepaths. Got {n_filepaths} filepaths.")
+        # path = self.filepaths[0]
+        # if not path.endswith('.tif') or not path.endswith('.tiff'):
+        #     raise Exception(f"Skipping dask digest is only supported for tif files. Got {path}.")
+        from eubi_bridge.base.data_manager import ArrayManager
+        manager = ArrayManager(path,
+                               series = self._series,
+                               metadata_reader=metadata_reader,
+                               # skip_dask = False,
+                               **kwargs
+                               )
+        import os
+        name = os.path.basename(path).split('.')[0]
+        self.digested_arrays = {name: manager.array}
+        self.digested_arrays_sample_paths = {name: path}
+        self.managers = {name: manager}
+        self._compute_pixel_metadata(**kwargs)
+
     def digest(self, # TODO: refactor to "assimilate_tags" and "concatenate?"
                time_tag: Union[str, tuple] = None,
                channel_tag: Union[str, tuple] = None,
@@ -176,6 +212,7 @@ class BridgeBase:
                axes_of_concatenation: Union[int, tuple, str] = None,
                ###
                metadata_reader: str = 'bfio',
+               # skip_dask: bool = True,
                **kwargs
                ):
         """
@@ -210,6 +247,7 @@ class BridgeBase:
             ...     axes_of_concatenation='tz'  # Concatenate only time and z dimensions
             ... )
         """
+
         axes = 'tczyx'
         tags = (time_tag, channel_tag, z_tag, y_tag, x_tag)
 
@@ -430,7 +468,8 @@ class BridgeBase:
         if storage_options.get('squeeze', False):
             self.squeeze_dataset()
         if storage_options.get('dimension_order'):
-            self.transpose_dataset(storage_options['dimension_order'])
+            if not storage_options.get('dimension_order') in (None, 'auto'):
+                self.transpose_dataset(storage_options['dimension_order'])
 
         # Update storage options with format and verbosity
         storage_options.update({
@@ -577,6 +616,7 @@ def downscale(
                 chunkdict[grname][key] = tuple(pyr.base_array.chunksize)
                 # channeldict[grname][key] = tuple(pyr.meta.channels)
                 if pyr.meta.zarr_format == 3:
+                    # print(f"pyr: {pyr}")
                     sharddict[grname][key] = tuple(pyr.meta.zarr_group)
                     basepath = pyr.meta.resolution_paths[0]
                     sharddict[grname][key] = tuple(pyr.layers[basepath].shards)
@@ -607,13 +647,17 @@ def downscale(
                       for level, chunk in subchunks.items()}
 
         if len(sharddict) > 0:
+            # print(f"sharddict: {sharddict}")
             flatshards = {os.path.join(output_path, f"{key}.zarr"
                           if not key.endswith('zarr') else key, str(level)): shard
                           for key, subshards in sharddict.items()
                           for level, shard in subshards.items()}
+            if len(flatshards) == 0:
+                flatshards = None
         else:
             flatshards = None
         ### TODO ends
+        # print(f"flatshards: {flatshards}")
 
         results = store_arrays(flatarrays,
                                output_path=output_path,

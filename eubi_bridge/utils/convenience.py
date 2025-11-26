@@ -378,6 +378,8 @@ def take_filepaths(input_path: str,
 
     if os.path.isfile(input_path) and input_path.endswith('.csv'):
         return take_filepaths_from_csv(input_path, includes, excludes)
+    elif os.path.isfile(input_path) or input_path.endswith('.zarr'):
+        return [input_path]
 
     original_input_path = input_path
 

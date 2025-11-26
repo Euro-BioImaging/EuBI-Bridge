@@ -5,7 +5,7 @@ import fsspec.spec
 import numpy as np
 
 from dask import delayed
-import dask
+import dask, zarr
 import dask.array as da
 from eubi_bridge.ngff.multiscales import Pyramid
 
@@ -22,10 +22,30 @@ from bioio_bioformats import utils
 
 readable_formats = ('.ome.tiff', '.ome.tif', '.czi', '.lif',
                     '.nd2', '.tif', '.tiff', '.lsm',
-                    '.png', '.jpg', '.jpeg')
+                    '.png', '.jpg', '.jpeg', '.h5')
+
+
+def read_tiff_aszarr(input_path, **kwargs):
+    import tifffile, zarr
+    tiff_file = tifffile.TiffFile(input_path)
+    tiffzarrstore = tiff_file.aszarr()
+    array = zarr.open(tiffzarrstore,
+                      mode='r',
+                      )
+    return array
+
+def read_h5(input_path, **kwargs):
+    import h5py
+    f = h5py.File(input_path)
+    dset_name = list(f.keys())[0]
+    ds = f[dset_name]
+    array = da.from_array(ds, **kwargs)
+    return array
 
 
 def read_tiff(input_path, **kwargs):
+    if kwargs.get('skip_dask', False):
+        return read_tiff_aszarr(input_path, **kwargs)
     from bioio_tifffile.reader import Reader as reader  # pip install bioio-tifffile --no-deps
     kwargs['chunk_dims'] = 'YX'
     img = reader(input_path, **kwargs)
@@ -36,11 +56,11 @@ def read_tiff(input_path, **kwargs):
     im = img.get_image_dask_data(dimensions_to_read)
     return im
 
-
 @delayed
 def read_single_image_asarray(input_path,
                               use_bioformats_readers = False,
-                              **kwargs):
+                              **kwargs
+                              ):
     """
     Reads a single image file with Dask and returns the array.
 
@@ -60,15 +80,21 @@ def read_single_image_asarray(input_path,
     logger = get_logger(__name__)
     reader_kwargs = {}
     dimensions = 'TCZYX'
+
     if input_path.endswith('.zarr'):
         reader = Pyramid().from_ngff
     else:
-        if use_bioformats_readers:
+        if input_path.endswith('.h5'):
+            reader = read_h5
+            if 'chunks' in kwargs:
+                reader_kwargs['chunks'] = kwargs['chunks']
+        elif use_bioformats_readers:
             from bioio_bioformats.reader import Reader as reader
         elif input_path.endswith(('ome.tiff', 'ome.tif')):
             from bioio_ome_tiff.reader import Reader as reader # pip install bioio-ome-tiff --no-deps
         elif input_path.endswith(('.tif', '.tiff', '.lsm')):
             reader = read_tiff
+            reader_kwargs.update(**kwargs)
         elif input_path.endswith('.czi'):
             from eubi_bridge.base.czi_reader import read_czi as reader
             reader_kwargs = dict(
@@ -97,7 +123,9 @@ def read_single_image_asarray(input_path,
         logger.info(f"Reading with {reader.__qualname__}.")
     im = reader(input_path, **reader_kwargs)
     if isinstance(im, da.Array):
-        assert im.ndim == 5
+        # assert im.ndim == 5
+        return im
+    if isinstance(im, zarr.Array):
         return im
     if hasattr(im, 'set_scene'):
         im.set_scene(kwargs.get('scene_index', 0))

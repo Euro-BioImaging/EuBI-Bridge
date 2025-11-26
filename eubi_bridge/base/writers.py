@@ -1,5 +1,5 @@
 import copy
-import os, itertools, tempfile, shutil, threading
+import os, itertools, tempfile, shutil, threading, asyncio
 import zarr, dask, numcodecs
 from zarr import codecs
 from zarr.storage import LocalStore
@@ -9,6 +9,7 @@ import dask.array as da
 import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Dict, Union, Any, Tuple, Optional
+from distributed import get_client
 ### internal imports
 from eubi_bridge.ngff.multiscales import NGFFMetadataHandler  #Multimeta
 from eubi_bridge.utils.convenience import (
@@ -317,11 +318,15 @@ def write_with_zarrpy(arr: da.Array,
 
     return res
 
-def write_chunk_with_tensorstore(chunk: np.ndarray, ts_store, block_info: Dict) -> None:
+def write_chunk_with_tensorstore(chunk: np.ndarray,
+                                 ts_store,
+                                 block_info: Dict
+                                 ) -> None:
     if hasattr(chunk, "get"):
         chunk = chunk.get()  # Convert CuPy -> NumPy
-    ts_store[tuple(slice(*b) for b in block_info[0]["array-location"])] = chunk
-
+    fut = ts_store[tuple(slice(*b) for b in block_info[0]["array-location"])].write(chunk)
+    fut.result()
+    return
 
 def write_with_tensorstore(
     arr: da.Array,
@@ -367,10 +372,10 @@ def write_with_tensorstore(
 
     shards = tuple(int(size) for size in np.ravel(shards))
 
-    # Rechunk if needed
+#    Rechunk if needed
     if zarr_format == 2:
         if not np.equal(arr.chunksize, chunks).all():
-            arr = arr.rechunk(chunks, method=rechunk_method)
+            arr = arr.rechunk(shards, method=rechunk_method)
     else:  # zarr_format == 3
         if shards is not None and not np.equal(arr.chunksize, shards).all():
             arr = arr.rechunk(shards, method=rechunk_method)
@@ -432,9 +437,21 @@ def write_with_tensorstore(
     }
 
     ts_store = ts.open(zarr_spec).result()
-    return arr.map_blocks(write_chunk_with_tensorstore, ts_store=ts_store, dtype=dtype)
+
+    return arr.map_blocks(write_chunk_with_tensorstore,
+                          ts_store=ts_store,
+                          dtype=dtype)
 
 
+def compute_blocks(arr, block_shape):
+    """Return slices defining large blocks over the array."""
+    slices_per_dim = [range(0, s, b) for
+                      s, b in zip(arr.shape, block_shape)]
+    blocks = []
+    for starts in itertools.product(*slices_per_dim):
+        block_slices = tuple(slice(start, min(start+b, dim)) for start, b, dim in zip(starts, block_shape, arr.shape))
+        blocks.append(block_slices)
+    return blocks
 
 @delayed
 def count_threads():
@@ -498,8 +515,11 @@ def store_arrays(arrays: Dict[str, Dict[str, da.Array]], # flatarrays
     target_chunk_mb = kwargs.get('target_chunk_mb', 1)
 
     writer_func = write_with_tensorstore if use_tensorstore else write_with_zarrpy
-
-    zarr.group(output_path, overwrite=overwrite, zarr_version = zarr_format)
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+    zarr.group(output_path, 
+               overwrite=overwrite, 
+               zarr_version = zarr_format)
     results = {}
 
     for key, arr in arrays.items():
@@ -530,18 +550,18 @@ def store_arrays(arrays: Dict[str, Dict[str, da.Array]], # flatarrays
         chunks = np.minimum(flatchunks or arr.chunksize, arr.shape).tolist()
         chunks = tuple([int(item) for item in chunks])
 
-        if zarr_format == 3:
-            if output_shards is not None:
-                shards = output_shards[key]
-            elif output_shard_coefficients is not None:
-                flatshardcoefs = output_shard_coefficients[key]
-                shards = np.multiply(chunks, flatshardcoefs)
-            else:
-                shards = chunks
+        # if zarr_format == 3:
+        if output_shards is not None:
+            shards = output_shards[key]
+        elif output_shard_coefficients is not None:
+            flatshardcoefs = output_shard_coefficients[key]
+            shards = np.multiply(chunks, flatshardcoefs)
+        else:
+            shards = chunks
 
             shards = tuple([int(item) for item in shards])
-        else:
-            shards = None
+        # else:
+        #     shards = None
 
         dirpath = os.path.dirname(key)
         arrpath = os.path.basename(key)
@@ -549,7 +569,11 @@ def store_arrays(arrays: Dict[str, Dict[str, da.Array]], # flatarrays
         if is_zarr_group(dirpath):
             gr = zarr.open_group(dirpath, mode='a')
         else:
-            gr = zarr.group(dirpath, overwrite=overwrite, zarr_version = zarr_format)
+            if not os.path.exists(dirpath):
+                os.makedirs(dirpath)
+            gr = zarr.group(dirpath, 
+                            overwrite=overwrite, 
+                            zarr_version = zarr_format)
 
         version = '0.5' if zarr_format == 3 else '0.4'
 
@@ -595,15 +619,16 @@ def store_arrays(arrays: Dict[str, Dict[str, da.Array]], # flatarrays
                                    )
 
     if compute:
-        try:
+        # try:
             # dask.compute(list(results.values()), retries = 6)
-            dask.compute(
-                list(results.values()),
-                retries=6,
-            )
-        except Exception as e:
-            # print(e)
-            pass
+
+        dask.compute(
+            list(results.values()),
+            retries=6,
+        )
+        # except Exception as e:
+        #     # print(e)
+        #     pass
     else:
         return results
     return results
