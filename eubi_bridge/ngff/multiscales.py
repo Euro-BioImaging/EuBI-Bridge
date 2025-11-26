@@ -5,7 +5,10 @@ from dataclasses import dataclass
 import copy
 import numpy as np
 import dask.array as da
-from eubi_bridge.base.scale import Downscaler
+from eubi_bridge.ngff import defaults
+from eubi_bridge.core.scale import Downscaler
+from eubi_bridge.utils.convenience import make_json_safe
+from natsort import natsorted
 
 
 def is_zarr_group(path: (str, Path)
@@ -275,13 +278,14 @@ class NGFFMetadataHandler:
             raise RuntimeError("No zarr group connected. Call connect_to_group first.")
 
         if self.metadata.get('version', '') == '0.5':
-            self.zarr_group.attrs['ome'] = self.metadata
+            self.zarr_group.attrs['ome'] = make_json_safe(self.metadata)
         else:
-            self.zarr_group.attrs['multiscales'] = self.metadata['multiscales']
+            metadata = make_json_safe(self.metadata)
+            self.zarr_group.attrs['multiscales'] = metadata['multiscales']
             if 'omero' in self.metadata:
-                self.zarr_group.attrs['omero'] = self.metadata['omero']
+                self.zarr_group.attrs['omero'] = metadata['omero']
             if '_creator' in self.metadata:
-                self.zarr_group.attrs['_creator'] = self.metadata['_creator']
+                self.zarr_group.attrs['_creator'] = metadata['_creator']
 
         self._pending_changes = False
 
@@ -306,7 +310,7 @@ class NGFFMetadataHandler:
         self.metadata['omero'] = omero_meta['omero']
         self._pending_changes = True
 
-    def add_channel(self,
+    def add_channel(self, ### TODO: NEED TO BE UPDATED!!!
                     color: str = "808080",
                     label: str = None,
                     dtype=None,
@@ -378,6 +382,8 @@ class NGFFMetadataHandler:
 
         if units is None:
             units = [None] * len(axis_order)
+        else:
+            units = list(units)
         if len(axis_order) - len(units) == 1:
             if 'c' in axis_order:
                 idx = axis_order.index('c')
@@ -450,6 +456,10 @@ class NGFFMetadataHandler:
     def get_resolution_paths(self) -> List[str]:
         """Get paths to all resolution levels."""
         return [ds['path'] for ds in self.multiscales['datasets']]
+
+    @property
+    def tag(self):
+        return self.multiscales['name']
 
     @property
     def _axis_names(self) -> List[str]:
@@ -557,8 +567,19 @@ class NGFFMetadataHandler:
             pth = self.resolution_paths[0]
         if scale == 'auto':
             pth = self.scales[pth]
-        idx = self.resolution_paths.index(pth)
-        self.multiscales['datasets'][idx]['coordinateTransformations'][0]['scale'] = scale
+        if pth in self.resolution_paths:
+            idx = self.resolution_paths.index(pth)
+            self.multiscales['datasets'][idx]['coordinateTransformations'][0]['scale'] = scale
+        else:
+            d = {
+                'path': pth,
+                'coordinateTransformations': [
+                    {
+                        'scale': scale,
+                    }
+                ]
+            }
+            self.multiscales['datasets'].append(d)
         self._pending_changes = True
         # if hard:
         #     self.gr.attrs['multiscales'] = self.multimeta
@@ -682,13 +703,187 @@ class Pyramid:
             self.from_ngff(gr)
 
     def __repr__(self):
-        return f"NGFF with {self.nlayers} layers."
+        try:
+            return f"NGFF with {self.nlayers} layers."
+        except:
+            return f"NGFF."
 
     def from_ngff(self, gr):
         self.meta = NGFFMetadataHandler()
         self.meta.connect_to_group(gr)
         self.meta.read_metadata()
         self.gr = self.meta.zarr_group
+        return self
+
+    @property
+    def dtype(self):
+        return self.base_array.dtype
+
+    @property
+    def shape(self):
+        return self.base_array.shape
+
+    def from_array(self,
+                   array: (np.ndarray, da.Array, zarr.Array),
+                   axis_order: str = None,
+                   unit_list: List[str] = None,
+                   scale: List[float] = None,
+                   version: str = "0.4",
+                   name: str = "Series 0",
+                   ):
+        """Take an numpy or dask array and create a pyramid from it. No need to write as NGFF."""
+        if not isinstance(array, da.Array):
+            array = da.from_array(array)
+        ndim = array.ndim
+        if axis_order is None:
+            axes = defaults.axis_order[:ndim]
+        else:
+            axes = axis_order[:ndim]
+        if unit_list is None:
+            unit_list = [defaults.unit_map[ax] for ax in axes]
+        else:
+            unit_list = unit_list[:ndim]
+        if scale is None:
+            scale = [defaults.scale_map[ax] for ax in axes]
+        else:
+            scale = scale[:ndim]
+        # self.meta = NGFFMetadataHandler()
+        self._dask_layers = {'0': array}
+        # omerometa = copy.deepcopy(self.meta.metadata['omero'])
+        self.meta = NGFFMetadataHandler()
+        self.meta.create_new(version=version, name=name)
+        self.meta.parse_axes(axis_order, unit_list)
+        self.meta.set_scale(pth = '0', scale = scale)
+        # self.meta.metadata['omero'] = omerometa
+        return self
+
+    def to5D(self):
+        arrs = self.dask_arrays
+        axes = self.axes
+        channels = copy.copy(self.meta.channels)
+        # print(f"channels copied: {channels}")
+        axes_to_add = [ax for ax in 'tczyx' if ax not in axes]
+        if len(axes_to_add) == 0:
+            return self
+        new_units = []
+        for ax in 'tczyx':
+            if ax in axes:
+                new_units.append(self.meta.unit_dict[ax])
+            else:
+                new_units.append(defaults.unit_map[ax])
+        arrlist = []
+        scalelist = []
+        for key in natsorted(arrs.keys()):
+            arr = arrs[key]
+            new_shape = []
+            new_scale = []
+            for ax in 'tczyx':
+                if ax in axes:
+                    new_shape.append(arr.shape[axes.index(ax)])
+                    new_scale.append(self.meta.scaledict[key][ax])
+                else:
+                    new_shape.append(1)
+                    new_scale.append(defaults.scale_map[ax])
+            arr = arr.reshape(new_shape)
+            arrlist.append(arr)
+            scalelist.append(new_scale)
+        pyr = Pyramid().from_arrays(arrays = arrlist,
+                                    axis_order = 'tczyx',
+                                    unit_list = new_units,
+                                    scales = scalelist,
+                                    version = self.meta.version,
+                                    name = self.meta.tag
+                                    )
+        pyr.meta.metadata['omero']['channels'] = channels
+        pyr.meta.zarr_group = self.meta.zarr_group
+        return pyr
+
+    def squeeze(self):
+        arrays = self.dask_arrays
+        basearr = self.base_array
+        if all(n > 1 for n in basearr.shape):
+            return self
+        if isinstance(basearr, zarr.Array):
+            logger.warn(f"Zarr arrays are not supported for squeeze operation.\n"
+                        f"Zarr array for the path {self.series_path} is being converted to dask array.")
+            array = da.from_array(self.array)
+        else:
+            array = basearr
+        shapedict = dict(zip(self.axes, self.shape))
+        singlet_axes = [ax for ax, size in shapedict.items() if size == 1]
+        scaledict = self.meta.scaledict
+        unitdict = self.meta.unit_dict
+        newaxes = ''.join(ax for ax in self.axes if ax not in singlet_axes)
+        newunits, newscales = [], []
+        assert (len(scaledict) - len(unitdict)) <= 1
+        for ax in self.axes:
+            if ax not in singlet_axes:
+                if ax in unitdict:
+                    newunits.append(unitdict[ax])
+        for level in natsorted(scaledict.keys()):
+            scale_level_dict = scaledict[level]
+            scale_level = []
+            for ax in scale_level_dict:
+                if ax not in singlet_axes:
+                    scale_level.append(scale_level_dict[ax])
+            newscales.append(scale_level)
+        singlet_indices = tuple([self.axes.index(ax) for ax in singlet_axes])
+        arrays = []
+        for key in natsorted(self.dask_arrays.keys()):
+            arr = self.dask_arrays[key]
+            newarray = da.squeeze(arr, axis = singlet_indices)
+            arrays.append(newarray)
+        # print(f"newaxes: {newaxes}")
+        # print(f"newunits: {newunits}")
+        # print(f"newscales: {newscales}")
+        squeezed = Pyramid().from_arrays(arrays, axis_order = newaxes, unit_list = newunits, scales = newscales, version = self.meta.version, name = self.meta.tag)
+        return squeezed
+
+    def from_arrays(self,
+                   arrays: List[Union[np.ndarray, da.Array, zarr.Array]],
+                   axis_order: str = None,
+                   unit_list: List[str] = None,
+                   scales: List[float] = None,
+                   version: str = "0.4",
+                   name: str = "Series 0",
+                   ):
+
+        if isinstance(arrays, (np.ndarray, da.Array, zarr.Array)):
+            arrays = [arrays]
+        base_array = arrays[0]
+        ndim = base_array.ndim
+        try:
+            base_scale = scales['0']
+        except:
+            base_scale = scales[0]
+        if axis_order is None:
+            axes = defaults.axis_order[:ndim]
+        else:
+            axes = axis_order[:ndim]
+        if unit_list is None:
+            unit_list = [defaults.unit_map[ax] for ax in axes]
+        else:
+            unit_list = unit_list[:ndim]
+
+        if scales is None:
+            base_scale = [defaults.scale_map[ax] for ax in axes]
+        else:
+            base_scale = base_scale[:ndim]
+        # self.meta = NGFFMetadataHandler()
+        self._dask_layers = {'0': base_array}
+        self.meta = NGFFMetadataHandler()
+        self.meta.create_new(version=version, name=name)
+        self.meta.parse_axes(axis_order, unit_list)
+        # self.meta.set_scale(pth = '0', scale = base_scale)
+        self.meta.add_dataset(path = '0', scale = base_scale)
+        if len(arrays) > 1:
+            for i, array in enumerate(arrays[1:]):
+                if scales is None:
+                    scale = np.multiply(np.divide(base_array.shape, array.shape), base_scale).tolist()
+                else:
+                    scale = scales[i+1]
+                self.meta.add_dataset(path = f'{i+1}', scale = scale)
+                self._dask_layers[f'{i+1}'] = array
         return self
 
     def to_ngff(self,
@@ -715,10 +910,29 @@ class Pyramid:
 
     @property
     def layers(self):
-        return {path: self.gr[path] for path in self.gr.array_keys()}
+        if self.gr is None:
+            return self._dask_layers
+        # return {path: self.gr[path] for path in self.gr.array_keys()}
+        return {path: self.gr[path] for path in self.meta.resolution_paths}
+
+    @property
+    def scale_factor_dict(self):
+        shapes = [self.layers[key].shape for key in self.meta.resolution_paths]
+        scale_factors = np.divide(shapes[0], shapes)
+        scale_factor_list = scale_factors.tolist()
+        scale_factor_list = [dict(zip(self.meta.axis_order, scale))
+                             for scale in scale_factor_list]
+        scale_factordict = {pth: scale
+                            for pth, scale in
+                            zip(self.meta.resolution_paths, scale_factor_list)}
+        return scale_factordict
+
 
     def get_dask_data(self):
-        return {str(path): da.from_zarr(self.layers[path]) for path in self.gr.array_keys()}
+        if self.gr is None:
+            return self._dask_layers
+        # return {str(path): da.from_zarr(self.layers[path]) for path in self.gr.array_keys()}
+        return {str(path): da.from_zarr(self.layers[path]) for path in self.meta.resolution_paths}
 
     @property
     def dask_arrays(self):
@@ -728,22 +942,27 @@ class Pyramid:
     def base_array(self):
         return self.dask_arrays['0']
 
-    # def shrink(self,
-    #            hard=False
-    #            ):
-    #     """
-    #     Delete all arrays except for the base array (zeroth array)
-    #     :return:
-    #     """
-    #     for key in self.meta.resolution_paths:
-    #         if key == '0':
-    #             continue
-    #         self.meta.del_dataset(key)
-    #         if hard:
-    #             del self.gr[key]
-    #     if hard:
-    #         self.meta.to_ngff(self.gr)
-    #     return
+    def shrink(self,
+                paths: List[str] = ['0']
+                ):
+        arrays = [self.dask_arrays[path] for path in paths]
+        axis_order = self.meta.axis_order
+        unit_list = self.meta.unit_list
+        scales = [self.meta.scales[path] for path in paths]
+        new_pyr = Pyramid().from_arrays(arrays, axis_order, unit_list, scales)
+        new_pyr.meta.metadata['omero'] = self.meta.metadata['omero']
+        return new_pyr
+
+    def copy_layers(self,
+                    paths: List[str] = ['0']
+                    ):
+        arrays = [self.dask_arrays[path].copy() for path in paths]
+        axis_order = self.meta.axis_order
+        unit_list = self.meta.unit_list
+        scales = [self.meta.scales[path] for path in paths]
+        new_pyr = Pyramid().from_arrays(arrays, axis_order, unit_list, scales)
+        new_pyr.meta.metadata['omero'] = self.meta.metadata['omero']
+        return new_pyr
 
     def update_scales(self,
                       **kwargs
@@ -795,10 +1014,6 @@ class Pyramid:
                                   # hard=hard
                                   )
 
-    @property
-    def tag(self):
-        return self.multimeta[0]['name']
-
     def retag(self,
               new_tag: str,
               hard=False
@@ -808,7 +1023,47 @@ class Pyramid:
             self.meta.save_changes()
         return self
 
-    def update_downscaler(self,
+    def rechunk(self,
+                time_chunk = None,
+                channel_chunk = None,
+                z_chunk = None,
+                y_chunk = None,
+                x_chunk = None,
+                ):
+        """
+        Rechunks the dask arrays in the Pyramid.
+        :return: Pyramid
+        """
+        chunkdict = {'t': time_chunk,
+                  'c': channel_chunk,
+                  'z': z_chunk,
+                  'y': y_chunk,
+                  'x': x_chunk}
+        current_chunks = dict(zip(self.meta.axis_order, self.base_array.chunksize))
+        chunkdict_limited = {ax: chunkdict[ax] for ax in self.meta.axis_order}
+        assert(len(chunkdict_limited) == len(current_chunks))
+        chunks = [chunkdict_limited[ax]
+                  if chunkdict_limited[ax] is not None
+                  else current_chunks[ax]
+                  for ax in self.meta.axis_order]
+
+        new_arrays = []
+        for path in self.meta.resolution_paths:
+            dask_array = self.dask_arrays[path]
+            rechunked_array = dask_array.rechunk(chunks)
+            new_arrays.append(rechunked_array)
+        new_pyr = Pyramid().from_arrays(new_arrays,
+                                        self.meta.axis_order,
+                                        self.meta.unit_list,
+                                        self.meta.scales,
+                                        version = self.meta.version,
+                                        name = "Rechunked"
+                                        )
+        new_pyr.meta.metadata['omero'] = self.meta.metadata['omero']
+        return new_pyr
+
+
+    async def update_downscaler(self,
                           scale_factor=None,
                           n_layers=1,
                           downscale_method='simple',
@@ -817,7 +1072,7 @@ class Pyramid:
                           ):
         min_dimension_size = kwargs.get('min_dimension_size', 64)
 
-        darr = self.base_array
+        darr = self.layers['0']
         shape = darr.shape
         if n_layers in (None, 'default', 'auto'):
             n_layers = calculate_n_layers(shape, scale_factor, min_dimension_size)
@@ -832,4 +1087,22 @@ class Pyramid:
                                      downscale_method=downscale_method,
                                      backend=backend
                                      )
+        await self.downscaler.update()
         return self
+
+    def get_downscaled_pyramid(self):
+        if not hasattr(self, 'downscaler'):
+            asyncio.run(self.update_downscaler())
+        arrays = self.downscaler._downscaled_arrays
+        scales = self.downscaler.dm.scales
+        unit_list = self.meta.unit_list
+        axis_order = self.meta.axis_order
+        name = self.meta.multiscales.get('name', 'Series_0')
+        new_pyr = Pyramid().from_arrays(arrays=arrays,
+                                     axis_order=axis_order,
+                                     unit_list=unit_list,
+                                     scales=scales,
+                                     name=name
+                                     )
+        new_pyr.meta.metadata['omero'] = self.meta.metadata['omero']
+        return new_pyr

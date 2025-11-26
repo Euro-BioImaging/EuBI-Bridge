@@ -2,7 +2,7 @@ import numpy as np
 import warnings
 import dask.array as da
 import os
-from typing import Optional, Dict, Any, Tuple, Union
+from typing import Optional, Dict, Any, Tuple, Union, Iterable
 import warnings
 import dask.array as da
 
@@ -15,7 +15,7 @@ def read_czi(
     view_index: int = 0,
     phase_index: int = 0,
     illumination_index: int = 0,
-    scene_index: int = 0,
+    scene_index: Union[int, Iterable[int]] = 0,
     rotation_index: int = 0,
     mosaic_tile_index: int = 0,
     sample_index: int = 0
@@ -56,15 +56,6 @@ def read_czi(
     except Exception as e:
         raise RuntimeError(f"Failed to read CZI file: {str(e)}") from e
 
-    # Handle scene selection
-    if scene_index != 0:
-        if not 0 <= scene_index < len(img.scenes):
-            raise ValueError(
-                f"Scene index {scene_index} is out of range. "
-                f"Must be between 0 and {len(img.scenes) - 1}."
-            )
-        img.set_scene(scene_index)
-
     # Process non-standard dimensions
     nonstandard_dims = [
         dim.upper() for dim in img.standard_metadata.dimensions_present
@@ -104,14 +95,52 @@ def read_czi(
         for dim in nonstandard_dims
         if dim in czi_dim_map
     }
-
-    # Read the image data
-    try:
-        return img.get_image_dask_data(dimension_order_out='TCZYX', **index_map)
-    except Exception as e:
-        raise RuntimeError(f"Failed to read image data: {str(e)}") from e
-
-
+    class MockImg:
+        def __init__(self, img, path, index_map):
+            self.img = img
+            self.path = path
+            self.index_map = index_map
+            self.set_scene(0)
+            self.set_tile(0)
+            self._set_series_path()
+        @property
+        def n_scenes(self):
+            return len(self.img.scenes)
+        @property
+        def n_tiles(self):
+            if hasattr(self.img.dims, 'M'):
+                return self.img.dims.M
+            elif hasattr(self.img._dims, 'M'):
+                return self.img._dims.M
+            else:
+                return 1
+        @property
+        def scenes(self):
+            return self.img.scenes
+        def _set_series_path(self, add_tile_index = False):
+            # self.series_path = os.path.splitext(self.path)[0] + f'_{self.series}' + os.path.splitext(self.path)[1]
+            if add_tile_index:
+                tile_index = self.index_map.get('M', 0)
+                self.series_path = self.path + f'_{self.series}' + f'_tile{self.tile}'
+            else:
+                self.series_path = self.path + f'_{self.series}'
+        def get_image_dask_data(self, *args, **kwargs):
+            try:
+                return self.img.get_image_dask_data(dimension_order_out='TCZYX',
+                                                    **self.index_map)
+            except Exception as e:
+                raise RuntimeError(f"Failed to read image data: {str(e)}") from e
+        def set_scene(self, scene_index: int):
+            self.index_map['S'] = scene_index
+            self.series = scene_index
+            self.img.set_scene(scene_index)
+            self._set_series_path()
+        def set_tile(self, mosaic_tile_index: int):
+            self.index_map['M'] = mosaic_tile_index
+            self.tile = mosaic_tile_index
+            self._set_series_path()
+    mock = MockImg(img, input_path, index_map)
+    return mock
 
 
 

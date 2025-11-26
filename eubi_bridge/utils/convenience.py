@@ -1,7 +1,8 @@
-import os, json, glob, time
+import os, json, glob, time, math
 import warnings
 
 import numpy as np, pandas as pd
+
 try:
     import cupy as cp
     cupy_available = True
@@ -24,6 +25,9 @@ from typing import (
     List,
     Optional
 )
+
+from eubi_bridge.utils.logging_config import get_logger
+logger = get_logger(__name__)
 
 def asstr(s):
     if isinstance(s, str):
@@ -93,7 +97,7 @@ def index_nth_dimension(array,
         dimensions = [dimensions]
     if intervals is None or np.isscalar(intervals):
         intervals = np.repeat(intervals, len(dimensions))
-    assert len(intervals) == len(dimensions) ### KALDIM
+    assert len(intervals) == len(dimensions)
     interval_dict = {item: interval for item, interval in zip(dimensions, intervals)}
     shape = array.shape
     slcs = []
@@ -319,69 +323,17 @@ def sensitive_glob(pattern: str,
     return results
 
 
-def take_filepaths_from_csv(input_path: str,
-                            includes: bool = None,
-                            excludes: bool = None
-                            ) -> list:
-    """Take filepaths from a CSV file.
-
-    Supports two formats:
-    1. With header row containing 'filepath' column:
-       filepath,other_column
-       /path/to/file.tif,value
-
-    2. Without header (takes first column):
-       /path/to/file.tif
-       /another/path.tif
-    """
-    import csv
-
-    with open(input_path, 'r') as f:
-        # Try to read with headers first
-        start_pos = f.tell()
-        try:
-            sniffer = csv.Sniffer()
-            has_header = sniffer.has_header(f.read(1024))
-            f.seek(start_pos)
-
-            if has_header:
-                reader = csv.DictReader(f)
-                if 'filepath' not in reader.fieldnames:
-                    raise ValueError(f"CSV has headers but no 'filepath' column. Found columns: {reader.fieldnames}")
-                paths = [row['filepath'] for row in reader]
-            else:
-                # No headers, read first column
-                reader = csv.reader(f)
-                paths = [row[0] for row in reader if row]  # Skip empty lines
-
-        except csv.Error as e:
-            # Fallback to reading as simple text file if CSV parsing fails
-            f.seek(start_pos)
-            paths = [line.strip() for line in f if line.strip()]  # Read non-empty lines
-
-    paths = list(filter(lambda path: (includes in path if includes is not None else True)
-                                     and
-                                     (excludes not in path if excludes is not None else True),
-                        paths
-                        )
-                 )
-    paths = list(filter(lambda path: not path.endswith('zarr.json'), paths))
-    if len(paths) == 0:
-        raise ValueError(f"No valid paths found in {input_path}")
-    return sorted(paths)
-
-
-def take_filepaths(input_path: str,
-                   includes: bool = None,
-                   excludes: bool = None
+def take_filepaths_from_path(input_path: str,
+                   includes: (str, tuple, list) = None,
+                   excludes: (str, tuple, list) = None,
+                   **kwargs # Placeholder
                    ):
 
-    if os.path.isfile(input_path) and input_path.endswith('.csv'):
-        return take_filepaths_from_csv(input_path, includes, excludes)
-    elif os.path.isfile(input_path) or input_path.endswith('.zarr'):
-        return [input_path]
-
     original_input_path = input_path
+    if isinstance(includes, str):
+        includes = includes.split(',')
+    if isinstance(excludes, str):
+        excludes = excludes.split(',')
 
     if os.path.isfile(input_path) or input_path.endswith('.zarr'):
         dirname = os.path.dirname(input_path)
@@ -399,19 +351,112 @@ def take_filepaths(input_path: str,
         input_path_ = input_path
     paths = sensitive_glob(input_path_, recursive=False, sensitive_to='.zarr')
 
-    paths = list(filter(lambda path: (includes in path if includes is not None else True)
-                                     and
-                                     (excludes not in path if excludes is not None else True),
-                        paths
-                        )
-                 )
+    paths = list(filter(
+        lambda path: (
+                (
+                    any(inc in path for inc in includes)
+                    if isinstance(includes, (tuple, list))
+                    else (includes in path if includes is not None else True)
+                )
+                and
+                (
+                    not any(exc in path for exc in excludes)
+                    if isinstance(excludes, (tuple, list))
+                    else (excludes not in path if excludes is not None else True)
+                )
+        ),
+        paths
+    ))
+
     paths = list(filter(lambda path: not path.endswith('zarr.json'), paths))
     if len(paths) == 0:
         raise ValueError(f"No valid paths found for {original_input_path}")
     return sorted(paths)
 
-import numpy as np
-from typing import Tuple
+
+TABLE_FORMATS = (".csv", ".tsv", ".txt", ".xls", ".xlsx")
+
+def take_filepaths(
+        input_path: Union[str, os.PathLike],
+        **global_kwargs
+        ):
+
+    if 'includes' in global_kwargs:
+        if global_kwargs['includes'] is None:
+            pass
+        elif isinstance(global_kwargs['includes'], (tuple, list)):
+            global_kwargs['includes'] = tuple([str(member) for member in global_kwargs['includes']])
+        elif isinstance(global_kwargs['includes'], str):
+            global_kwargs['includes'] = global_kwargs['includes'].split(',')
+        elif np.isscalar(global_kwargs['includes']):
+            global_kwargs['includes'] = str(global_kwargs['includes'])
+        else:
+            raise TypeError(f"Unknown type: {type(global_kwargs['includes'])}")
+
+    if 'excludes' in global_kwargs:
+        if global_kwargs['excludes'] is None:
+            pass
+        elif isinstance(global_kwargs['excludes'], (tuple, list)):
+            global_kwargs['excludes'] = tuple([str(member) for member in global_kwargs['excludes']])
+        elif isinstance(global_kwargs['excludes'], str):
+            global_kwargs['excludes'] = global_kwargs['excludes'].split(',')
+        elif np.isscalar(global_kwargs['excludes']):
+            global_kwargs['excludes'] = str(global_kwargs['excludes'])
+        else:
+            raise TypeError(f"Unknown type: {type(global_kwargs['excludes'])}")
+
+    if input_path.endswith(TABLE_FORMATS):
+        concatenation_axes = global_kwargs.get('concatenation_axes', None)
+        if concatenation_axes is not None:
+            logger.error(
+                "Specifying tables as input is only supported for one-to-one conversions at the moment. With aggregative conversions, specify a directory instead.")
+            raise Exception(
+                "Specifying tables as input is only supported for one-to-one conversions at the moment. With aggregative conversions, specify a directory instead.")
+
+        logger.info(f"Loading conversion table from {input_path}")
+        if input_path.endswith((".csv", ".tsv", ".txt")):
+            df = pd.read_csv(input_path)
+        elif input_path.endswith((".xls", ".xlsx")):
+            df = pd.read_excel(input_path)
+        else:
+            raise ValueError("Unsupported file format. Use .csv or .xlsx")
+    elif os.path.isdir(input_path) or os.path.isfile(input_path) or '*' in input_path:
+        filepaths = take_filepaths_from_path(input_path, **global_kwargs)
+        df = pd.DataFrame(filepaths, columns=["input_path"])
+    else:
+        raise Exception(f"Invalid input path: {input_path}")
+
+    # Normalize input column name
+    if "filepath" in df.columns and "input_path" not in df.columns:
+        df.rename(columns={"filepath": "input_path"}, inplace=True)
+
+    if "input_path" not in df.columns:
+        raise ValueError("Table must include an 'input_path' or 'filepath' column.")
+    def should_drop(row):
+        inp = row["input_path"]
+        includes = global_kwargs.get('includes', [None])
+        excludes = global_kwargs.get('excludes', [None])
+        if not isinstance(includes, (tuple,list)):
+            includes = [includes]
+        if not isinstance(excludes, (tuple,list)):
+            excludes = [excludes]
+        mask1 = any([inc in inp if inc is not None else True for inc in includes])
+        mask2 = any([exc not in inp if exc is not None else True for exc in excludes])
+        return mask1 and mask2
+
+    mask = df.apply(should_drop, axis=1)
+    df = df[mask]
+    # --- Apply global defaults for any missing parameters ---
+
+    for k, v in global_kwargs.items():
+        if k not in df.columns:
+            if hasattr(v, '__len__'):
+                df[k] = [v for _ in range(len(df))]
+            else:
+                df[k] = v
+
+    return df
+
 
 def autocompute_chunk_shape(
     array_shape: Tuple[int, ...],
@@ -456,3 +501,368 @@ def autocompute_chunk_shape(
 
     return tuple(chunk_shape)
 
+
+
+# def autocompute_chunk_shape1(
+#         array_shape: Tuple[int, ...],
+#         axes: str,
+#         target_chunk_mb: float = 1.0,
+#         dtype: type = np.uint16,
+# ) -> Tuple[int, ...]:
+#     """
+#     Compute optimal chunk shape for an array.
+#
+#     For spatial dimensions (x, y, z), aims for cubic/isotropic chunks.
+#     Non-spatial dimensions (t, c, etc.) remain at size 1.
+#
+#     Args:
+#         array_shape: Shape of the array to chunk
+#         axes: String describing axes (e.g., 'tzyx')
+#         target_chunk_mb: Target chunk size in megabytes
+#         dtype: Data type of array elements
+#
+#     Returns:
+#         Tuple representing the chunk shape
+#     """
+#     if len(array_shape) != len(axes):
+#         raise ValueError("Length of array_shape must match length of axes.")
+#
+#     # Calculate budget
+#     chunk_bytes = int(target_chunk_mb * 1024 * 1024)
+#     element_size = np.dtype(dtype).itemsize
+#     max_elements = chunk_bytes // element_size
+#
+#     # Initialize chunk shape (all non-spatial stay at 1)
+#     chunk_shape = [1] * len(array_shape)
+#
+#     # Identify spatial axes only
+#     spatial_indices = [i for i, ax in enumerate(axes) if ax in 'xyz']
+#
+#     if not spatial_indices:
+#         return tuple(chunk_shape)
+#
+#     # Start with isotropic cube
+#     n_spatial = len(spatial_indices)
+#     side_length = int(max_elements ** (1.0 / n_spatial))
+#
+#     for i in spatial_indices:
+#         chunk_shape[i] = min(side_length, array_shape[i])
+#
+#     # Distribute remaining budget to maintain cubic shape
+#     # Repeatedly expand the smallest dimension by the maximum safe amount
+#     while True:
+#         current_elements = np.prod([chunk_shape[i] for i in spatial_indices])
+#         remaining_budget = max_elements - current_elements
+#
+#         if remaining_budget <= 0:
+#             break
+#
+#         # Find spatial dimensions that can still grow
+#         growable = [(chunk_shape[i], i) for i in spatial_indices
+#                     if chunk_shape[i] < array_shape[i]]
+#
+#         if not growable:
+#             break
+#
+#         # Sort by current size to find smallest dimension
+#         growable.sort()
+#         smallest_size, smallest_idx = growable[0]
+#
+#         # Calculate how much we can grow this dimension
+#         other_elements = np.prod([chunk_shape[j] for j in spatial_indices
+#                                   if j != smallest_idx])
+#
+#         # Maximum size this dimension can be given budget
+#         max_size_budget = max_elements // other_elements
+#
+#         # Maximum size given array constraint
+#         max_size_array = array_shape[smallest_idx]
+#
+#         # Grow to the minimum of these constraints
+#         new_size = min(max_size_budget, max_size_array)
+#
+#         if new_size <= chunk_shape[smallest_idx]:
+#             break  # Can't grow any further
+#
+#         chunk_shape[smallest_idx] = new_size
+#
+#     return tuple(chunk_shape)
+
+
+# Example usage and tests
+# if __name__ == "__main__":
+#     # Test 1: 3D
+#     shape1 = (2000, 2000, 1, 100, 1)
+#     axes1 = "xyczt"
+#
+#     for dtype in ['uint8', 'uint16']:
+#         result1 = autocompute_chunk_shape(shape1, axes1, target_chunk_mb=1.0, dtype=dtype)
+#         size1_mb = np.prod(result1) * np.dtype(dtype).itemsize / 1024 / 1024
+#         print(f"3D array, axes {axes1}, shape {shape1}, dtype {dtype}, chunk shape {result1}")
+#         print(f"  Elements: {np.prod(result1):,}, Size: {size1_mb:.2f} MB\n")
+#
+#     # Test 2: 2D
+#     shape2 = (2000, 2000, 1, 1, 1)
+#     axes2 = "xyczt"
+#
+#     for dtype in ['uint8', 'uint16']:
+#         result2 = autocompute_chunk_shape(shape2, axes2, target_chunk_mb=1.0, dtype=dtype)
+#         size2_mb = np.prod(result2) * np.dtype(dtype).itemsize / 1024 / 1024
+#         print(f"2D array, axes {axes2}, shape {shape2} dtype {dtype}, chunk shape {result2}")
+#         print(f"  Elements: {np.prod(result2):,}, Size: {size2_mb:.2f} MB\n")
+#
+#     # Test 3: 3D
+#     shape3 = (2000, 2000, 3, 2000, 10)
+#     axes3 = "xyczt"
+#
+#     for dtype in ['uint8', 'uint16']:
+#         result3 = autocompute_chunk_shape(shape3, axes3, target_chunk_mb=1.0, dtype = dtype)
+#         size3_mb = np.prod(result3) * np.dtype(dtype).itemsize / 1024 / 1024
+#         print(f"\n5D array, axes {axes3}, shape {shape3}, dtype {dtype}, chunk shape {result3}")
+#         print(f"  Elements: {np.prod(result3):,}, Size: {size3_mb:.2f} MB\n")
+
+
+def get_chunk_shape(arr):
+    if hasattr(arr, 'chunk_layout'):
+        chunks = arr.chunk_layout.read_chunk.shape
+    elif hasattr(arr, 'chunksize'):
+        chunks = arr.chunksize
+    elif hasattr(arr, 'chunks'):
+        chunks = arr.chunks
+    else:
+        logger.warning("No chunks given. Using array shape as chunks.")
+        chunks = arr.shape
+    return chunks
+
+def parse_memory(gb_string):
+    """
+    Convert a string representing GB (e.g., '5GB', '1.2GB') to megabytes.
+    """
+    if isinstance(gb_string, int) or gb_string.isnumeric():
+        ### assume that it is already in MB
+        return int(gb_string)
+    if not gb_string.endswith('GB'):
+        ### assume that it is already in MB
+        return int(gb_string)
+
+    # Remove any whitespace and convert to uppercase
+    gb_string = gb_string.strip().upper()
+
+    # Extract the numeric part
+    number_part = gb_string[:-2]  # remove 'GB'
+
+    # Convert to float and multiply by 1024 to get MB
+    mb_value = float(number_part) * 1024
+
+    return mb_value
+
+def compute_chunk_batch(
+        chunked_array,
+        dtype: Union[np.dtype, str, type],
+        memory_limit_mb: int
+) -> Tuple[int, ...]:
+    """
+    Calculate optimal chunk batch sizes for a chunked array (zarr/dask) that maximizes
+    isotropy while staying within memory limits.
+
+    Parameters:
+    -----------
+    chunked_array : zarr.Array or dask.array.Array
+        The chunked array to calculate batch sizes for
+    dtype : np.dtype, str, or type
+        Data type of the array elements
+    memory_limit : int
+        Maximum memory limit in bytes
+
+    Returns:
+    --------
+    tuple
+        Tuple of integers specifying the chunk batch size in each dimension
+    """
+
+    memory_limit_mb = parse_memory(memory_limit_mb)
+
+    # Get array properties
+    array_shape = chunked_array.shape
+
+    # Handle different chunk formats (dask vs zarr)
+    chunk_shape = get_chunk_shape(chunked_array)
+
+    # Convert dtype to numpy dtype and get itemsize
+    np_dtype = np.dtype(dtype)
+    itemsize = np_dtype.itemsize
+
+    # Calculate memory per chunk
+    chunk_size = np.prod(chunk_shape)
+    memory_per_chunk = chunk_size * itemsize
+    memory_per_chunk_mb = memory_per_chunk / (1024 ** 2)
+
+    if memory_per_chunk_mb > memory_limit_mb:
+        logger.warn(f"For the array with shape {array_shape} and dtype {dtype},\n"
+                    f"the size of an input chunk ({memory_per_chunk_mb} megabytes) exceeds target memory ({memory_limit_mb} megabytes).\n"
+                    f"Target memory is temporarily increased to {memory_per_chunk_mb} megabytes.")
+        memory_limit_mb = memory_per_chunk_mb
+
+    # Maximum number of chunks that fit in memory
+    max_chunks = memory_limit_mb // memory_per_chunk_mb
+
+    # Calculate maximum chunks per dimension
+    max_chunks_per_dim = []
+    for i, (array_dim, chunk_dim) in enumerate(zip(array_shape, chunk_shape)):
+        max_chunks_in_dim = math.ceil(array_dim / chunk_dim)
+        max_chunks_per_dim.append(max_chunks_in_dim)
+
+    # Find the most isotropic distribution of chunks
+    ndims = len(array_shape)
+
+    # Start with the geometric mean as a target
+    target_chunks_per_dim = max_chunks ** (1.0 / ndims)
+
+    # Initialize with minimum (1 chunk per dimension)
+    # This ensures we always return multiples of chunk sizes
+    batch_chunks = [1] * ndims
+
+    # Greedily increase dimensions to approach isotropy while staying under limit
+    while True:
+        current_total = np.prod(batch_chunks)
+        if current_total >= max_chunks:
+            break
+
+        # Find dimension that's furthest from target ratio
+        ratios = [batch_chunks[i] / target_chunks_per_dim for i in range(ndims)]
+        min_ratio_idx = np.argmin(ratios)
+
+        # Check if we can increase this dimension
+        if batch_chunks[min_ratio_idx] < max_chunks_per_dim[min_ratio_idx]:
+            # Test if increasing this dimension would exceed memory limit
+            test_batch = batch_chunks.copy()
+            test_batch[min_ratio_idx] += 1
+
+            if np.prod(test_batch) <= max_chunks:
+                batch_chunks[min_ratio_idx] += 1
+            else:
+                break
+        else:
+            # This dimension is maxed out, try the next best option
+            available_dims = [i for i in range(ndims)
+                              if batch_chunks[i] < max_chunks_per_dim[i]]
+            if not available_dims:
+                break
+
+            # Among available dimensions, pick the one with smallest ratio
+            available_ratios = [(ratios[i], i) for i in available_dims]
+            _, next_best_idx = min(available_ratios)
+
+            test_batch = batch_chunks.copy()
+            test_batch[next_best_idx] += 1
+
+            if np.prod(test_batch) <= max_chunks:
+                batch_chunks[next_best_idx] += 1
+            else:
+                break
+
+    # Convert to actual sizes (multiply by chunk dimensions)
+    batch_sizes = tuple(batch_chunks[i] * chunk_shape[i] for i in range(ndims))
+
+    return batch_sizes
+
+
+def find_common_root(paths: List[Union[str, os.PathLike]]) -> str:
+    """
+    Find the common root directory from a list of paths.
+
+    Args:
+        paths: List of file or directory paths (can be strings or pathlib.Path objects)
+
+    Returns:
+        str: The common root directory path, or an empty string if no common root exists
+
+    Examples:
+        >>> find_common_root(['/a/b/c', '/a/b/d', '/a/b/c/e'])
+        '/a/b'
+        >>> find_common_root(['a/b/c', 'a/b/d', 'a/b/c/e'])
+        'a/b'
+        >>> find_common_root(['/a/b/c', 'x/y/z'])  # No common root
+        ''
+    """
+    if not paths:
+        return ""
+
+    # Convert all paths to Path objects and get their absolute paths
+    try:
+        path_objs = [Path(p).resolve() for p in paths]
+    except (TypeError, OSError):
+        return ""
+
+    # Get the common prefix of all paths
+    common = os.path.commonpath([str(p) for p in path_objs])
+
+    # Verify that the common prefix is actually a common parent directory
+    common_path = Path(common)
+    if not all(common_path in p.parents or p == common_path for p in path_objs):
+        return ""
+
+    return common
+
+
+def find_common_root_relative(paths: List[Union[str, os.PathLike]]) -> str:
+    """
+    Find the common root directory from a list of paths, preserving relative paths.
+
+    This version works with relative paths without converting them to absolute paths.
+
+    Args:
+        paths: List of file or directory paths (can be strings or pathlib.Path objects)
+
+    Returns:
+        str: The common root directory path, or an empty string if no common root exists
+    """
+    if not paths:
+        return ""
+
+    # Split all paths into their components
+    split_paths = [Path(p).parts for p in paths]
+
+    # Find the common prefix
+    common_parts = []
+    for parts in zip(*split_paths):
+        if len(set(parts)) == 1:
+            common_parts.append(parts[0])
+        else:
+            break
+
+    if not common_parts:
+        return ""
+
+    return str(Path(*common_parts))
+
+class ChannelMap:
+    DEFAULT_COLORS = {
+        'red': "FF0000",
+        'green': "00FF00",
+        'blue': "0000FF",
+        'magenta': "FF00FF",
+        'cyan': "00FFFF",
+        'yellow': "FFFF00",
+        'white': "FFFFFF",
+    }
+    def __getitem__(self, key):
+        if key in self.DEFAULT_COLORS:
+            return self.DEFAULT_COLORS[key]
+        else:
+            return None
+
+
+def make_json_safe(obj):
+    if isinstance(obj, dict):
+        return {k: make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_safe(v) for v in obj]
+    elif isinstance(obj, (np.integer,)):
+        return int(obj)
+    elif isinstance(obj, (np.floating,)):
+        return float(obj)
+    elif isinstance(obj, (np.ndarray,)):
+        return obj.tolist()
+    else:
+        return obj
