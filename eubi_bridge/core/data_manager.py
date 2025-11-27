@@ -1183,12 +1183,17 @@ class ArrayManager:  ### Unify the classes above.
         await asyncio.to_thread(self.pyr.update_scales, **self.scaledict)
         await asyncio.to_thread(self.pyr.update_units, **self.unitdict)
 
-        for idx,new_channel_meta in enumerate(self.channels):
-            channel = self.pyr.meta.metadata['omero']['channels'][idx]
-            channel.update(new_channel_meta)
-            self.pyr.meta.metadata['omero']['channels'][idx] = channel
+        ################# Critical ###################
+        if isinstance(self.img, NGFFImageMeta):
+            for idx,new_channel_meta in enumerate(self.channels):
+                channel = self.pyr.meta.metadata['omero']['channels'][idx]
+                channel.update(new_channel_meta)
+                self.pyr.meta.metadata['omero']['channels'][idx] = channel
+        else:
+            self.pyr.meta.metadata['omero']['channels'] = self.channels
 
         self.pyr.meta._pending_changes = True
+        ##############################################
 
         if self.omemeta is None:
             # Lazy import in thread to avoid blocking if heavy
