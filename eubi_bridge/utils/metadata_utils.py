@@ -127,6 +127,7 @@ def parse_channels(manager,
                    ):
 
     dtype = kwargs.get('dtype', None)
+    # starting_channels = kwargs.get('starting_channels', None)
     if dtype is None:
         dtype = manager.array.dtype
     if 'c' not in manager.axes:
@@ -138,15 +139,20 @@ def parse_channels(manager,
     default_channels = generate_channel_metadata(num_channels=channel_count,
                                                  dtype=dtype)
 
-    if manager.channels is not None:
-        # print(f"Manager's channels: {manager.channels}")
-        # print(f"Default channels: {default_channels}")
-        # print(f"channel numbers: {len(default_channels), len(manager.channels)}")
-        for idx, channel in enumerate(manager.channels):
+    #######--------------------------------------##########
+    # Update default channels with manager channels
+    # Keep an eye on this part!!!
+    if manager.channels is not None: ### Keep an eye on this part!!!
+        if hasattr(manager, 'pyr') and manager.pyr is not None:
+            mchannels = manager.pyr.meta.omero['channels']
+        else:
+            mchannels = manager.channels
+        for idx, channel in enumerate(mchannels):
             try:
                 default_channels[idx].update(channel)
             except Exception as e:
                 logger.error(f"Failed to update channel {idx} with {channel}: {e}")
+    #########################################################
 
     import copy
     from eubi_bridge.utils.convenience import make_json_safe
@@ -156,8 +162,9 @@ def parse_channels(manager,
     #######-----------------------------------##################
     # Handle channel intensity limits first
     channel_intensity_limits = kwargs.get('channel_intensity_limits','from_dtype')
-    assert channel_intensity_limits in ('from_dtype', 'from_array'), f"Channel intensity limits must be either 'from_dtype' or 'from_array'"
+    assert channel_intensity_limits in ('from_dtype', 'from_array', 'auto'), f"Channel intensity limits must be either 'from_dtype', 'from_array' or 'auto'"
     from_array = channel_intensity_limits == 'from_array'
+    from_none = channel_intensity_limits == 'auto'
     start_intensities, end_intensities = manager.compute_intensity_limits(
                                                     from_array = from_array,
                                                     dtype = dtype)
@@ -187,7 +194,8 @@ def parse_channels(manager,
             'start': start_intensities[channel_idx],
             'end': end_intensities[channel_idx]
         }
-        current_channel['window'] = window
+        if not from_none:
+            current_channel['window'] = window
         output[channel_idx] = current_channel
     #######-----------------------------------##################
 

@@ -674,13 +674,13 @@ class EuBIBridge:
         self.cluster_params = self._collect_params('cluster', **kwargs)
         self.readers_params = self._collect_params('readers', **kwargs)
         self.conversion_params = self._collect_params('conversion', **kwargs)
+        self.conversion_params['channel_intensity_limits'] = 'auto'
 
         combined = {**self.cluster_params,
                     **self.readers_params,
                     **self.conversion_params,
                     }
         extra_kwargs = {key: kwargs[key] for key in kwargs if key not in combined}
-
 
         # Collect file paths based on inclusion and exclusion patterns
         # Prepare pixel metadata arguments
@@ -707,7 +707,7 @@ class EuBIBridge:
                           channel_indices: list = None,
                           channel_labels: list = None,
                           channel_colors: list = None,
-                          channel_intensity_limits = 'dtype',
+                          channel_intensity_limits = 'from_dtype',
                           includes=None,
                           excludes=None,
                           **kwargs
@@ -738,13 +738,19 @@ class EuBIBridge:
 
         # Collect file paths based on inclusion and exclusion patterns
         # Prepare pixel metadata arguments
-        if any(item is not None for item in [channel_labels, channel_colors]):
-            assert all(hasattr(item, '__len__') for item in [channel_indices, channel_labels, channel_colors])
-            assert len(indices) == len(labels) == len(colors)
+        items = [channel_indices, channel_labels, channel_colors]
+        if any([item is not None for item in items]):
+            assert channel_indices is not None, f"The channel_labels and channel_colors can only be modified if channel_indices is provided."
+            if isinstance(channel_indices, (int,str)):
+                channel_indices = [channel_indices]
             channel_meta_kwargs_ = dict(channel_indices=channel_indices,
-                                       channel_labels=labels,
-                                       channel_colors=colors)
+                                       channel_labels=channel_labels,
+                                       channel_colors=channel_colors)
             channel_meta_kwargs = {key: val for key, val in channel_meta_kwargs_.items() if val is not None}
+            for key, val in channel_meta_kwargs.items():
+                if isinstance(val, (int, str)):
+                    channel_meta_kwargs[key] = [val]
+                assert len(channel_meta_kwargs[key]) == len(channel_indices), f"If channel_labels or channel_colors are provided, they must have the same length as channel_indices."
         else:
             channel_meta_kwargs = {}
 

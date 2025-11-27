@@ -753,7 +753,7 @@ class Pyramid:
     def to5D(self):
         arrs = self.dask_arrays
         axes = self.axes
-        channels = copy.copy(self.meta.channels)
+        channels = copy.copy(self.meta.metadata['omero']['channels'])
         # print(f"channels copied: {channels}")
         axes_to_add = [ax for ax in 'tczyx' if ax not in axes]
         if len(axes_to_add) == 0:

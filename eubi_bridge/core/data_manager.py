@@ -928,6 +928,9 @@ class ArrayManager:  ### Unify the classes above.
     # Metadata helpers
     # ------------------------------------------------------------------
     def fill_default_meta(self):
+        # if self.pyr is not None:
+        #     zgroup = self.pyr.meta.zarr_group
+        #     omero_copy = copy.copy(self.pyr.meta.omero)
         if self.array is None:
             raise Exception("Array is missing. An array needs to be assigned.")
         new_scaledict: Dict[str, Any] = {}
@@ -1169,7 +1172,7 @@ class ArrayManager:  ### Unify the classes above.
     # ------------------------------------------------------------------
     # Pyramid + OME-XML
     # ------------------------------------------------------------------
-    async def sync_pyramid(self, create_omexml_if_not_exists: bool = False, save_changes = True):
+    async def sync_pyramid(self, create_omexml_if_not_exists: bool = False, save_changes = False):
         """Synchronize scale/unit metadata with pyramid and update/save OME-XML.
         Offloads pyramid + file I/O parts to threads.
         """
@@ -1179,7 +1182,12 @@ class ArrayManager:  ### Unify the classes above.
         # Update scales/units on pyramid (likely fast, but be safe if it touches disk)
         await asyncio.to_thread(self.pyr.update_scales, **self.scaledict)
         await asyncio.to_thread(self.pyr.update_units, **self.unitdict)
-        self.pyr.meta.metadata['omero']['channels'] = self.channels
+
+        for idx,new_channel_meta in enumerate(self.channels):
+            channel = self.pyr.meta.metadata['omero']['channels'][idx]
+            channel.update(new_channel_meta)
+            self.pyr.meta.metadata['omero']['channels'][idx] = channel
+
         self.pyr.meta._pending_changes = True
 
         if self.omemeta is None:
@@ -1266,8 +1274,12 @@ class ArrayManager:  ### Unify the classes above.
             return
         if self.pyr is not None:
             zgroup = self.pyr.meta.zarr_group
+            omero_copy = copy.copy(self.pyr.meta.omero)
             self.pyr = self.pyr.squeeze()
             self.pyr.meta.zarr_group = zgroup
+            self.pyr.meta.metadata['omero'] = omero_copy
+        else:
+            omero_copy = None
         if isinstance(self.array, zarr.Array):
             logger.warn(f"Zarr arrays are not supported for squeeze operation.\n"
                         f"Zarr array for the path {self.series_path} is being converted to dask array.")
@@ -1309,6 +1321,7 @@ class ArrayManager:  ### Unify the classes above.
              zrange=None,
              yrange=None,
              xrange=None):
+        omero_copy = copy.copy(self.pyr.meta.omero)
         slicedict = {
             't': slice(*trange) if trange is not None else slice(None),
             'c': slice(*crange) if crange is not None else slice(None),
@@ -1317,6 +1330,12 @@ class ArrayManager:  ### Unify the classes above.
             'x': slice(*xrange) if xrange is not None else slice(None),
         }
         slicedict = {ax: r for ax, r in slicedict.items() if ax in self.axes}
+        ### slice channels:
+        if 'c' in slicedict and 'c' in self.axes:
+            c_slice = slicedict.get('c')
+            channels = [omero_copy['channels'][i] for i in range(c_slice.start, c_slice.stop)]
+            self.pyr.meta.omero['channels'] = channels
+        ####
         slices = tuple([slicedict[ax] for ax in self.axes])
         logger.info(f"The array with shape {self.array.shape} is cropped to {slicedict}")
         if isinstance(self.array, zarr.Array):
@@ -1328,6 +1347,7 @@ class ArrayManager:  ### Unify the classes above.
         array = array[slices]
         logger.info(f"The cropped array shape: {array.shape}")
         self.set_arraydata(array, self.axes, self.units, self.scales)
+
 
     def to_cupy(self):
         try:
