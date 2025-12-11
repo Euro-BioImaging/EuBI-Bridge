@@ -1,12 +1,11 @@
 import fsspec
-import fsspec.core
-import fsspec.compression
-import fsspec.spec
 import numpy as np
 
 from dask import delayed
 import dask, zarr, asyncio
-import dask.array as da
+from eubi_bridge.utils.convenience import soft_start_jvm
+# soft_start_jvm()
+
 from eubi_bridge.ngff.multiscales import Pyramid
 
 from bioio_bioformats import utils

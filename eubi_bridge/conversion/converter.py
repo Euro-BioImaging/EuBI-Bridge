@@ -1,25 +1,32 @@
-import os#, multiprocessing
+from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, \
+    autocompute_chunk_shape, soft_start_jvm
+
+# soft_start_jvm()
+
+import os, multiprocessing as mp
 
 # os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
 
 # Ensure the environment is inherited by forked/spawned processes
 # multiprocessing.set_start_method("spawn", force=True)
-import time
 import asyncio
-import pickle
 import s3fs
 import numpy as np, pandas as pd
 from natsort import natsorted
 # from distributed import LocalCluster, Client
 # import logging
-from typing import Union, Optional, Any, Dict, List, Tuple, Iterable
+from typing import Union
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
 from eubi_bridge.conversion.conversion_worker import unary_worker_sync, aggregative_worker_sync
-from eubi_bridge.utils.convenience import take_filepaths
+from eubi_bridge.utils.convenience import take_filepaths, soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.conversion.worker_init import initialize_worker_process
+
 
 logger = get_logger(__name__)
+
+
 
 async def run_conversions_from_filepaths(
         input_path,
@@ -35,40 +42,101 @@ async def run_conversions_from_filepaths(
             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
         **global_kwargs: global defaults for all conversions
     """
-    # if hasattr(input_path, 'loc'):
-    #     df = input_path
-    # else:
     df = take_filepaths(input_path, **global_kwargs)
-    # Optionally create dirs before running
-    # for odir in df["output_path"].unique():
-    #     if odir and not os.path.exists(odir):
-    #         os.makedirs(odir, exist_ok=True)
 
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))
-    loop = asyncio.get_running_loop()
 
-    def _run_one(row):
-        """Run one conversion with unified kwargs."""
-        job_kwargs = row.to_dict()
-        input_path = job_kwargs.get('input_path')
-        output_path = job_kwargs.get('output_path')
-        job_kwargs.pop('input_path')
-        job_kwargs.pop('output_path')
-        return loop.run_in_executor(
-            pool,
-            unary_worker_sync,
-            input_path,
-            output_path,
-            job_kwargs
-        )
+    # Get spawn context explicitly
+    ctx = mp.get_context("spawn")
 
-    # --- Run all conversions ---
-    with ProcessPoolExecutor(max_workers) as pool:
-        tasks = [_run_one(row) for _, row in df.iterrows()]
-        results = await asyncio.gather(*tasks)
+    # Import worker function
+    from eubi_bridge.conversion.conversion_worker import unary_worker_sync
+
+    # Create executor with spawn context AND initializer
+    with ProcessPoolExecutor(
+            max_workers=max_workers,
+            mp_context=ctx,
+            initializer=initialize_worker_process  # Initialize JVM once per worker
+    ) as pool:
+        loop = asyncio.get_running_loop()
+
+        tasks = []
+        for idx, row in df.iterrows():
+            job_kwargs = row.to_dict()
+            input_path_job = job_kwargs.pop('input_path')
+            output_path = job_kwargs.pop('output_path')
+
+            # Submit to executor
+            task = loop.run_in_executor(
+                pool,
+                unary_worker_sync,
+                input_path_job,
+                output_path,
+                job_kwargs
+            )
+            tasks.append(task)
+
+        # Gather with return_exceptions to see all failures
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Log results
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                print(f"[Main] Task {i} failed: {result}")
+            else:
+                print(f"[Main] Task {i} succeeded: {result}")
 
     return results
+
+
+
+# async def run_conversions_from_filepaths(
+#         input_path,
+#         **global_kwargs
+# ):
+#     """
+#     Run parallel conversions where each job's parameters (including input/output dirs)
+#     are specified via kwargs or a CSV/XLSX file.
+#
+#     Args:
+#         input_path:
+#             - list of file paths, OR
+#             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
+#         **global_kwargs: global defaults for all conversions
+#     """
+#     # soft_start_jvm()
+#
+#     df = take_filepaths(input_path, **global_kwargs)
+#
+#     # --- Setup concurrency ---
+#     max_workers = int(global_kwargs.get("max_workers", 4))
+#     loop = asyncio.get_running_loop()
+#
+#     def _run_one(row):
+#         """Run one conversion with unified kwargs."""
+#         job_kwargs = row.to_dict()
+#         input_path = job_kwargs.get('input_path')
+#         output_path = job_kwargs.get('output_path')
+#         job_kwargs.pop('input_path')
+#         job_kwargs.pop('output_path')
+#         return loop.run_in_executor(
+#             pool,
+#             unary_worker_sync,
+#             input_path,
+#             output_path,
+#             job_kwargs
+#         )
+#
+#     # --- Run all conversions ---
+#     ctx = mp.get_context("spawn")
+#     with ProcessPoolExecutor(max_workers=max_workers,
+#                              mp_context=ctx
+#                              ) as pool:
+#         tasks = [_run_one(row) for _, row in df.iterrows()]
+#         results = await asyncio.gather(*tasks)
+#
+#     return results
 
 
 async def run_conversions_from_filepaths_with_local_cluster(
@@ -142,7 +210,6 @@ async def run_conversions_from_filepaths_with_slurm(
                 slurm_account, slurm_partition, slurm_time, slurm_mem, slurm_cores
     """
     import os
-    import asyncio
     from dask_jobqueue import SLURMCluster
     from dask.distributed import Client
     from eubi_bridge.utils.convenience import take_filepaths
@@ -264,6 +331,18 @@ async def run_conversions_with_concatenation(
         ):
     """Convert with concatenation using threads (safe for large Dask arrays)."""
 
+    # input_path = f"/home/oezdemir/data/original/steyer/amst"
+    # output_path = f"/home/oezdemir/data/zarr/steyer/result"
+    # scene_index = 0
+    # time_tag = None
+    # channel_tag = None
+    # z_tag = 'slice_'
+    # y_tag = None
+    # x_tag = None
+    # concatenation_axes = 'z'
+    # metadata_reader = 'bfio'
+    # kwargs = {'skip_dask': True}
+
     df = take_filepaths(input_path,
                         scene_index = scene_index,
                         output_path = output_path,
@@ -287,7 +366,8 @@ async def run_conversions_with_concatenation(
                                 )
     base.filepaths = filepaths_accepted
     common_dir = os.path.commonpath(filepaths_accepted)
-    await base.read_dataset()
+    skip_dask = kwargs.get('skip_dask', False)
+    await base.read_dataset(aszarr = skip_dask)
     if verbose:
         logger.info(f"Concatenating along {concatenation_axes}")
     await base.digest( ### Channel concatenation also done here.

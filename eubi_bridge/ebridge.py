@@ -1,3 +1,13 @@
+import scyjava
+
+# Disable all Maven/JGO endpoints BEFORE bioio/bioformats is imported
+scyjava.config.endpoints.clear()
+scyjava.config.maven_offline = True
+scyjava.config.jgo_disabled = True
+
+from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, \
+    autocompute_chunk_shape, soft_start_jvm
+
 import warnings
 warnings.filterwarnings(
     "ignore",
@@ -12,13 +22,10 @@ warnings.filterwarnings(
     module="bioio_tifffile.reader",
 )
 
-import shutil, ctypes, time, os, zarr, pprint, psutil, dask, copy, s3fs
-import numpy as np, os, glob, tempfile, sys
-from multiprocessing.pool import ThreadPool
+import shutil, time, zarr, pprint, psutil, dask, s3fs
+import numpy as np, os, tempfile
 
 from dask import array as da
-# from distributed import LocalCluster, Client
-# from dask_jobqueue import SLURMCluster
 from pathlib import Path
 from typing import Union
 
@@ -37,16 +44,6 @@ logger = get_logger(__name__)
 
 
 
-def soft_start_jvm():
-    """Starts the JVM if it is not already running."""
-    import scyjava, jpype
-
-    if not scyjava.jvm_started():
-        scyjava.config.endpoints.append("ome:formats-gpl:6.7.0")
-        scyjava.start_jvm()
-    return
-
-
 def verify_filepaths_for_cluster(filepaths):
     """Verify that all file extensions are supported for distributed processing."""
     logger.info("Verifying file extensions for distributed setup.")
@@ -54,7 +51,8 @@ def verify_filepaths_for_cluster(filepaths):
                'nd2', '.h5'
                'ome.tiff', 'ome.tif',
                'tiff', 'tif', 'zarr',
-               'png', 'jpg', 'jpeg']
+               'png', 'jpg', 'jpeg',
+               'btf']
 
     for filepath in filepaths:
         verified = any(list(map(lambda path, ext: path.endswith(ext),
@@ -370,8 +368,6 @@ class EuBIBridge:
                              overwrite: bool = 'default',
                              override_channel_names: bool = 'default',
                              channel_intensity_limits = 'default',
-                             # use_tensorstore: bool = 'default',
-                             # use_gpu: bool = 'default',
                              metadata_reader: str = 'default',
                              save_omexml: bool = 'default',
                              squeeze: bool = 'default',
@@ -442,8 +438,6 @@ class EuBIBridge:
             'overwrite': overwrite,
             'override_channel_names': override_channel_names,
             'channel_intensity_limits': channel_intensity_limits,
-            # 'use_tensorstore': use_tensorstore,
-            # 'use_gpu': use_gpu,
             'metadata_reader': metadata_reader,
             'save_omexml': save_omexml,
             'squeeze': squeeze,
@@ -516,6 +510,7 @@ class EuBIBridge:
                 ):
         """Synchronous wrapper for the async to_zarr_async method."""
         t0 = time.time()
+        soft_start_jvm()
         # Get parameters:
         logger.info(f"Conversion starting.")
         if output_path is None:
@@ -531,7 +526,6 @@ class EuBIBridge:
                     **self.readers_params,
                     **self.conversion_params,
                     **self.downscale_params}
-        import pprint
         extra_kwargs = {key: kwargs[key] for key in kwargs if key not in combined}
         run_conversions(os.path.abspath(input_path),
                         output_path,

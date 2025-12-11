@@ -1,14 +1,14 @@
 import zarr, natsort, copy, asyncio
 
-import shutil, time, os, zarr, psutil, dask, gc, json
-import numpy as np, os, glob, tempfile, importlib
+import zarr, psutil, dask, json
+import numpy as np, os
 
 from ome_types.model import OME, Image, Pixels, Channel  # TiffData, Plane
 from ome_types.model import PixelType, Pixels_DimensionOrder, UnitsLength, UnitsTime
 
 from dask import array as da
 from pathlib import Path
-from typing import Union, Optional, Any, Dict, List, Tuple, Iterable
+from typing import Union, Optional, Any, Dict, List, Iterable
 
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.ngff.defaults import unit_map, scale_map, default_axes

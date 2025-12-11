@@ -1,0 +1,1 @@
+ome:formats-gpl:8.0.0

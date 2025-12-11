@@ -1,7 +1,6 @@
 import zarr
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple, Union, Iterable, ClassVar
-from dataclasses import dataclass
 import copy
 import numpy as np
 import dask.array as da

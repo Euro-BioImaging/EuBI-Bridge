@@ -1,15 +1,10 @@
 # Standard library imports
-import copy
-import logging
 import os
-import tempfile
-import warnings
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Union
 
 # Third-party imports
-import dask, asyncio
-import dask.array as da
+import dask
 import numpy as np
 
 # Local application imports

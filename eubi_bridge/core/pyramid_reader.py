@@ -1,12 +1,8 @@
 import fsspec
-import fsspec.core
-import fsspec.compression
-import fsspec.spec
 import numpy as np
 
 from dask import delayed
 import dask, zarr
-import dask.array as da
 
 
 # The block below moved to the 'ebridge.py' module in the 'to_zarr' method.

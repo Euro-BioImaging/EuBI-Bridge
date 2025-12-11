@@ -242,7 +242,6 @@ def parse_channels(manager,
                 pass
         items[idx] = item
     channel_indices, channel_labels, channel_colors, channel_intensity_limits = items
-    import pprint
     # pprint.pprint(manager.path)
     # pprint.pprint(manager.series_path)
     # pprint.pprint(manager.array.shape)

@@ -1,13 +1,7 @@
-import os
-import time
 import asyncio
-import pickle
 import numpy as np, pandas as pd
-import multiprocessing as mp
 # from distributed import LocalCluster, Client
-import logging
-from typing import Union, Optional, Any, Dict, List, Tuple
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from eubi_bridge.conversion.metadata_update_worker import update_worker_sync
 from eubi_bridge.utils.convenience import take_filepaths
 from eubi_bridge.utils.logging_config import get_logger

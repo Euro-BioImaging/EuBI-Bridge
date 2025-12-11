@@ -5,6 +5,16 @@ This module provides async workers for converting image data to zarr format,
 supporting both unary (single-file) and aggregative (multi-file) conversion modes.
 """
 
+# Add these imports at the top of conversion_worker.py
+from eubi_bridge.conversion.worker_init import safe_worker_wrapper
+import sys
+
+
+from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, \
+    autocompute_chunk_shape, soft_start_jvm
+
+# soft_start_jvm()
+
 import asyncio
 import os
 from typing import Union, Dict, Tuple, Optional, Any
@@ -300,6 +310,7 @@ async def _load_input_manager(input_path: Union[str, ArrayManager],
     )
     await manager.init()
     manager.fill_default_meta()
+    print(f"Manager array is of type {manager.array}")
 
     # Load scenes
     series = kwargs.get('scene_index', 'all')
@@ -405,19 +416,58 @@ async def aggregative_worker(manager: ArrayManager,
     sem = asyncio.Semaphore(max_concurrency)
 
     output_path_full = f"{output_path}.zarr"
+    print(f"Manager array is of type {manager.array}")
     await _process_single_scene(manager, output_path_full, kwargs, sem)
 
 
-# Synchronous wrappers for multiprocessing
+# # Synchronous wrappers for multiprocessing
+# def unary_worker_sync(input_path: Union[str, ArrayManager],
+#                       output_path: str,
+#                       kwargs: dict) -> None:
+#     """Synchronous wrapper for unary_worker."""
+#     return asyncio.run(unary_worker(input_path, output_path, **kwargs))
+#
+#
+# def aggregative_worker_sync(input_path: Union[str, ArrayManager],
+#                             output_path: str,
+#                             kwargs: dict) -> None:
+#     """Synchronous wrapper for aggregative_worker."""
+#     return asyncio.run(aggregative_worker(input_path, output_path, **kwargs))
+
+
+
+# Replace your existing synchronous wrappers at the bottom with these:
+
+@safe_worker_wrapper
 def unary_worker_sync(input_path: Union[str, ArrayManager],
                       output_path: str,
-                      kwargs: dict) -> None:
-    """Synchronous wrapper for unary_worker."""
-    return asyncio.run(unary_worker(input_path, output_path, **kwargs))
+                      kwargs: dict) -> dict:
+    """
+    Synchronous wrapper for unary_worker.
+    Safe for multiprocessing with proper exception handling.
+    """
+    print(f"[Worker] Processing: {input_path}", file=sys.stderr, flush=True)
+
+    # Run the async worker
+    asyncio.run(unary_worker(input_path, output_path, **kwargs))
+
+    print(f"[Worker] Completed: {input_path}", file=sys.stderr, flush=True)
+
+    return {"status": "success", "input": str(input_path), "output": output_path}
 
 
-def aggregative_worker_sync(input_path: Union[str, ArrayManager],
+@safe_worker_wrapper
+def aggregative_worker_sync(manager: ArrayManager,
                             output_path: str,
-                            kwargs: dict) -> None:
-    """Synchronous wrapper for aggregative_worker."""
-    return asyncio.run(aggregative_worker(input_path, output_path, **kwargs))
+                            kwargs: dict) -> dict:
+    """
+    Synchronous wrapper for aggregative_worker.
+    Safe for multiprocessing with proper exception handling.
+    """
+    print(f"[Worker] Processing aggregative: {output_path}", file=sys.stderr, flush=True)
+
+    asyncio.run(aggregative_worker(manager, output_path, **kwargs))
+
+    print(f"[Worker] Completed aggregative: {output_path}", file=sys.stderr, flush=True)
+
+    return {"status": "success", "output": output_path}

@@ -1,8 +1,6 @@
 # from concurrent.futures import ProcessPoolExecutor
-import copy
-from typing import Union
 import tensorstore as ts
-import zarr, os, asyncio
+import zarr, asyncio
 import numpy as np, pandas as pd
 from eubi_bridge.conversion.fileset_io import BatchFile, FileSet
 from eubi_bridge.utils.convenience import take_filepaths, ChannelMap, is_zarr_group
@@ -13,10 +11,7 @@ from eubi_bridge.core.writers import store_multiscale_async
 from eubi_bridge.conversion.fileset_io import BatchFile
 from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
 from eubi_bridge.utils.metadata_utils import generate_channel_metadata, parse_channels
-import time
-import multiprocessing as mp
-from typing import Union, Dict, Tuple, Optional, Any
-
+from typing import Union, Dict
 
 from eubi_bridge.utils.logging_config import get_logger
 logger = get_logger(__name__)

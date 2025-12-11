@@ -3,7 +3,6 @@
 
 def setup_mp_logging(log_queue):
     """Setup logging in child processes to use the shared queue"""
-    import logging
     import sys
 
     class QueueWriter:

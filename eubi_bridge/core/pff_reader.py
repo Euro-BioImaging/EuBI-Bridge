@@ -1,12 +1,8 @@
 import fsspec
-import fsspec.core
-import fsspec.compression
-import fsspec.spec
 import numpy as np
 
 from dask import delayed
 import dask, zarr
-import dask.array as da
 from eubi_bridge.ngff.multiscales import Pyramid
 
 from bioio_bioformats import utils

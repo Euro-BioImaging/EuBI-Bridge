@@ -11,7 +11,6 @@ from natsort import natsorted
 from eubi_bridge.core.data_manager import ArrayManager, ChannelIterator #, prune_seriesfix
 from eubi_bridge.utils.logging_config import get_logger
 
-import logging, warnings
 # Set up logger for this module
 logger = get_logger(__name__)
 

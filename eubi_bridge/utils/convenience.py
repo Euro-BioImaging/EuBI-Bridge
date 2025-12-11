@@ -1,4 +1,4 @@
-import os, json, glob, time, math
+import glob, time, math
 import warnings
 
 import numpy as np, pandas as pd
@@ -8,22 +8,17 @@ try:
     cupy_available = True
 except:
     cupy_available = False
-import zarr, json, shutil, os, copy, zarr
+import zarr, json, os, zarr
 from dask import array as da
 import dask
 import numcodecs
-import shutil, tempfile
 from pathlib import Path
-from typing import List
 
 from typing import (
     Union,
     Tuple,
-    Dict,
-    Any,
     Iterable,
-    List,
-    Optional
+    List
 )
 
 from eubi_bridge.utils.logging_config import get_logger
@@ -866,3 +861,281 @@ def make_json_safe(obj):
         return obj.tolist()
     else:
         return obj
+
+#############################################
+# pip install install-jdk
+
+def _get_or_install_jdk():
+    """
+    Ensure a modern JDK is available, installing via install-jdk if needed.
+
+    Returns:
+        Path to java executable
+    """
+    # First, check if JAVA_HOME is set and points to a good JDK
+    java_home = os.environ.get('JAVA_HOME')
+    if java_home:
+        java_path = pathlib.Path(java_home) / 'bin' / 'java'
+        if not java_path.exists():
+            java_path = pathlib.Path(java_home) / 'bin' / 'java.exe'
+
+        if java_path.exists():
+            # Check version
+            import subprocess
+            try:
+                result = subprocess.run(
+                    [str(java_path), '-version'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                version_output = result.stderr + result.stdout
+
+                # Check if it's Java 11+ (Bio-Formats requirement)
+                if 'version "1.' in version_output:  # Java 8 or older
+                    major_version = int(version_output.split('"')[1].split('.')[1])
+                    if major_version >= 8:
+                        print(f"[JVM] Found Java {major_version} at {java_home}, but need 11+",
+                              file=sys.stderr, flush=True)
+                elif 'version "' in version_output:
+                    version_str = version_output.split('"')[1]
+                    major_version = int(version_str.split('.')[0])
+                    if major_version >= 11:
+                        print(f"[JVM] Using Java {major_version} from JAVA_HOME: {java_home}",
+                              file=sys.stderr, flush=True)
+                        return str(java_path)
+            except Exception as e:
+                print(f"[JVM] Error checking Java version: {e}", file=sys.stderr, flush=True)
+
+    # Try to use install-jdk to get a proper JDK
+    try:
+        import jdk
+        jdkpath = Path(jdk._JDK_DIR)
+        jdkpath.mkdir(parents=True, exist_ok=True)
+
+        installed_jdks = list(jdkpath.glob('*'))
+        if len(installed_jdks) > 0:
+            # os.environ['JAVA_HOME'] = installed_jdks[0]
+            # print(f"[Worker {mp.current_process().name}] Using JDK: {installed_jdks[0]}",
+            #       file=sys.stderr, flush=True)
+            java_home = installed_jdks[0]
+            print(f"[JVM] Using JDK: {java_home}", file=sys.stderr, flush=True)
+        else:
+            java_home = jdk.install('17')
+            print(f"[JVM] JDK 17 installed at: {java_home}", file=sys.stderr, flush=True)
+
+        # Set JAVA_HOME for this process and children
+        os.environ['JAVA_HOME'] = str(java_home)
+
+        # Return path to java executable
+        java_path = pathlib.Path(java_home) / 'bin' / 'java'
+        if not java_path.exists():
+            java_path = pathlib.Path(java_home) / 'bin' / 'java.exe'
+
+        return str(java_path)
+
+    except ImportError:
+        print("[JVM] install-jdk not found. Install with: pip install install-jdk",
+              file=sys.stderr, flush=True)
+        print("[JVM] Falling back to system Java (may be outdated)",
+              file=sys.stderr, flush=True)
+        return None
+    except Exception as e:
+        print(f"[JVM] Error installing JDK: {e}", file=sys.stderr, flush=True)
+        return None
+
+import sys
+import pathlib
+
+def find_libjvm(java_home: pathlib.Path) -> str:
+    """
+    Given JAVA_HOME, return full path to libjvm (cross-platform).
+    """
+    candidates = []
+
+    # Windows
+    candidates.append(java_home / "bin" / "server" / "jvm.dll")
+    candidates.append(java_home / "bin" / "client" / "jvm.dll")
+
+    # Linux
+    candidates.append(java_home / "lib" / "server" / "libjvm.so")
+    candidates.append(java_home / "jre" / "lib" / "server" / "libjvm.so")
+
+    # macOS (Homebrew/OpenJDK layout)
+    candidates.append(java_home / "lib" / "server" / "libjvm.dylib")
+    candidates.append(java_home / "jre" / "lib" / "server" / "libjvm.dylib")
+
+    for c in candidates:
+        if c.exists():
+            return str(c)
+
+    raise RuntimeError(
+        f"Could not find libjvm for JAVA_HOME={java_home}.\n"
+        f"Checked:\n" + "\n".join(str(c) for c in candidates)
+    )
+
+
+
+def soft_start_jvm():
+    """Start JVM with bundled JARs only, bypassing Maven/JGO entirely."""
+
+    # Critical: Import scyjava AFTER environment setup
+    import scyjava, pathlib
+
+    if scyjava.jvm_started():
+        return
+
+    # Ensure we have a modern JDK
+    java_path = _get_or_install_jdk()
+
+    # Get bundled JARs directory
+    pkg_dir = pathlib.Path(__file__).resolve().parent.parent
+    jars_dir = pkg_dir / "bioformats"
+    jars = sorted(str(p) for p in jars_dir.glob("*.jar"))
+
+    if not jars:
+        raise RuntimeError(f"No bundled jars found in {jars_dir}")
+
+    # Method 1: Use jpype directly (bypasses scyjava's Maven logic)
+    try:
+        import jpype
+        import jpype.imports
+        import pathlib
+
+        # Find jpype's support JAR - critical for Windows
+        jpype_dir = pathlib.Path(jpype.__file__).parent.parent
+        jpype_jar = jpype_dir / "org.jpype.jar"
+
+        # real = f"C:\Users\oezdemir\miniforge3\envs\eubizarr2\Lib\site-packages\org.jpype.jar"
+        if not jpype_jar.exists():
+            # Try alternative locations
+            for possible_jar in jpype_dir.rglob("org.jpype*.jar"):
+                jpype_jar = possible_jar
+                break
+
+        if not jpype_jar.exists():
+            raise RuntimeError(
+                f"Cannot find org.jpype.jar in {jpype_dir}. "
+                "JPype may not be installed correctly. "
+                "Try: pip uninstall jpype1 && pip install jpype1 --force-reinstall"
+            )
+
+        # Build classpath: jpype JAR first, then bioformats JARs
+        classpath = str(jpype_jar) + os.pathsep + os.pathsep.join(jars)
+
+        print(f"[JVM] Starting JVM with {len(jars)} bioformats JARs + jpype JAR",
+              file=sys.stderr, flush=True)
+
+        # Prepare JVM arguments
+        jvm_kwargs = {
+            'classpath': classpath,
+            'convertStrings': False
+        }
+
+        # Use the installed JDK if available
+        # if java_path:
+        #     jvm_kwargs['jvmpath'] = java_path
+        if java_path:
+            # java_home = pathlib.Path(java_path).parent.parent  # strip /bin/java.exe
+            # jvm_dll = _find_jvm_dll(java_home)
+            # jvm_kwargs['jvmpath'] = jvm_dll
+            java_home = pathlib.Path(os.environ["JAVA_HOME"])
+            jvm_path = find_libjvm(java_home)
+            jvm_kwargs['jvmpath'] = jvm_path
+
+        # Start JVM with explicit classpath
+        jpype.startJVM(**jvm_kwargs)
+
+        # Mark scyjava as started
+        scyjava._jpype_jvm = jpype
+
+        print("[JVM] JVM started successfully", file=sys.stderr, flush=True)
+        return
+
+    except ImportError:
+        print("[JVM] jpype not available, falling back to scyjava",
+              file=sys.stderr, flush=True)
+
+    # Method 2: Force scyjava to use local JARs only
+    # Clear any Maven configuration
+    scyjava.config.endpoints.clear()
+    scyjava.config.maven_offline = True
+
+    # Set JVM path if we have one
+    if java_path:
+        scyjava.config.jvm_path = str(java_path)
+
+    # Disable JGO by monkeypatching
+    try:
+        import jgo.jgo
+        original_resolve = jgo.jgo.resolve_dependencies
+        jgo.jgo.resolve_dependencies = lambda *args, **kwargs: []
+    except ImportError:
+        pass
+
+    # Add all JARs to classpath
+    for jar in jars:
+        scyjava.config.add_classpath(jar)
+
+    # Start JVM
+    scyjava.start_jvm()
+
+    print("[JVM] JVM started successfully via scyjava", file=sys.stderr, flush=True)
+    return
+
+
+
+import os
+import pathlib
+from urllib.parse import urlparse
+
+def make_kvstore(store_path: str):
+    if not isinstance(store_path, str):
+        raise ValueError("store_path must be a string")
+
+    parsed = urlparse(store_path)
+
+    # ======================================================================
+    # 1. HTTPS URL  (S3-style URL you use)
+    # ======================================================================
+    if parsed.scheme == "https":
+        # Example:
+        #   https://bucket-name/path/to/object
+        host = parsed.netloc                      # bucket-name.example.com or bucket-name
+        parts = parsed.path.strip("/").split("/") # ["bucket", "subfolder", "file"]
+
+        if len(parts) == 0:
+            raise ValueError(f"Cannot parse HTTPS URL: {store_path}")
+
+        bucket = parts[0]
+        path = "/".join(parts[1:])
+        path = path.replace(" ", "%20")
+
+        return {
+            "driver": "s3",
+            "endpoint": f"https://{host}",
+            "bucket": bucket,
+            "path": path,
+            "aws_region": "us-east-1"
+        }
+
+    # ======================================================================
+    # 2. Local filesystem path (cross-platform)
+    #    Handles:
+    #       - /absolute/posix/path
+    #       - C:\absolute\windows\path
+    #       - C:/absolute/windows/path
+    #       - \\server\share (UNC)
+    #       - relative paths
+    # ======================================================================
+    p = pathlib.Path(store_path)
+
+    # If it's a file path (absolute or relative), use TensorStore "file" driver
+    # (TensorStore supports both)
+    if p.is_absolute() or not parsed.scheme:
+        return {"driver": "file", "path": str(p)}
+
+    # ======================================================================
+    # 3. Unknown
+    # ======================================================================
+    raise ValueError(f"Unsupported store path: {store_path}")

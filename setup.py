@@ -30,6 +30,7 @@ def get_requirements():
         "fire>=0.0.0",
         "imageio==2.27.0",
         "imageio-ffmpeg==0.6.0",
+        "install-jdk",
         "natsort>=0.0.0",
         "nd2>=0.0.0",
         "numpy>=0.0.0",
@@ -89,6 +90,9 @@ setuptools.setup(
     license='MIT',
     packages=setuptools.find_packages(),
     include_package_data=True,
+    package_data={
+        "eubi_bridge": ["bioformats/*.jar"],
+    },
     install_requires=get_requirements(),
     python_requires='>=3.11,<3.13',
     extras_require={

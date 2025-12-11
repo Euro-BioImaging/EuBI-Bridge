@@ -1,26 +1,17 @@
-import copy
-import os
 # os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
 import time
 import itertools
-import tempfile
-import shutil
-import threading
-import asyncio
 import zarr
 import dask
-import math
-import sys
 import numcodecs
 import s3fs
 from zarr import codecs
 from zarr.storage import LocalStore
 from dataclasses import dataclass
 from dask import delayed
-import dask.array as da
 import numpy as np
 from pathlib import Path
-from typing import List, Tuple, Dict, Union, Any, Tuple, Optional, Sequence
+from typing import List, Dict, Sequence
 from distributed import get_client
 import concurrent.futures
 import tensorstore as ts
@@ -605,6 +596,8 @@ import dask.array as da
 import zarr
 import tensorstore as ts
 from typing import Union, Optional, Tuple, Any
+from eubi_bridge.utils.convenience import make_kvstore
+
 
 async def write_with_tensorstore_async(
         arr: (da.Array, zarr.Array, ts.TensorStore),
@@ -650,21 +643,7 @@ async def write_with_tensorstore_async(
     shards = tuple(int(size) for size in np.ravel(shards))
 
     # Optionally tune TensorStore file I/O concurrency inside kvstore spec
-    if isinstance(store_path, str) and store_path.startswith('https://'):
-        endpoint = 'https://' + store_path.replace('https://', '').split('/')[0]
-        bucket = store_path.replace('https://', '').split('/')[1]
-        path = os.path.join(*store_path.replace('https://', '').split('/')[2:])
-        path = path.replace(' ', '%20')
-        kvstore = {"driver": "s3",
-                   "endpoint": endpoint,
-                   "bucket": bucket,
-                   "path": str(path),
-                   "aws_region": "us-east-1",  # or any valid region name
-                   }
-    elif isinstance(store_path, str) and store_path.startswith('/'):
-        kvstore = {"driver": "file", "path": str(store_path)}
-    else:
-        raise ValueError(f"Unsupported store path: {store_path}")
+    kvstore = make_kvstore(store_path)
     if ts_io_concurrency:
         kvstore["file_io_concurrency"] = {"limit": int(ts_io_concurrency)}
 

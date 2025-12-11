@@ -1,13 +1,11 @@
 import os.path
 
 import zarr, dataclasses
-from pathlib import Path
 import numpy as np, zarr
 import dask.array as da
-from typing import Callable
 import tensorstore as ts
 import asyncio
-from pathlib import Path
+from eubi_bridge.utils.convenience import make_kvstore
 
 
 def simple_downscale(
@@ -94,23 +92,7 @@ class DownscaleManager:
         return np.multiply(self.scale, self.scale_factors)
 
 
-def wrap_kvstore(store_path):
-    if isinstance(store_path, str) and store_path.startswith('https://'):
-        endpoint = 'https://' + store_path.replace('https://', '').split('/')[0]
-        bucket = store_path.replace('https://', '').split('/')[1]
-        path = os.path.join(*store_path.replace('https://', '').split('/')[2:])
-        path = path.replace(' ', '%20')
-        kvstore = {"driver": "s3",
-                   "endpoint": endpoint,
-                   "bucket": bucket,
-                   "path": str(path),
-                   "aws_region": "eu-west-1",  # or any valid region name
-                   }
-    elif isinstance(store_path, str) and store_path.startswith('/'):
-        kvstore = {"driver": "file", "path": str(store_path)}
-    else:
-        raise ValueError(f"Unsupported store path: {store_path}")
-    return kvstore
+
 
 @dataclasses.dataclass
 class Downscaler:
@@ -127,7 +109,7 @@ class Downscaler:
         #     self.output_chunks = [self.array.chunksize] * self.n_layers
         if isinstance(self.array, str):
             store_path = self.array
-            kvstore = wrap_kvstore(store_path)
+            kvstore = make_kvstore(store_path)
             self.base_array_root = os.path.abspath(self.array)
             self.downscale_method = 'ts'
             self.array = ts.open(
@@ -144,7 +126,7 @@ class Downscaler:
                 self.base_array_root = self.array.store.path
             arraypath = self.array.path
             ts_path = os.path.join(self.base_array_root,arraypath)
-            kvstore = wrap_kvstore(ts_path)
+            kvstore = make_kvstore(ts_path)
 
             self.downscale_method = 'ts'
             self.array = ts.open(

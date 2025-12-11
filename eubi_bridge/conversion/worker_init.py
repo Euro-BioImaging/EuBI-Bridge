@@ -1,0 +1,159 @@
+"""
+Worker initialization module for multiprocessing with JVM support.
+"""
+import os
+import sys
+import multiprocessing as mp
+
+
+# Global flag to track if worker is initialized
+_worker_initialized = False
+
+
+def _patch_xsdata_for_cython():
+    """
+    Patch xsdata to handle Cython types that don't have __subclasses__.
+
+    This fixes: AttributeError: type object '_cython_3_2_1.cython_function_or_method'
+    has no attribute '__subclasses__'
+    """
+    try:
+        from xsdata.formats.dataclass.context import XmlContext
+
+        original_get_subclasses = XmlContext.get_subclasses
+
+        @classmethod
+        def patched_get_subclasses(cls, clazz):
+            """Patched version that handles types without __subclasses__."""
+            try:
+                # Try to get subclasses normally
+                for subclass in clazz.__subclasses__():
+                    yield subclass
+                    # Recursively get subclasses of subclasses
+                    if hasattr(subclass, '__subclasses__'):
+                        yield from cls.get_subclasses(subclass)
+            except (AttributeError, TypeError):
+                # Skip types that don't support __subclasses__
+                # (like Cython internal types)
+                pass
+
+        XmlContext.get_subclasses = patched_get_subclasses
+
+    except ImportError:
+        # xsdata not installed, no patching needed
+        pass
+
+
+def initialize_worker_process():
+    """
+    Initialize worker process with JVM and proper scyjava configuration.
+
+    This is called once per worker process via ProcessPoolExecutor's initializer.
+    """
+    global _worker_initialized
+
+    if _worker_initialized:
+        return
+
+    print(f"[Worker {mp.current_process().name}] Starting initialization...",
+          file=sys.stderr, flush=True)
+
+    # Patch xsdata BEFORE any ome_types imports
+    _patch_xsdata_for_cython()
+
+    # Set environment variables to prevent Maven access
+    os.environ['JGO_CACHE_DIR'] = '/dev/null'
+    os.environ['MAVEN_OFFLINE'] = 'true'
+
+    # Ensure JDK is available (worker inherits JAVA_HOME from parent if already set)
+    # But we may need to check/install if not present
+    try:
+        java_home = os.environ.get('JAVA_HOME')
+        if not java_home:
+            print(f"[Worker {mp.current_process().name}] No JAVA_HOME, checking for JDK...",
+                  file=sys.stderr, flush=True)
+            # Try to use install-jdk
+            try:
+                import jdk
+                from pathlib import Path
+                jdkpath = Path(jdk._JDK_DIR)
+                jdkpath.mkdir(parents=True, exist_ok=True)
+
+                installed_jdks = list(jdkpath.glob('*'))
+                if len(installed_jdks) > 0:
+                    os.environ['JAVA_HOME'] = installed_jdks[0]
+                    print(f"[Worker {mp.current_process().name}] Using JDK: {installed_jdks[0]}",
+                          file=sys.stderr, flush=True)
+            except ImportError:
+                print(f"[Worker {mp.current_process().name}] install-jdk not available",
+                      file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[Worker {mp.current_process().name}] JDK check warning: {e}",
+              file=sys.stderr, flush=True)
+
+    # Configure scyjava BEFORE any imports that might use Java
+    import scyjava
+    scyjava.config.endpoints.clear()
+    scyjava.config.maven_offline = True
+
+    # Disable JGO
+    try:
+        import jgo.jgo
+        jgo.jgo.resolve_dependencies = lambda *args, **kwargs: []
+        jgo.jgo.executable_path = lambda *args, **kwargs: None
+    except ImportError:
+        pass
+
+    # Now start JVM with bundled JARs
+    from eubi_bridge.utils.convenience import soft_start_jvm
+
+    try:
+        soft_start_jvm()
+        print(f"[Worker {mp.current_process().name}] JVM initialized successfully",
+              file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[Worker {mp.current_process().name}] JVM init failed: {e}",
+              file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc()
+        raise
+
+    _worker_initialized = True
+
+
+def safe_worker_wrapper(func):
+    """
+    Decorator to wrap worker functions with exception handling.
+
+    Converts unpicklable exceptions to picklable RuntimeError with full details.
+    """
+    import functools
+    import traceback
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            # Ensure worker is initialized (redundant safety check)
+            if not _worker_initialized:
+                initialize_worker_process()
+
+            return func(*args, **kwargs)
+
+        except Exception as e:
+            # Capture full exception details
+            exc_type = type(e).__name__
+            exc_msg = str(e)
+            exc_tb = traceback.format_exc()
+
+            # Create a simple, picklable RuntimeError
+            error_msg = (
+                f"Worker process failed\n"
+                f"Function: {func.__name__}\n"
+                f"Exception: {exc_type}: {exc_msg}\n"
+                f"\nFull traceback:\n{exc_tb}"
+            )
+
+            print(f"[Worker Error] {error_msg}", file=sys.stderr, flush=True)
+            raise RuntimeError(error_msg) from None
+
+    return wrapper

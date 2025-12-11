@@ -1,0 +1,12 @@
+
+<project>
+	<modelVersion>4.0.0</modelVersion>
+	<groupId>ome-BOOTSTRAPPER</groupId>
+	<artifactId>formats-gpl-BOOTSTRAPPER</artifactId>
+	<version>0</version>
+	<dependencyManagement>
+		<dependencies><dependency><groupId>ome</groupId><artifactId>formats-gpl</artifactId><version>8.0.0</version><type>pom</type><scope>import</scope></dependency></dependencies>
+	</dependencyManagement>
+	<dependencies><dependency><groupId>ome</groupId><artifactId>formats-gpl</artifactId><version>8.0.0</version></dependency></dependencies>
+	<repositories><repository><id>scijava.public</id><url>https://maven.scijava.org/content/groups/public</url></repository></repositories>
+</project>
