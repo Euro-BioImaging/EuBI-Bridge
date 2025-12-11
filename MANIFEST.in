@@ -1,0 +1,2 @@
+recursive-include eubi_bridge/bioformats *.jar
+
