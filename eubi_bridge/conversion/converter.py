@@ -1,25 +1,18 @@
-from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, \
-    autocompute_chunk_shape, soft_start_jvm
-
-# soft_start_jvm()
+from eubi_bridge.utils.path_utils import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths
+from eubi_bridge.utils.array_utils import autocompute_chunk_shape
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
 
 import os, multiprocessing as mp
-
-# os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
-
-# Ensure the environment is inherited by forked/spawned processes
-# multiprocessing.set_start_method("spawn", force=True)
 import asyncio
 import s3fs
 import numpy as np, pandas as pd
 from natsort import natsorted
-# from distributed import LocalCluster, Client
-# import logging
 from typing import Union
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
 from eubi_bridge.conversion.conversion_worker import unary_worker_sync, aggregative_worker_sync
-from eubi_bridge.utils.convenience import take_filepaths, soft_start_jvm
+from eubi_bridge.utils.path_utils import take_filepaths
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.conversion.worker_init import initialize_worker_process
 
@@ -88,55 +81,6 @@ async def run_conversions_from_filepaths(
                 print(f"[Main] Task {i} succeeded: {result}")
 
     return results
-
-
-
-# async def run_conversions_from_filepaths(
-#         input_path,
-#         **global_kwargs
-# ):
-#     """
-#     Run parallel conversions where each job's parameters (including input/output dirs)
-#     are specified via kwargs or a CSV/XLSX file.
-#
-#     Args:
-#         input_path:
-#             - list of file paths, OR
-#             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
-#         **global_kwargs: global defaults for all conversions
-#     """
-#     # soft_start_jvm()
-#
-#     df = take_filepaths(input_path, **global_kwargs)
-#
-#     # --- Setup concurrency ---
-#     max_workers = int(global_kwargs.get("max_workers", 4))
-#     loop = asyncio.get_running_loop()
-#
-#     def _run_one(row):
-#         """Run one conversion with unified kwargs."""
-#         job_kwargs = row.to_dict()
-#         input_path = job_kwargs.get('input_path')
-#         output_path = job_kwargs.get('output_path')
-#         job_kwargs.pop('input_path')
-#         job_kwargs.pop('output_path')
-#         return loop.run_in_executor(
-#             pool,
-#             unary_worker_sync,
-#             input_path,
-#             output_path,
-#             job_kwargs
-#         )
-#
-#     # --- Run all conversions ---
-#     ctx = mp.get_context("spawn")
-#     with ProcessPoolExecutor(max_workers=max_workers,
-#                              mp_context=ctx
-#                              ) as pool:
-#         tasks = [_run_one(row) for _, row in df.iterrows()]
-#         results = await asyncio.gather(*tasks)
-#
-#     return results
 
 
 async def run_conversions_from_filepaths_with_local_cluster(
@@ -212,7 +156,7 @@ async def run_conversions_from_filepaths_with_slurm(
     import os
     from dask_jobqueue import SLURMCluster
     from dask.distributed import Client
-    from eubi_bridge.utils.convenience import take_filepaths
+    from eubi_bridge.utils.path_utils import take_filepaths
     from eubi_bridge.conversion.conversion_worker import unary_worker_sync
     from eubi_bridge.utils.logging_config import get_logger
     logger = get_logger(__name__)
@@ -367,7 +311,7 @@ async def run_conversions_with_concatenation(
     base.filepaths = filepaths_accepted
     common_dir = os.path.commonpath(filepaths_accepted)
     skip_dask = kwargs.get('skip_dask', False)
-    await base.read_dataset(aszarr = skip_dask)
+    await base.read_dataset(readers_params = {'aszarr': skip_dask})
     if verbose:
         logger.info(f"Concatenating along {concatenation_axes}")
     await base.digest( ### Channel concatenation also done here.

@@ -28,6 +28,12 @@ Thumbs.db
 *.swp
 *.swo
 
+# JDK binaries - downloaded at install time, not versioned
+bioformats/jdk/darwin/
+bioformats/jdk/linux/
+bioformats/jdk/win32/
+# But keep the directory structure
+!bioformats/jdk/.gitkeep
 htmlcov/
 .coverage
 .tox/
@@ -40,3 +46,4 @@ pytest_debug.log
 .cache/
 
 todo.md
+CODE_REVIEW.md

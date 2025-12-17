@@ -1,10 +1,9 @@
-# from concurrent.futures import ProcessPoolExecutor
 import tensorstore as ts
 import zarr, asyncio
 import numpy as np, pandas as pd
 from eubi_bridge.conversion.fileset_io import BatchFile, FileSet
-from eubi_bridge.utils.convenience import take_filepaths, ChannelMap, is_zarr_group
-# from eubi_bridge.core.readers import read_single_image_asarray
+from eubi_bridge.utils.path_utils import take_filepaths, is_zarr_group
+from eubi_bridge.utils.misc_utils import ChannelMap
 from eubi_bridge.core.data_manager import ArrayManager
 from eubi_bridge.core.writers import write_with_tensorstore_async, _get_or_create_multimeta, _create_zarr_v2_array, CompressorConfig
 from eubi_bridge.core.writers import store_multiscale_async
@@ -24,10 +23,7 @@ def _parse_item(kwargs, item_type, item_symbol, defaultitems):
     elif pd.isna(item):
         return defaultitems[item_symbol]
     else:
-        try:
-            return item
-        except:
-            raise ValueError(f"Invalid item {item} for {item_type}")
+        return item
 
 def parse_scales(manager,
                  **kwargs
@@ -83,7 +79,7 @@ async def update_worker(input_path: Union[str, ArrayManager],
     memory_limit_per_batch = kwargs.get('memory_limit_per_batch', 1024)
     series = kwargs.get('series', 'all')
     # if not isinstance(input_path, ArrayManager):
-    from eubi_bridge.utils.convenience import is_zarr_group
+    from eubi_bridge.utils.path_utils import is_zarr_group
     if not is_zarr_group(input_path):
         raise Exception(f"Metadata update only works with OME-Zarr datasets.")
     manager = ArrayManager(

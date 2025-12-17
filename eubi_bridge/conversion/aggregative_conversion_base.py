@@ -13,9 +13,7 @@ from eubi_bridge.core.readers import read_single_image, read_single_image_delaye
 from eubi_bridge.conversion.fileset_io import BatchFile
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.ngff.defaults import unit_map, scale_map, default_axes
-from eubi_bridge.utils.convenience import (
-    take_filepaths
-)
+from eubi_bridge.utils.path_utils import take_filepaths
 
 # Configure logging
 # logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
@@ -60,7 +58,7 @@ class AggregativeConverter:
 
         # Ensure the input path is absolute
         if input_path is not None:
-            if not input_path.startswith(os.sep):
+            if not Path(input_path).is_absolute():
                 input_path = os.path.abspath(input_path)
 
         # Initialize instance variables
@@ -124,10 +122,9 @@ class AggregativeConverter:
                                             includes = includes,
                                             excludes = excludes)
             self.filepaths = df.input_path.tolist()
-        try:
-            readers_params.pop('scene_index')
-        except:
-            pass
+        
+        # Remove scene_index from readers_params if present (handled separately below)
+        readers_params.pop('scene_index', None)
 
         futures = [ ### This must change. Read all series from within the function.
                     ### Function must return a list of series.
@@ -292,7 +289,7 @@ class AggregativeConverter:
         self.batchdata.squeeze()
 
     async def transpose_dataset(self,
-                          dimension_order=Union[str, tuple, list]
+                          dimension_order: Union[str, tuple, list] = None
                           ):
         """
         Transpose the dataset according to the given dimension order.

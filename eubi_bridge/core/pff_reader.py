@@ -1,19 +1,23 @@
+"""
+Reader for formats supported via bioio (Platform-independent File Format reader).
+
+This is the generic fallback reader that handles any format supported by bioio,
+including OME-TIFF, CZI, LIF, ND2, PNG, JPG, and anything bioformats can open.
+"""
+
 import fsspec
 import numpy as np
 
 from dask import delayed
 import dask, zarr
+import dask.array as da
+from typing import Any, Optional
 from eubi_bridge.ngff.multiscales import Pyramid
 
-from bioio_bioformats import utils
+from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.core.reader_interface import ImageReader
 
-# The block below moved to the 'ebridge.py' module in the 'to_zarr' method.
-# import scyjava
-# import jpype
-# # IMPORTANT: jvm must be started before importing bioio_bioformats readers
-# if not scyjava.jvm_started():
-#     scyjava.config.endpoints.append("ome:formats-gpl:6.7.0")
-#     scyjava.start_jvm()
+logger = get_logger(__name__)
 
 
 readable_formats = ('.ome.tiff', '.ome.tif', '.czi', '.lif',
@@ -21,103 +25,147 @@ readable_formats = ('.ome.tiff', '.ome.tif', '.czi', '.lif',
                     '.png', '.jpg', '.jpeg')
 
 
-def read_pff(input_path,
-            **kwargs
-            ):
+class BioIOReader(ImageReader):
     """
-    Reads a single image file.
+    Generic reader for any format supported by bioio.
+    
+    This is the fallback reader for formats that don't have specialized readers.
+    It uses the appropriate bioio extension reader based on file format.
+    """
+    
+    def __init__(self, path: str, img: Any, **kwargs):
+        """
+        Initialize BioIO reader.
+        
+        Parameters
+        ----------
+        path : str
+            Path to the image file.
+        img : bioio Reader
+            Initialized bioio reader object.
+        """
+        self._path = path
+        self.img = img
+        self.series = 0
+        self._set_series_path()
+    
+    @property
+    def path(self) -> str:
+        """Path to the image file."""
+        return self._path
+    
+    @property
+    def series_path(self) -> str:
+        """Current series identifier."""
+        return self._series_path
+    
+    @property
+    def n_scenes(self) -> int:
+        """Number of scenes."""
+        return len(self.img.scenes)
+    
+    @property
+    def n_tiles(self) -> int:
+        """Number of tiles (most formats don't support this)."""
+        return 1
+    
+    def _set_series_path(self) -> None:
+        """Update series path."""
+        self._series_path = self._path + f'_{self.series}'
+    
+    def set_scene(self, scene_index: int) -> None:
+        """Set the current scene."""
+        if scene_index < 0 or scene_index >= self.n_scenes:
+            raise IndexError(f"Scene index {scene_index} out of range [0, {self.n_scenes})")
+        self.series = scene_index
+        self.img.set_scene(self.series)
+        self._set_series_path()
+    
+    def set_tile(self, tile_index: int) -> None:
+        """No-op for most formats (no tile support)."""
+        if tile_index != 0:
+            logger.warning("This format does not support tiles. Ignoring set_tile().")
+    
+    def get_image_dask_data(self, **kwargs) -> da.Array:
+        """Get image data as dask array."""
+        try:
+            dimensions_to_read = kwargs.get('dimensions_to_read', 'TCZYX')
+            return self.img.get_image_dask_data(dimensions_to_read)
+        except Exception as e:
+            raise RuntimeError(f"Failed to read image data from {self._path}: {str(e)}") from e
 
+
+def read_pff(
+    input_path: str,
+    **kwargs
+) -> ImageReader:
+    """
+    Read a file in any format supported by bioio.
+    
+    This function selects the appropriate bioio reader based on file extension
+    and returns a reader instance implementing the ImageReader interface.
+    
     Parameters
     ----------
     input_path : str
         Path to the image file.
-    **kwargs : dict
-        Additional keyword arguments, such as `verbose` and `scene`.
-
+    **kwargs
+        Additional keyword arguments passed to the reader.
+        
     Returns
     -------
-    arr : dask.array.Array
-        The image array.
+    ImageReader
+        A reader instance implementing the ImageReader interface.
+        May be BioIOReader, TIFFZarrReader, CZIReader, or another specialized reader.
+        
+    Raises
+    ------
+    FileNotFoundError
+        If the file cannot be found.
+    RuntimeError
+        If the file cannot be opened.
     """
-    from eubi_bridge.utils.logging_config import get_logger
-    logger = get_logger(__name__)
-    reader_kwargs = {}
-    dimensions = 'TCZYX'
-
-
-    if input_path.endswith(('ome.tiff', 'ome.tif')):
-        from bioio_ome_tiff.reader import Reader as reader  # pip install bioio-ome-tiff --no-deps
-        logger.info(f"Actual reader: bioio_ome_tiff.")
-    elif input_path.endswith(('.tif', '.tiff')): ### TODO: Use this until ome.tiff reader is safe
-        from eubi_bridge.core.tiff_reader import read_tiff_image as reader
-        reader_kwargs.update(**kwargs)
-        logger.info(f"Actual reader: tifffile.")
+    logger.info(f"Reading file with format detection: {input_path}")
+    
+    # Route to specialized readers first
+    if input_path.endswith(('.ome.tiff', '.ome.tif')):
+        from bioio_ome_tiff.reader import Reader as reader
+        logger.info("Using bioio-ome-tiff reader")
+        img = reader(input_path, **kwargs)
+        return BioIOReader(input_path, img, **kwargs)
+    
+    elif input_path.endswith(('.tif', '.tiff')):
+        from eubi_bridge.core.tiff_reader import read_tiff_image
+        logger.info("Using native tifffile reader")
+        return read_tiff_image(input_path, aszarr=True, **kwargs)
+    
     elif input_path.endswith('.czi'):
-        from eubi_bridge.core.czi_reader import read_czi as reader
-        reader_kwargs = dict(
-            as_mosaic=False,
-            view_index=0,
-            phase_index=0,
-            illumination_index=0,
-            scene_index=0,
-            rotation_index=0,
-            mosaic_tile_index=0,
-            sample_index=0
-        )
-        for k, v in kwargs.items():
-            if k in reader_kwargs:
-                kwargs[k] = kwargs[k]
-        logger.info(f"Actual reader: bioio_czi.")
+        from eubi_bridge.core.czi_reader import read_czi
+        logger.info("Using CZI-specific reader")
+        return read_czi(input_path, **kwargs)
+    
     elif input_path.endswith('.lif'):
         from bioio_lif.reader import Reader as reader
-        logger.info(f"Actual reader: bioio_lif.")
+        logger.info("Using bioio-lif reader")
+        img = reader(input_path, **kwargs)
+        return BioIOReader(input_path, img, **kwargs)
+    
     elif input_path.endswith('.nd2'):
         from bioio_nd2.reader import Reader as reader
-        logger.info(f"Actual reader: bioio_nd2.")
+        logger.info("Using bioio-nd2 reader")
+        img = reader(input_path, **kwargs)
+        return BioIOReader(input_path, img, **kwargs)
+    
     elif input_path.endswith(('.png', '.jpg', '.jpeg')):
         from bioio_imageio.reader import Reader as reader
-        logger.info(f"Actual reader: bioio_imageio.")
+        logger.info("Using bioio-imageio reader")
+        img = reader(input_path, **kwargs)
+        return BioIOReader(input_path, img, **kwargs)
+    
     else:
+        # Default fallback: use bioformats
         from bioio_bioformats.reader import Reader as reader
-        logger.info(f"Actual reader: bioio_bioformats.")
-    verbose = kwargs.get('verbose', False)
-    # if verbose:
-    img = reader(input_path, **reader_kwargs)
-    if hasattr(img, 'index_map'): ### means it is a czi reader
-        return img
-
-    class MockImg:
-        def __init__(self,
-                     img,
-                     path,
-                     **kwargs
-                     ):
-            self.img = img
-            self.path = path
-            self.set_scene(0)
-            self._set_series_path()
-        @property
-        def n_scenes(self):
-            return len(self.img.scenes)
-        def _set_series_path(self):
-            # self.series_path = os.path.splitext(self.path)[0] + f'_{self.series}' + os.path.splitext(self.path)[1]
-            self.series_path = self.path + f'_{self.series}'
-        def get_image_dask_data(self, *args, **kwargs):
-            try:
-                dimensions_to_read = kwargs.get('dimensions_to_read', 'TCZYX')
-                return self.img.get_image_dask_data(dimensions_to_read)
-            except Exception as e:
-                raise RuntimeError(f"Failed to read image data: {str(e)}") from e
-        def set_scene(self, scene_index: int):
-            self.series = scene_index
-            self.img.set_scene(scene_index)
-            self._set_series_path()
-    mock = MockImg(img, input_path)
-    return mock
-
-
-
-# path = f"/home/oezdemir/Desktop/from_local_0_tiff/MVI_1349-00017.ome.tiff"
-#
-# pff = read_pff(path, aszarr = False)
+        logger.info("Using bioio-bioformats reader (fallback)")
+        img = reader(input_path, **kwargs)
+        return BioIOReader(input_path, img, **kwargs)
 # pff.get_image_dask_data()

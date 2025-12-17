@@ -3,7 +3,7 @@ import numpy as np, pandas as pd
 # from distributed import LocalCluster, Client
 from concurrent.futures import ProcessPoolExecutor
 from eubi_bridge.conversion.metadata_update_worker import update_worker_sync
-from eubi_bridge.utils.convenience import take_filepaths
+from eubi_bridge.utils.path_utils import take_filepaths
 from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)

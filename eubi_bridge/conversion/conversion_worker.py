@@ -10,8 +10,9 @@ from eubi_bridge.conversion.worker_init import safe_worker_wrapper
 import sys
 
 
-from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, \
-    autocompute_chunk_shape, soft_start_jvm
+from eubi_bridge.utils.path_utils import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths
+from eubi_bridge.utils.array_utils import autocompute_chunk_shape
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
 
 # soft_start_jvm()
 
@@ -120,32 +121,127 @@ def _parse_axis_params(manager: ArrayManager, kwargs: Dict,
 
 
 def parse_chunks(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse chunk sizes for each axis."""
+    """Parse chunk sizes for each axis.
+    
+    Extracts chunk size parameters from kwargs for each dimension in the array.
+    Uses default chunk sizes if not specified.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing dimension information.
+    **kwargs
+        Keyword arguments containing axis-specific chunk sizes.
+        
+    Returns
+    -------
+    Tuple
+        Chunk sizes for each axis in the array.
+    """
     return _parse_axis_params(manager, kwargs, 0, DEFAULT_CHUNKS)
 
 
 def parse_shard_coefs(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse shard coefficients for each axis."""
+    """Parse shard coefficients for each axis.
+    
+    Shard coefficients control how chunks are organized into shards
+    for optimized storage and access patterns.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing dimension information.
+    **kwargs
+        Keyword arguments containing shard coefficient values.
+        
+    Returns
+    -------
+    Tuple
+        Shard coefficients for each axis.
+    """
     return _parse_axis_params(manager, kwargs, 1, DEFAULT_SHARD_COEFS)
 
 
 def parse_scales(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse scale values for each axis."""
+    """Parse scale values for each axis.
+    
+    Scale values define the physical size of pixels/voxels along each dimension,
+    essential for NGFF metadata and proper image interpretation.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing dimension and scale information.
+    **kwargs
+        Keyword arguments containing axis-specific scale values.
+        
+    Returns
+    -------
+    Tuple
+        Scale values for each axis.
+    """
     return _parse_axis_params(manager, kwargs, 2, manager.scaledict)
 
 
 def parse_scale_factors(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse scale factors for each axis."""
+    """Parse scale factors for each axis.
+    
+    Scale factors determine the downsampling ratio for each pyramid level.
+    Defines how dimensions shrink as we move down the resolution hierarchy.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing dimension information.
+    **kwargs
+        Keyword arguments containing axis-specific scale factor values.
+        
+    Returns
+    -------
+    Tuple
+        Scale factors for each axis in the pyramid.
+    """
     return _parse_axis_params(manager, kwargs, 3, DEFAULT_SCALE_FACTORS)
 
 
 def parse_units(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse unit values for each axis (excluding channel)."""
+    """Parse unit values for each axis (excluding channel).
+    
+    Units specify the physical measurement unit for each dimension
+    (e.g., 'micrometer' for spatial, 'second' for temporal).
+    Channel axis always has no physical unit.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing unit information.
+    **kwargs
+        Keyword arguments containing axis-specific unit values.
+        
+    Returns
+    -------
+    Tuple
+        Unit strings for each non-channel axis.
+    """
     return _parse_axis_params(manager, kwargs, 4, manager.unitdict)
 
 
 def _extract_cropping_slices(kwargs: Dict) -> list:
-    """Extract cropping range parameters from kwargs."""
+    """Extract cropping range parameters from kwargs.
+    
+    Collects all cropping-related keyword arguments that define
+    rectangular regions of interest in the dataset.
+    
+    Parameters
+    ----------
+    kwargs : Dict
+        Keyword arguments containing potential cropping parameters.
+        
+    Returns
+    -------
+    list
+        List of cropping parameter values.
+    """
     return [kwargs.get(key) for key in kwargs if key in CROPPING_PARAMS]
 
 
@@ -163,7 +259,6 @@ async def _prepare_manager(manager: ArrayManager, kwargs: Dict) -> None:
     # Parse and fix channel metadata
     manager._channels = parse_channels(
         manager,
-        channel_indices='all',
         channel_intensity_limits='from_dtype'
     )
     manager.fix_bad_channels()

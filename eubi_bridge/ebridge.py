@@ -5,8 +5,9 @@ scyjava.config.endpoints.clear()
 scyjava.config.maven_offline = True
 scyjava.config.jgo_disabled = True
 
-from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, \
-    autocompute_chunk_shape, soft_start_jvm
+from eubi_bridge.utils.path_utils import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths
+from eubi_bridge.utils.array_utils import autocompute_chunk_shape
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
 
 import warnings
 warnings.filterwarnings(
@@ -32,7 +33,7 @@ from typing import Union
 # from eubi_bridge.ngff.multiscales import Pyramid
 # from eubi_bridge.ngff import defaults
 from eubi_bridge.core.data_manager import BatchManager
-from eubi_bridge.utils.convenience import take_filepaths, is_zarr_group
+from eubi_bridge.utils.path_utils import take_filepaths, is_zarr_group
 from eubi_bridge.utils.metadata_utils import print_printable, get_printables
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
@@ -111,12 +112,11 @@ class EuBIBridge:
             cluster=dict(
                 on_local_cluster = False,
                 on_slurm=False,
-                max_workers=16,  # size of the pool for sync writer
+                max_workers=4,  # size of the pool for sync writer
                 compute_batch_size = 4,
                 memory_limit_per_batch = '1GB',
-                max_concurrency = 16,  # limit how many writes run at once
-                memory_per_worker = '10GB'
-                # executor_kind = "processes",  # "threads" for I/O, "processes" for CPU-bound compression
+                max_concurrency = 4,  # limit how many writes run at once
+                memory_per_worker = '4GB'
                 ),
             readers=dict(
                 as_mosaic=False,
@@ -127,7 +127,6 @@ class EuBIBridge:
                 rotation_index=0,
                 mosaic_tile_index=0,
                 sample_index=0,
-                # use_bioformats_readers=False
             ),
             conversion=dict(
                 verbose=False,
@@ -156,10 +155,6 @@ class EuBIBridge:
                 overwrite=False,
                 override_channel_names = False,
                 channel_intensity_limits = 'from_dtype',
-                # use_tensorstore=False,
-                # use_gpu=False,
-                # rechunk_method='tasks',
-                # trim_memory=False,
                 metadata_reader='bfio',
                 save_omexml=True,
                 squeeze=True,
@@ -177,8 +172,6 @@ class EuBIBridge:
             )
         )
 
-        # self.root_defaults = defaults
-        # self.root_dask_defaults = root_dask_defaults
         config_gr = zarr.open_group(configpath, mode='a')
         config = config_gr.attrs
         for key in self.root_defaults.keys():
@@ -189,9 +182,7 @@ class EuBIBridge:
                         config[key][subkey] = self.root_defaults[key][subkey]
             config_gr.attrs[key] = config[key]
         self.config = dict(config_gr.attrs)
-        ###
         self.config_gr = config_gr
-        ###
         self._dask_temp_dir = None
 
     def _optimize_dask_config(self):
@@ -638,9 +629,9 @@ class EuBIBridge:
                           input_path: Union[Path, str],
                           includes=None,
                           excludes=None,
-                          time_scale: (int, float) = None,
-                          z_scale: (int, float) = None,
-                          y_scale: (int, float) = None,
+                          time_scale: Union[int, float] = None,
+                          z_scale: Union[int, float] = None,
+                          y_scale: Union[int, float] = None,
                           x_scale: (int, float) = None,
                           time_unit: str = None,
                           z_unit: str = None,
@@ -698,9 +689,8 @@ class EuBIBridge:
 
     def update_channel_meta(self,
                           input_path: Union[Path, str],
-                          channel_indices: list = None,
-                          channel_labels: list = None,
-                          channel_colors: list = None,
+                          channel_labels: str = '',
+                          channel_colors: str = '',
                           channel_intensity_limits = 'from_dtype',
                           includes=None,
                           excludes=None,
@@ -710,6 +700,12 @@ class EuBIBridge:
         Updates pixel metadata for image files located at the specified input path.
 
         Args:
+            input_path: Path to input file(s)
+            channel_labels: Channel labels in format "idx1,label1;idx2,label2;..." (e.g., "0,Red;1,Green")
+            channel_colors: Channel colors in format "idx1,color1;idx2,color2;..." (e.g., "0,FF0000;1,00FF00")
+            channel_intensity_limits: 'from_dtype', 'from_array', or 'auto'
+            includes: Include file patterns
+            excludes: Exclude file patterns
             **kwargs: Additional parameters for cluster and conversion configuration.
 
         Returns:
@@ -729,24 +725,12 @@ class EuBIBridge:
                     }
         extra_kwargs = {key: kwargs[key] for key in kwargs if key not in combined}
 
-
-        # Collect file paths based on inclusion and exclusion patterns
-        # Prepare pixel metadata arguments
-        items = [channel_indices, channel_labels, channel_colors]
-        if any([item is not None for item in items]):
-            assert channel_indices is not None, f"The channel_labels and channel_colors can only be modified if channel_indices is provided."
-            if isinstance(channel_indices, (int,str)):
-                channel_indices = [channel_indices]
-            channel_meta_kwargs_ = dict(channel_indices=channel_indices,
-                                       channel_labels=channel_labels,
-                                       channel_colors=channel_colors)
-            channel_meta_kwargs = {key: val for key, val in channel_meta_kwargs_.items() if val is not None}
-            for key, val in channel_meta_kwargs.items():
-                if isinstance(val, (int, str)):
-                    channel_meta_kwargs[key] = [val]
-                assert len(channel_meta_kwargs[key]) == len(channel_indices), f"If channel_labels or channel_colors are provided, they must have the same length as channel_indices."
-        else:
-            channel_meta_kwargs = {}
+        # Prepare channel metadata arguments
+        channel_meta_kwargs = {}
+        if channel_labels:
+            channel_meta_kwargs['channel_labels'] = channel_labels
+        if channel_colors:
+            channel_meta_kwargs['channel_colors'] = channel_colors
 
         run_updates(
                     os.path.abspath(input_path),

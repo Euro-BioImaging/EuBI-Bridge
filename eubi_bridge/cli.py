@@ -75,7 +75,7 @@ def _patch_xsdata_for_cython():
 
 _patch_xsdata_for_cython()
 
-from eubi_bridge.utils.convenience import soft_start_jvm
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.ebridge import EuBIBridge
 from eubi_bridge.utils.logging_config import get_logger, setup_logging
 

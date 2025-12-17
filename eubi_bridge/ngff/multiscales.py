@@ -4,24 +4,69 @@ from typing import Optional, Dict, List, Any, Tuple, Union, Iterable, ClassVar
 import copy
 import numpy as np
 import dask.array as da
+import asyncio
 from eubi_bridge.ngff import defaults
 from eubi_bridge.core.scale import Downscaler
-from eubi_bridge.utils.convenience import make_json_safe
+from eubi_bridge.utils.json_utils import make_json_safe
+from eubi_bridge.utils.logging_config import get_logger
 from natsort import natsorted
 
+logger = get_logger(__name__)
 
-def is_zarr_group(path: (str, Path)
-                  ):
+
+def is_zarr_group(path: Union[str, Path]) -> bool:
+    """
+    Quickly check if a path/store is a Zarr group.
+    
+    Used for negative checks (e.g., skipping non-Zarr files).
+    
+    Note: Intentionally catches all exceptions since the goal is a fast negative check,
+    not comprehensive validation. Any failure to open as Zarr means it's not a Zarr group.
+    
+    Parameters
+    ----------
+    path : Union[str, Path]
+        Path or store location to check
+        
+    Returns
+    -------
+    bool
+        True if path is a valid Zarr group, False otherwise
+    """
     try:
         _ = zarr.open_group(path, mode='r')
         return True
-    except:
+    except Exception:
+        # Not a valid Zarr group: could be missing, wrong format, inaccessible, etc.
         return False
 
 
 def generate_channel_metadata(num_channels,
                               dtype=np.uint16
                               ):
+    """Generate standard OMERO channel metadata with colors and intensity ranges.
+    
+    Creates metadata for each channel including distinct colors, coefficients,
+    and intensity range based on the provided dtype.
+    
+    Parameters
+    ----------
+    num_channels : int
+        Number of channels to generate metadata for.
+    dtype : numpy.dtype, optional
+        Data type to determine intensity min/max values. Default is np.uint16.
+        
+    Returns
+    -------
+    list
+        List of channel metadata dictionaries with color, coefficient, active status,
+        and intensity range (min/max).
+        
+    Raises
+    ------
+    ValueError
+        If dtype is not a supported numeric type.
+    """
     # Standard distinct microscopy colors
     default_colors = [
         "FF0000",  # Red
@@ -88,9 +133,27 @@ class NGFFMetadataHandler:
         self.zarr_format: Optional[int] = None
 
     def __enter__(self) -> 'NGFFMetadataHandler':
+        """Context manager entry: return self for use in with statement.
+        
+        Returns
+        -------
+        NGFFMetadataHandler
+            Self instance for use as context manager.
+        """
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit: save pending changes if any.
+        
+        Parameters
+        ----------
+        exc_type : type or None
+            Exception type if an exception occurred in the with block.
+        exc_val : Exception or None
+            Exception instance if an exception occurred.
+        exc_tb : traceback or None
+            Traceback if an exception occurred.
+        """
         if self._pending_changes:
             self.save_changes()
 
@@ -290,6 +353,16 @@ class NGFFMetadataHandler:
                             scale: Optional[List[float]] = None,
                             translation: Optional[List[float]] = None
                             ) -> None:
+        """Update scale and/or translation for all resolution levels.
+        
+        Parameters
+        ----------
+        scale : Optional[List[float]]
+            New scale values for coordinate transformation.
+        translation : Optional[List[float]]
+            New translation values for coordinate transformation.
+        """
+
         """Update all datasets with new scale and/or translation values."""
         for dataset in self.multiscales['datasets']:
             if scale is not None:
@@ -307,9 +380,41 @@ class NGFFMetadataHandler:
         self.metadata['omero'] = omero_meta['omero']
         self._pending_changes = True
 
-    def add_channel(self, ### TODO: NEED TO BE UPDATED!!!
+    def add_channel(self,
+                    label: str = '',
+                    color: str = '808080',
+                    coefficient: float = 1.0,
+                    family: str = 'linear',
+                    inverted: bool = False) -> None:
+        """Add a new channel to the OMERO metadata.
+        
+        Parameters
+        ----------
+        label : str, optional
+            Display label for the channel. Default is empty string.
+        color : str, optional
+            Hex color code (without #) for the channel. Default is '808080' (gray).
+        coefficient : float, optional
+            Coefficient for contrast display. Default is 1.0.
+        family : str, optional
+            Family type for color rendering ('linear', 'exponential', 'logarithmic').
+            Default is 'linear'.
+        inverted : bool, optional
+            Whether the color mapping is inverted. Default is False.
+            
+        Raises
+        ------
+        RuntimeError
+            If no metadata is loaded or created.
+        """
+        pass
+
+    def add_channel(self,
+                    label: str = '',
                     color: str = "808080",
-                    label: str = None,
+                    coefficient: float = 1.0,
+                    family: str = 'linear',
+                    inverted: bool = False,
                     dtype=None) -> None:
         """Add a channel to the OMERO metadata."""
         assert dtype is not None, f"dtype cannot be None"
@@ -363,10 +468,32 @@ class NGFFMetadataHandler:
             for i, channel in enumerate(self.metadata['omero']['channels'])
         ]
 
-    def parse_axes(self,  ###
+    def parse_axes(self,  
                    axis_order: str,
                    units: Optional[List[str]] = None) -> None:
-        """Update axes information with new axis order and units."""
+        """Update axes information with new axis order and optional units.
+        
+        Creates or updates the axes array in the multiscales metadata,
+        assigning axis types (time, channel, space) and units.
+        
+        Parameters
+        ----------
+        axis_order : str
+            String of axis characters (e.g., 'tczyx') specifying dimension order.
+            Valid characters: 't' (time), 'c' (channel), 'z'/'y'/'x' (space).
+        units : Optional[List[str]]
+            List of unit strings for each axis (e.g., ['second', None, 'micrometer', ...]).
+            If None, defaults are assigned based on axis type. Default is None.
+            For channel axis, unit is always None. For spatial axes, default is 'micrometer'.
+            For time axis, default is 'second'.
+            
+        Raises
+        ------
+        RuntimeError
+            If no metadata has been loaded or created.
+        ValueError
+            If axis order contains invalid characters.
+        """
         if self.metadata is None:
             raise RuntimeError("No metadata loaded or created.")
 
@@ -686,21 +813,49 @@ def calculate_n_layers(shape: Tuple[int, ...],
 
 class Pyramid:
     def __init__(self,
-                 gr: (zarr.Group, zarr.storage.StoreLike, Path, str) = None
+                 gr: Union[zarr.Group, zarr.storage.StoreLike, Path, str] = None
                  # An NGFF group. This contains the multiscales metadata in attrs and image layers as
                  ):
+        """Initialize a Pyramid from an NGFF-compliant Zarr group or create empty.
+        
+        Parameters
+        ----------
+        gr : Union[zarr.Group, zarr.storage.StoreLike, Path, str], optional
+            An NGFF-compliant Zarr group, storage path, or Path object.
+            If provided, metadata is read from the group. If None, creates
+            an empty pyramid to be filled with from_array() or from_ngff().
+        """
         self.meta = None
         self.gr = None
         if gr is not None:
             self.from_ngff(gr)
 
     def __repr__(self):
+        """Return string representation of pyramid.
+        
+        Returns
+        -------
+        str
+            Description showing number of layers if available, or generic 'NGFF'.
+        """
         try:
             return f"NGFF with {self.nlayers} layers."
-        except:
+        except (AttributeError, TypeError):
             return f"NGFF."
 
     def from_ngff(self, gr):
+        """Load pyramid from an NGFF-compliant Zarr group.
+        
+        Parameters
+        ----------
+        gr : zarr.Group or str or Path
+            Zarr group or path to Zarr store containing NGFF metadata.
+            
+        Returns
+        -------
+        self
+            Returns self for method chaining.
+        """
         self.meta = NGFFMetadataHandler()
         self.meta.connect_to_group(gr)
         self.meta.read_metadata()
@@ -709,21 +864,59 @@ class Pyramid:
 
     @property
     def dtype(self):
+        """Get the data type of the base (full resolution) array.
+        
+        Returns
+        -------
+        numpy.dtype
+            Data type of the highest resolution level.
+        """
         return self.base_array.dtype
 
     @property
     def shape(self):
+        """Get the shape of the base (full resolution) array.
+        
+        Returns
+        -------
+        tuple
+            Shape tuple of the highest resolution level array.
+        """
         return self.base_array.shape
 
     def from_array(self,
-                   array: (np.ndarray, da.Array, zarr.Array),
+                   array: Union[np.ndarray, da.Array, zarr.Array],
                    axis_order: str = None,
                    unit_list: List[str] = None,
                    scale: List[float] = None,
                    version: str = "0.4",
                    name: str = "Series 0",
                    ):
-        """Take an numpy or dask array and create a pyramid from it. No need to write as NGFF."""
+        """Create a pyramid from a numpy or dask array without writing to NGFF store.
+        
+        Initializes an in-memory pyramid structure with metadata but does not
+        create a Zarr store. Use store_as_ngff() to write to disk.
+        
+        Parameters
+        ----------
+        array : Union[np.ndarray, da.Array, zarr.Array]
+            Input array to create pyramid from.
+        axis_order : str, optional
+            Axis order string (e.g., 'tczyx'). If None, uses defaults for array ndim.
+        unit_list : List[str], optional
+            List of units for each axis. If None, uses defaults.
+        scale : List[float], optional
+            List of scale factors for each axis. If None, uses defaults.
+        version : str, optional
+            NGFF metadata version ('0.4' or '0.5'). Default is '0.4'.
+        name : str, optional
+            Name for the image series. Default is 'Series 0'.
+            
+        Returns
+        -------
+        self
+            Returns self for method chaining.
+        """
         if not isinstance(array, da.Array):
             array = da.from_array(array)
         ndim = array.ndim
@@ -796,7 +989,7 @@ class Pyramid:
         if all(n > 1 for n in basearr.shape):
             return self
         if isinstance(basearr, zarr.Array):
-            logger.warn(f"Zarr arrays are not supported for squeeze operation.\n"
+            logger.warning(f"Zarr arrays are not supported for squeeze operation.\n"
                         f"Zarr array for the path {self.series_path} is being converted to dask array.")
             array = da.from_array(self.array)
         else:
@@ -846,7 +1039,8 @@ class Pyramid:
         ndim = base_array.ndim
         try:
             base_scale = scales['0']
-        except:
+        except (KeyError, TypeError):
+            # Try numeric index if string key fails
             base_scale = scales[0]
         if axis_order is None:
             axes = defaults.axis_order[:ndim]
@@ -879,7 +1073,7 @@ class Pyramid:
         return self
 
     def to_ngff(self,
-                store: (zarr.Group, zarr.storage.StoreLike, Path, str),
+                store: Union[zarr.Group, zarr.storage.StoreLike, Path, str],
                 version: str = "0.5"
                 ):
         newmeta = NGFFMetadataHandler()

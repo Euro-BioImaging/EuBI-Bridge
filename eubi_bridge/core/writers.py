@@ -20,13 +20,13 @@ from typing import Union, Optional, Tuple, Any
 
 ### internal imports
 from eubi_bridge.ngff.multiscales import Pyramid, NGFFMetadataHandler
-from eubi_bridge.utils.convenience import (
+from eubi_bridge.utils.array_utils import (
     get_chunksize_from_array,
-    is_zarr_group,
     autocompute_chunk_shape,
     compute_chunk_batch,
     get_chunk_shape,
 )
+from eubi_bridge.utils.path_utils import is_zarr_group
 from eubi_bridge.utils.logging_config import get_logger
 
 # import logging, warnings
@@ -73,6 +73,28 @@ def create_zarr_array(directory: Union[Path, str, zarr.Group],
                       chunks: Tuple[int, ...],
                       dtype: Any,
                       overwrite: bool = False) -> zarr.Array:
+    """Create a new Zarr array in the specified directory or group.
+    
+    Parameters
+    ----------
+    directory : Union[Path, str, zarr.Group]
+        Directory path or Zarr group where the array will be created.
+    array_name : str
+        Name of the array to create.
+    shape : Tuple[int, ...]
+        Shape of the array.
+    chunks : Tuple[int, ...]
+        Chunk shape for the array.
+    dtype : Any
+        Data type of the array.
+    overwrite : bool, optional
+        If True, overwrite existing array with the same name. Default is False.
+        
+    Returns
+    -------
+    zarr.Array
+        The created Zarr array.
+    """
     chunks = tuple(np.minimum(shape, chunks))
 
     if not isinstance(directory, zarr.Group):
@@ -96,6 +118,26 @@ def create_zarr_array(directory: Union[Path, str, zarr.Group],
 def get_regions(array_shape: Tuple[int, ...],
                 region_shape: Tuple[int, ...],
                 as_slices: bool = False) -> list:
+    """Generate regions for tiled access to an array.
+    
+    Divides an array into regions of specified size, returning either
+    coordinate tuples or Python slice objects for each region.
+    
+    Parameters
+    ----------
+    array_shape : Tuple[int, ...]
+        Shape of the full array.
+    region_shape : Tuple[int, ...]
+        Shape of each region/tile.
+    as_slices : bool, optional
+        If True, return regions as slice objects. If False, return as
+        coordinate tuples. Default is False.
+        
+    Returns
+    -------
+    list
+        List of regions, either as coordinate tuples or slice objects.
+    """
     assert len(array_shape) == len(region_shape)
     steps = []
     for size, inc in zip(array_shape, region_shape):
@@ -149,7 +191,8 @@ def get_compressor(name,
 def get_default_fill_value(dtype):
     try:
         dtype = np.dtype(dtype.name)
-    except:
+    except (AttributeError, TypeError):
+        # dtype may not have .name attribute or conversion may fail
         pass
     if np.issubdtype(dtype, np.integer):
         return 0
@@ -596,7 +639,7 @@ import dask.array as da
 import zarr
 import tensorstore as ts
 from typing import Union, Optional, Tuple, Any
-from eubi_bridge.utils.convenience import make_kvstore
+from eubi_bridge.utils.storage_utils import make_kvstore
 
 
 async def write_with_tensorstore_async(
@@ -829,7 +872,8 @@ async def downscale_with_tensorstore_async(
 
     try:
         grpath = pyr.gr.store.root
-    except:
+    except AttributeError:
+        # Fallback for stores without .root attribute
         grpath = pyr.gr.store.path
     basepath = pyr.meta.resolution_paths[0]
     base_layer = pyr.layers[basepath]
@@ -837,7 +881,8 @@ async def downscale_with_tensorstore_async(
 
     try:
         compressor_params = base_layer.compressors[0].get_config()
-    except:
+    except (AttributeError, IndexError):
+        # Fallback if get_config() not available or no compressors
         compressor_params = base_layer.compressors[0].to_dict()#dict(base_layer.codec.to_json())
     if 'id' in compressor_params:
         compressor_name = compressor_params['id']
@@ -901,7 +946,8 @@ def _get_or_create_multimeta(gr: zarr.Group,
     handler.connect_to_group(gr)
     try:
         handler.read_metadata()
-    except:
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        # Metadata doesn't exist or is invalid, create new
         handler.create_new(version=version)
         handler.parse_axes(axis_order=axis_order, units=unit_list)
     return handler

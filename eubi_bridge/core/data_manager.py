@@ -12,8 +12,8 @@ from typing import Union, Optional, Any, Dict, List, Iterable
 
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.ngff.defaults import unit_map, scale_map, default_axes
-from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, \
-    autocompute_chunk_shape
+from eubi_bridge.utils.path_utils import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths
+from eubi_bridge.utils.array_utils import autocompute_chunk_shape
 from eubi_bridge.core.readers import (read_metadata_via_bioio_bioformats,
                                       read_metadata_via_extension,
                                       read_metadata_via_bfio,
@@ -298,23 +298,25 @@ class PFFImageMeta:
     async def read_omemeta(self):
         if self.root.endswith('ome') or self.root.endswith('xml'):
             from ome_types import OME
-            omemeta = OME().from_xml(path)
+            omemeta = OME().from_xml(self.root)
         else:
             if self._meta_reader == 'bioio':
                 # Try to read the metadata via bioio
                 try:
-                    omemeta = read_metadata_via_extension(self.root, series=self._series)
-                except:
-                    # If not found, try to read the metadata via bioformats
-                    omemeta = read_metadata_via_bioio_bioformats(self.root, series=self._series)
+                    omemeta = await read_metadata_via_extension(self.root, series=self._series)
+                except Exception as e:
+                    # Fallback to bioformats if bioio extension reader fails
+                    logger.debug(f"bioio extension reader failed for {self.root}: {e}. Falling back to bioformats.")
+                    omemeta = await read_metadata_via_bioio_bioformats(self.root, series=self._series)
             elif self._meta_reader == 'bfio':
                 try:
-                    omemeta = read_metadata_via_bfio(self.root)  # don't pass series, will be handled afterwards
-                except:
-                    # If not found, try to read the metadata via bioformats
-                    omemeta = read_metadata_via_bioio_bioformats(self.root, series=self._series)  ### make series plural
+                    omemeta = await read_metadata_via_bfio(self.root)  # don't pass series, will be handled afterwards
+                except Exception as e:
+                    # Fallback to bioformats if bfio reader fails
+                    logger.debug(f"bfio reader failed for {self.root}: {e}. Falling back to bioformats.")
+                    omemeta = await read_metadata_via_bioio_bioformats(self.root, series=self._series)
             else:
-                raise ValueError(f"Unsupported metadata reader: {sef._meta_reader}")
+                raise ValueError(f"Unsupported metadata reader: {self._meta_reader}")
         self.omemeta = omemeta
         self._n_scenes = len(self.omemeta.images)
 
@@ -369,10 +371,13 @@ class PFFImageMeta:
 
     @property
     def n_tiles(self):
-        try:
-            return self.reader.n_tiles
-        except:
-            return self._n_tiles
+        """Get number of tiles, with fallback to cached value."""
+        if self.reader is not None and hasattr(self.reader, 'n_tiles'):
+            try:
+                return self.reader.n_tiles
+            except Exception as e:
+                logger.warning(f"Failed to get n_tiles from reader: {e}. Using cached value.")
+        return self._n_tiles
 
     @property
     def n_scenes(self):
@@ -384,12 +389,18 @@ class PFFImageMeta:
 
 
     def get_pixels(self):
+        """Get pixels metadata from OME metadata, with validation."""
+        if self.omemeta is None:
+            raise ValueError(f"OME metadata not loaded for path {self.root}")
+        if self._series >= len(self.omemeta.images):
+            raise ValueError(f"Series {self._series} out of range for path {self.root}")
+        
         try:
             pixels = self.omemeta.images[self._series].pixels
             missing_fields = self.essential_omexml_fields - pixels.model_fields_set
             pixels.model_fields_set.update(missing_fields)
-        except:
-            raise ValueError(f"For the path {self.root} and series{self._series}")
+        except (AttributeError, IndexError) as e:
+            raise ValueError(f"Failed to get pixels from path {self.root} series {self._series}: {e}") from e
         return pixels
 
     @property
@@ -762,7 +773,7 @@ class ArrayManager:  ### Unify the classes above.
         # Will be set during init()
         self.img = None
         self.axes: str = ""
-        self.array: Optional[da.Array, zarr.Array] = None
+        self.array: Optional[Union[da.Array, zarr.Array]] = None
         self.ndim: Optional[int] = None
         self.caxes: str = ""
         self.chunkdict: Dict[str, Any] = {}
@@ -1218,10 +1229,11 @@ class ArrayManager:  ### Unify the classes above.
 
         # Update / write OME XML if exists or requested to create
         try:
-            if 'OME' in list(self.pyr.gr.keys()) or create_omexml_if_not_exists:
+            if self.pyr.gr is not None and ('OME' in list(self.pyr.gr.keys()) or create_omexml_if_not_exists):
                 await self.save_omexml(self.pyr.gr.store.root, overwrite=True)
-        except:
-            pass
+        except (OSError, AttributeError) as e:
+            # OSError for filesystem issues, AttributeError for store without local root
+            logger.warning(f"Failed to save OME-XML for pyramid: {e}")
         if save_changes:
             await asyncio.to_thread(self.pyr.meta.save_changes)
 
@@ -1254,8 +1266,9 @@ class ArrayManager:  ### Unify the classes above.
         gr = await asyncio.to_thread(zarr.group, base_path)
         try:
             path = os.path.join(gr.store.root, 'OME', 'METADATA.ome.xml')
-        except:
-            logger.warn(f"Writing OME-XML is currently only possible with local stores.")
+        except AttributeError as e:
+            # Zarr store doesn't have .root attribute (e.g., cloud storage)
+            logger.warning(f"Writing OME-XML is currently only possible with local stores: {e}")
             return
         await asyncio.to_thread(gr.create_group, 'OME', overwrite=overwrite)
 

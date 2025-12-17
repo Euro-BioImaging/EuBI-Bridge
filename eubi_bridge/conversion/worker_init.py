@@ -105,7 +105,7 @@ def initialize_worker_process():
         pass
 
     # Now start JVM with bundled JARs
-    from eubi_bridge.utils.convenience import soft_start_jvm
+    from eubi_bridge.utils.jvm_manager import soft_start_jvm
 
     try:
         soft_start_jvm()
