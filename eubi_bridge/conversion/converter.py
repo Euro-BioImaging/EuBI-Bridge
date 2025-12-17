@@ -1,21 +1,24 @@
-from eubi_bridge.utils.path_utils import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths
+import asyncio
+import multiprocessing as mp
+import os
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from typing import Union
+
+import numpy as np
+import pandas as pd
+import s3fs
+from natsort import natsorted
+
+from eubi_bridge.conversion.aggregative_conversion_base import \
+    AggregativeConverter
+from eubi_bridge.conversion.conversion_worker import (aggregative_worker_sync,
+                                                      unary_worker_sync)
+from eubi_bridge.conversion.worker_init import initialize_worker_process
 from eubi_bridge.utils.array_utils import autocompute_chunk_shape
 from eubi_bridge.utils.jvm_manager import soft_start_jvm
-
-import os, multiprocessing as mp
-import asyncio
-import s3fs
-import numpy as np, pandas as pd
-from natsort import natsorted
-from typing import Union
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
-from eubi_bridge.conversion.conversion_worker import unary_worker_sync, aggregative_worker_sync
-from eubi_bridge.utils.path_utils import take_filepaths
-from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger
-from eubi_bridge.conversion.worker_init import initialize_worker_process
-
+from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
+                                          sensitive_glob, take_filepaths)
 
 logger = get_logger(__name__)
 
@@ -97,7 +100,7 @@ async def run_conversions_from_filepaths_with_local_cluster(
             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
         **global_kwargs: global defaults for all conversions
     """
-    from distributed import LocalCluster, Client
+    from distributed import Client, LocalCluster
     df = take_filepaths(input_path, **global_kwargs)
     # Optionally create dirs before running
     for odir in df["output_path"].unique():
@@ -154,11 +157,13 @@ async def run_conversions_from_filepaths_with_slurm(
                 slurm_account, slurm_partition, slurm_time, slurm_mem, slurm_cores
     """
     import os
-    from dask_jobqueue import SLURMCluster
+
     from dask.distributed import Client
-    from eubi_bridge.utils.path_utils import take_filepaths
+    from dask_jobqueue import SLURMCluster
+
     from eubi_bridge.conversion.conversion_worker import unary_worker_sync
     from eubi_bridge.utils.logging_config import get_logger
+    from eubi_bridge.utils.path_utils import take_filepaths
     logger = get_logger(__name__)
 
     # --- Prepare file list ---

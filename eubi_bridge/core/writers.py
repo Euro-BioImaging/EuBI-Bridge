@@ -1,33 +1,30 @@
 # os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
-import time
+import concurrent.futures
 import itertools
-import zarr
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+
 import dask
 import numcodecs
+import numpy as np
 import s3fs
+import tensorstore as ts
+import zarr
+from dask import delayed
+from distributed import get_client
 from zarr import codecs
 from zarr.storage import LocalStore
-from dataclasses import dataclass
-from dask import delayed
-import numpy as np
-from pathlib import Path
-from typing import List, Dict, Sequence
-from distributed import get_client
-import concurrent.futures
-import tensorstore as ts
-from typing import Union, Optional, Tuple, Any
-
 
 ### internal imports
-from eubi_bridge.ngff.multiscales import Pyramid, NGFFMetadataHandler
-from eubi_bridge.utils.array_utils import (
-    get_chunksize_from_array,
-    autocompute_chunk_shape,
-    compute_chunk_batch,
-    get_chunk_shape,
-)
-from eubi_bridge.utils.path_utils import is_zarr_group
+from eubi_bridge.ngff.multiscales import NGFFMetadataHandler, Pyramid
+from eubi_bridge.utils.array_utils import (autocompute_chunk_shape,
+                                           compute_chunk_batch,
+                                           get_chunk_shape,
+                                           get_chunksize_from_array)
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.path_utils import is_zarr_group
 
 # import logging, warnings
 
@@ -631,14 +628,16 @@ async def write_block_optimized(arr, ts_store, block_slices):
 
 import asyncio
 import concurrent.futures
-import numpy as np
+import copy
 import math
 import os
-import copy
+from typing import Any, Optional, Tuple, Union
+
 import dask.array as da
-import zarr
+import numpy as np
 import tensorstore as ts
-from typing import Union, Optional, Tuple, Any
+import zarr
+
 from eubi_bridge.utils.storage_utils import make_kvstore
 
 

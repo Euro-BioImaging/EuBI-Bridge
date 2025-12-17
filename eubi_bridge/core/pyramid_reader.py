@@ -2,17 +2,18 @@
 Reader for NGFF/Zarr pyramid datasets.
 """
 
-import fsspec
-import numpy as np
 from typing import Any, Optional
 
-from dask import delayed
-import dask, zarr
+import dask
 import dask.array as da
+import fsspec
+import numpy as np
+import zarr
+from dask import delayed
 
+from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.logging_config import get_logger
-from eubi_bridge.core.reader_interface import ImageReader
 
 logger = get_logger(__name__)
 

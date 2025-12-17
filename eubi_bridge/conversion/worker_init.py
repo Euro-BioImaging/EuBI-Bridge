@@ -1,10 +1,9 @@
 """
 Worker initialization module for multiprocessing with JVM support.
 """
+import multiprocessing as mp
 import os
 import sys
-import multiprocessing as mp
-
 
 # Global flag to track if worker is initialized
 _worker_initialized = False
@@ -74,8 +73,9 @@ def initialize_worker_process():
                   file=sys.stderr, flush=True)
             # Try to use install-jdk
             try:
-                import jdk
                 from pathlib import Path
+
+                import jdk
                 jdkpath = Path(jdk._JDK_DIR)
                 jdkpath.mkdir(parents=True, exist_ok=True)
 

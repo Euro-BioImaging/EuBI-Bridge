@@ -1,8 +1,9 @@
 import copy
+
 import numpy as np
 
-from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.json_utils import make_json_safe
+from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 

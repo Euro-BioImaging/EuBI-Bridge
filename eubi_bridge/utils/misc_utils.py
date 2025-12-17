@@ -1,10 +1,11 @@
 """Miscellaneous utility functions for data processing."""
 
 import time
-from typing import Union, Tuple, List, Callable
+from pathlib import Path
+from typing import Callable, List, Tuple, Union
+
 import numpy as np
 import zarr
-from pathlib import Path
 
 from eubi_bridge.utils.logging_config import get_logger
 

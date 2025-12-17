@@ -1,25 +1,29 @@
-import zarr, natsort, copy, asyncio
-
-import zarr, psutil, dask, json
-import numpy as np, os
-
-from ome_types.model import OME, Image, Pixels, Channel  # TiffData, Plane
-from ome_types.model import PixelType, Pixels_DimensionOrder, UnitsLength, UnitsTime
-
-from dask import array as da
+import asyncio
+import copy
+import json
+import os
 from pathlib import Path
-from typing import Union, Optional, Any, Dict, List, Iterable
+from typing import Any, Dict, Iterable, List, Optional, Union
 
+import dask
+import natsort
+import numpy as np
+import psutil
+import zarr
+from dask import array as da
+from ome_types.model import (OME, Channel, Image, Pixels,  # TiffData, Plane
+                             Pixels_DimensionOrder, PixelType, UnitsLength,
+                             UnitsTime)
+
+from eubi_bridge.core.readers import (  # read_single_image_asarray,
+    read_metadata_via_bfio, read_metadata_via_bioio_bioformats,
+    read_metadata_via_extension, read_single_image)
+from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
-from eubi_bridge.ngff.defaults import unit_map, scale_map, default_axes
-from eubi_bridge.utils.path_utils import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths
 from eubi_bridge.utils.array_utils import autocompute_chunk_shape
-from eubi_bridge.core.readers import (read_metadata_via_bioio_bioformats,
-                                      read_metadata_via_extension,
-                                      read_metadata_via_bfio,
-                                      # read_single_image_asarray,
-                                      read_single_image)
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
+                                          sensitive_glob, take_filepaths)
 
 # Set up logger for this module
 logger = get_logger(__name__)

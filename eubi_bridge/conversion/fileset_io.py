@@ -1,6 +1,6 @@
 import copy
-import re
 import os
+import re
 from typing import Dict, Iterable, List, Union
 
 import dask.array as da
@@ -8,7 +8,8 @@ import numpy as np
 from dask import delayed
 from natsort import natsorted
 
-from eubi_bridge.core.data_manager import ArrayManager, ChannelIterator #, prune_seriesfix
+from eubi_bridge.core.data_manager import (ArrayManager,  # , prune_seriesfix
+                                           ChannelIterator)
 from eubi_bridge.utils.logging_config import get_logger
 
 # Set up logger for this module

@@ -1,5 +1,5 @@
-import os
 import multiprocessing as mp
+import os
 
 # === CRITICAL: Set multiprocessing method FIRST ===
 # This MUST happen before any other imports that might create process pools
@@ -44,9 +44,10 @@ try:
 except ImportError:
     pass  # JGO not installed, even better
 
+import warnings
+
 # === Now safe to import other modules ===
 import fire
-import warnings
 
 
 # Patch xsdata for Cython compatibility BEFORE importing anything that uses ome_types
@@ -75,8 +76,8 @@ def _patch_xsdata_for_cython():
 
 _patch_xsdata_for_cython()
 
-from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.ebridge import EuBIBridge
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger, setup_logging
 
 logger = get_logger(__name__)

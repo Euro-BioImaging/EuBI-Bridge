@@ -5,17 +5,18 @@ This is the generic fallback reader that handles any format supported by bioio,
 including OME-TIFF, CZI, LIF, ND2, PNG, JPG, and anything bioformats can open.
 """
 
+from typing import Any, Optional
+
+import dask
+import dask.array as da
 import fsspec
 import numpy as np
-
+import zarr
 from dask import delayed
-import dask, zarr
-import dask.array as da
-from typing import Any, Optional
-from eubi_bridge.ngff.multiscales import Pyramid
 
-from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.core.reader_interface import ImageReader
+from eubi_bridge.ngff.multiscales import Pyramid
+from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 

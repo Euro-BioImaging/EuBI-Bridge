@@ -7,17 +7,19 @@ This module provides:
 - Utilities for handling OME metadata
 """
 
+import asyncio
+
+import dask
 import fsspec
 import numpy as np
-
+import zarr
 from dask import delayed
-import dask, zarr, asyncio
-from eubi_bridge.utils.jvm_manager import soft_start_jvm
 
-from eubi_bridge.ngff.multiscales import Pyramid
-from eubi_bridge.utils.logging_config import get_logger
-from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.core.metadata_extractors import MetadataExtractorFactory
+from eubi_bridge.core.reader_interface import ImageReader
+from eubi_bridge.ngff.multiscales import Pyramid
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
+from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -192,7 +194,8 @@ async def read_metadata_via_bioio_bioformats(input_path: str, **kwargs):
     ome_types.model.OME
         OME metadata object.
     """
-    from eubi_bridge.core.metadata_extractors import BioFormatsMetadataExtractor
+    from eubi_bridge.core.metadata_extractors import \
+        BioFormatsMetadataExtractor
     
     series = kwargs.get('series', None)
     extractor = BioFormatsMetadataExtractor()

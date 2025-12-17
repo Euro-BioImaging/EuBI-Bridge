@@ -1,5 +1,6 @@
 import logging
 import sys
+
 import bfio  # must import first
 from rich.console import Console
 from rich.logging import RichHandler

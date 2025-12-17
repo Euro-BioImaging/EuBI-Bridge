@@ -7,12 +7,13 @@ from typing import Union
 import dask
 import numpy as np
 
+from eubi_bridge.conversion.fileset_io import BatchFile
 # Local application imports
 from eubi_bridge.core.data_manager import BatchManager
-from eubi_bridge.core.readers import read_single_image, read_single_image_delayed
-from eubi_bridge.conversion.fileset_io import BatchFile
+from eubi_bridge.core.readers import (read_single_image,
+                                      read_single_image_delayed)
+from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
-from eubi_bridge.ngff.defaults import unit_map, scale_map, default_axes
 from eubi_bridge.utils.path_utils import take_filepaths
 
 # Configure logging

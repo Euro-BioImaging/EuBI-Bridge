@@ -2,19 +2,20 @@
 Reader for HDF5 files.
 """
 
-import fsspec
-import fsspec.core
-import fsspec.compression
-import fsspec.spec
-import numpy as np
 from typing import Any, Optional
 
-from dask import delayed
-import dask, zarr
+import dask
 import dask.array as da
+import fsspec
+import fsspec.compression
+import fsspec.core
+import fsspec.spec
+import numpy as np
+import zarr
+from dask import delayed
 
-from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.core.reader_interface import ImageReader
+from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 

@@ -7,7 +7,8 @@ improving type safety and extensibility.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Any
+from typing import Any, Optional
+
 import dask.array as da
 
 

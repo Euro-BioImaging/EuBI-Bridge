@@ -5,9 +5,9 @@ Separates metadata extraction from array reading, allowing independent
 strategies for different file formats and metadata sources.
 """
 
-from abc import ABC, abstractmethod
-from typing import Optional, Any
 import asyncio
+from abc import ABC, abstractmethod
+from typing import Any, Optional
 
 from eubi_bridge.utils.logging_config import get_logger
 

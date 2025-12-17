@@ -2,13 +2,14 @@
 Reader for Zeiss CZI microscopy files.
 """
 
-import numpy as np
 import os
-from typing import Union, Iterable, Optional, Any
-import dask.array as da
+from typing import Any, Iterable, Optional, Union
 
-from eubi_bridge.utils.logging_config import get_logger
+import dask.array as da
+import numpy as np
+
 from eubi_bridge.core.reader_interface import ImageReader
+from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 

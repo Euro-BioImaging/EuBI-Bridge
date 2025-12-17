@@ -3,9 +3,10 @@
 import glob
 import os
 from pathlib import Path
-from typing import List, Union, Optional, Tuple
-import pandas as pd
+from typing import List, Optional, Tuple, Union
+
 import numpy as np
+import pandas as pd
 
 from eubi_bridge.utils.logging_config import get_logger
 

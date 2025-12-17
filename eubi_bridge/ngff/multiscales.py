@@ -1,15 +1,17 @@
-import zarr
-from pathlib import Path
-from typing import Optional, Dict, List, Any, Tuple, Union, Iterable, ClassVar
-import copy
-import numpy as np
-import dask.array as da
 import asyncio
-from eubi_bridge.ngff import defaults
+import copy
+from pathlib import Path
+from typing import Any, ClassVar, Dict, Iterable, List, Optional, Tuple, Union
+
+import dask.array as da
+import numpy as np
+import zarr
+from natsort import natsorted
+
 from eubi_bridge.core.scale import Downscaler
+from eubi_bridge.ngff import defaults
 from eubi_bridge.utils.json_utils import make_json_safe
 from eubi_bridge.utils.logging_config import get_logger
-from natsort import natsorted
 
 logger = get_logger(__name__)
 

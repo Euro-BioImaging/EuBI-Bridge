@@ -1,18 +1,25 @@
-import tensorstore as ts
-import zarr, asyncio
-import numpy as np, pandas as pd
-from eubi_bridge.conversion.fileset_io import BatchFile, FileSet
-from eubi_bridge.utils.path_utils import take_filepaths, is_zarr_group
-from eubi_bridge.utils.misc_utils import ChannelMap
-from eubi_bridge.core.data_manager import ArrayManager
-from eubi_bridge.core.writers import write_with_tensorstore_async, _get_or_create_multimeta, _create_zarr_v2_array, CompressorConfig
-from eubi_bridge.core.writers import store_multiscale_async
-from eubi_bridge.conversion.fileset_io import BatchFile
-from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
-from eubi_bridge.utils.metadata_utils import generate_channel_metadata, parse_channels
-from typing import Union, Dict
+import asyncio
+from typing import Dict, Union
 
+import numpy as np
+import pandas as pd
+import tensorstore as ts
+import zarr
+
+from eubi_bridge.conversion.aggregative_conversion_base import \
+    AggregativeConverter
+from eubi_bridge.conversion.fileset_io import BatchFile, FileSet
+from eubi_bridge.core.data_manager import ArrayManager
+from eubi_bridge.core.writers import (CompressorConfig, _create_zarr_v2_array,
+                                      _get_or_create_multimeta,
+                                      store_multiscale_async,
+                                      write_with_tensorstore_async)
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.metadata_utils import (generate_channel_metadata,
+                                              parse_channels)
+from eubi_bridge.utils.misc_utils import ChannelMap
+from eubi_bridge.utils.path_utils import is_zarr_group, take_filepaths
+
 logger = get_logger(__name__)
 
 

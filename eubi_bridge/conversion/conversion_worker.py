@@ -5,27 +5,28 @@ This module provides async workers for converting image data to zarr format,
 supporting both unary (single-file) and aggregative (multi-file) conversion modes.
 """
 
-# Add these imports at the top of conversion_worker.py
-from eubi_bridge.conversion.worker_init import safe_worker_wrapper
-import sys
-
-
-from eubi_bridge.utils.path_utils import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths
-from eubi_bridge.utils.array_utils import autocompute_chunk_shape
-from eubi_bridge.utils.jvm_manager import soft_start_jvm
-
-# soft_start_jvm()
-
 import asyncio
 import os
-from typing import Union, Dict, Tuple, Optional, Any
+import sys
+from typing import Any, Dict, Optional, Tuple, Union
 
 import pandas as pd
 
+# Add these imports at the top of conversion_worker.py
+from eubi_bridge.conversion.worker_init import safe_worker_wrapper
 from eubi_bridge.core.data_manager import ArrayManager
 from eubi_bridge.core.writers import store_multiscale_async
+from eubi_bridge.utils.array_utils import autocompute_chunk_shape
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.metadata_utils import parse_channels
+from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
+                                          sensitive_glob, take_filepaths)
+
+# soft_start_jvm()
+
+
+
 
 logger = get_logger(__name__)
 

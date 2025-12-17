@@ -1,9 +1,9 @@
 """JVM initialization and management."""
 
 import os
-import sys
 import pathlib
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -169,11 +169,11 @@ def find_libjvm() -> str:
 
 def soft_start_jvm() -> None:
     """Start JVM with bundled JARs only, bypassing Maven/JGO entirely."""
+    import pathlib
     import traceback
 
     # Critical: Import scyjava AFTER environment setup
     import scyjava
-    import pathlib
 
     if scyjava.jvm_started():
         return

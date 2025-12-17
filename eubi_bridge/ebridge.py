@@ -5,11 +5,13 @@ scyjava.config.endpoints.clear()
 scyjava.config.maven_offline = True
 scyjava.config.jgo_disabled = True
 
-from eubi_bridge.utils.path_utils import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths
+import warnings
+
 from eubi_bridge.utils.array_utils import autocompute_chunk_shape
 from eubi_bridge.utils.jvm_manager import soft_start_jvm
+from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
+                                          sensitive_glob, take_filepaths)
 
-import warnings
 warnings.filterwarnings(
     "ignore",
     message="Dask configuration key 'distributed.p2p.disk' has been deprecated",
@@ -23,22 +25,30 @@ warnings.filterwarnings(
     module="bioio_tifffile.reader",
 )
 
-import shutil, time, zarr, pprint, psutil, dask, s3fs
-import numpy as np, os, tempfile
-
-from dask import array as da
+import os
+import pprint
+import shutil
+import tempfile
+import time
 from pathlib import Path
 from typing import Union
 
+import dask
+import numpy as np
+import psutil
+import s3fs
+import zarr
+from dask import array as da
+
+from eubi_bridge.conversion.aggregative_conversion_base import \
+    AggregativeConverter
+from eubi_bridge.conversion.converter import run_conversions
+from eubi_bridge.conversion.updater import run_updates
 # from eubi_bridge.ngff.multiscales import Pyramid
 # from eubi_bridge.ngff import defaults
 from eubi_bridge.core.data_manager import BatchManager
-from eubi_bridge.utils.path_utils import take_filepaths, is_zarr_group
-from eubi_bridge.utils.metadata_utils import print_printable, get_printables
 from eubi_bridge.utils.logging_config import get_logger
-from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
-from eubi_bridge.conversion.converter import run_conversions
-from eubi_bridge.conversion.updater import run_updates
+from eubi_bridge.utils.metadata_utils import get_printables, print_printable
 
 # Set up logger for this module
 logger = get_logger(__name__)

@@ -1,7 +1,8 @@
 """Array processing utilities for Dask, Zarr, and NumPy arrays."""
 
 import math
-from typing import Union, Tuple, Optional
+from typing import Optional, Tuple, Union
+
 import numpy as np
 import zarr
 from dask import array as da
