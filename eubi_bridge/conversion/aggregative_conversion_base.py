@@ -1,5 +1,8 @@
 # Standard library imports
+import logging
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Union
 
@@ -14,11 +17,11 @@ from eubi_bridge.core.readers import (read_single_image,
                                       read_single_image_delayed)
 from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
+from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import take_filepaths
 
 # Configure logging
-# logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
-# warnings.filterwarnings('ignore')
+logger = get_logger(__name__)
 
 
 
@@ -399,3 +402,39 @@ class AggregativeConverter:
             processed_shard_coeffs[output_path] = final_shard_coeffs
 
         return processed_chunk_sizes, processed_shard_coeffs
+
+    def _cleanup_temp_dir(self):
+        """Clean up temporary directory if it exists.
+
+        Properly handles both tempfile.TemporaryDirectory objects and string paths.
+        """
+        if self._dask_temp_dir is None:
+            return
+
+        try:
+            if isinstance(self._dask_temp_dir, tempfile.TemporaryDirectory):
+                self._dask_temp_dir.cleanup()
+            elif isinstance(self._dask_temp_dir, (str, Path)):
+                path = Path(self._dask_temp_dir)
+                if path.exists():
+                    shutil.rmtree(path)
+        except Exception as e:
+            logger.warning(f"Error cleaning up temporary directory: {e}")
+        finally:
+            self._dask_temp_dir = None
+
+    def __enter__(self):
+        """Context manager entry for resource management."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with proper cleanup."""
+        self._cleanup_temp_dir()
+        return False
+
+    def __del__(self):
+        """Destructor to ensure cleanup on garbage collection."""
+        try:
+            self._cleanup_temp_dir()
+        except Exception:
+            pass  # Silence errors during destruction

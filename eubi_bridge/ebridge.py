@@ -196,21 +196,31 @@ class EuBIBridge:
         self._dask_temp_dir = None
 
     def _optimize_dask_config(self):
-        """Optimize Dask configuration for maximum conversion speed.
+        """Optimize Dask configuration for maximum conversion speed and memory efficiency.
 
         This configuration is tuned for high-performance data processing with Dask,
-        focusing on maximizing throughput while maintaining system stability.
-        The settings are optimized for I/O and CPU-bound workloads.
+        focusing on maximizing throughput while maintaining system stability and
+        preventing memory overflow.
+
+        Performance Notes:
+        - Task fusion reduces graph size and improves scheduler efficiency
+        - Memory management prevents OOM errors with large datasets
+        - Spill to disk allows processing beyond RAM capacity
+        - Culling removes unnecessary task dependencies
         """
 
         # Get system information for adaptive configuration
         total_memory = psutil.virtual_memory().total
         total_cores = psutil.cpu_count(logical=False) or psutil.cpu_count() or 4
 
-        # Calculate memory fractions based on available memory
-        memory_target = float(os.getenv('DASK_MEMORY_TARGET', '0.8'))
-        memory_spill = float(os.getenv('DASK_MEMORY_SPILL', '0.9'))
-        memory_pause = float(os.getenv('DASK_MEMORY_PAUSE', '0.95'))
+        # Calculate memory limits based on available memory
+        memory_target_fraction = float(os.getenv('DASK_MEMORY_TARGET', '0.6'))
+        memory_spill_fraction = float(os.getenv('DASK_MEMORY_SPILL', '0.8'))
+        memory_pause_fraction = float(os.getenv('DASK_MEMORY_PAUSE', '0.95'))
+
+        # Convert fractions to bytes
+        memory_target = int(total_memory * memory_target_fraction)
+        memory_spill = int(total_memory * memory_spill_fraction)
 
         dask.config.set({
             # Task scheduling and execution
@@ -220,8 +230,46 @@ class EuBIBridge:
             'optimization.fuse.rename-keys': True,
             'optimization.culling.active': True,  # Remove unnecessary tasks
             'optimization.rewrite.fuse': True,
-
+            # Memory management
+            'dataframe.shuffle-compression': 'lz4',
+            'array.chunk-size': '128 MiB',  # Default chunk size
         })
+
+    def _cleanup_temp_dir(self):
+        """Clean up temporary directory if it exists.
+
+        Properly handles both tempfile.TemporaryDirectory objects and string paths.
+        """
+        if self._dask_temp_dir is None:
+            return
+
+        try:
+            if isinstance(self._dask_temp_dir, tempfile.TemporaryDirectory):
+                self._dask_temp_dir.cleanup()
+            elif isinstance(self._dask_temp_dir, (str, Path)):
+                path = Path(self._dask_temp_dir)
+                if path.exists():
+                    shutil.rmtree(path)
+        except Exception as e:
+            logger.warning(f"Error cleaning up temporary directory: {e}")
+        finally:
+            self._dask_temp_dir = None
+
+    def __enter__(self):
+        """Context manager entry for resource management."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with proper cleanup."""
+        self._cleanup_temp_dir()
+        return False
+
+    def __del__(self):
+        """Destructor to ensure cleanup on garbage collection."""
+        try:
+            self._cleanup_temp_dir()
+        except Exception:
+            pass  # Silence errors during destruction
 
     def reset_config(self):
         """
@@ -627,13 +675,14 @@ class EuBIBridge:
 
         ###### Shutdown and clean up
         if self.client is not None:
-            self.client.shutdown()
-            self.client.close()
+            try:
+                self.client.shutdown()
+            except Exception as e:
+                logger.warning(f"Error shutting down Dask client: {e}")
+            finally:
+                self.client.close()
 
-        if isinstance(self._dask_temp_dir, tempfile.TemporaryDirectory):
-            shutil.rmtree(self._dask_temp_dir.name)
-        else:
-            shutil.rmtree(self._dask_temp_dir)
+        self._cleanup_temp_dir()
 
     def update_pixel_meta(self,
                           input_path: Union[Path, str],
