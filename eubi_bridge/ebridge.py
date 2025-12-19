@@ -142,7 +142,7 @@ class EuBIBridge:
                 verbose=False,
                 zarr_format=2,
                 skip_dask=False,
-                auto_chunk=False,
+                auto_chunk=True,
                 target_chunk_mb=1,
                 time_chunk=1,
                 channel_chunk=1,

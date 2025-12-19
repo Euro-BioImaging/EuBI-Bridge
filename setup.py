@@ -19,7 +19,8 @@ from pathlib import Path
 
 # GitHub repository details for JDK downloads
 GITHUB_REPO = "Euro-BioImaging/EuBI-Bridge"
-GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
+GITHUB_BRANCH = "bf_bundled"  # Change to "main" for production release
+GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}"
 JDK_BASE_PATH = Path(__file__).parent / "bioformats" / "jdk"
 
 
@@ -52,12 +53,14 @@ def download_and_extract_jdk():
     Download the platform-specific JDK from GitHub and extract it locally.
     
     This function is called during setup to prepare the JDK for the current platform.
-    The JDK is only downloaded if not already present locally.
+    The JDK MUST be downloaded and extracted at installation time.
+    
+    This is CRITICAL for HPC environments where runtime downloads are unstable.
     
     Raises
     ------
     RuntimeError
-        If download or extraction fails
+        If download or extraction fails (installation will fail)
     """
     platform_id = get_platform_identifier()
     jdk_platform_path = JDK_BASE_PATH / platform_id
@@ -67,25 +70,67 @@ def download_and_extract_jdk():
         print(f"✓ JDK for {platform_id} already present at {jdk_platform_path}")
         return
     
-    print(f"Preparing JDK for {platform_id}...")
+    print(f"\n{'='*70}")
+    print(f"DOWNLOADING JDK FOR {platform_id.upper()}")
+    print(f"{'='*70}")
     
     # Create directory structure if needed
     JDK_BASE_PATH.mkdir(parents=True, exist_ok=True)
     
-    # For development/local setup: JDKs are already in repo
-    # For PyPI installs: would need to download from GitHub
-    # Since this is typically run in development, we skip download if already versioned
-    if not jdk_platform_path.exists():
-        print(
-            f"Warning: JDK for {platform_id} not found at {jdk_platform_path}\n"
-            f"If installing from PyPI, JDKs will be downloaded at first runtime.\n"
-            f"For git checkouts, ensure JDK files are present or run: git lfs pull"
-        )
+    # Download from GitHub
+    jdk_tar_name = f"jdk_{platform_id}.tar.gz"
+    github_url = f"{GITHUB_RAW_URL}/bioformats/jdk/{platform_id}/{jdk_tar_name}"
+    
+    print(f"GitHub URL: {github_url}")
+    
+    import tempfile
+    import os
+    
+    # Download to temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.tar.gz') as tmp:
+        tmp_path = tmp.name
+    
+    try:
+        print(f"Downloading JDK (this may take a minute)...")
+        urllib.request.urlretrieve(github_url, tmp_path)
+        print(f"✓ Downloaded JDK to {tmp_path}")
+        
+        # Extract to target directory
+        print(f"Extracting JDK...")
+        with tarfile.open(tmp_path, "r:gz") as tar:
+            tar.extractall(path=jdk_platform_path.parent)
+        print(f"✓ Extracted JDK to {jdk_platform_path}")
+        print(f"{'='*70}\n")
+        
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise RuntimeError(
+            f"\n{'='*70}\n"
+            f"CRITICAL: JDK DOWNLOAD FAILED\n"
+            f"{'='*70}\n"
+            f"Platform: {platform_id}\n"
+            f"URL: {github_url}\n"
+            f"Error: {e}\n\n"
+            f"INSTALLATION FAILED: JDK must be downloaded at installation time.\n"
+            f"This is required for HPC and production environments.\n\n"
+            f"Solutions:\n"
+            f"1. Check your internet connection\n"
+            f"2. Verify GitHub is accessible\n"
+            f"3. For offline installation: Pre-download from {github_url}\n"
+            f"   and place at: {jdk_platform_path}\n"
+            f"4. If using git clone, ensure: git lfs pull\n"
+            f"{'='*70}\n"
+        ) from e
+    finally:
+        # Clean up temporary file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def get_requirements():
-    """Get requirements from requirements.txt or return default requirements."""
-    requirements = [
+    """Get requirements separated by use case."""
+    core_requires = [
         "aicspylibczi>=0.0.0",
         "asciitree>=0.3.3",
         "bfio>=0.0.0",
@@ -104,14 +149,13 @@ def get_requirements():
         "distributed>=2024.12.1",
         "elementpath==5.0.1",
         "fasteners==0.19",
-        "fire>=0.0.0",
         "imageio==2.27.0",
         "imageio-ffmpeg==0.6.0",
         "install-jdk",
+        "lz4>=4.4.4",
         "natsort>=0.0.0",
         "nd2>=0.0.0",
-        "numpy>=0.0.0",
-        # "openjdk==8.*",
+        "numpy>=2.3.2",
         "pydantic>=2.11.7",
         "pylibczirw>=0.0.0",
         "readlif==0.6.5",
@@ -125,18 +169,28 @@ def get_requirements():
         "xmltodict==0.14.2",
         "zarr>=3.0",
         "zstandard>=0.0.0",
-        #
-        "aiofiles>=24.1.0",
         "blosc2>=3.7.1",
-        "fastapi>=0.116.1",
-        "lz4>=4.4.4",
-        "numpy>=2.3.2",
+        "aiofiles>=24.1.0",
         "psutil>=7.0.0",
         "rich>=14.1.0",
-        "uvicorn>=0.35.0",
-        "websockets>=15.0.1",
-        "h5py"
+        "h5py",
     ]
+
+    extras_require = {
+        "cli": [
+            "fire>=0.0.0",
+        ],
+        "gui": [
+            "fire>=0.0.0",
+            "streamlit>=1.28.0",
+            "matplotlib>=3.5.0",
+        ],
+        "all": [
+            "fire>=0.0.0",
+            "streamlit>=1.28.0",
+            "matplotlib>=3.5.0",
+        ],
+    }
 
     # Optionally still try to read from requirements.txt if it exists
     # if os.path.exists('../requirements.txt'):
@@ -145,7 +199,7 @@ def get_requirements():
     #             line.strip() for line in f
     #             if line.strip() and not line.startswith('#')
     #         ]
-    return requirements
+    return core_requires, extras_require
 
 
 def readme():
@@ -157,13 +211,9 @@ def readme():
     return ""
 
 
-# Prepare JDK during setup
-try:
-    download_and_extract_jdk()
-except Exception as e:
-    print(f"Warning during JDK setup: {e}")
-    # Don't fail the entire setup if JDK prep fails
-    # JDKs will be sourced at runtime if needed
+# Prepare JDK during setup - THIS MUST SUCCEED
+# Installation fails if JDK cannot be downloaded
+download_and_extract_jdk()
 
 
 setuptools.setup(
@@ -183,18 +233,16 @@ setuptools.setup(
             "bioformats/*.jar",
             "bioformats/*.xml",
             "bioformats/*.txt",
+            "bioformats/jdk/**/*",
         ],
     },
-    install_requires=get_requirements(),
+    install_requires=get_requirements()[0],
+    extras_require=get_requirements()[1],
     python_requires='>=3.11,<3.13',
-    extras_require={
-        # Include CUDA variants if needed
-        'cuda11': ['cupy-cuda11x'],
-        'cuda12': ['cupy-cuda12x'],
-    },
     entry_points={
         'console_scripts': [
-            "eubi = eubi_bridge.cli:main"
+            "eubi = eubi_bridge.cli:main",
+            "eubi-gui = eubi_bridge.app:main"
         ]
     },
 )

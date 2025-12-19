@@ -1,2 +1,3 @@
 recursive-include eubi_bridge/bioformats *.jar
-
+recursive-include eubi_bridge/bioformats/jdk *
+recursive-include eubi_bridge/bioformats/libjvm *

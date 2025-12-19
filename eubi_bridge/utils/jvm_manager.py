@@ -163,7 +163,8 @@ def find_libjvm() -> str:
     checked = "\n".join(str(p) for p in candidates)
     raise RuntimeError(
         f"Bundled libjvm not found. Checked:\n{checked}\n"
-        f"Please bundle a full JDK under {jdk_base} or provide libjvm under {libjvm_base}."
+        f"Please bundle a full JDK under {jdk_pkg_base} or {jdk_root_base}, "
+        f"or provide libjvm under {libjvm_base}."
     )
 
 

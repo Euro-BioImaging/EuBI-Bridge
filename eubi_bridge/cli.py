@@ -47,7 +47,7 @@ except ImportError:
 import warnings
 
 # === Now safe to import other modules ===
-import fire
+# Note: fire is imported lazily in main() to allow core library usage without CLI dependency
 
 
 # Patch xsdata for Cython compatibility BEFORE importing anything that uses ome_types
@@ -101,6 +101,8 @@ def patch_fire_no_literal_eval_for(*arg_names):
 
 # --- Main ---
 def main():
+    import fire
+    
     patch_fire_no_literal_eval_for("includes", "excludes")
 
     # Start JVM with bundled JARs only
