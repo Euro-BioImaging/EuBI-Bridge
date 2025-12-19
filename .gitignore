@@ -28,12 +28,15 @@ Thumbs.db
 *.swp
 *.swo
 
-# JDK binaries - downloaded at install time, not versioned
+# JDK binaries - distributed via GitHub Releases, not versioned in repo
+# Project root JDK directories (original source)
 bioformats/jdk/darwin/
 bioformats/jdk/linux/
 bioformats/jdk/win32/
-# But keep the directory structure
-!bioformats/jdk/.gitkeep
+# JDK tar.gz archives (uploaded to GitHub Releases)
+bioformats/jdk_archives/
+# Package-level JDK (downloaded during pip install)
+eubi_bridge/bioformats/jdk/
 htmlcov/
 .coverage
 .tox/

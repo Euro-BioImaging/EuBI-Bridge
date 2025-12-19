@@ -22,7 +22,8 @@ from pathlib import Path
 GITHUB_REPO = "Euro-BioImaging/EuBI-Bridge"
 GITHUB_RELEASE_TAG = "jdk-v11"  # Release tag containing JDK archives
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/download/{GITHUB_RELEASE_TAG}"
-JDK_BASE_PATH = Path(__file__).parent / "bioformats" / "jdk"
+# JDK must be inside eubi_bridge package to be included in the wheel
+JDK_BASE_PATH = Path(__file__).parent / "eubi_bridge" / "bioformats" / "jdk"
 
 
 def get_platform_identifier():

@@ -12,14 +12,84 @@ from eubi_bridge.utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def find_bundled_jdk_home() -> Optional[str]:
+    """
+    Find the bundled JDK home directory.
+    
+    Returns:
+        Path to bundled JDK home, or None if not found
+    """
+    import platform as _platform
+    
+    pkg_dir = pathlib.Path(__file__).resolve().parent.parent  # eubi_bridge/
+    jdk_base = pkg_dir / "bioformats" / "jdk"
+    
+    platform_map = {
+        "darwin": "darwin",
+        "win32": "win32", 
+        "linux": "linux",
+    }
+    
+    if sys.platform not in platform_map:
+        return None
+    
+    platform_dir = platform_map[sys.platform]
+    
+    # Architecture detection (important for darwin)
+    arch_dir = ""
+    if sys.platform == "darwin":
+        arch = _platform.machine().lower()
+        if arch in ("arm64", "aarch64"):
+            arch_dir = "arm64"
+        elif arch in ("x86_64", "amd64"):
+            arch_dir = "x86_64"
+        else:
+            arch_dir = arch
+    
+    # Build candidate paths
+    candidates = []
+    if arch_dir:
+        candidates.append(jdk_base / platform_dir / arch_dir)
+    candidates.append(jdk_base / platform_dir)
+    
+    for jdk_path in candidates:
+        # Check for macOS JDK structure (Contents/Home)
+        macos_home = jdk_path / "Contents" / "Home"
+        if macos_home.exists() and (macos_home / "bin" / "java").exists():
+            return str(macos_home)
+        
+        # Check for Linux/Windows JDK structure (bin directly)
+        if (jdk_path / "bin" / "java").exists() or (jdk_path / "bin" / "java.exe").exists():
+            return str(jdk_path)
+    
+    return None
+
+
 def get_or_install_jdk() -> Optional[str]:
     """
-    Ensure a modern JDK is available, installing via install-jdk if needed.
+    Ensure a modern JDK is available.
+    
+    Priority order:
+    1. Bundled JDK (inside package - fully self-contained)
+    2. JAVA_HOME environment variable
+    3. install-jdk library (downloads to ~/.jdk/)
 
     Returns:
         Path to java executable, or None if unable to find/install JDK
     """
-    # First, check if JAVA_HOME is set and points to a good JDK
+    # Priority 1: Check for bundled JDK (fully self-contained)
+    bundled_jdk_home = find_bundled_jdk_home()
+    if bundled_jdk_home:
+        java_path = pathlib.Path(bundled_jdk_home) / 'bin' / 'java'
+        if not java_path.exists():
+            java_path = pathlib.Path(bundled_jdk_home) / 'bin' / 'java.exe'
+        
+        if java_path.exists():
+            os.environ['JAVA_HOME'] = bundled_jdk_home
+            logger.info(f"Using bundled JDK: {bundled_jdk_home}")
+            return str(java_path)
+    
+    # Priority 2: Check if JAVA_HOME is set and points to a good JDK
     java_home = os.environ.get('JAVA_HOME')
     if java_home:
         java_path = pathlib.Path(java_home) / 'bin' / 'java'
@@ -51,7 +121,7 @@ def get_or_install_jdk() -> Optional[str]:
             except Exception as e:
                 logger.error(f"Error checking Java version: {e}")
 
-    # Try to use install-jdk to get a proper JDK
+    # Priority 3: Try to use install-jdk to get a proper JDK (downloads to ~/.jdk/)
     try:
         import jdk
         jdkpath = Path(jdk._JDK_DIR)
@@ -60,7 +130,7 @@ def get_or_install_jdk() -> Optional[str]:
         installed_jdks = list(jdkpath.glob('*'))
         if len(installed_jdks) > 0:
             java_home = installed_jdks[0]
-            logger.info(f"Using JDK: {java_home}")
+            logger.info(f"Using system JDK: {java_home}")
         else:
             java_home = jdk.install('17')
             logger.info(f"JDK 17 installed at: {java_home}")
