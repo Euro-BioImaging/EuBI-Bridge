@@ -18,29 +18,37 @@ import shutil
 from pathlib import Path
 
 # GitHub repository details for JDK downloads
+# JDK archives are hosted on GitHub Releases due to their size (170-185 MB each)
 GITHUB_REPO = "Euro-BioImaging/EuBI-Bridge"
-GITHUB_BRANCH = "bf_bundled"  # Change to "main" for production release
-GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}"
+GITHUB_RELEASE_TAG = "jdk-v11"  # Release tag containing JDK archives
+GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/download/{GITHUB_RELEASE_TAG}"
 JDK_BASE_PATH = Path(__file__).parent / "bioformats" / "jdk"
 
 
 def get_platform_identifier():
     """
-    Determine the platform identifier for JDK download.
+    Determine the platform identifier and architecture for JDK download.
     
     Returns
     -------
-    str
-        Platform identifier: 'darwin', 'linux', or 'win32'
+    tuple[str, str]
+        (platform_id, jdk_archive_name) tuple
+        platform_id: 'darwin', 'linux', or 'win32'
+        jdk_archive_name: filename of the JDK tar.gz archive
     """
     system = platform.system()
+    machine = platform.machine().lower()
     
     if system == 'Darwin':
-        return 'darwin'
+        # macOS: distinguish between Apple Silicon (arm64) and Intel (x86_64)
+        if machine in ('arm64', 'aarch64'):
+            return 'darwin', 'jdk_darwin_arm64.tar.gz'
+        else:
+            return 'darwin', 'jdk_darwin_x86_64.tar.gz'
     elif system == 'Linux':
-        return 'linux'
+        return 'linux', 'jdk_linux.tar.gz'
     elif system == 'Windows':
-        return 'win32'
+        return 'win32', 'jdk_win32.tar.gz'
     else:
         raise RuntimeError(
             f"Unsupported platform: {system}. "
@@ -50,20 +58,34 @@ def get_platform_identifier():
 
 def download_and_extract_jdk():
     """
-    Download the platform-specific JDK from GitHub and extract it locally.
+    Download the platform-specific JDK from GitHub Releases and extract it.
     
     This function is called during setup to prepare the JDK for the current platform.
     The JDK MUST be downloaded and extracted at installation time.
     
     This is CRITICAL for HPC environments where runtime downloads are unstable.
     
+    JDK archives are hosted on GitHub Releases:
+    - jdk_darwin_arm64.tar.gz (~178 MB) - macOS Apple Silicon
+    - jdk_darwin_x86_64.tar.gz (~172 MB) - macOS Intel
+    - jdk_linux.tar.gz (~184 MB) - Linux x86_64
+    - jdk_win32.tar.gz - Windows (if available)
+    
     Raises
     ------
     RuntimeError
         If download or extraction fails (installation will fail)
     """
-    platform_id = get_platform_identifier()
+    platform_id, jdk_archive_name = get_platform_identifier()
     jdk_platform_path = JDK_BASE_PATH / platform_id
+    
+    # Architecture-specific subdirectory for darwin
+    machine = platform.machine().lower()
+    if platform_id == 'darwin':
+        if machine in ('arm64', 'aarch64'):
+            jdk_platform_path = JDK_BASE_PATH / platform_id / 'arm64'
+        else:
+            jdk_platform_path = JDK_BASE_PATH / platform_id / 'x86_64'
     
     # Check if JDK already exists locally
     if jdk_platform_path.exists() and list(jdk_platform_path.glob('**/*')):
@@ -75,13 +97,15 @@ def download_and_extract_jdk():
     print(f"{'='*70}")
     
     # Create directory structure if needed
-    JDK_BASE_PATH.mkdir(parents=True, exist_ok=True)
+    jdk_platform_path.mkdir(parents=True, exist_ok=True)
     
-    # Download from GitHub
-    jdk_tar_name = f"jdk_{platform_id}.tar.gz"
-    github_url = f"{GITHUB_RAW_URL}/bioformats/jdk/{platform_id}/{jdk_tar_name}"
+    # Download from GitHub Releases
+    github_url = f"{GITHUB_RELEASES_URL}/{jdk_archive_name}"
     
-    print(f"GitHub URL: {github_url}")
+    print(f"Platform: {platform_id}")
+    print(f"Architecture: {machine}")
+    print(f"Archive: {jdk_archive_name}")
+    print(f"URL: {github_url}")
     
     import tempfile
     import os
@@ -91,14 +115,20 @@ def download_and_extract_jdk():
         tmp_path = tmp.name
     
     try:
-        print(f"Downloading JDK (this may take a minute)...")
+        print(f"Downloading JDK (~180 MB, this may take a minute)...")
         urllib.request.urlretrieve(github_url, tmp_path)
-        print(f"✓ Downloaded JDK to {tmp_path}")
+        
+        # Check file size to ensure download succeeded
+        file_size = os.path.getsize(tmp_path)
+        if file_size < 1000000:  # Less than 1 MB = likely an error page
+            raise RuntimeError(f"Downloaded file too small ({file_size} bytes), likely 404 or error page")
+        
+        print(f"✓ Downloaded JDK ({file_size // 1024 // 1024} MB)")
         
         # Extract to target directory
         print(f"Extracting JDK...")
         with tarfile.open(tmp_path, "r:gz") as tar:
-            tar.extractall(path=jdk_platform_path.parent)
+            tar.extractall(path=jdk_platform_path)
         print(f"✓ Extracted JDK to {jdk_platform_path}")
         print(f"{'='*70}\n")
         
@@ -110,6 +140,8 @@ def download_and_extract_jdk():
             f"CRITICAL: JDK DOWNLOAD FAILED\n"
             f"{'='*70}\n"
             f"Platform: {platform_id}\n"
+            f"Architecture: {machine}\n"
+            f"Archive: {jdk_archive_name}\n"
             f"URL: {github_url}\n"
             f"Error: {e}\n\n"
             f"INSTALLATION FAILED: JDK must be downloaded at installation time.\n"
@@ -117,9 +149,9 @@ def download_and_extract_jdk():
             f"Solutions:\n"
             f"1. Check your internet connection\n"
             f"2. Verify GitHub is accessible\n"
-            f"3. For offline installation: Pre-download from {github_url}\n"
-            f"   and place at: {jdk_platform_path}\n"
-            f"4. If using git clone, ensure: git lfs pull\n"
+            f"3. Create the GitHub Release '{GITHUB_RELEASE_TAG}' with JDK archives\n"
+            f"4. For offline installation: Manually download from GitHub Releases\n"
+            f"   and extract to: {jdk_platform_path}\n"
             f"{'='*70}\n"
         ) from e
     finally:
