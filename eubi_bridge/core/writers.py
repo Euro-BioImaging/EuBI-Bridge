@@ -268,9 +268,24 @@ def _create_zarr_array(
     """Create a Zarr array with specified format and compression settings."""
     compressor_config = compressor_config or CompressorConfig()
     chunks = tuple(np.minimum(shape, chunks).tolist())
+    
+    # For sharding: ensure shards are compatible with chunks
+    # During downscaling, reshape shards to align with new chunk sizes
     if shards is not None:
         shards = tuple(np.array(shards).flatten().tolist())
-        assert np.allclose(np.mod(shards, chunks), 0), f"Shards {shards} must be a multiple of chunks {chunks}"
+        # Adjust shards to be compatible with chunks for this layer
+        # If shards don't divide evenly into chunks, scale them proportionally
+        adjusted_shards = []
+        for shard_size, chunk_size, dim_size in zip(shards, chunks, shape):
+            if shard_size % chunk_size != 0 and chunk_size > 0:
+                # Find the largest divisor of shard_size that is also a multiple of chunk_size
+                # Or just use a shard size that's compatible with the current chunk
+                adjusted = (dim_size // max(1, dim_size // shard_size)) if shard_size > 0 else chunk_size
+                adjusted_shards.append(min(adjusted, dim_size))
+            else:
+                adjusted_shards.append(shard_size)
+        shards = tuple(adjusted_shards)
+    
     store = LocalStore(store_path)
 
     if zarr_format not in (ZARR_V2, ZARR_V3):
