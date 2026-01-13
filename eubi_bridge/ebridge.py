@@ -123,8 +123,8 @@ class EuBIBridge:
                 on_local_cluster = False,
                 on_slurm=False,
                 max_workers=4,  # size of the pool for sync writer
-                compute_batch_size = 4,
-                memory_limit_per_batch = '1GB',
+                queue_size = 4,
+                region_size_mb = '1GB',
                 max_concurrency = 4,  # limit how many writes run at once
                 memory_per_worker = '4GB'
                 ),
@@ -314,8 +314,8 @@ class EuBIBridge:
 
     def configure_cluster(self,
                           max_workers: int = 'default',
-                          compute_batch_size: int = 'default',
-                          memory_limit_per_batch: int = 'default',
+                          queue_size: int = 'default',
+                          region_size_mb: int = 'default',
                           memory_per_worker: int = 'default',
                           max_concurrency: int = 'default',
                           on_local_cluster: bool = 'default',
@@ -326,14 +326,14 @@ class EuBIBridge:
 
         The following parameters can be configured:
             - max_workers (int, optional): Size of the pool for sync writer.
-            - compute_batch_size (int, optional): Number of batches to process in parallel.
-            - memory_limit_per_batch (int, optional): Memory limit in MB for each batch.
+            - queue_size (int, optional): Number of batches to process in parallel.
+            - region_size_mb (int, optional): Memory limit in MB for each batch.
             - max_concurrency (int, optional): Maximum number of concurrent operations.
 
         Args:
             max_workers (int, optional): Size of the pool for sync writer.
-            compute_batch_size (int, optional): Number of batches to process in parallel.
-            memory_limit_per_batch (int, optional): Memory limit in MB for each batch.
+            queue_size (int, optional): Number of batches to process in parallel.
+            region_size_mb (int, optional): Memory limit in MB for each batch.
             max_concurrency (int, optional): Maximum number of concurrent operations.
 
         Returns:
@@ -342,8 +342,8 @@ class EuBIBridge:
 
         params = {
             'max_workers': max_workers,
-            'compute_batch_size': compute_batch_size,
-            'memory_limit_per_batch': memory_limit_per_batch,
+            'queue_size': queue_size,
+            'region_size_mb': region_size_mb,
             'memory_per_worker': memory_per_worker,
             'max_concurrency': max_concurrency,
             'on_local_cluster': on_local_cluster,

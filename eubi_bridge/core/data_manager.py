@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
+#from xml.etree.ElementPath import ops
 
 import dask
 import natsort
@@ -18,6 +19,8 @@ from ome_types.model import (OME, Channel, Image, Pixels,  # TiffData, Plane
 from eubi_bridge.core.readers import (  # read_single_image_asarray,
     read_metadata_via_bfio, read_metadata_via_bioio_bioformats,
     read_metadata_via_extension, read_single_image)
+from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+from eubi_bridge.external.dyna_zarr import operations as ops
 from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.array_utils import autocompute_chunk_shape
@@ -530,6 +533,19 @@ class TIFFImageMeta(PFFImageMeta):
         await super().read_omemeta()
 
     def get_axes(self):
+        """
+        Get normalized axis order.
+        
+        When using dyna_zarr (aszarr=True), returns 'tczyx' since TIFFDynaZarrReader
+        normalizes all TIFF data to 5D TCZYX.
+        
+        Otherwise, returns native TIFF axes with some normalization.
+        """
+        # If using dyna_zarr, data is normalized to 5D TCZYX
+        if self._aszarr:
+            return 'tczyx'
+        
+        # Otherwise, use native TIFF axes with normalization
         axes = self._meta.axes.lower()
         # if 's' in axes:
         #     axes = axes.replace('s', 'c')
@@ -548,14 +564,80 @@ class TIFFImageMeta(PFFImageMeta):
         return ''.join(newaxes)
 
     def get_scaledict(self):
+        """
+        Get scale values for each axis.
+        
+        When using dyna_zarr (aszarr=True), extracts metadata from the native TIFF 
+        dimensions and fills in defaults for added singleton dimensions.
+        Otherwise, returns native TIFF scales filtered by actual axes.
+        """
+        if self._aszarr:
+            # Get parent's scale dict (from OME metadata)
+            parent_scaledict = super().get_scaledict()
+            
+            # Get the native TIFF axes (what actually exists in the file)
+            native_axes = self._meta.axes.lower()
+            
+            # Build the 5D TCZYX scale dict with actual values for existing dims
+            # and defaults for added singleton dims
+            scaledict_5d = {}
+            for ax in 'tczyx':
+                if ax in native_axes:
+                    # Use the actual value from parent if available
+                    scaledict_5d[ax] = parent_scaledict.get(ax, scale_map.get(ax, 1.0))
+                else:
+                    # Use default for added singleton dimensions
+                    scaledict_5d[ax] = scale_map.get(ax, 1.0)
+            
+            return scaledict_5d
+        
+        # Otherwise, use parent implementation
         scaledict = super().get_scaledict()
         axes = self.get_axes()
         return {ax: scaledict[ax]
                 for ax in axes
                 if ax in scaledict
                 }
+    
+    def get_scales(self):
+        """
+        Get scale values as list.
+        
+        When using dyna_zarr, returns scales for all 5D TCZYX (excluding channel).
+        """
+        scaledict = self.get_scaledict()
+        caxes = [ax for ax in self.get_axes() if ax != 'c']
+        return [scaledict[ax] for ax in caxes]
 
     def get_unitdict(self):
+        """
+        Get unit strings for each axis.
+        
+        When using dyna_zarr (aszarr=True), extracts metadata from the native TIFF
+        dimensions and fills in defaults for added singleton dimensions.
+        Otherwise, returns native TIFF units filtered by actual axes.
+        """
+        if self._aszarr:
+            # Get parent's unit dict (from OME metadata)
+            parent_unitdict = super().get_unitdict()
+            
+            # Get the native TIFF axes (what actually exists in the file)
+            native_axes = self._meta.axes.lower()
+            
+            # Build the 5D TCZYX unit dict with actual values for existing dims
+            # and defaults for added singleton dims
+            unitdict_5d = {}
+            for ax in 'tczyx':
+                if ax in native_axes:
+                    # Use the actual value from parent if available
+                    unitdict_5d[ax] = parent_unitdict.get(ax, unit_map.get(ax))
+                else:
+                    # Use default for added singleton dimensions
+                    unitdict_5d[ax] = unit_map.get(ax)
+            
+            return unitdict_5d
+        
+        # Otherwise, use parent implementation
         unitdict = super().get_unitdict()
         caxes = [ax for ax in self.get_axes() if ax != 'c']
         return {ax: unitdict[ax]
@@ -887,6 +969,7 @@ class ArrayManager:  ### Unify the classes above.
 
         if scene_indices == 'all':
             scene_indices = list(range(self.img.n_scenes))
+            print(f"Number of scenes to load: {len(scene_indices)}")
         elif np.isscalar(scene_indices):
             scene_indices = [scene_indices]
 
@@ -916,6 +999,7 @@ class ArrayManager:  ### Unify the classes above.
         n_tiles = self.img.n_tiles or 1
         if tile_indices == 'all':
             tile_indices = list(range(n_tiles))
+            print(f"Number of tiles to load: {len(tile_indices)}")
         elif np.isscalar(tile_indices):
             tile_indices = [tile_indices]
         tile_indices_ = []
@@ -1119,6 +1203,8 @@ class ArrayManager:  ### Unify the classes above.
         if array is not None:
             self.array = array
             self.ndim = self.array.ndim
+            #print(self.ndim, self.array.shape)
+            #print(self.axes)
             assert len(self.axes) == self.ndim
 
         self.caxes = ''.join([ax for ax in axes if ax != 'c'])
@@ -1127,6 +1213,8 @@ class ArrayManager:  ### Unify the classes above.
                 chunks = self.array.chunks
             elif isinstance(self.array, da.Array):
                 chunks = self.array.chunksize
+            elif isinstance(self.array, DynamicArray):
+                chunks = self.array.chunks
             else:
                 raise Exception(f"Array type {type(self.array)} is not supported.")
             self.chunkdict = dict(zip(list(self.axes), chunks))
@@ -1297,14 +1385,25 @@ class ArrayManager:  ### Unify the classes above.
         if self.pyr is not None:
             zgroup = self.pyr.meta.zarr_group
             omero_copy = copy.copy(self.pyr.meta.omero)
+            #print(f"Before squeeze, shape: {self.pyr.base_array.shape}")
+            #print(f"Before squeeze, axes: {self.pyr.axes}")
             self.pyr = self.pyr.squeeze()
             self.pyr.meta.zarr_group = zgroup
             self.pyr.meta.metadata['omero'] = omero_copy
+            #print(f"Array type: self.pyr.base_array: {self.pyr.base_array}")
+            #print(f"After squeeze, new shape: {self.pyr.base_array.shape}")
+            #print(f"After squeeze, new shape: {self.pyr.base_array.shape}")
+            #print(f"After squeeze, new axes: {self.pyr.axes}")
+            self.set_arraydata(self.pyr.base_array,
+                               self.pyr.axes,
+                               self.pyr.meta.unit_list,
+                               self.pyr.meta.scales[self.pyr.meta.resolution_paths[0]])
+            return
         else:
             omero_copy = None
         if isinstance(self.array, zarr.Array):
-            logger.warn(f"Zarr arrays are not supported for squeeze operation.\n"
-                        f"Zarr array for the path {self.series_path} is being converted to dask array.")
+            logger.warning(f"Zarr arrays are not supported for squeeze operation.\n"
+                           f"Zarr array for the path {self.series_path} is being converted to dask array.")
             array = da.from_array(self.array)
         else:
             array = self.array
@@ -1318,7 +1417,10 @@ class ArrayManager:  ### Unify the classes above.
                     newunits.append(self.unitdict[ax])
                 if ax in self.scaledict:
                     newscales.append(self.scaledict[ax])
-        newarray = da.squeeze(array)
+        if isinstance(array, DynamicArray):
+            newarray = ops.squeeze(array)
+        else:       
+            newarray = da.squeeze(array)
         # print(f"newaxes: {newaxes}")
         # print(f"newunits: {newunits}")
         # print(f"newscales: {newscales}")
@@ -1334,7 +1436,10 @@ class ArrayManager:  ### Unify the classes above.
                 newunits.append(self.unitdict[ax])
             if ax in self.scaledict:
                 newscales.append(self.scaledict[ax])
-        newarray = self.array.transpose(*new_ids)
+        if isinstance(self.array, DynamicArray):
+            newarray = ops.transpose(self.array, axes=new_ids)
+        else:
+            newarray = self.array.transpose(*new_ids)
         self.set_arraydata(newarray, newaxes, newunits, newscales)
 
     def crop(self,

@@ -323,6 +323,10 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         scale_factors = parse_scale_factors(manager, **kwargs)
 
         # Store multiscale data
+        channel_meta = parse_channels(
+            manager,
+            **dict(kwargs, channel_intensity_limits='from_dtype')
+        )
         await store_multiscale_async(
             arr=manager.array,
             dtype=kwargs.get('dtype'),
@@ -331,10 +335,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             axes=manager.axes,
             scales=parse_scales(manager, **kwargs),
             units=parse_units(manager, **kwargs),
-            channel_meta=parse_channels(
-                manager,
-                **dict(kwargs, channel_intensity_limits='from_dtype')
-            ),
+            channel_meta=channel_meta,
             auto_chunk=kwargs.get('auto_chunk', True),
             output_chunks=parse_chunks(manager, **kwargs),
             output_shard_coefficients=parse_shard_coefs(manager, **kwargs),
@@ -343,9 +344,13 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             min_dimension_size=kwargs.get('min_dimension_size', 64),
             scale_factors=parse_scale_factors(manager, **kwargs),
             max_concurrency=kwargs.get('max_concurrency', 4),
+            region_size_mb=kwargs.get('region_size_mb', 128),
             compute_batch_size=kwargs.get('compute_batch_size', 4),
+            queue_size=kwargs.get('queue_size', 8),
             memory_limit_per_batch=kwargs.get('memory_limit_per_batch', 1024),
-            verbose = kwargs.get('verbose', False)
+            verbose=kwargs.get('verbose', False),
+            compressor=kwargs.get('compressor', 'blosc'),
+            compressor_params=kwargs.get('compressor_params', {})
         )
 
         # Update channel metadata if needed

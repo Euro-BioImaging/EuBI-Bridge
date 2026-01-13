@@ -122,7 +122,9 @@ def sizeof(array, unit: str = 'gb') -> float:
         return bytes_size
 
 
-def get_chunk_shape(arr) -> Tuple[int, ...]:
+def get_chunk_shape(arr,
+                    default_chunks: Optional[Tuple[int, ...]] = None    
+                    ) -> Tuple[int, ...]:
     """Extract chunk shape from various array types.
     
     Args:
@@ -138,8 +140,11 @@ def get_chunk_shape(arr) -> Tuple[int, ...]:
     elif hasattr(arr, 'chunks'):
         chunks = arr.chunks
     else:
-        logger.warning("No chunks given. Using array shape as chunks.")
-        chunks = arr.shape
+        if default_chunks is not None:
+            chunks = default_chunks    
+        else:
+            logger.warning('Array has no chunk shape, using full shape')
+            chunks = arr.shape
     return chunks
 
 

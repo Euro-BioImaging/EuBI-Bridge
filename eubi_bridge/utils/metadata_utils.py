@@ -169,6 +169,7 @@ class ChannelParser:
         )
         
         self._merge_manager_channels(default_channels)
+        
         self.output = copy.deepcopy(default_channels)
         
         assert 'coefficient' in self.output[0].keys(), \
@@ -188,6 +189,9 @@ class ChannelParser:
     def _merge_manager_channels(self, default_channels: list):
         """Merge manager's channel metadata into defaults.
         
+        Only updates fields that have non-None values in the manager channels.
+        This prevents None values from overwriting good default metadata.
+        
         Args:
             default_channels: List of default channel metadata dictionaries
         """
@@ -203,7 +207,11 @@ class ChannelParser:
         
         for idx, channel in enumerate(mchannels):
             try:
-                default_channels[idx].update(channel)
+                # Only update fields that have non-None values in manager channels
+                # This prevents None values from overwriting good defaults
+                for key, value in channel.items():
+                    if value is not None:
+                        default_channels[idx][key] = value
             except Exception as e:
                 logger.error(f"Failed to update channel {idx} with {channel}: {e}")
     
@@ -376,5 +384,6 @@ def parse_channels(manager, **kwargs):
         ...     channel_labels="0,Red;1,Green;2,Blue",
         ...     channel_colors="0,FF0000;1,00FF00;2,0000FF")
     """
-    return ChannelParser(manager, **kwargs).parse()
+    result = ChannelParser(manager, **kwargs).parse()
+    return result
 

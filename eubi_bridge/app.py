@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import html as html_module
 from eubi_bridge.views import pixel_metadata, channel_metadata, lazy_viewer, visual_channel_editor
+from eubi_bridge.views.compression_config import render_compression_config
 
 # Fix fork-after-threads deadlock: use spawn context for ProcessPoolExecutor
 # This must be set before any multiprocessing usage
@@ -505,11 +506,11 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                         help="Number of parallel workers"
                     )
     
-                    compute_batch_size = st.number_input(
-                        "Compute Batch Size",
+                    queue_size = st.number_input(
+                        "Queue Size",
                         min_value=1,
                         max_value=32,
-                        value=bridge.config['cluster']['compute_batch_size'],
+                        value=bridge.config['cluster']['queue_size'],
                         help="Number of batches to process in parallel"
                     )
     
@@ -522,9 +523,9 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                     )
     
                 with col2:
-                    memory_limit_per_batch = st.text_input(
-                        "Memory Limit per Batch",
-                        value=bridge.config['cluster']['memory_limit_per_batch'],
+                    region_size_mb = st.text_input(
+                        "Region Size (MB)",
+                        value=bridge.config['cluster']['region_size_mb'],
                         help="Memory limit per batch (e.g., '1GB', '512MB')"
                     )
     
@@ -666,12 +667,8 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                         help="Output data type"
                     )
     
-                    compressor = st.selectbox(
-                        "Compressor",
-                        options=['blosc', 'zstd', 'gzip', 'lz4', 'none'],
-                        index=0,
-                        help="Compression algorithm"
-                    )
+                    # Compression configuration with dynamic parameters
+                    compressor, compressor_params = render_compression_config(key_prefix="conv_")
     
                     verbose = st.checkbox(
                         "Verbose Output",
@@ -951,8 +948,8 @@ if operation_mode == "🔄 Convert to OME-Zarr":
     
                     kwargs = {
                         'max_workers': max_workers,
-                        'compute_batch_size': compute_batch_size,
-                        'memory_limit_per_batch': memory_limit_per_batch,
+                        'queue_size': queue_size,
+                        'region_size_mb': region_size_mb,
                         'max_concurrency': max_concurrency,
                         'memory_per_worker': memory_per_worker,
                         'on_local_cluster': on_local_cluster,
@@ -999,7 +996,12 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                         'z_scale_factor': z_scale_factor,
                         'y_scale_factor': y_scale_factor,
                         'x_scale_factor': x_scale_factor,
+                        'compressor': compressor,
+                        'compressor_params': compressor_params,
                     }
+
+                    import pprint
+                    #pprint.pprint(kwargs)
     
                     if auto_chunk:
                         kwargs['target_chunk_mb'] = target_chunk_mb
@@ -1124,6 +1126,8 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                                 concatenation_axes=concatenation_axes if concatenation_axes else None,
                                 **kwargs
                             )
+                            pprint.pprint("Conversion kwargs:")
+                            pprint.pprint(kwargs)
                             conversion_result['success'] = True
                         except Exception as e:
                             import traceback
@@ -1286,14 +1290,14 @@ st.caption(
 def main():
     """Entry point for eubi-gui command.
     
-    This function is called when users run `eubi-gui` from the command line.
-    It launches the Streamlit application.
+    This function is called when users run `eubi-gui` from the command line via setup.py entry_points.
+    Do NOT call this when running with `streamlit run` directly.
     """
     import subprocess
     import sys
+    import os
     
     # Get the path to this script
-    import os
     script_path = os.path.abspath(__file__)
     
     # Launch streamlit with this script
@@ -1303,5 +1307,7 @@ def main():
     ])
 
 
-if __name__ == "__main__":
-    main()
+# NOTE: Do NOT uncomment the line below when running with Streamlit directly.
+# Streamlit handles execution automatically. Uncommenting this causes multiple browser windows.
+# if __name__ == "__main__":
+#     main()

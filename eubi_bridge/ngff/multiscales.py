@@ -12,6 +12,9 @@ from eubi_bridge.core.scale import Downscaler
 from eubi_bridge.ngff import defaults
 from eubi_bridge.utils.json_utils import make_json_safe
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.external.dyna_zarr import operations as ops
+from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+
 
 logger = get_logger(__name__)
 
@@ -348,7 +351,7 @@ class NGFFMetadataHandler:
                 self.zarr_group.attrs['omero'] = metadata['omero']
             if '_creator' in self.metadata:
                 self.zarr_group.attrs['_creator'] = metadata['_creator']
-
+        
         self._pending_changes = False
 
     def update_all_datasets(self,
@@ -826,9 +829,19 @@ class Pyramid:
             An NGFF-compliant Zarr group, storage path, or Path object.
             If provided, metadata is read from the group. If None, creates
             an empty pyramid to be filled with from_array() or from_ngff().
+            
+        Notes
+        -----
+        The Pyramid class supports three array storage modes:
+        - **Zarr persistent**: Arrays stored in a zarr.Group on disk/cloud
+        - **In-memory (lazy)**: Arrays stored in _array_layers (dask, DynamicArray, or numpy)
+        - **Hybrid**: Both zarr and in-memory layers can coexist
+        
+        Use the `layers` property to transparently access arrays from either storage mode.
         """
         self.meta = None
         self.gr = None
+        self._array_layers = {}  # In-memory array storage (dask, DynamicArray, numpy)
         if gr is not None:
             self.from_ngff(gr)
 
@@ -894,15 +907,16 @@ class Pyramid:
                    version: str = "0.4",
                    name: str = "Series 0",
                    ):
-        """Create a pyramid from a numpy or dask array without writing to NGFF store.
+        """Create a pyramid from any array type without writing to NGFF store.
         
         Initializes an in-memory pyramid structure with metadata but does not
-        create a Zarr store. Use store_as_ngff() to write to disk.
+        create a Zarr store. Preserves the input array type (dask, DynamicArray, numpy, etc.).
+        Use store_as_ngff() to write to disk.
         
         Parameters
         ----------
         array : Union[np.ndarray, da.Array, zarr.Array]
-            Input array to create pyramid from.
+            Input array to create pyramid from. Type is preserved (not converted to dask).
         axis_order : str, optional
             Axis order string (e.g., 'tczyx'). If None, uses defaults for array ndim.
         unit_list : List[str], optional
@@ -919,8 +933,6 @@ class Pyramid:
         self
             Returns self for method chaining.
         """
-        if not isinstance(array, da.Array):
-            array = da.from_array(array)
         ndim = array.ndim
         if axis_order is None:
             axes = defaults.axis_order[:ndim]
@@ -934,21 +946,18 @@ class Pyramid:
             scale = [defaults.scale_map[ax] for ax in axes]
         else:
             scale = scale[:ndim]
-        # self.meta = NGFFMetadataHandler()
-        self._dask_layers = {'0': array}
-        # omerometa = copy.deepcopy(self.meta.metadata['omero'])
+        # Store array in in-memory layer storage, preserving its type (dask, DynamicArray, numpy, etc.)
+        self._array_layers = {'0': array}
         self.meta = NGFFMetadataHandler()
         self.meta.create_new(version=version, name=name)
         self.meta.parse_axes(axis_order, unit_list)
         self.meta.set_scale(pth = '0', scale = scale)
-        # self.meta.metadata['omero'] = omerometa
         return self
 
     def to5D(self):
-        arrs = self.dask_arrays
+        arrs = self.layers  # Use layers to preserve array types
         axes = self.axes
         channels = copy.copy(self.meta.metadata['omero']['channels'])
-        # print(f"channels copied: {channels}")
         axes_to_add = [ax for ax in 'tczyx' if ax not in axes]
         if len(axes_to_add) == 0:
             return self
@@ -971,7 +980,12 @@ class Pyramid:
                 else:
                     new_shape.append(1)
                     new_scale.append(defaults.scale_map[ax])
-            arr = arr.reshape(new_shape)
+            # Preserve array type when reshaping
+            if hasattr(arr, 'reshape'):
+                arr = arr.reshape(new_shape)
+            else:
+                # For arrays that don't support reshape directly
+                arr = np.asarray(arr).reshape(new_shape)
             arrlist.append(arr)
             scalelist.append(new_scale)
         pyr = Pyramid().from_arrays(arrays = arrlist,
@@ -986,14 +1000,14 @@ class Pyramid:
         return pyr
 
     def squeeze(self):
-        arrays = self.dask_arrays
+        arrays = self.layers  # Use layers to preserve array types
         basearr = self.base_array
         if all(n > 1 for n in basearr.shape):
             return self
         if isinstance(basearr, zarr.Array):
             logger.warning(f"Zarr arrays are not supported for squeeze operation.\n"
                         f"Zarr array for the path {self.series_path} is being converted to dask array.")
-            array = da.from_array(self.array)
+            array = da.from_zarr(basearr)
         else:
             array = basearr
         shapedict = dict(zip(self.axes, self.shape))
@@ -1015,15 +1029,22 @@ class Pyramid:
                     scale_level.append(scale_level_dict[ax])
             newscales.append(scale_level)
         singlet_indices = tuple([self.axes.index(ax) for ax in singlet_axes])
-        arrays = []
-        for key in natsorted(self.dask_arrays.keys()):
-            arr = self.dask_arrays[key]
-            newarray = da.squeeze(arr, axis = singlet_indices)
-            arrays.append(newarray)
-        # print(f"newaxes: {newaxes}")
-        # print(f"newunits: {newunits}")
-        # print(f"newscales: {newscales}")
-        squeezed = Pyramid().from_arrays(arrays, axis_order = newaxes, unit_list = newunits, scales = newscales, version = self.meta.version, name = self.meta.tag)
+        arrays_squeezed = []
+        for key in natsorted(arrays.keys()):
+            arr = arrays[key]
+            # Use dask squeeze for dask arrays, handle other types
+            if isinstance(arr, da.Array):
+                newarray = da.squeeze(arr, axis = singlet_indices)
+            elif isinstance(arr, DynamicArray):
+                newarray = ops.squeeze(arr, axis = singlet_indices) if singlet_axes else arr
+            elif hasattr(arr, 'squeeze'):
+                # Try to use native squeeze method if available
+                newarray = arr.squeeze(axis = singlet_indices) if singlet_axes else arr
+            else:
+                # Fallback for arrays without squeeze method
+                newarray = np.squeeze(np.asarray(arr), axis = singlet_indices if singlet_axes else None)
+            arrays_squeezed.append(newarray)
+        squeezed = Pyramid().from_arrays(arrays_squeezed, axis_order = newaxes, unit_list = newunits, scales = newscales, version = self.meta.version, name = self.meta.tag)
         return squeezed
 
     def from_arrays(self,
@@ -1034,6 +1055,31 @@ class Pyramid:
                    version: str = "0.4",
                    name: str = "Series 0",
                    ):
+        """Create a pyramid from a list of arrays at different resolutions.
+        
+        Supports any array type: dask arrays, DynamicArray, zarr arrays, or numpy arrays.
+        Stores arrays in _array_layers for in-memory access via the layers property.
+        
+        Parameters
+        ----------
+        arrays : List[Union[np.ndarray, da.Array, zarr.Array]]
+            List of arrays from lowest to highest resolution.
+        axis_order : str, optional
+            Axis order string (e.g., 'tczyx'). If None, uses defaults for array ndim.
+        unit_list : List[str], optional
+            List of units for each axis. If None, uses defaults.
+        scales : List[float], optional
+            List of scale factors for each array. If None, computed from shape ratios.
+        version : str, optional
+            NGFF metadata version ('0.4' or '0.5'). Default is '0.4'.
+        name : str, optional
+            Name for the image series. Default is 'Series 0'.
+            
+        Returns
+        -------
+        self
+            Returns self for method chaining.
+        """
 
         if isinstance(arrays, (np.ndarray, da.Array, zarr.Array)):
             arrays = [arrays]
@@ -1057,12 +1103,11 @@ class Pyramid:
             base_scale = [defaults.scale_map[ax] for ax in axes]
         else:
             base_scale = base_scale[:ndim]
-        # self.meta = NGFFMetadataHandler()
-        self._dask_layers = {'0': base_array}
+        # Store arrays in in-memory layer storage (supports dask, DynamicArray, numpy)
+        self._array_layers = {'0': base_array}
         self.meta = NGFFMetadataHandler()
         self.meta.create_new(version=version, name=name)
         self.meta.parse_axes(axis_order, unit_list)
-        # self.meta.set_scale(pth = '0', scale = base_scale)
         self.meta.add_dataset(path = '0', scale = base_scale)
         if len(arrays) > 1:
             for i, array in enumerate(arrays[1:]):
@@ -1071,7 +1116,7 @@ class Pyramid:
                 else:
                     scale = scales[i+1]
                 self.meta.add_dataset(path = f'{i+1}', scale = scale)
-                self._dask_layers[f'{i+1}'] = array
+                self._array_layers[f'{i+1}'] = array
         return self
 
     def to_ngff(self,
@@ -1097,10 +1142,30 @@ class Pyramid:
         return self.meta.nlayers
 
     @property
-    def layers(self):
+    def layers(self) -> Dict[str, Union[da.Array, zarr.Array]]:
+        """Get all array layers across all resolutions.
+        
+        Returns arrays from either persistent zarr storage or in-memory storage,
+        depending on which mode is active. This property provides transparent access
+        to arrays regardless of storage backend.
+        
+        Returns
+        -------
+        Dict[str, Union[da.Array, zarr.Array]]
+            Dictionary mapping resolution paths ('0', '1', etc.) to array objects.
+            - If zarr group exists (self.gr): Returns zarr arrays from disk/cloud
+            - If no zarr group: Returns in-memory arrays from _array_layers
+            
+        Notes
+        -----
+        Array types in _array_layers can be:
+        - dask.array.Array: Lazy-evaluated numerical arrays
+        - DynamicArray: In-memory lazy arrays with transformations
+        - numpy.ndarray: Regular numpy arrays (not lazy)
+        """
         if self.gr is None:
-            return self._dask_layers
-        # return {path: self.gr[path] for path in self.gr.array_keys()}
+            return self._array_layers
+        # Return zarr arrays from persistent storage
         return {path: self.gr[path] for path in self.meta.resolution_paths}
 
     @property
@@ -1116,11 +1181,40 @@ class Pyramid:
         return scale_factordict
 
 
-    def get_dask_data(self):
+    def get_dask_data(self) -> Dict[str, Union[da.Array, object]]:
+        """Get all array layers, converting zarr to dask but preserving other types.
+        
+        Provides access to arrays while preserving their type. Only zarr arrays are
+        converted to dask. Supports multiple array types from _array_layers (dask, 
+        DynamicArray, numpy).
+        
+        Returns
+        -------
+        Dict[str, Union[da.Array, object]]
+            Dictionary mapping resolution paths to arrays.
+            - In-memory arrays (_array_layers): Returned as-is (preserves type)
+            - Zarr arrays: Converted to dask arrays via da.from_zarr()
+            
+        Notes
+        -----
+        For in-memory storage, this method returns arrays in their native type:
+        - dask.array.Array: Lazy evaluation preserved
+        - DynamicArray: Lazy evaluation with transformations preserved
+        - numpy.ndarray: Standard numpy arrays
+        - Zarr arrays: Converted to dask for consistent computation API
+        """
         if self.gr is None:
-            return self._dask_layers
-        # return {str(path): da.from_zarr(self.layers[path]) for path in self.gr.array_keys()}
-        return {str(path): da.from_zarr(self.layers[path]) for path in self.meta.resolution_paths}
+            # Return in-memory arrays preserving their type (dask, DynamicArray, numpy)
+            return self._array_layers
+        # Convert only zarr arrays to dask for consistent computation access
+        result = {}
+        for path in self.meta.resolution_paths:
+            arr = self.layers[path]
+            if isinstance(arr, zarr.Array):
+                result[str(path)] = da.from_zarr(arr)
+            else:
+                result[str(path)] = arr
+        return result
 
     @property
     def dask_arrays(self):
