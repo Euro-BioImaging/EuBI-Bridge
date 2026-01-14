@@ -19,59 +19,19 @@ from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
 logger = get_logger(__name__)
 
 
-def is_zarr_group(path: Union[str, Path]) -> bool:
-    """
-    Quickly check if a path/store is a Zarr group.
-    
-    Used for negative checks (e.g., skipping non-Zarr files).
-    
-    Note: Intentionally catches all exceptions since the goal is a fast negative check,
-    not comprehensive validation. Any failure to open as Zarr means it's not a Zarr group.
-    
-    Parameters
-    ----------
-    path : Union[str, Path]
-        Path or store location to check
-        
-    Returns
-    -------
-    bool
-        True if path is a valid Zarr group, False otherwise
-    """
+
+def is_zarr_group(path: (str, Path)
+                  ):
     try:
         _ = zarr.open_group(path, mode='r')
         return True
-    except Exception:
-        # Not a valid Zarr group: could be missing, wrong format, inaccessible, etc.
+    except:
         return False
 
 
 def generate_channel_metadata(num_channels,
                               dtype=np.uint16
                               ):
-    """Generate standard OMERO channel metadata with colors and intensity ranges.
-    
-    Creates metadata for each channel including distinct colors, coefficients,
-    and intensity range based on the provided dtype.
-    
-    Parameters
-    ----------
-    num_channels : int
-        Number of channels to generate metadata for.
-    dtype : numpy.dtype, optional
-        Data type to determine intensity min/max values. Default is np.uint16.
-        
-    Returns
-    -------
-    list
-        List of channel metadata dictionaries with color, coefficient, active status,
-        and intensity range (min/max).
-        
-    Raises
-    ------
-    ValueError
-        If dtype is not a supported numeric type.
-    """
     # Standard distinct microscopy colors
     default_colors = [
         "FF0000",  # Red
@@ -138,27 +98,9 @@ class NGFFMetadataHandler:
         self.zarr_format: Optional[int] = None
 
     def __enter__(self) -> 'NGFFMetadataHandler':
-        """Context manager entry: return self for use in with statement.
-        
-        Returns
-        -------
-        NGFFMetadataHandler
-            Self instance for use as context manager.
-        """
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Context manager exit: save pending changes if any.
-        
-        Parameters
-        ----------
-        exc_type : type or None
-            Exception type if an exception occurred in the with block.
-        exc_val : Exception or None
-            Exception instance if an exception occurred.
-        exc_tb : traceback or None
-            Traceback if an exception occurred.
-        """
         if self._pending_changes:
             self.save_changes()
 
@@ -351,23 +293,13 @@ class NGFFMetadataHandler:
                 self.zarr_group.attrs['omero'] = metadata['omero']
             if '_creator' in self.metadata:
                 self.zarr_group.attrs['_creator'] = metadata['_creator']
-        
+
         self._pending_changes = False
 
     def update_all_datasets(self,
                             scale: Optional[List[float]] = None,
                             translation: Optional[List[float]] = None
                             ) -> None:
-        """Update scale and/or translation for all resolution levels.
-        
-        Parameters
-        ----------
-        scale : Optional[List[float]]
-            New scale values for coordinate transformation.
-        translation : Optional[List[float]]
-            New translation values for coordinate transformation.
-        """
-
         """Update all datasets with new scale and/or translation values."""
         for dataset in self.multiscales['datasets']:
             if scale is not None:
@@ -385,43 +317,11 @@ class NGFFMetadataHandler:
         self.metadata['omero'] = omero_meta['omero']
         self._pending_changes = True
 
-    def add_channel(self,
-                    label: str = '',
-                    color: str = '808080',
-                    coefficient: float = 1.0,
-                    family: str = 'linear',
-                    inverted: bool = False) -> None:
-        """Add a new channel to the OMERO metadata.
-        
-        Parameters
-        ----------
-        label : str, optional
-            Display label for the channel. Default is empty string.
-        color : str, optional
-            Hex color code (without #) for the channel. Default is '808080' (gray).
-        coefficient : float, optional
-            Coefficient for contrast display. Default is 1.0.
-        family : str, optional
-            Family type for color rendering ('linear', 'exponential', 'logarithmic').
-            Default is 'linear'.
-        inverted : bool, optional
-            Whether the color mapping is inverted. Default is False.
-            
-        Raises
-        ------
-        RuntimeError
-            If no metadata is loaded or created.
-        """
-        pass
-
-    def add_channel(self,
-                    label: str = '',
-                    color: str = "808080",
-                    coefficient: float = 1.0,
-                    family: str = 'linear',
-                    inverted: bool = False,
-                    dtype=None) -> None:
-        """Add a channel to the OMERO metadata."""
+    def _get_window_meta(self,
+                         dtype=None,
+                         start_intensity: (int, float) = None,
+                         end_intensity: (int, float) = None
+                         ):
         assert dtype is not None, f"dtype cannot be None"
         min = 0
         if np.issubdtype(dtype, np.integer):
@@ -430,6 +330,25 @@ class NGFFMetadataHandler:
             max = float(np.finfo(dtype).max)
         else:
             raise ValueError(f"Unsupported dtype {dtype}")
+
+        if start_intensity is None:
+            start_intensity = min
+        if end_intensity is None:
+            end_intensity = max
+        return min,max,start_intensity,end_intensity
+
+    def add_channel(self, ### TODO: NEED TO BE UPDATED!!!
+                    color: str = "808080",
+                    label: str = None,
+                    dtype=None,
+                    start_intensity: (int, float) = None,
+                    end_intensity: (int, float) = None
+                    ) -> None:
+        """Add a channel to the OMERO metadata."""
+
+        min,max,start_intensity,end_intensity = self._get_window_meta(dtype=dtype,
+                                                                     start_intensity=start_intensity,
+                                                                     end_intensity=end_intensity)
 
         if 'omero' not in self.metadata:
             self.metadata['omero'] = {
@@ -446,12 +365,50 @@ class NGFFMetadataHandler:
             'coefficient': 1,
             'active': True,
             'label': label or f"Channel {len(self.metadata['omero']['channels'])}",
-            'window': {'min': min, 'max': max, 'start': min, 'end': max},
+            'window': {'min': min, 'max': max, 'start': start_intensity, 'end': end_intensity},
             'family': 'linear',
             'inverted': False
         }
 
         self.metadata['omero']['channels'].append(channel)
+        self._pending_changes = True
+
+    def update_channel(self,
+                    idx: int,
+                    color: str = "808080",
+                    label: str = None,
+                    dtype=None,
+                    start_intensity: (int, float) = None,
+                    end_intensity: (int, float) = None
+                    ) -> None:
+        """Add a channel to the OMERO metadata."""
+        channel_len = len(self.channels)
+        if idx > channel_len:
+            raise ValueError(f"Index {idx} is out of bounds for {channel_len} channels")
+
+        min, max, start_intensity, end_intensity = self._get_window_meta(dtype=dtype,
+                                                                         start_intensity=start_intensity,
+                                                                         end_intensity=end_intensity)
+
+        channel = self.metadata['omero']['channels'][idx]
+        channel['color'] = color
+        channel['label'] = label or f"Channel {idx}"
+        channel['window'] = {'min': min, 'max': max, 'start': start_intensity, 'end': end_intensity}
+
+        self.metadata['omero']['channels'][idx] = channel
+        self._pending_changes = True
+
+    def _validate_channel(self, channel):
+        channel_keys = ['color', 'coefficient', 'active', 'label', 'window', 'family', 'inverted']
+        for key in channel_keys:
+            if key not in channel:
+                raise ValueError(f"Channel must have {key} key")
+        return
+
+    def set_channels(self, channels):
+        for channel in channels:
+            self._validate_channel(channel)
+        self.metadata['omero']['channels'] = channels
         self._pending_changes = True
 
     def get_channels(self) -> List[Dict[str, Any]]:
@@ -465,40 +422,19 @@ class NGFFMetadataHandler:
         if 'omero' not in self.metadata or 'channels' not in self.metadata['omero']:
             return []
 
-        return [
-            {
-                'label': channel.get('label', f"Channel {i}"),
-                'color': channel.get('color', '808080')
-            }
-            for i, channel in enumerate(self.metadata['omero']['channels'])
-        ]
+        # return [
+        #     {
+        #         'label': channel.get('label', f"Channel {i}"),
+        #         'color': channel.get('color', '808080')
+        #     }
+        #     for i, channel in enumerate(self.metadata['omero']['channels'])
+        # ]
+        return self.metadata['omero']['channels']
 
-    def parse_axes(self,  
+    def parse_axes(self,  ###
                    axis_order: str,
                    units: Optional[List[str]] = None) -> None:
-        """Update axes information with new axis order and optional units.
-        
-        Creates or updates the axes array in the multiscales metadata,
-        assigning axis types (time, channel, space) and units.
-        
-        Parameters
-        ----------
-        axis_order : str
-            String of axis characters (e.g., 'tczyx') specifying dimension order.
-            Valid characters: 't' (time), 'c' (channel), 'z'/'y'/'x' (space).
-        units : Optional[List[str]]
-            List of unit strings for each axis (e.g., ['second', None, 'micrometer', ...]).
-            If None, defaults are assigned based on axis type. Default is None.
-            For channel axis, unit is always None. For spatial axes, default is 'micrometer'.
-            For time axis, default is 'second'.
-            
-        Raises
-        ------
-        RuntimeError
-            If no metadata has been loaded or created.
-        ValueError
-            If axis order contains invalid characters.
-        """
+        """Update axes information with new axis order and units."""
         if self.metadata is None:
             raise RuntimeError("No metadata loaded or created.")
 

@@ -44,7 +44,7 @@ COLOR_PRESETS = {
 }
 
 
-def _sniff_zarr_version(zarr_path: str) -> str:
+def _sniff_zarr_version(zarr_path: str) -> str: # TODO: detection should be more robust and remote-friendly
     """Sniff OME-Zarr version from file structure.
     
     - zarr.json + ome folder = version 0.5

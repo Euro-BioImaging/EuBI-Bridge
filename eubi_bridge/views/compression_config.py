@@ -176,7 +176,7 @@ def render_compression_config(key_prefix=""):
             return None, {}
         
         # Handle clevel vs level parameter naming
-        if 'clevel' in compressor_params and compressor in ('gzip', 'bz2'):
+        if 'clevel' in compressor_params and compressor in ('gzip', 'bz2', 'zstd'):
             compressor_params['level'] = compressor_params.pop('clevel')
         
         return compressor, compressor_params

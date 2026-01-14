@@ -41,7 +41,7 @@ def load_pyramid(path):
         return None, "Path does not exist"
     
     try:
-        from views.visual_channel_editor import load_pyramid_cached
+        from eubi_bridge.views.visual_channel_editor import load_pyramid_cached
         pyr = load_pyramid_cached(path)
         if pyr is None:
             return None, "Failed to load OME-Zarr"
@@ -410,32 +410,61 @@ def render(bridge):
                             x_unit = unit_val
 
                     def run_update():
-                        from eubi_bridge.ebridge import EuBIBridge
-                        update_bridge = EuBIBridge()
-                        update_bridge.update_pixel_meta(
-                            input_path=input_path,
-                            includes=None,
-                            excludes=None,
-                            time_scale=time_scale,
-                            z_scale=z_scale,
-                            y_scale=y_scale,
-                            x_scale=x_scale,
-                            time_unit=time_unit,
-                            z_unit=z_unit,
-                            y_unit=y_unit,
-                            x_unit=x_unit,
-                        )
+                        from eubi_bridge.ngff.multiscales import Pyramid
+                        # Load fresh pyramid for direct metadata updates
+                        pyr = Pyramid(input_path)
+                        
+                        # Build kwargs dict for scale updates
+                        scale_kwargs = {}
+                        if time_scale is not None:
+                            scale_kwargs['t'] = time_scale
+                        if z_scale is not None:
+                            scale_kwargs['z'] = z_scale
+                        if y_scale is not None:
+                            scale_kwargs['y'] = y_scale
+                        if x_scale is not None:
+                            scale_kwargs['x'] = x_scale
+                        
+                        # Build kwargs dict for unit updates
+                        unit_kwargs = {}
+                        if time_unit is not None:
+                            unit_kwargs['t'] = time_unit
+                        if z_unit is not None:
+                            unit_kwargs['z'] = z_unit
+                        if y_unit is not None:
+                            unit_kwargs['y'] = y_unit
+                        if x_unit is not None:
+                            unit_kwargs['x'] = x_unit
+                        
+                        # Apply updates using Pyramid methods
+                        if scale_kwargs:
+                            pyr.update_scales(**scale_kwargs)
+                        if unit_kwargs:
+                            pyr.update_units(**unit_kwargs)
+                        
+                        # Save changes
+                        pyr.meta.save_changes()
 
                     result = run_operation_with_logging(run_update, status_container, log_container)
 
                     if result['success']:
                         status_container.success("Pixel metadata updated successfully!")
-                        st.session_state.pixel_meta_pyramid = None
                         
-                        st.markdown("---")
-                        updated_pyr, _ = load_pyramid(input_path)
-                        if updated_pyr:
-                            display_ome_zarr_info(updated_pyr, title="Updated OME-Zarr Information")
+                        # CRITICAL: Clear all caches to force reload from disk
+                        from eubi_bridge.views.visual_channel_editor import load_pyramid_cached, get_pyramid_metadata, reset_for_new_dataset
+                        load_pyramid_cached.clear()
+                        get_pyramid_metadata.clear()
+                        
+                        # Reset ALL editor session state and plane caches
+                        reset_for_new_dataset()
+                        
+                        # Reset pixel metadata session state
+                        st.session_state.pixel_meta_pyramid = None
+                        st.session_state.pixel_meta_path = None
+                        st.session_state.vce_current_zarr = input_path  # Keep the path selected
+                        
+                        # Force Streamlit to re-render with fresh data from disk
+                        st.rerun()
                     else:
                         status_container.error(f"Update failed: {result['error']}")
                         if result['traceback']:
