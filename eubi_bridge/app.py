@@ -137,7 +137,7 @@ else:
     if 'conv_selected_input' not in st.session_state:
         st.session_state.conv_selected_input = ""
     if 'conv_selected_output' not in st.session_state:
-        st.session_state.conv_selected_output = ""
+        st.session_state.conv_selected_output = os.path.expanduser("~")
     if 'conv_includes' not in st.session_state:
         st.session_state.conv_includes = ""
     if 'conv_excludes' not in st.session_state:
@@ -349,6 +349,9 @@ else:
         if st.session_state.conv_show_output_browser:
             current_path = st.session_state.conv_output_browse_path
             
+            # Auto-select the current directory being browsed
+            st.session_state.conv_selected_output = current_path
+            
             st.caption(f"📁 {current_path}")
             
             nav_col1, nav_col2 = st.columns(2)
@@ -357,6 +360,7 @@ else:
                     parent = os.path.dirname(current_path)
                     if parent and parent != current_path:
                         st.session_state.conv_output_browse_path = parent
+                        st.session_state.conv_selected_output = parent
                         st.session_state.conv_output_pending = parent
                         st.session_state.conv_nav_counter += 1
                         st.rerun()
@@ -364,6 +368,7 @@ else:
                 if st.button("🏠 Home", key="conv_output_home", use_container_width=True):
                     home = os.path.expanduser("~")
                     st.session_state.conv_output_browse_path = home
+                    st.session_state.conv_selected_output = home
                     st.session_state.conv_output_pending = home
                     st.session_state.conv_nav_counter += 1
                     st.rerun()
@@ -408,6 +413,7 @@ else:
                                 with col3:
                                     if st.button("Select", key=f"conv_out_sel_{idx}"):
                                         st.session_state.conv_selected_output = item['path']
+                                        st.session_state.conv_output_text = item['path']
                                         st.session_state.conv_output_pending = item['path']
                                         st.session_state.conv_show_output_browser = False
                                         st.rerun()
