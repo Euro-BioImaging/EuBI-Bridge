@@ -364,9 +364,7 @@ def render(bridge):
                 if not changes:
                     st.warning("No changes to apply")
                 else:
-                    st.markdown("### Update Log")
                     status_container = st.empty()
-                    log_container = st.container()
                     status_container.info("Updating pixel metadata...")
 
                     def parse_scale(val):
@@ -409,7 +407,7 @@ def render(bridge):
                             x_scale = scale_val
                             x_unit = unit_val
 
-                    def run_update():
+                    try:
                         from eubi_bridge.ngff.multiscales import Pyramid
                         # Load fresh pyramid for direct metadata updates
                         pyr = Pyramid(input_path)
@@ -424,7 +422,7 @@ def render(bridge):
                             scale_kwargs['y'] = y_scale
                         if x_scale is not None:
                             scale_kwargs['x'] = x_scale
-                        
+            
                         # Build kwargs dict for unit updates
                         unit_kwargs = {}
                         if time_unit is not None:
@@ -435,38 +433,36 @@ def render(bridge):
                             unit_kwargs['y'] = y_unit
                         if x_unit is not None:
                             unit_kwargs['x'] = x_unit
-                        
-                        # Apply updates using Pyramid methods
+            
+                        # Apply updates using Pyramid methods (direct, no overhead)
                         if scale_kwargs:
                             pyr.update_scales(**scale_kwargs)
                         if unit_kwargs:
                             pyr.update_units(**unit_kwargs)
-                        
+            
                         # Save changes
                         pyr.meta.save_changes()
-
-                    result = run_operation_with_logging(run_update, status_container, log_container)
-
-                    if result['success']:
+            
                         status_container.success("Pixel metadata updated successfully!")
-                        
+            
                         # CRITICAL: Clear all caches to force reload from disk
                         from eubi_bridge.views.visual_channel_editor import load_pyramid_cached, get_pyramid_metadata, reset_for_new_dataset
                         load_pyramid_cached.clear()
                         get_pyramid_metadata.clear()
-                        
+            
                         # Reset ALL editor session state and plane caches
                         reset_for_new_dataset()
-                        
+            
                         # Reset pixel metadata session state
                         st.session_state.pixel_meta_pyramid = None
                         st.session_state.pixel_meta_path = None
                         st.session_state.vce_current_zarr = input_path  # Keep the path selected
-                        
+            
                         # Force Streamlit to re-render with fresh data from disk
                         st.rerun()
-                    else:
-                        status_container.error(f"Update failed: {result['error']}")
-                        if result['traceback']:
-                            with st.expander("Show error details"):
-                                st.code(result['traceback'])
+            
+                    except Exception as e:
+                        import traceback
+                        status_container.error(f"Update failed: {str(e)}")
+                        with st.expander("Show error details"):
+                            st.code(traceback.format_exc())

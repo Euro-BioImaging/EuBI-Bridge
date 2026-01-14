@@ -762,9 +762,8 @@ def render_save_controls(pyr: Pyramid, num_channels: int, channels_meta: list):
                 try:
                     zarr_path = st.session_state.vce_current_zarr
 
-                    handler = NGFFMetadataHandler()
-                    handler.connect_to_group(zarr_path, mode='a')
-                    handler.read_metadata()
+                    # Use Pyramid directly for fast metadata updates (no overhead)
+                    pyr_fresh = Pyramid(zarr_path)
 
                     for ch_idx in range(num_channels):
                         new_color = st.session_state.vce_editing_colors.get(
@@ -775,14 +774,14 @@ def render_save_controls(pyr: Pyramid, num_channels: int, channels_meta: list):
                         new_limits = st.session_state.vce_intensity_limits.get(
                             state_key, (0, 1))
 
-                        handler.update_channel(ch_idx,
-                                               color=new_color.lstrip('#'),
-                                               label=new_label,
-                                               start_intensity=new_limits[0],
-                                               end_intensity=new_limits[1],
-                                               dtype=pyr.dtype)
+                        pyr_fresh.meta.update_channel(ch_idx,
+                                                      color=new_color.lstrip('#'),
+                                                      label=new_label,
+                                                      start_intensity=new_limits[0],
+                                                      end_intensity=new_limits[1],
+                                                      dtype=pyr.dtype)
 
-                    handler.save_changes()
+                    pyr_fresh.meta.save_changes()
 
                     load_pyramid_cached.clear()
                     get_pyramid_metadata.clear()
