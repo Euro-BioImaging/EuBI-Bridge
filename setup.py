@@ -215,13 +215,13 @@ def get_requirements():
         ],
         "gui": [
             "fire>=0.0.0",
-            "streamlit>=1.28.0",
-            "matplotlib>=3.5.0",
+            "streamlit>=1.52.1",
+            "matplotlib",
         ],
         "all": [
             "fire>=0.0.0",
-            "streamlit>=1.28.0",
-            "matplotlib>=3.5.0",
+            "streamlit>=1.52.1",
+            "matplotlib",
         ],
     }
 
