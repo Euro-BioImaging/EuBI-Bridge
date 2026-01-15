@@ -1608,6 +1608,7 @@ async def store_multiscale_async(
             size = 1
         meta.autocompute_omerometa(size, arr.dtype)
     elif channels is not None:
+        print(f"Adding channel metadata: {channels}")
         meta.metadata['omero']['channels'] = channels
     
     meta.save_changes()

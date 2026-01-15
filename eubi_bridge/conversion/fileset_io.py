@@ -11,8 +11,8 @@ from natsort import natsorted
 from eubi_bridge.core.data_manager import (ArrayManager,  # , prune_seriesfix
                                            ChannelIterator)
 from eubi_bridge.utils.logging_config import get_logger
-
-# Set up logger for this module
+from eubi_bridge.external.dyna_zarr import operations as ops, DynamicArray
+                        
 logger = get_logger(__name__)
 
 transpose_list = lambda l: list(map(list, zip(*l)))
@@ -138,6 +138,88 @@ def accumulate_slices_along_axis(shapes: Iterable,
     return slices
 
 
+def find_consensus_sequence(strings: List[str]) -> tuple:
+    """
+    Find consensus sequence using column-based majority voting.
+    
+    Pads all strings to the same length with '_', then identifies
+    which positions have differing characters across the strings.
+    
+    Args:
+        strings: List of strings to find consensus from
+        
+    Returns:
+        (consensus_str, variable_positions_list): Consensus string and list of 
+        positions where characters differ
+    """
+    if not strings:
+        return '', []
+    
+    max_len = max(len(s) for s in strings)
+    padded_strings = [s.ljust(max_len, '_') for s in strings]
+    
+    consensus_chars = []
+    variable_positions = []
+    
+    for pos in range(max_len):
+        chars_at_pos = [s[pos] for s in padded_strings]
+        
+        # Find most common character (majority voting)
+        char_counts = {}
+        for ch in chars_at_pos:
+            char_counts[ch] = char_counts.get(ch, 0) + 1
+        
+        most_common = max(char_counts.items(), key=lambda x: x[1])[0]
+        consensus_chars.append(most_common)
+        
+        # Check if all characters at this position are the same
+        if len(set(chars_at_pos)) > 1:
+            variable_positions.append(pos)
+    
+    return ''.join(consensus_chars), variable_positions
+
+
+def subtract_tags_from_filenames(filenames: List[str], tags: List[str]) -> Dict:
+    """
+    Subtract tags from filenames, returning before/after parts separately.
+    
+    Args:
+        filenames: List of filenames (basenames, not full paths)
+        tags: List of tags to find and remove from each filename
+        
+    Returns:
+        Dict with keys:
+            - 'before_parts': Strings before each tag
+            - 'after_parts': Strings after each tag
+            - 'tag_positions': Index where each tag starts
+            - 'mappings': Tuples of (filename, tag, before, after, position)
+    """
+    before_parts = []
+    after_parts = []
+    tag_positions = []
+    mappings = []
+    
+    for filename, tag in zip(filenames, tags):
+        idx = filename.find(tag)
+        if idx == -1:
+            raise ValueError(f"Tag '{tag}' not found in filename '{filename}'")
+        
+        before = filename[:idx]
+        after = filename[idx + len(tag):]
+        
+        before_parts.append(before)
+        after_parts.append(after)
+        tag_positions.append(idx)
+        mappings.append((filename, tag, before, after, idx))
+    
+    return {
+        'before_parts': before_parts,
+        'after_parts': after_parts,
+        'tag_positions': tag_positions,
+        'mappings': mappings
+    }
+
+
 def reduce_paths_flexible(paths: Iterable[str],
                           dimension_tag: Union[str, tuple, list],
                           replace_with: str = 'set') -> str:
@@ -146,47 +228,93 @@ def reduce_paths_flexible(paths: Iterable[str],
 
     - If `dimension_tag` is a string (e.g., 'T' or 'Channel'), it's assumed to be followed by digits;
       the digits are replaced with `replace_with`.
-    - If `dimension_tag` is a tuple/list (e.g., ('blue', 'red')), those are treated as categorical tokens
-      and replaced with their joined value plus `replace_with`.
+    - If `dimension_tag` is a tuple/list (e.g., ('Au', 'Apo')), collects the parts containing these
+      tokens from all paths and combines them with the replace_with suffix.
     """
 
     paths = list(paths)
     if not paths:
         return ""
+    
+    if len(paths) == 1:
+        return paths[0]
 
     if isinstance(dimension_tag, str):
-        # Match like 'T0001', 'Channel2', etc.
+        # Numeric case: Match like 'T0001', 'Channel2', etc.
         pattern = re.compile(rf'({re.escape(dimension_tag)})(\d+)')
         def replace_tag(path):
             return pattern.sub(lambda m: m.group(1) + replace_with, path)
+        
+        replaced_paths = [replace_tag(p) for p in paths]
+        return replaced_paths[0]
 
     elif isinstance(dimension_tag, (tuple, list)):
-        # Categorical case: match only if surrounded by boundaries like /, _, -, ., or start/end of string
+        # Categorical case: merge categorical dimension tags
         unique_vals = list(dimension_tag)
-        joined_val = ''.join(unique_vals) + replace_with
-
-        # Example: match (^|/|_|-|.)blue(?=$|/|_|-|.)
-        pattern = re.compile(
-            rf'(?:(?<=^)|(?<=[/_\-.]))({"|".join(map(re.escape, unique_vals))})(?=$|[\/_\-.])'
-        )
-
-        def replace_tag(path):
-            return pattern.sub(joined_val, path)
+        
+        # Split paths into directory and filename
+        common_dir = os.path.dirname(paths[0])
+        filenames = [os.path.basename(p) for p in paths]
+        
+        # Find which tag appears in each filename and extract before/after parts
+        before_parts = []
+        after_parts = []
+        found_tags = []
+        tag_indices = []
+        
+        for filename in filenames:
+            found = False
+            for tag in unique_vals:
+                if tag in filename:
+                    idx = filename.find(tag)
+                    before = filename[:idx]
+                    after = filename[idx + len(tag):]
+                    
+                    before_parts.append(before)
+                    after_parts.append(after)
+                    found_tags.append(tag)
+                    tag_indices.append(idx)
+                    found = True
+                    break
+            
+            if not found:
+                raise ValueError(f"No tags {unique_vals} found in {filename}")
+        
+        # Find common prefix of all before_parts
+        common_before = os.path.commonprefix(before_parts)
+        
+        # Find common suffix of all after_parts
+        reversed_after_parts = [s[::-1] for s in after_parts]
+        common_after_reversed = os.path.commonprefix(reversed_after_parts)
+        common_after_suffix = common_after_reversed[::-1]
+        
+        # Extract variable parts: what's left after removing common prefix/suffix
+        variable_before_parts = [b[len(common_before):] for b in before_parts]
+        variable_after_parts = [a[:-len(common_after_suffix)] if common_after_suffix else a for a in after_parts]
+        
+        # Interleave: For each file, merge: variable_before[i] + tag[i] + variable_after[i]
+        # Then concatenate all these merged units
+        merged_units = []
+        for var_before, tag, var_after in zip(variable_before_parts, found_tags, variable_after_parts):
+            unit = var_before + tag + var_after
+            merged_units.append(unit)
+        
+        merged_content = ''.join(merged_units)
+        
+        # Final result = common_before + merged_content + common_after_suffix
+        result_filename = common_before + merged_content + common_after_suffix
+        
+        # Add replace_with before the file extension
+        last_dot = result_filename.rfind('.')
+        if last_dot != -1:
+            result_filename = result_filename[:last_dot] + f'{replace_with}' + result_filename[last_dot:]
+        else:
+            result_filename = result_filename + f'_{replace_with}'
+        
+        return os.path.join(common_dir, result_filename)
 
     else:
         raise ValueError("dimension_tag must be a string or a tuple/list of strings")
-
-    # Apply replacement
-    replaced_paths = [replace_tag(p) for p in paths]
-
-    # Now combine all paths token-wise
-    tokenized = [re.split(r'([/_\-.])', p) for p in replaced_paths]
-    merged_tokens = []
-    for tokens in zip(*tokenized):
-        uniq = list(dict.fromkeys(tokens))  # preserve order
-        merged_tokens.append(''.join(uniq))
-
-    return ''.join(merged_tokens)
 
 
 def parse_channel_tag_from_string(channel_tag: str) -> tuple:
@@ -272,6 +400,13 @@ class FileSet:
         }
         self.path_dict = dict(zip(filepaths, filepaths))
 
+    def concatenate(self, arrays, axis: int):
+        concatenate = ops.concatenate
+        for arr in self.array_dict.values():
+            if isinstance(arr, da.Array):
+                concatenate = da.concatenate
+        return concatenate(arrays, axis=axis)
+
     def get_numerics_per_dimension_tag(self,
                                        dimension_tag: str
                                        ) -> List[str]:
@@ -291,7 +426,7 @@ class FileSet:
             ['0001', '0002']
         """
         filepaths = list(self.group.values())[0]
-        matches = get_matches(f'{dimension_tag}\d+', filepaths)
+        matches = get_matches(rf'{dimension_tag}\d+', filepaths)
         spans = [match.string[match.start():match.end()] for match in matches]
         numerics = [get_numerics(span)[0] for span in spans]
         # TODO: add an incrementality validator
@@ -355,7 +490,7 @@ class FileSet:
             else:
                 numeric_dict = {}
                 for key, filepaths in group.items():
-                    matches = get_matches(f'{dim}\d+', filepaths)
+                    matches = get_matches(rf'{dim}\d+', filepaths)
                     spans = [match.string[match.start():match.end()] for match in matches]
                     spans = [span.replace(dim, '') for span in spans]  ### remove search term from the spans
                     numerics = [get_numerics(span)[0] for span in spans]
@@ -425,13 +560,17 @@ class FileSet:
                 dimension_tag,
                 replace_with=f'_{self.AXIS_DICT[axis]}set'
             )
+            print(f"Group reduced paths: {group_reduced_paths}")
+            print(f"Dimension tag: {dimension_tag}")
+            print(f"New reduced path: {new_reduced_path}")
+            print(f"Replacing with: _{self.AXIS_DICT[axis]}set")
             new_reduced_paths = [new_reduced_path] * len(group_reduced_paths)
 
             # If arrays are present, concatenate them
             if self.array_dict is not None:
                 group_arrays = [self.array_dict[path] for path in sorted_paths]
                 logger.info(f"Arrays being concatenated in the order: {sorted_paths}")
-                new_array = da.concatenate(group_arrays, axis=axis)
+                new_array = self.concatenate(group_arrays, axis=axis)
 
             # Update dictionaries with new values
             for path, slc, reduced_path in zip(sorted_paths,
@@ -443,7 +582,8 @@ class FileSet:
                 self.path_dict[path] = reduced_path
                 if self.array_dict is not None:
                     self.array_dict[path] = new_array
-
+        import pprint
+        pprint.pprint(self.path_dict)
         return group
 
     def get_concatenated_array_paths(self):
@@ -616,8 +756,9 @@ class BatchFile:
                                  series = 0,
                                  metadata_reader = metadata_reader,
                                  **kwargs) for path in pruned_paths]
-        self.managers = {}
+        self.managers = {} # Speed up this part
         for manager in managers:
+            logger.info(f"Reference manager: {manager.path} constructed.")
             await manager.init()
             await manager.load_scenes(series)
             self.managers.update(**manager.loaded_scenes)

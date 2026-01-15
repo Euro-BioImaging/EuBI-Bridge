@@ -199,12 +199,14 @@ class ChannelParser:
             return
         
         # Get channels from pyramid metadata or manager
-        mchannels = (
-            self.manager.pyr.meta.omero['channels']
-            if hasattr(self.manager, 'pyr') and self.manager.pyr is not None
-            else self.manager.channels
-        )
+        # mchannels = (
+        #     self.manager.pyr.meta.omero['channels']
+        #     if hasattr(self.manager, 'pyr') and self.manager.pyr is not None
+        #     else self.manager.channels
+        # )
         
+        mchannels = self.manager.channels
+
         for idx, channel in enumerate(mchannels):
             try:
                 # Only update fields that have non-None values in manager channels

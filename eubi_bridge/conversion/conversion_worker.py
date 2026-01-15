@@ -263,7 +263,7 @@ async def _prepare_manager(manager: ArrayManager, kwargs: Dict) -> None:
         channel_intensity_limits='from_dtype'
     )
     manager.fix_bad_channels()
-
+    print(f"The manager array shape before squeezing: {manager.array.shape}")
     # Apply optional transformations
     if kwargs.get('squeeze'):
         manager.squeeze()
@@ -318,6 +318,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         sem: Semaphore for concurrency control
     """
     async with sem:
+        print(f"The manager array shape before preparation: {manager.array.shape}")
         await _prepare_manager(manager, kwargs)
 
         scale_factors = parse_scale_factors(manager, **kwargs)
@@ -327,6 +328,9 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             manager,
             **dict(kwargs, channel_intensity_limits='from_dtype')
         )
+        print(f"The manager array shape before storing: {manager.array.shape}")
+        import pprint
+        pprint.pprint(f"Channel metadata before storing: {channel_meta}")
         await store_multiscale_async(
             arr=manager.array,
             dtype=kwargs.get('dtype'),
@@ -420,7 +424,7 @@ async def _load_input_manager(input_path: Union[str, ArrayManager],
     # Load tiles if specified
     mosaic_tile_index = kwargs.get('mosaic_tile_index')
     if mosaic_tile_index is not None and len(manager.loaded_scenes) > 1:
-        logger.warn(f"Currently cannot load multiple scenes and multiple tiles at the same time.\n"
+        logger.warning(f"Currently cannot load multiple scenes and multiple tiles at the same time.\n"
                     f"Will load only the first tile.")
     elif mosaic_tile_index is not None and len(manager.loaded_scenes) <= 1:
         await manager.load_tiles(tile_indices=mosaic_tile_index)

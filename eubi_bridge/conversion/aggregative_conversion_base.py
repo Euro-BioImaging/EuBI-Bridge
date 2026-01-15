@@ -285,6 +285,8 @@ class AggregativeConverter:
                     channel['label'] = tagitem
                     channels[idx] = channel
                 manager._channels = channels
+        import pprint
+        pprint.pprint(f"Channel metadata: {manager.channels}")
         self.batchdata = BatchManager()
         await self.batchdata.init(self.managers)
         await self.batchdata.fill_default_meta()

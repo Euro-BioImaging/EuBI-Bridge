@@ -339,12 +339,12 @@ class PFFImageMeta:
         if not hasattr(dims, 'S'):
             dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TCZYX')
         elif hasattr(dims, 'S') and not hasattr(dims, 'C'):
-            logger.warn(f"As dimension names, 'S' was found but no 'C'. 'S' is being assumed as channel dimension.")
+            logger.warning(f"As dimension names, 'S' was found but no 'C'. 'S' is being assumed as channel dimension.")
             dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TSZYX')
             logger.info(f"Current dask data shape: {dask_data.shape}")
         elif hasattr(dims, 'S') and hasattr(dims, 'C'):
             if dims.C != pix.size_c & dims.S == pix.size_c:
-                logger.warn(f"As dimension names, both 'S' and 'C' were found but 'S' seems to match the real dimension number. Assuming 'S' as channel dimension.")
+                logger.warning(f"As dimension names, both 'S' and 'C' were found but 'S' seems to match the real dimension number. Assuming 'S' as channel dimension.")
                 dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TSZYX')
                 logger.info(f"Current dask data shape: {dask_data.shape}")
             else:
@@ -1382,25 +1382,6 @@ class ArrayManager:  ### Unify the classes above.
     def squeeze(self):
         if all(n > 1 for n in self.array.shape):
             return
-        if self.pyr is not None:
-            zgroup = self.pyr.meta.zarr_group
-            omero_copy = copy.copy(self.pyr.meta.omero)
-            #print(f"Before squeeze, shape: {self.pyr.base_array.shape}")
-            #print(f"Before squeeze, axes: {self.pyr.axes}")
-            self.pyr = self.pyr.squeeze()
-            self.pyr.meta.zarr_group = zgroup
-            self.pyr.meta.metadata['omero'] = omero_copy
-            #print(f"Array type: self.pyr.base_array: {self.pyr.base_array}")
-            #print(f"After squeeze, new shape: {self.pyr.base_array.shape}")
-            #print(f"After squeeze, new shape: {self.pyr.base_array.shape}")
-            #print(f"After squeeze, new axes: {self.pyr.axes}")
-            self.set_arraydata(self.pyr.base_array,
-                               self.pyr.axes,
-                               self.pyr.meta.unit_list,
-                               self.pyr.meta.scales[self.pyr.meta.resolution_paths[0]])
-            return
-        else:
-            omero_copy = None
         if isinstance(self.array, zarr.Array):
             logger.warning(f"Zarr arrays are not supported for squeeze operation.\n"
                            f"Zarr array for the path {self.series_path} is being converted to dask array.")
@@ -1421,12 +1402,24 @@ class ArrayManager:  ### Unify the classes above.
             newarray = ops.squeeze(array)
         else:       
             newarray = da.squeeze(array)
-        # print(f"newaxes: {newaxes}")
-        # print(f"newunits: {newunits}")
-        # print(f"newscales: {newscales}")
+        print(f"newaxes: {newaxes}")
+        print(f"newunits: {newunits}")
+        print(f"newscales: {newscales}")
+        print(f"newarray.shape: {newarray.shape}")
         self.set_arraydata(newarray, newaxes, newunits, newscales)
+        if self.pyr is not None:
+            version = self.pyr.meta.multiscales.get('version', '0.4')
+        else:
+            version = '0.4'
+        self.pyr = Pyramid().from_array(newarray,
+                                        axis_order=newaxes,
+                                        unit_list=newunits,
+                                        scale=newscales,
+                                        version=version,
+                                        name = 'squeezed',
+                                        )
 
-    def transpose(self, newaxes: str):
+    def transpose(self, newaxes: str): # TODO: review and test this method. Requires recreating pyramid as well.
         newaxes = ''.join(ax for ax in newaxes if ax in self.axes)
         new_ids = [self.axes.index(ax) for ax in newaxes]
         newunits, newscales = [], []
@@ -1475,14 +1468,6 @@ class ArrayManager:  ### Unify the classes above.
         logger.info(f"The cropped array shape: {array.shape}")
         self.set_arraydata(array, self.axes, self.units, self.scales)
 
-
-    def to_cupy(self):
-        try:
-            import cupy
-        except Exception:
-            raise Exception("Cupy not installed but required for this operation.")
-        array = self.array.map_blocks(cupy.asarray)
-        self.set_arraydata(array, self.axes, self.units, self.scales)
 
     def split_series(self):
         """Split each series into a separate ArrayManager using set_scene method.

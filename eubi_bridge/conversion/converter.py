@@ -300,6 +300,7 @@ async def run_conversions_with_concatenation(
 
     verbose = kwargs.get('verbose', None)
     override_channel_names = kwargs.get('override_channel_names', False)
+    print(f"override_channel_names: {override_channel_names}")
 
     max_workers = int(kwargs.get("max_workers", 4))
     if verbose:
@@ -336,6 +337,7 @@ async def run_conversions_with_concatenation(
         updated_key = os.path.splitext(key)[0]
         names.append(updated_key)
         man = base.managers[key]
+        print(f"Manager for {key} has array shape: {man.array.shape}")
         managers.append(man)
 
     # --- Use ThreadPoolExecutor for aggregative conversion ---
