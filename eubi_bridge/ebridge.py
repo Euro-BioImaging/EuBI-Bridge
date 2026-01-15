@@ -70,7 +70,7 @@ def verify_filepaths_for_cluster(filepaths):
                                 [filepath] * len(formats), formats)))
         if not verified:
             root, ext = os.path.splitext(filepath)
-            logging.warning(f"Distributed execution is not supported for the {ext} format")
+            logger.warning(f"Distributed execution is not supported for the {ext} format")
             logger.warning(f"Falling back on multithreading.")
             break
     if verified:
@@ -365,7 +365,7 @@ class EuBIBridge:
                           rotation_index: int = 'default',
                           mosaic_tile_index: int = 'default',
                           sample_index: int = 'default',
-                          # use_bioformats_readers: bool = 'default'
+                          # use_bioformats_readers: bool = 'default' # TODO: implement
                           ):
         """
         Updates reader configuration settings. To update the current default value for a parameter, provide that parameter with a value other than 'default'.
@@ -383,7 +383,7 @@ class EuBIBridge:
             'rotation_index': rotation_index,
             'mosaic_tile_index': mosaic_tile_index,
             'sample_index': sample_index,
-            'use_bioformats_readers': use_bioformats_readers
+            #'use_bioformats_readers': use_bioformats_readers
         }
 
         for key in params:
@@ -639,11 +639,11 @@ class EuBIBridge:
         series = self.readers_params['scene_index']
 
         ###### Read and digest
-        base = BridgeBase(input_path,
-                          excludes=excludes,
-                          includes=includes,
-                          series=series
-                          )
+        base = AggregativeConverter(input_path,
+                                    excludes=excludes,
+                                    includes=includes,
+                                    series=series
+                                    )
 
         base.read_dataset(verified_for_cluster,
                           readers_params=self.readers_params
@@ -691,7 +691,7 @@ class EuBIBridge:
                           time_scale: Union[int, float] = None,
                           z_scale: Union[int, float] = None,
                           y_scale: Union[int, float] = None,
-                          x_scale: (int, float) = None,
+                          x_scale: Union[int, float] = None,
                           time_unit: str = None,
                           z_unit: str = None,
                           y_unit: str = None,
