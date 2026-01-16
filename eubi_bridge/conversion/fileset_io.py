@@ -301,15 +301,9 @@ def reduce_paths_flexible(paths: Iterable[str],
         
         merged_content = ''.join(merged_units)
         
-        # Final result = common_before + merged_content + common_after_suffix
-        result_filename = common_before + merged_content + common_after_suffix
-        
-        # Add replace_with before the file extension
-        last_dot = result_filename.rfind('.')
-        if last_dot != -1:
-            result_filename = result_filename[:last_dot] + f'{replace_with}' + result_filename[last_dot:]
-        else:
-            result_filename = result_filename + f'_{replace_with}'
+        # Final result = common_before + merged_content + replace_with + common_after_suffix
+        # This ensures replace_with is placed right after the merged content, not at the end
+        result_filename = common_before + merged_content + f'{replace_with}' + common_after_suffix
         
         return os.path.join(common_dir, result_filename)
 
