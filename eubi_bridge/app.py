@@ -146,6 +146,21 @@ else:
         st.session_state.conv_show_input_browser = False
     if 'conv_show_output_browser' not in st.session_state:
         st.session_state.conv_show_output_browser = False
+    if 'conv_input_page' not in st.session_state:
+        st.session_state.conv_input_page = 0
+    if 'conv_output_page' not in st.session_state:
+        st.session_state.conv_output_page = 0
+    if 'conv_prev_includes' not in st.session_state:
+        st.session_state.conv_prev_includes = ""
+    if 'conv_prev_excludes' not in st.session_state:
+        st.session_state.conv_prev_excludes = ""
+    
+    # Reset pagination when filters change
+    if st.session_state.conv_includes != st.session_state.conv_prev_includes or \
+       st.session_state.conv_excludes != st.session_state.conv_prev_excludes:
+        st.session_state.conv_input_page = 0
+        st.session_state.conv_prev_includes = st.session_state.conv_includes
+        st.session_state.conv_prev_excludes = st.session_state.conv_excludes
     
     def matches_filter(name, includes, excludes):
         if includes:
@@ -271,39 +286,67 @@ else:
                     filter_note = " (filtered)" if filter_active else ""
                     
                     if items:
-                        with st.expander(f"Contents ({len(items)}){filter_note}", expanded=True):
-                            for idx, item in enumerate(items[:30]):
-                                if item['is_dir']:
-                                    col1, col2, col3 = st.columns([5, 2, 2])
-                                    with col1:
-                                        st.markdown(f"<div style='word-wrap:break-word;overflow-wrap:anywhere;'>📁 {item['name']}</div>", unsafe_allow_html=True)
-                                    with col2:
-                                        if st.button("Enter", key=f"conv_in_enter_{idx}"):
-                                            st.session_state.conv_input_browse_path = item['path']
-                                            st.session_state.conv_selected_input = item['path']
-                                            st.session_state.conv_input_pending = item['path']
-                                            st.session_state.conv_input_valid = True
-                                            st.session_state.conv_includes = ""
-                                            st.session_state.conv_excludes = ""
-                                            st.rerun()
-                                    with col3:
-                                        if st.button("Select", key=f"conv_in_sel_dir_{idx}"):
-                                            st.session_state.conv_selected_input = item['path']
-                                            st.session_state.conv_input_pending = item['path']
-                                            st.session_state.conv_input_valid = True
-                                            st.session_state.conv_show_input_browser = False
-                                            st.rerun()
-                                else:
-                                    col1, col2 = st.columns([7, 2])
-                                    with col1:
-                                        st.markdown(f"<div style='word-wrap:break-word;overflow-wrap:anywhere;'>📄 {item['name']}</div>", unsafe_allow_html=True)
-                                    with col2:
-                                        if st.button("Select", key=f"conv_in_sel_{idx}"):
-                                            st.session_state.conv_selected_input = item['path']
-                                            st.session_state.conv_input_pending = item['path']
-                                            st.session_state.conv_input_valid = True
-                                            st.session_state.conv_show_input_browser = False
-                                            st.rerun()
+                        ITEMS_PER_PAGE = 20
+                        total_count = len(items)
+                        total_pages = max(1, (total_count + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+                        current_page = st.session_state.conv_input_page
+                        if current_page >= total_pages:
+                            current_page = 0
+                            st.session_state.conv_input_page = 0
+                        
+                        st.markdown(f"**Contents** {filter_note}")
+                        st.caption(f"Page {current_page + 1}/{total_pages} ({total_count} items)")
+                        
+                        pg_col1, pg_col2, pg_col3 = st.columns([1, 2, 1])
+                        with pg_col1:
+                            if st.button("◀", key="conv_input_page_prev", use_container_width=True, disabled=current_page <= 0):
+                                st.session_state.conv_input_page = current_page - 1
+                                st.rerun()
+                        with pg_col2:
+                            st.caption(f"Items {current_page * ITEMS_PER_PAGE + 1}-{min((current_page + 1) * ITEMS_PER_PAGE, total_count)}")
+                        with pg_col3:
+                            if st.button("▶", key="conv_input_page_next", use_container_width=True, disabled=current_page >= total_pages - 1):
+                                st.session_state.conv_input_page = current_page + 1
+                                st.rerun()
+                        
+                        start_idx = current_page * ITEMS_PER_PAGE
+                        end_idx = min(start_idx + ITEMS_PER_PAGE, total_count)
+                        page_items = items[start_idx:end_idx]
+                        
+                        for global_idx, item in enumerate(page_items):
+                            idx = start_idx + global_idx
+                            if item['is_dir']:
+                                col1, col2, col3 = st.columns([5, 2, 2])
+                                with col1:
+                                    st.markdown(f"<div style='word-wrap:break-word;overflow-wrap:anywhere;'>📁 {item['name']}</div>", unsafe_allow_html=True)
+                                with col2:
+                                    if st.button("Enter", key=f"conv_in_enter_{idx}"):
+                                        st.session_state.conv_input_browse_path = item['path']
+                                        st.session_state.conv_selected_input = item['path']
+                                        st.session_state.conv_input_pending = item['path']
+                                        st.session_state.conv_input_valid = True
+                                        st.session_state.conv_includes = ""
+                                        st.session_state.conv_excludes = ""
+                                        st.session_state.conv_input_page = 0
+                                        st.rerun()
+                                with col3:
+                                    if st.button("Select", key=f"conv_in_sel_dir_{idx}"):
+                                        st.session_state.conv_selected_input = item['path']
+                                        st.session_state.conv_input_pending = item['path']
+                                        st.session_state.conv_input_valid = True
+                                        st.session_state.conv_show_input_browser = False
+                                        st.rerun()
+                            else:
+                                col1, col2 = st.columns([7, 2])
+                                with col1:
+                                    st.markdown(f"<div style='word-wrap:break-word;overflow-wrap:anywhere;'>📄 {item['name']}</div>", unsafe_allow_html=True)
+                                with col2:
+                                    if st.button("Select", key=f"conv_in_sel_{idx}"):
+                                        st.session_state.conv_selected_input = item['path']
+                                        st.session_state.conv_input_pending = item['path']
+                                        st.session_state.conv_input_valid = True
+                                        st.session_state.conv_show_input_browser = False
+                                        st.rerun()
                     elif filter_active:
                         st.info("No items match current filters")
             except Exception as e:
@@ -400,23 +443,51 @@ else:
                             items.append({'name': item, 'path': item_path})
                     
                     if items:
-                        with st.expander(f"Folders ({len(items)})", expanded=True):
-                            for idx, item in enumerate(items[:30]):
-                                col1, col2, col3 = st.columns([5, 2, 2])
-                                with col1:
-                                    st.markdown(f"<div style='word-wrap:break-word;overflow-wrap:anywhere;'>📁 {item['name']}</div>", unsafe_allow_html=True)
-                                with col2:
-                                    if st.button("Enter", key=f"conv_out_enter_{idx}"):
-                                        st.session_state.conv_output_browse_path = item['path']
-                                        st.session_state.conv_output_pending = item['path']
-                                        st.rerun()
-                                with col3:
-                                    if st.button("Select", key=f"conv_out_sel_{idx}"):
-                                        st.session_state.conv_selected_output = item['path']
-                                        st.session_state.conv_output_text = item['path']
-                                        st.session_state.conv_output_pending = item['path']
-                                        st.session_state.conv_show_output_browser = False
-                                        st.rerun()
+                        ITEMS_PER_PAGE = 20
+                        total_count = len(items)
+                        total_pages = max(1, (total_count + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+                        current_page = st.session_state.conv_output_page
+                        if current_page >= total_pages:
+                            current_page = 0
+                            st.session_state.conv_output_page = 0
+                        
+                        st.markdown(f"**Folders**")
+                        st.caption(f"Page {current_page + 1}/{total_pages} ({total_count} folders)")
+                        
+                        pg_col1, pg_col2, pg_col3 = st.columns([1, 2, 1])
+                        with pg_col1:
+                            if st.button("◀", key="conv_output_page_prev", use_container_width=True, disabled=current_page <= 0):
+                                st.session_state.conv_output_page = current_page - 1
+                                st.rerun()
+                        with pg_col2:
+                            st.caption(f"Items {current_page * ITEMS_PER_PAGE + 1}-{min((current_page + 1) * ITEMS_PER_PAGE, total_count)}")
+                        with pg_col3:
+                            if st.button("▶", key="conv_output_page_next", use_container_width=True, disabled=current_page >= total_pages - 1):
+                                st.session_state.conv_output_page = current_page + 1
+                                st.rerun()
+                        
+                        start_idx = current_page * ITEMS_PER_PAGE
+                        end_idx = min(start_idx + ITEMS_PER_PAGE, total_count)
+                        page_items = items[start_idx:end_idx]
+                        
+                        for global_idx, item in enumerate(page_items):
+                            idx = start_idx + global_idx
+                            col1, col2, col3 = st.columns([5, 2, 2])
+                            with col1:
+                                st.markdown(f"<div style='word-wrap:break-word;overflow-wrap:anywhere;'>📁 {item['name']}</div>", unsafe_allow_html=True)
+                            with col2:
+                                if st.button("Enter", key=f"conv_out_enter_{idx}"):
+                                    st.session_state.conv_output_browse_path = item['path']
+                                    st.session_state.conv_output_pending = item['path']
+                                    st.session_state.conv_output_page = 0
+                                    st.rerun()
+                            with col3:
+                                if st.button("Select", key=f"conv_out_sel_{idx}"):
+                                    st.session_state.conv_selected_output = item['path']
+                                    st.session_state.conv_output_text = item['path']
+                                    st.session_state.conv_output_pending = item['path']
+                                    st.session_state.conv_show_output_browser = False
+                                    st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
     with st.sidebar.expander("Config Management"):

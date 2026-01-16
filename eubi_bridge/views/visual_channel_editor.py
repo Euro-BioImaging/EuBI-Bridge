@@ -203,17 +203,16 @@ def calculate_intensity_ranges_lazy(zarr_path: str, pyr: Pyramid,
         else:
             data = layer[...]
 
-        if hasattr(data, 'compute'):
-            data = data.compute()
-
-        data = np.asarray(data)
-
         if data.size > 10_000_000:
             indices = np.random.choice(data.size, 10_000_000, replace=False)
             data_flat = data.flat
-            sampled = np.array([data_flat[i] for i in indices])
+            sampled = data_flat[indices]
+            if hasattr(sampled, 'compute'):
+                sampled = sampled.compute()
             vmin, vmax = float(np.min(sampled)), float(np.max(sampled))
         else:
+            if hasattr(data, 'compute'):
+                data = data.compute()
             vmin, vmax = float(np.min(data)), float(np.max(data))
 
         result = (vmin, vmax)
@@ -232,7 +231,7 @@ def get_dtype_range(dtype: np.dtype) -> Tuple[float, float]:
         info = np.iinfo(dtype)
         return (float(info.min), float(info.max))
     elif np.issubdtype(dtype, np.floating):
-        return (0.0, 1.0)
+        return float(np.finfo(dtype).min), float(np.finfo(dtype).max)
     return (0.0, 255.0)
 
 
@@ -612,17 +611,26 @@ def render_channel_controls(num_channels: int, channels_meta: Optional[list],
 
     st.markdown("### Channel Settings")
 
-    range_mode = st.radio("Intensity Range",
-                          options=["Data Values", "Data Type"],
-                          index=0 if not use_dtype_range else 1,
-                          horizontal=True,
-                          disabled=is_locked,
-                          key=f"vce_range_mode_{dataset_id}")
-
-    if range_mode != st.session_state.vce_intensity_range_mode:
-        st.session_state.vce_intensity_range_mode = range_mode
-        st.session_state.vce_intensity_limits = {}
-        st.rerun()
+    st.markdown("**Intensity Range**")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📊 Actual Data", 
+                     help="Scale to min/max values in the data (computed on demand)",
+                     use_container_width=True,
+                     key=f"vce_range_actual_{dataset_id}",
+                     type="primary" if not use_dtype_range else "secondary"):
+            st.session_state.vce_intensity_range_mode = "Data Values"
+            st.session_state.vce_intensity_limits = {}
+            st.rerun()
+    with col2:
+        if st.button("🔢 Data Type Range",
+                     help="Use full range of the data type (e.g., 0-65535 for uint16)",
+                     use_container_width=True,
+                     key=f"vce_range_dtype_{dataset_id}",
+                     type="primary" if use_dtype_range else "secondary"):
+            st.session_state.vce_intensity_range_mode = "Data Type"
+            st.session_state.vce_intensity_limits = {}
+            st.rerun()
 
     dtype_range = get_dtype_range(
         pyr.layers['0'].dtype) if use_dtype_range else None
@@ -698,11 +706,18 @@ def render_channel_controls(num_channels: int, channels_meta: Optional[list],
                 zarr_path, pyr, ch_idx)
 
         if state_key not in st.session_state.vce_intensity_limits:
-            if channels_meta and ch_idx < len(channels_meta):
-                window = channels_meta[ch_idx].get('window', {})
-                default_min = window.get('start', ch_min)
-                default_max = window.get('end', ch_max)
+            if use_dtype_range and dtype_range:
+                # Data Type Range mode: use full dtype range for bounds,
+                # but use metadata window start/end for current position if available
+                slider_min, slider_max = dtype_range
+                if channels_meta and ch_idx < len(channels_meta):
+                    window = channels_meta[ch_idx].get('window', {})
+                    default_min = window.get('start', slider_min)
+                    default_max = window.get('end', slider_max)
+                else:
+                    default_min, default_max = slider_min, slider_max
             else:
+                # Actual Data mode: always use calculated data range for both bounds and position
                 default_min, default_max = ch_min, ch_max
             st.session_state.vce_intensity_limits[state_key] = (default_min,
                                                                 default_max)
@@ -717,8 +732,8 @@ def render_channel_controls(num_channels: int, channels_meta: Optional[list],
             new_limits = st.slider("Intensity",
                                    min_value=ch_min,
                                    max_value=ch_max,
-                                   value=(max(ch_min, current[0]),
-                                          min(ch_max, current[1])),
+                                   value=(max(ch_min, float(current[0])),
+                                          min(ch_max, float(current[1]))),
                                    step=step,
                                    key=f"intensity_{dataset_id}_{ch_idx}",
                                    disabled=is_locked)
@@ -741,7 +756,7 @@ def render_save_controls(pyr: Pyramid, num_channels: int, channels_meta: list):
         if st.button("Lock Changes",
                      type="primary",
                      use_container_width=True,
-                     key=f"vce_lock_{dataset_id}"):
+                     key=f"vcdataset_ide_lock_{dataset_id}"):
             st.session_state.vce_changes_locked = True
             st.rerun()
     else:
@@ -903,6 +918,7 @@ def render_sidebar_file_browser():
                 st.rerun()
             return
 
+        # Browser is active - show full browser UI
         st.markdown("---")
         
         if st.button("Done Browsing",
@@ -1095,7 +1111,6 @@ def render_sidebar_file_browser():
                                          key=f"vce_open_zarr_{zarr_idx}",
                                          disabled=is_current):
                                 st.session_state.vce_current_zarr = item['path']
-                                st.session_state.vce_browser_mode = 'inactive'
                                 reset_for_new_dataset()
                                 st.rerun()
 

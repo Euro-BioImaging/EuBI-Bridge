@@ -105,9 +105,7 @@ def main():
     
     patch_fire_no_literal_eval_for("includes", "excludes")
 
-    # Start JVM with bundled JARs only
-    soft_start_jvm()
-
+    # JVM is now lazily initialized only when needed (in to_zarr, show_pixel_meta, etc.)
     # Don't set spawn here - already set at module level
     fire.Fire(EuBIBridge)
 

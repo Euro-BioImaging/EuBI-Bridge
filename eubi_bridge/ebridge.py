@@ -40,8 +40,7 @@ import s3fs
 import zarr
 from dask import array as da
 
-from eubi_bridge.conversion.aggregative_conversion_base import \
-    AggregativeConverter
+from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
 from eubi_bridge.conversion.converter import run_conversions
 from eubi_bridge.conversion.updater import run_updates
 # from eubi_bridge.ngff.multiscales import Pyramid
@@ -124,7 +123,7 @@ class EuBIBridge:
                 on_slurm=False,
                 max_workers=4,  # size of the pool for sync writer
                 queue_size = 4,
-                region_size_mb = '1GB',
+                region_size_mb = 512,
                 max_concurrency = 4,  # limit how many writes run at once
                 memory_per_worker = '4GB'
                 ),
@@ -558,8 +557,10 @@ class EuBIBridge:
                 **kwargs # metadata kwargs such as pixel sizes and channel info
                 ):
         """Synchronous wrapper for the async to_zarr_async method."""
-        t0 = time.time()
+        # Initialize JVM for image reading (needs Java-based Bio-Formats)
         soft_start_jvm()
+        
+        t0 = time.time()
         # Get parameters:
         logger.info(f"Conversion starting.")
         if output_path is None:
@@ -619,6 +620,9 @@ class EuBIBridge:
         Returns:
             None
         """
+
+        # Initialize JVM for image reading (needs Java-based Bio-Formats)
+        soft_start_jvm()
 
         # Get parameters:
         self.cluster_params = self._collect_params('cluster', **kwargs)
@@ -708,11 +712,12 @@ class EuBIBridge:
             series (int, optional): Series index to process.
             time_scale, z_scale, y_scale, x_scale ((int, float), optional): Scaling factors for the respective dimensions.
             time_unit, z_unit, y_unit, x_unit (str, optional): Units for the respective dimensions.
-            **kwargs: Additional parameters for cluster and conversion configuration.
-
-        Returns:
+            Returns:
             None
         """
+
+        # Initialize JVM for image reading (needs Java-based Bio-Formats)
+        soft_start_jvm()
 
         # Collect cluster and conversion parameters
         self.cluster_params = self._collect_params('cluster', **kwargs)
@@ -770,6 +775,9 @@ class EuBIBridge:
         Returns:
             None
         """
+
+        # Initialize JVM for image reading (needs Java-based Bio-Formats)
+        soft_start_jvm()
 
         # Collect cluster and conversion parameters
         self.cluster_params = self._collect_params('cluster', **kwargs)
