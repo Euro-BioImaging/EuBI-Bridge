@@ -23,6 +23,11 @@ from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
 logger = get_logger(__name__)
 
 
+def _warmup_worker():
+    """Dummy function to trigger worker initialization without doing any work."""
+    return None
+
+
 
 async def run_conversions_from_filepaths(
         input_path,
@@ -56,6 +61,14 @@ async def run_conversions_from_filepaths(
             initializer=initialize_worker_process  # Initialize JVM once per worker
     ) as pool:
         loop = asyncio.get_running_loop()
+        
+        # Pre-warm worker pool: force JVM initialization in all workers
+        # This prevents ~30s delay when first tasks are submitted
+        warmup_futures = [
+            loop.run_in_executor(pool, _warmup_worker)
+            for _ in range(max_workers)
+        ]
+        await asyncio.gather(*warmup_futures)
 
         tasks = []
         for idx, row in df.iterrows():

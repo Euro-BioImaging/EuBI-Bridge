@@ -304,6 +304,40 @@ class DynamicArray:
         result._dtype = transform.dtype
         # Keep zarr metadata from original
         return result
+    
+    def min(self, axis: Optional[int] = None):
+        """Compute minimum along specified axis.
+        
+        Parameters
+        ----------
+        axis : int, optional
+            Axis along which to compute minimum. If None, reduces to scalar.
+        
+        Returns
+        -------
+        scalar or numpy.ndarray
+            Minimum value(s). Computed immediately.
+        """
+        from . import operations
+        result = operations.min(self, axis=axis)
+        return result.compute()
+    
+    def max(self, axis: Optional[int] = None):
+        """Compute maximum along specified axis.
+        
+        Parameters
+        ----------
+        axis : int, optional
+            Axis along which to compute maximum. If None, reduces to scalar.
+        
+        Returns
+        -------
+        scalar or numpy.ndarray
+            Maximum value(s). Computed immediately.
+        """
+        from . import operations
+        result = operations.max(self, axis=axis)
+        return result.compute()
 
 
 # Import Transform subclasses

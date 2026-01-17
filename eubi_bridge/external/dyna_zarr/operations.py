@@ -832,6 +832,56 @@ class AddTransform(Transform):
         return data1 + data2
 
 
+class MinTransform(Transform):
+    """Lazy minimum reduction along specified axes."""
+    def __init__(self, array: 'DynamicArray', axis: Optional[int] = None):
+        super().__init__()
+        self.array = array
+        self.axis = axis
+        
+        if axis is None:
+            self.shape = ()
+            self.chunks = None
+        else:
+            normalized_axis = axis if axis >= 0 else array.ndim + axis
+            if normalized_axis < 0 or normalized_axis >= array.ndim:
+                raise ValueError(f"axis {axis} out of bounds for dimension {array.ndim}")
+            self.shape = array.shape[:normalized_axis] + array.shape[normalized_axis + 1:]
+            self.chunks = array.chunks[:normalized_axis] + array.chunks[normalized_axis + 1:] if array.chunks else None
+        
+        self.dtype = array.dtype
+    
+    def read(self, key):
+        """Read entire array and compute minimum."""
+        full_data = self.array._read_direct(tuple(slice(None) for _ in range(self.array.ndim)))
+        return np.min(full_data, axis=self.axis)
+
+
+class MaxTransform(Transform):
+    """Lazy maximum reduction along specified axes."""
+    def __init__(self, array: 'DynamicArray', axis: Optional[int] = None):
+        super().__init__()
+        self.array = array
+        self.axis = axis
+        
+        if axis is None:
+            self.shape = ()
+            self.chunks = None
+        else:
+            normalized_axis = axis if axis >= 0 else array.ndim + axis
+            if normalized_axis < 0 or normalized_axis >= array.ndim:
+                raise ValueError(f"axis {axis} out of bounds for dimension {array.ndim}")
+            self.shape = array.shape[:normalized_axis] + array.shape[normalized_axis + 1:]
+            self.chunks = array.chunks[:normalized_axis] + array.chunks[normalized_axis + 1:] if array.chunks else None
+        
+        self.dtype = array.dtype
+    
+    def read(self, key):
+        """Read entire array and compute maximum."""
+        full_data = self.array._read_direct(tuple(slice(None) for _ in range(self.array.ndim)))
+        return np.max(full_data, axis=self.axis)
+
+
 # operations class with static methods for creating transforms
 
 class operations:
@@ -963,6 +1013,18 @@ class operations:
         """Element-wise addition."""
         transform = AddTransform(array1, array2)
         return array1._with_transform(transform)
+    
+    @staticmethod
+    def min(array: 'DynamicArray', axis: Optional[int] = None) -> 'DynamicArray':
+        """Compute minimum along axis (lazy reduction)."""
+        transform = MinTransform(array, axis)
+        return array._with_transform(transform)
+    
+    @staticmethod
+    def max(array: 'DynamicArray', axis: Optional[int] = None) -> 'DynamicArray':
+        """Compute maximum along axis (lazy reduction)."""
+        transform = MaxTransform(array, axis)
+        return array._with_transform(transform)
 
 
 def slice_array(array: 'DynamicArray', key) -> 'DynamicArray':
