@@ -554,10 +554,10 @@ class FileSet:
                 dimension_tag,
                 replace_with=f'_{self.AXIS_DICT[axis]}set'
             )
-            print(f"Group reduced paths: {group_reduced_paths}")
-            print(f"Dimension tag: {dimension_tag}")
-            print(f"New reduced path: {new_reduced_path}")
-            print(f"Replacing with: _{self.AXIS_DICT[axis]}set")
+            #print(f"Group reduced paths: {group_reduced_paths}")
+            #print(f"Dimension tag: {dimension_tag}")
+            #print(f"New reduced path: {new_reduced_path}")
+            #print(f"Replacing with: _{self.AXIS_DICT[axis]}set")
             new_reduced_paths = [new_reduced_path] * len(group_reduced_paths)
 
             # If arrays are present, concatenate them
@@ -576,8 +576,8 @@ class FileSet:
                 self.path_dict[path] = reduced_path
                 if self.array_dict is not None:
                     self.array_dict[path] = new_array
-        import pprint
-        pprint.pprint(self.path_dict)
+        #import pprint
+        #pprint.pprint(self.path_dict)
         return group
 
     def get_concatenated_array_paths(self):

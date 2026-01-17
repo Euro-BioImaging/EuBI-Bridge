@@ -994,7 +994,7 @@ class ArrayManager:  ### Unify the classes above.
 
         if scene_indices == 'all':
             scene_indices = list(range(self.img.n_scenes))
-            print(f"Number of scenes to load: {len(scene_indices)}")
+            logger.info(f"Number of scenes to load: {len(scene_indices)}")
         elif np.isscalar(scene_indices):
             scene_indices = [scene_indices]
 
@@ -1024,7 +1024,7 @@ class ArrayManager:  ### Unify the classes above.
         n_tiles = self.img.n_tiles or 1
         if tile_indices == 'all':
             tile_indices = list(range(n_tiles))
-            print(f"Number of tiles to load: {len(tile_indices)}")
+            logger.info(f"Number of tiles to load: {len(tile_indices)}")
         elif np.isscalar(tile_indices):
             tile_indices = [tile_indices]
         tile_indices_ = []
@@ -1427,10 +1427,10 @@ class ArrayManager:  ### Unify the classes above.
             newarray = ops.squeeze(array)
         else:       
             newarray = da.squeeze(array)
-        print(f"newaxes: {newaxes}")
-        print(f"newunits: {newunits}")
-        print(f"newscales: {newscales}")
-        print(f"newarray.shape: {newarray.shape}")
+        #print(f"newaxes: {newaxes}")
+        #print(f"newunits: {newunits}")
+        #print(f"newscales: {newscales}")
+        #print(f"newarray.shape: {newarray.shape}")
         self.set_arraydata(newarray, newaxes, newunits, newscales)
         if self.pyr is not None:
             version = self.pyr.meta.multiscales.get('version', '0.4')

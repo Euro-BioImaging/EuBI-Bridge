@@ -39,6 +39,10 @@ import psutil
 import s3fs
 import zarr
 from dask import array as da
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.text import Text
 
 from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
 from eubi_bridge.conversion.converter import run_conversions
@@ -47,10 +51,11 @@ from eubi_bridge.conversion.updater import run_updates
 # from eubi_bridge.ngff import defaults
 from eubi_bridge.core.data_manager import BatchManager
 from eubi_bridge.utils.logging_config import get_logger
-from eubi_bridge.utils.metadata_utils import get_printables, print_printable
+#from eubi_bridge.utils.metadata_utils import get_printables, print_printable
 
 # Set up logger for this module
 logger = get_logger(__name__)
+_console = Console()
 
 
 
@@ -277,17 +282,68 @@ class EuBIBridge:
         self.config_gr.attrs.update(self.root_defaults)
         self.config = dict(self.config_gr.attrs)
 
+    def _print_config_unified(self, title: str, config_sections: dict):
+        """Print all config sections in a single table with section headers as rows."""
+        table = Table(
+            title=title,
+            title_style="bold cyan",
+            show_header=True,
+            header_style="bold white on blue",
+            padding=(0, 1),
+            border_style="blue"
+        )
+        table.add_column("Section", style="magenta", width=15)
+        table.add_column("Parameter", style="cyan", width=25)
+        table.add_column("Value", style="green")
+        
+        section_list = list(config_sections.items())
+        for section_idx, (section_name, section_dict) in enumerate(section_list):
+            is_first = True
+            for key, value in sorted(section_dict.items()):
+                # Format value nicely
+                if isinstance(value, bool):
+                    val_str = "[bold green]True[/bold green]" if value else "[bold red]False[/bold red]"
+                elif isinstance(value, dict):
+                    val_str = "[dim]" + str(value) + "[/dim]"
+                elif value is None:
+                    val_str = "[dim italic]None[/dim italic]"
+                else:
+                    val_str = str(value)
+                
+                # Only show section name on first row of each section
+                section_display = f"[bold magenta]{section_name.upper()}[/bold magenta]" if is_first else ""
+                table.add_row(section_display, key, val_str)
+                is_first = False
+            
+            # Add separator line between sections (but not after the last one)
+            if section_idx < len(section_list) - 1:
+                table.add_section()
+        
+        _console.print(table)
+
     def show_config(self):
         """
-        Displays the current cluster, conversion, and downscale parameters.
+        Displays the current cluster, conversion, and downscale parameters with rich formatting.
         """
-        pprint.pprint(self.config)
+        _console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
+        _console.print("[bold cyan]Current Configuration[/bold cyan]")
+        _console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
+        
+        sections = {k: v for k, v in self.config.items() if k in ['cluster', 'readers', 'conversion', 'downscale']}
+        self._print_config_unified("Configuration", sections)
+        _console.print()
 
     def show_root_defaults(self):
         """
-        Displays the installation defaults for cluster, conversion, and downscale parameters.
+        Displays the installation defaults for cluster, conversion, and downscale parameters with rich formatting.
         """
-        pprint.pprint(self.root_defaults)
+        _console.print("\n[bold yellow]═══════════════════════════════════════════════════════[/bold yellow]")
+        _console.print("[bold yellow]Installation Defaults[/bold yellow]")
+        _console.print("[bold yellow]═══════════════════════════════════════════════════════[/bold yellow]\n")
+        
+        sections = {k: v for k, v in self.root_defaults.items() if k in ['cluster', 'readers', 'conversion', 'downscale']}
+        self._print_config_unified("Defaults", sections)
+        _console.print()
 
     def _collect_params(self, param_type, **kwargs):
         """
@@ -598,95 +654,165 @@ class EuBIBridge:
                         input_path: Union[Path, str],
                         includes=None,
                         excludes=None,
-                        series: int = None,  # self.readers_params['scene_index'],
+                        series: int = None,
                         **kwargs
                         ):
         """
-        Print pixel-level metadata for all datasets in the 'input_path'.
+        Display pixel-level and channel metadata for all datasets in input_path.
+
+        Uses parallel metadata collection to efficiently read metadata from multiple
+        image files, then displays the results in a formatted table.
 
         Args:
             input_path (Union[Path, str]): Path to input file or directory.
-            output_path (Union[Path, str]): Directory, in which the output OME-Zarrs will be written.
-            includes (str, optional): Filename patterns to filter for.
-            excludes (str, optional): Filename patterns to filter against.
+            includes (str, optional): Filename patterns to filter for (comma-separated).
+            excludes (str, optional): Filename patterns to filter against (comma-separated).
+            series (int, optional): Series index to read. Defaults to configured scene_index.
             **kwargs: Additional configuration overrides.
 
-        Raises:
-            Exception: If no files are found in the input path.
-
         Prints:
-            Process logs including conversion and downscaling time.
+            Formatted table showing axes, shapes, scales, units, and channels for each file.
 
         Returns:
             None
         """
-
-        # Initialize JVM for image reading (needs Java-based Bio-Formats)
+        import asyncio
+        
+        # Initialize JVM for image reading
         soft_start_jvm()
 
-        # Get parameters:
+        # Get parameters
         self.cluster_params = self._collect_params('cluster', **kwargs)
         self.readers_params = self._collect_params('readers', **kwargs)
         self.conversion_params = self._collect_params('conversion', **kwargs)
 
-        paths = take_filepaths(input_path, includes=includes, excludes=excludes)
+        if series is None:
+            series = self.readers_params['scene_index']
 
-        filepaths = sorted(list(paths))
-
-        ###### Start the cluster
-        verified_for_cluster = verify_filepaths_for_cluster(filepaths)
-        if not verified_for_cluster:
-            self.cluster_params['no_distributed'] = True
-
-        self._start_cluster(**self.cluster_params)
-
-        series = self.readers_params['scene_index']
-
-        ###### Read and digest
-        base = AggregativeConverter(input_path,
-                                    excludes=excludes,
-                                    includes=includes,
-                                    series=series
-                                    )
-
-        base.read_dataset(verified_for_cluster,
-                          readers_params=self.readers_params
-                          )
-
-        base.digest()
-
-        temp_dir = base._dask_temp_dir
-        self.conversion_params['temp_dir'] = temp_dir
-
-        if self.client is not None:
-            base.client = self.client
-        base.set_dask_temp_dir(self._dask_temp_dir)
-
-        printables = {
-            path: get_printables(
-                manager.axes,
-                manager.shapedict,
-                manager.scaledict,
-                manager.unitdict
-            )
-            for path, manager in base.batchdata.managers.items()
+        # Combine all parameters for workers
+        combined_params = {
+            **self.cluster_params,
+            **self.readers_params,
+            **self.conversion_params,
         }
-        for path, printable in printables.items():
-            print('---------')
-            print(f"")
-            print(f"Metadata for '{path}':")
-            print_printable(printable)
+        combined_params['series'] = series
 
-        ###### Shutdown and clean up
-        if self.client is not None:
-            try:
-                self.client.shutdown()
-            except Exception as e:
-                logger.warning(f"Error shutting down Dask client: {e}")
-            finally:
-                self.client.close()
+        # Import and run metadata collection
+        from eubi_bridge.conversion.converter import run_metadata_collection_from_filepaths
 
-        self._cleanup_temp_dir()
+        metadata_list = asyncio.run(run_metadata_collection_from_filepaths(
+            input_path,
+            includes=includes,
+            excludes=excludes,
+            **combined_params
+        ))
+
+        # Display results
+        _console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
+        _console.print("[bold cyan]Image Metadata Summary[/bold cyan]")
+        _console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
+
+        # Create table for metadata display
+        table = Table(
+            title="Pixel & channel metadata (in the axis order: TCZYX)",
+            title_style="bold cyan",
+            show_header=True,
+            header_style="bold white on blue",
+            padding=(0, 1),
+            border_style="blue"
+        )
+        table.add_column("File", style="magenta", width=40, no_wrap=False)
+        table.add_column("Shape", style="yellow", width=25)
+        table.add_column("Scale & Units", style="green", width=25)
+        table.add_column("Dtype", style="white", width=12)
+        table.add_column("Channels", style="bright_magenta", width=30)
+
+        def _format_scale_value(value):
+            """Format scale value to 3 significant figures."""
+            if isinstance(value, (int, float)):
+                if value == 0:
+                    return "0"
+                val_float = float(value)
+                if abs(val_float) >= 0.001 and abs(val_float) < 1000:
+                    if val_float >= 1:
+                        return f"{val_float:.3g}"
+                    else:
+                        return f"{val_float:.2g}"
+                return f"{val_float:.2e}"
+            return str(value)
+
+        # Populate table with metadata
+        for metadata in metadata_list:
+            if metadata.get('status') == 'error':
+                input_file = metadata.get('input_path', 'Unknown')
+                error_msg = metadata.get('error', 'Unknown error')
+                table.add_row(
+                    f"[red]{Path(input_file).name}[/red]",
+                    f"[red]ERROR[/red]",
+                    f"[red]{error_msg}[/red]",
+                    "-",
+                    "-"
+                )
+                continue
+
+            # Extract metadata fields
+            input_file = Path(metadata['input_path']).name
+            axes = metadata.get('axes', 'Unknown')
+            shape = metadata.get('shape', {})
+            scale = metadata.get('scale', {})
+            units = metadata.get('units', {})
+            dtype = metadata.get('dtype', 'Unknown')
+            channels = metadata.get('channels', [])
+
+            # Format shape as key-value pairs (vertical)
+            shape_lines = []
+            for ax in axes:
+                ax_display = {'t': 'time', 'c': 'channels', 'z': 'z', 'y': 'y', 'x': 'x'}.get(ax, ax)
+                val = shape.get(ax, '?')
+                shape_lines.append(f"{ax_display}: {val}")
+            shape_str = '\n'.join(shape_lines) if shape_lines else 'Unknown'
+
+            # Format scale and units as key-value pairs (vertical, skip channel)
+            scale_unit_lines = []
+            for ax in axes:
+                if ax == 'c':  # Skip channel axis
+                    continue
+                ax_display = {'t': 'time', 'z': 'z', 'y': 'y', 'x': 'x'}.get(ax, ax)
+                scale_val = scale.get(ax, '?')
+                unit_val = units.get(ax, '')
+                
+                if scale_val != '?':
+                    formatted_scale = _format_scale_value(scale_val)
+                    if unit_val:
+                        scale_unit_lines.append(f"{ax_display}: {formatted_scale} {unit_val}")
+                    else:
+                        scale_unit_lines.append(f"{ax_display}: {formatted_scale}")
+                else:
+                    scale_unit_lines.append(f"{ax_display}: ?")
+            
+            scale_unit_str = '\n'.join(scale_unit_lines) if scale_unit_lines else 'Unknown'
+
+            # Format channels as key-value pairs
+            channel_lines = []
+            for i, ch in enumerate(channels):
+                label = ch.get('label', f"Channel {i}")
+                color = ch.get('color', None)
+                color_display = color if color else "None"
+                channel_lines.append(f"[bold]Label: {label}[/bold]")
+                channel_lines.append(f"[bold]Color: {color_display}[/bold]")
+            
+            channel_str = '\n'.join(channel_lines) if channel_lines else 'No channels'
+
+            table.add_row(
+                f"[bold]{input_file}[/bold]",
+                shape_str,
+                scale_unit_str,
+                f"[white]{dtype}[/white]",
+                channel_str
+            )
+
+        _console.print(table)
+        _console.print()
 
     def update_pixel_meta(self,
                           input_path: Union[Path, str],

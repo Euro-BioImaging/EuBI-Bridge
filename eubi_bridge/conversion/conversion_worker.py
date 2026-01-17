@@ -263,7 +263,8 @@ async def _prepare_manager(manager: ArrayManager, kwargs: Dict) -> None:
         channel_intensity_limits='from_dtype'
     )
     manager.fix_bad_channels()
-    print(f"The manager array shape before squeezing: {manager.array.shape}")
+    if kwargs.get('verbose', False): # TODO: Verify the verbosity check.
+        logger.info(f"The manager array shape before squeezing: {manager.array.shape}")
     # Apply optional transformations
     if kwargs.get('squeeze'):
         manager.squeeze()
@@ -318,7 +319,8 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         sem: Semaphore for concurrency control
     """
     async with sem:
-        print(f"The manager array shape before preparation: {manager.array.shape}")
+        if kwargs.get('verbose', False):
+            logger.info(f"The manager array shape before preparation: {manager.array.shape}")
         await _prepare_manager(manager, kwargs)
 
         scale_factors = parse_scale_factors(manager, **kwargs)
@@ -328,9 +330,10 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             manager,
             **dict(kwargs, channel_intensity_limits='from_dtype')
         )
-        print(f"The manager array shape before storing: {manager.array.shape}")
-        import pprint
-        pprint.pprint(f"Channel metadata before storing: {channel_meta}")
+        if kwargs.get('verbose', False): # TODO: Verify the verbosity here.
+            logger.info(f"The manager array shape before storing: {manager.array.shape}")
+        #import pprint
+        #pprint.pprint(f"Channel metadata before storing: {channel_meta}")
         await store_multiscale_async(
             arr=manager.array,
             dtype=kwargs.get('dtype'),
@@ -415,7 +418,8 @@ async def _load_input_manager(input_path: Union[str, ArrayManager],
     )
     await manager.init()
     manager.fill_default_meta()
-    print(f"Manager array is of type {manager.array}")
+    if kwargs.get('verbose', False):
+        logger.info(f"The manager array is of type: {type(manager.array)}")   
 
     # Load scenes
     series = kwargs.get('scene_index', 'all')
@@ -521,7 +525,8 @@ async def aggregative_worker(manager: ArrayManager,
     sem = asyncio.Semaphore(max_concurrency)
 
     output_path_full = f"{output_path}.zarr"
-    print(f"Manager array is of type {manager.array}")
+    if kwargs.get('verbose', False):
+        logger.info(f"The manager array is of type: {type(manager.array)}")
     await _process_single_scene(manager, output_path_full, kwargs, sem)
 
 
@@ -551,12 +556,14 @@ def unary_worker_sync(input_path: Union[str, ArrayManager],
     Synchronous wrapper for unary_worker.
     Safe for multiprocessing with proper exception handling.
     """
-    print(f"[Worker] Processing: {input_path}", file=sys.stderr, flush=True)
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Processing: {input_path}", file=sys.stderr, flush=True)
 
     # Run the async worker
     asyncio.run(unary_worker(input_path, output_path, **kwargs))
 
-    print(f"[Worker] Completed: {input_path}", file=sys.stderr, flush=True)
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Completed: {input_path}", file=sys.stderr, flush=True)
 
     return {"status": "success", "input": str(input_path), "output": output_path}
 
@@ -569,10 +576,89 @@ def aggregative_worker_sync(manager: ArrayManager,
     Synchronous wrapper for aggregative_worker.
     Safe for multiprocessing with proper exception handling.
     """
-    print(f"[Worker] Processing aggregative: {output_path}", file=sys.stderr, flush=True)
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Processing aggregative: {output_path}", file=sys.stderr, flush=True)
 
     asyncio.run(aggregative_worker(manager, output_path, **kwargs))
 
-    print(f"[Worker] Completed aggregative: {output_path}", file=sys.stderr, flush=True)
-
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Completed aggregative: {output_path}", file=sys.stderr, flush=True)  
     return {"status": "success", "output": output_path}
+
+
+@safe_worker_wrapper
+def metadata_reader_sync(input_path: Union[str, ArrayManager],
+                         kwargs: dict) -> dict:
+    """
+    Synchronous worker for reading metadata from a single image file.
+    
+    Initializes an ArrayManager for the input file, reads its metadata,
+    and returns a structured dictionary of metadata information.
+    
+    Args:
+        input_path: Path to image file
+        kwargs: Job parameters (series, skip_dask, metadata_reader, etc.)
+    
+    Returns:
+        Dictionary containing:
+        - status: "success" or "error"
+        - input_path: Input file path
+        - series: Series index
+        - axes: Axis order (e.g., 'tczyx')
+        - shape: Array shape dictionary
+        - scale: Scale factors dictionary
+        - units: Units dictionary
+        - dtype: Data type
+        - channels: List of channel metadata dictionaries
+        - error: Error message (if status is "error")
+    """
+    if kwargs.get('verbose', False):
+        logger.info(f"[MetadataReader] Reading metadata: {input_path}")
+
+    try:
+        # Extract relevant parameters
+        series = kwargs.get('series', 0)
+        skip_dask = kwargs.get('skip_dask', False)
+        metadata_reader = kwargs.get('metadata_reader', 'bfio')
+
+        # Initialize ArrayManager
+        manager = ArrayManager( # TODO: implement a new metadata reader for this functionality. ArrayManager is for conversion and completes missing axes!
+            path=input_path,
+            series=series,
+            skip_dask=skip_dask,
+            metadata_reader=metadata_reader,
+        )
+
+        # Initialize the manager (load metadata from file)
+        asyncio.run(manager.init())
+        
+        # Fill default metadata
+        manager.fill_default_meta()
+        manager.fix_bad_channels()
+
+        # Extract metadata
+        metadata = {
+            "status": "success",
+            "input_path": str(input_path),
+            "series": series,
+            "axes": manager.axes,
+            "shape": dict(manager.shapedict),
+            "scale": dict(manager.scaledict),
+            "units": dict(manager.unitdict),
+            "dtype": str(manager.array.dtype),
+            "channels": manager.channels,
+            "ndim": manager.ndim,
+        }
+
+        if kwargs.get('verbose', False):
+            logger.info(f"[MetadataReader] Completed: {input_path}")
+
+        return metadata
+
+    except Exception as e:
+        logger.error(f"[MetadataReader] Error reading {input_path}: {str(e)}")
+        return {
+            "status": "error",
+            "input_path": str(input_path),
+            "error": str(e),
+        }

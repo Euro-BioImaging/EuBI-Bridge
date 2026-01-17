@@ -247,37 +247,38 @@ class MetadataExtractorFactory:
         return None
 
 
-async def extract_metadata(path: str, strategy: str = 'auto', **kwargs) -> Any:
-    """
-    Convenience function to extract metadata with specified strategy.
+# TODO: Consider deprecating the function below:
+# async def extract_metadata(path: str, strategy: str = 'auto', **kwargs) -> Any:
+#     """
+#     Convenience function to extract metadata with specified strategy.
     
-    Parameters
-    ----------
-    path : str
-        Path to image file.
-    strategy : str, default 'auto'
-        Extraction strategy: 'auto', 'bioio', 'bioformats', 'bfio', 'tiff', 'h5'
-    **kwargs
-        Additional arguments (series, etc.)
+#     Parameters
+#     ----------
+#     path : str
+#         Path to image file.
+#     strategy : str, default 'auto'
+#         Extraction strategy: 'auto', 'bioio', 'bioformats', 'bfio', 'tiff', 'h5'
+#     **kwargs
+#         Additional arguments (series, etc.)
         
-    Returns
-    -------
-    Any
-        Extracted metadata.
-    """
-    if strategy == 'auto':
-        extractor = MetadataExtractorFactory.get_extractor(path)
-    elif strategy == 'bioio':
-        extractor = BioIOMetadataExtractor()
-    elif strategy == 'bioformats':
-        extractor = BioFormatsMetadataExtractor()
-    elif strategy == 'bfio':
-        extractor = BFIOMetadataExtractor()
-    elif strategy == 'tiff':
-        extractor = TIFFMetadataExtractor()
-    elif strategy == 'h5':
-        extractor = H5MetadataExtractor()
-    else:
-        raise ValueError(f"Unknown metadata extraction strategy: {strategy}")
+#     Returns
+#     -------
+#     Any
+#         Extracted metadata.
+#     """
+#     if strategy == 'auto':
+#         extractor = MetadataExtractorFactory.get_extractor(path)
+#     elif strategy == 'bioio':
+#         extractor = BioIOMetadataExtractor()
+#     elif strategy == 'bioformats':
+#         extractor = BioFormatsMetadataExtractor()
+#     elif strategy == 'bfio':
+#         extractor = BFIOMetadataExtractor()
+#     elif strategy == 'tiff':
+#         extractor = TIFFMetadataExtractor()
+#     elif strategy == 'h5':
+#         extractor = H5MetadataExtractor()
+#     else:
+#         raise ValueError(f"Unknown metadata extraction strategy: {strategy}")
     
-    return await extractor.extract(path, **kwargs)
+#     return await extractor.extract(path, **kwargs)

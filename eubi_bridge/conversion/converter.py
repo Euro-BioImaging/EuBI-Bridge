@@ -28,6 +28,77 @@ def _warmup_worker():
     return None
 
 
+async def run_metadata_collection_from_filepaths(
+        input_path,
+        **global_kwargs
+):
+    """
+    Collect metadata from image files in parallel.
+    
+    Similar to run_conversions_from_filepaths but collects and returns
+    metadata information instead of converting files.
+    
+    Args:
+        input_path: Path to files or directory or CSV/XLSX file
+        **global_kwargs: Global configuration parameters
+    
+    Returns:
+        List of metadata dictionaries for each file
+    """
+    df = take_filepaths(input_path, **global_kwargs)
+
+    # --- Setup concurrency ---
+    max_workers = int(global_kwargs.get("max_workers", 4))
+
+    # Get spawn context explicitly
+    ctx = mp.get_context("spawn")
+
+    # Import worker function
+    from eubi_bridge.conversion.conversion_worker import metadata_reader_sync
+
+    # Create executor with spawn context AND initializer
+    with ProcessPoolExecutor(
+            max_workers=max_workers,
+            mp_context=ctx,
+            initializer=initialize_worker_process  # Initialize JVM once per worker
+    ) as pool:
+        loop = asyncio.get_running_loop()
+        
+        # Pre-warm worker pool
+        warmup_futures = [
+            loop.run_in_executor(pool, _warmup_worker)
+            for _ in range(max_workers)
+        ]
+        await asyncio.gather(*warmup_futures)
+
+        tasks = []
+        for idx, row in df.iterrows():
+            job_kwargs = row.to_dict()
+            input_path_job = job_kwargs.pop('input_path')
+
+            # Submit to executor
+            task = loop.run_in_executor(
+                pool,
+                metadata_reader_sync,
+                input_path_job,
+                job_kwargs
+            )
+            tasks.append(task)
+
+        # Gather with return_exceptions to see all failures
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Log results
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"[Main] Task {i} failed: {result}")
+            elif isinstance(result, dict) and result.get('status') == 'error':
+                logger.error(f"[Main] Task {i} failed: {result.get('error')}")
+
+    return results
+
+
+
 
 async def run_conversions_from_filepaths(
         input_path,

@@ -127,12 +127,12 @@ class TIFFDynaZarrReader(ImageReader):
         # Get dimension information from TIFF series
         # tiff_file_series.axes contains dimension order (e.g., 'YX', 'ZYX', 'TZYX', etc.)
         tiff_axes = self.tiff_file_series.axes.upper()
-        logger.debug(f"TIFF axes for series {scene_index}: {tiff_axes}")
-        print(f"[set_scene] Initial TIFF axes: {tiff_axes}, shape: {dyna_array.shape}")
+        logger.debug(f"TIFF axes for series {scene_index}: {tiff_axes}")        
+        #print(f"[set_scene] Initial TIFF axes: {tiff_axes}, shape: {dyna_array.shape}")
         
         # Preprocess axes to handle 'S' dimension (sample → channel)
         processed_axes, processed_shape = self._preprocess_tiff_axes(tiff_axes, dyna_array.shape)
-        print(f"[set_scene] After preprocess: axes={processed_axes}, shape={processed_shape}")
+        #print(f"[set_scene] After preprocess: axes={processed_axes}, shape={processed_shape}")
         
         # If shape changed (S dimension removed), we need to reshape the array
         if processed_shape != dyna_array.shape:
@@ -141,12 +141,12 @@ class TIFFDynaZarrReader(ImageReader):
             slices = tuple(0 if i == s_index else slice(None) for i in range(len(tiff_axes)))
             dyna_array = dyna_array[slices]
             logger.debug(f"Removed spurious 'S' dimension, new shape: {dyna_array.shape}")
-            print(f"[set_scene] After slicing: shape={dyna_array.shape}")
+            #print(f"[set_scene] After slicing: shape={dyna_array.shape}")
         
         # Normalize to TCZYX using lazy operations
-        print(f"[set_scene] Calling _normalize_to_tczyx with axes={processed_axes}, array shape={dyna_array.shape}")
+        #print(f"[set_scene] Calling _normalize_to_tczyx with axes={processed_axes}, array shape={dyna_array.shape}")
         dyna_array = self._normalize_to_tczyx(dyna_array, processed_axes)
-        print(f"[set_scene] After normalize_to_tczyx: shape={dyna_array.shape}")
+        #print(f"[set_scene] After normalize_to_tczyx: shape={dyna_array.shape}")
         
         # Store the normalized array
         self._dyna_array = dyna_array
@@ -264,7 +264,7 @@ class TIFFDynaZarrReader(ImageReader):
         current_axes = tiff_axes
         target_axes = 'TCZYX'
         
-        print(f"[_normalize_to_tczyx] Starting with axes={current_axes}, shape={dyna_array.shape}")
+        #print(f"[_normalize_to_tczyx] Starting with axes={current_axes}, shape={dyna_array.shape}")
         
         # Step 1: Add missing dimensions using expand_dims
         # Build list of dimensions to add with their target positions
@@ -274,7 +274,7 @@ class TIFFDynaZarrReader(ImageReader):
                 target_pos = target_axes.index(target_dim)
                 dims_to_add.append((target_dim, target_pos))
         
-        print(f"[_normalize_to_tczyx] Dimensions to add: {dims_to_add}")
+        #print(f"[_normalize_to_tczyx] Dimensions to add: {dims_to_add}")
         
         # Sort by position (reverse order) to maintain correct indices during insertion
         dims_to_add.sort(key=lambda x: x[1], reverse=True)
@@ -288,10 +288,10 @@ class TIFFDynaZarrReader(ImageReader):
                 if ax in current_axes:
                     insert_pos = current_axes.index(ax) + 1
             
-            print(f"[_normalize_to_tczyx] Expanding {target_dim} at position {insert_pos}")
+            #print(f"[_normalize_to_tczyx] Expanding {target_dim} at position {insert_pos}")
             # Expand at the calculated position
             dyna_array = operations.expand_dims(dyna_array, axis=insert_pos)
-            print(f"[_normalize_to_tczyx] After expanding {target_dim}: shape={dyna_array.shape}")
+            #print(f"[_normalize_to_tczyx] After expanding {target_dim}: shape={dyna_array.shape}")
             
             # Update current_axes to reflect the new dimension
             current_axes = current_axes[:insert_pos] + target_dim + current_axes[insert_pos:]
@@ -302,14 +302,14 @@ class TIFFDynaZarrReader(ImageReader):
         if current_axes != target_axes:
             # Build permutation map
             perm = tuple(current_axes.index(dim) for dim in target_axes)
-            print(f"[_normalize_to_tczyx] Transposing from {current_axes} to {target_axes}, perm={perm}")
+            #print(f"[_normalize_to_tczyx] Transposing from {current_axes} to {target_axes}, perm={perm}")
             dyna_array = operations.transpose(dyna_array, perm)
-            print(f"[_normalize_to_tczyx] After transpose: shape={dyna_array.shape}")
+            #print(f"[_normalize_to_tczyx] After transpose: shape={dyna_array.shape}")
             
             logger.debug(f"Transposed from {current_axes} to {target_axes} using permutation {perm}")
             current_axes = target_axes
         
-        print(f"[_normalize_to_tczyx] Final shape: {dyna_array.shape}, axes: {current_axes}")
+        #print(f"[_normalize_to_tczyx] Final shape: {dyna_array.shape}, axes: {current_axes}")
         
         # Verify final shape has 5 dimensions
         if len(dyna_array.shape) != 5:
