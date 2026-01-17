@@ -17,6 +17,7 @@ from dask import delayed
 from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
 
 logger = get_logger(__name__)
 

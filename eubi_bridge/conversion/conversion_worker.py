@@ -577,12 +577,12 @@ def aggregative_worker_sync(manager: ArrayManager,
     Safe for multiprocessing with proper exception handling.
     """
     if kwargs.get('verbose', False):
-        logger.info(f"[Worker] Processing aggregative: {output_path}", file=sys.stderr, flush=True)
+        logger.info(f"[Worker] Processing aggregative: {output_path}")
 
     asyncio.run(aggregative_worker(manager, output_path, **kwargs))
 
     if kwargs.get('verbose', False):
-        logger.info(f"[Worker] Completed aggregative: {output_path}", file=sys.stderr, flush=True)  
+        logger.info(f"[Worker] Completed aggregative: {output_path}")  
     return {"status": "success", "output": output_path}
 
 
