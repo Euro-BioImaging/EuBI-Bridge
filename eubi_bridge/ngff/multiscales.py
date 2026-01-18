@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 
 
-def is_zarr_group(path: (str, Path)
+def is_zarr_group(path: Union[str, Path]
                   ):
     try:
         _ = zarr.open_group(path, mode='r')
@@ -319,8 +319,8 @@ class NGFFMetadataHandler:
 
     def _get_window_meta(self,
                          dtype=None,
-                         start_intensity: (int, float) = None,
-                         end_intensity: (int, float) = None
+                         start_intensity: Union[int, float] = None,
+                         end_intensity: Union[int, float] = None
                          ):
         assert dtype is not None, f"dtype cannot be None"
         min = 0
@@ -341,8 +341,8 @@ class NGFFMetadataHandler:
                     color: str = "808080",
                     label: str = None,
                     dtype=None,
-                    start_intensity: (int, float) = None,
-                    end_intensity: (int, float) = None
+                    start_intensity: Union[int, float] = None,
+                    end_intensity: Union[int, float] = None
                     ) -> None:
         """Add a channel to the OMERO metadata."""
 
@@ -378,8 +378,8 @@ class NGFFMetadataHandler:
                     color: str = "808080",
                     label: str = None,
                     dtype=None,
-                    start_intensity: (int, float) = None,
-                    end_intensity: (int, float) = None
+                    start_intensity: Union[int, float] = None,
+                    end_intensity: Union[int, float] = None
                     ) -> None:
         """Add a channel to the OMERO metadata."""
         channel_len = len(self.channels)
