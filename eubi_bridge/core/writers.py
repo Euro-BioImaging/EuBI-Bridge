@@ -629,11 +629,12 @@ async def downscale_with_tensorstore_async(
     coros = []
     for key, arr in pyr.downscaler.downscaled_arrays.items():
         if key != '0':
+            shards = tuple(base_layer.shards) if base_layer.shards is not None else base_layer.chunks
             params = dict(
                 arr = arr,
                 output_path=os.path.join(grpath, key),
                 output_chunks = tuple(base_layer.chunks),
-                output_shards = tuple(base_layer.shards),
+                output_shards = shards,
                 compressor = compressor_name,
                 compressor_params = compressor_params,
                 zarr_format = zarr_format,
@@ -1332,8 +1333,8 @@ async def store_multiscale_async(
                overwrite=overwrite,
                zarr_version=zarr_format)
 
-    ### Make the base path
-    base_store_path = os.path.join(output_path, '0')
+    ### Make the base path (use outpath which is the wrapped/resolved path)
+    base_store_path = os.path.join(outpath, '0')
     ### Add multiscales metadata
     version = '0.5' if zarr_format == 3 else '0.4'
     meta = _get_or_create_multimeta(
