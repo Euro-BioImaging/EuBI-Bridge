@@ -32,7 +32,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip setuptools wheel
         echo "Installing eubi_bridge with all extras..."
-        pip install -e ".[all]" -v
+        pip install -e ".[all]" --no-build-isolation -v
         echo "Installing test dependencies..."
         pip install pytest pytest-cov numpy tifffile imageio-ffmpeg zarr
         echo "Verifying installation..."
@@ -86,7 +86,6 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[all]"
-        pip install pylint
     
     - name: Verify eubi executable is accessible
       run: |
@@ -121,7 +120,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         echo "Installing eubi_bridge with all extras..."
-        pip install -e ".[all]" -v
+        pip install -e ".[all]" --no-build-isolation -v
         pip install pytest pytest-cov numpy tifffile imageio-ffmpeg zarr
     
     - name: Verify eubi executable is accessible
