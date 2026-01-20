@@ -25,6 +25,8 @@ def run_eubi_command(args: list) -> subprocess.CompletedProcess:
     import shutil
     import os
     
+    print(f"\n[DEBUG] Running eubi command with args: {args}")
+    
     # Ensure Scripts directory is in PATH (important for Windows)
     scripts_dir = os.path.join(sys.prefix, "Scripts")
     if scripts_dir not in os.environ.get("PATH", ""):
@@ -64,7 +66,10 @@ def run_eubi_command(args: list) -> subprocess.CompletedProcess:
             print(f"DEBUG: Scripts directory: {scripts_dir}")
             print(f"DEBUG: Scripts directory exists: {scripts_dir.exists()}")
             if scripts_dir.exists():
-                print(f"DEBUG: Contents of Scripts: {list(scripts_dir.iterdir())}")
+                try:
+                    print(f"DEBUG: Contents of Scripts: {list(scripts_dir.iterdir())}")
+                except (OSError, FileNotFoundError) as e:
+                    print(f"DEBUG: Could not list Scripts directory: {e}")
         raise RuntimeError(
             f"Could not find eubi executable on {platform.system()}\n"
             f"Python: {sys.executable}\n"
@@ -72,7 +77,15 @@ def run_eubi_command(args: list) -> subprocess.CompletedProcess:
         )
     
     cmd = [eubi_cmd, 'to_zarr'] + args
+    print(f"[DEBUG] Full command: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    print(f"[DEBUG] Command return code: {result.returncode}")
+    if result.stdout:
+        print(f"[DEBUG] STDOUT:\n{result.stdout[:500]}")
+    if result.stderr:
+        print(f"[DEBUG] STDERR:\n{result.stderr[:500]}")
+    
     if result.returncode != 0:
         raise RuntimeError(
             f"Command failed: {' '.join(cmd)}\n"

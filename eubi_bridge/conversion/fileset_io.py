@@ -1,6 +1,7 @@
 import copy
 import os
 import re
+import tempfile
 from typing import Dict, Iterable, List, Union
 
 import dask.array as da
@@ -524,7 +525,8 @@ class FileSet:
         group = self._split_by(*to_split)
         
         import sys
-        with open("/tmp/eubi_debug.log", "a") as f:
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
             f.write(f"\n[concatenate_along] axis={axis}, dimension_tag={dimension_tag}\n")
             f.write(f"[concatenate_along] to_split={to_split}\n")
             f.write(f"[concatenate_along] self.axis_tags={self.axis_tags}\n")
@@ -548,7 +550,8 @@ class FileSet:
             else:
                 sorted_paths = paths
             logger.info(f"Sorted paths for concatenation: {sorted_paths}")
-            with open("/tmp/eubi_debug.log", "a") as f:
+            debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+            with open(debug_log_path, "a") as f:
                 f.write(f"[concatenate_along] Group '{key}': sorted_paths={sorted_paths}\n")
             # Get slices and shapes for each path
             group_slices = [self.slice_dict[path] for path in sorted_paths]
@@ -575,10 +578,12 @@ class FileSet:
             if self.array_dict is not None:
                 group_arrays = [self.array_dict[path] for path in sorted_paths]
                 logger.info(f"Arrays being concatenated in the order: {sorted_paths}")
-                with open("/tmp/eubi_debug.log", "a") as f:
+                debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+                with open(debug_log_path, "a") as f:
                     f.write(f"  Concatenating arrays with shapes: {[arr.shape for arr in group_arrays]}\n")
                 new_array = self.concatenate(group_arrays, axis=axis)
-                with open("/tmp/eubi_debug.log", "a") as f:
+                debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+                with open(debug_log_path, "a") as f:
                     f.write(f"  Result array shape: {new_array.shape}\n")
 
             # Update dictionaries with new values
@@ -756,7 +761,8 @@ class BatchFile:
                 debug_msg += f"  {k}: {v}\n"
         
         # Write debug output to file
-        with open("/tmp/eubi_debug.log", "a") as f:
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
             f.write(debug_msg)
         
         return groups
@@ -830,7 +836,8 @@ class BatchFile:
             manager._channels = channelslist
         
         debug_msg += f"[_fuse_channels] END\n"
-        with open("/tmp/eubi_debug.log", "a") as f:
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
             f.write(debug_msg)
 
     async def _construct_channel_managers(self,
@@ -869,7 +876,8 @@ class BatchFile:
         if unloaded_paths:
             debug_msg += f"  Unloaded paths: {unloaded_paths}\n"
 
-        with open("/tmp/eubi_debug.log", "a") as f:
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
             f.write(debug_msg)
 
         pruned_paths = list(set(prune_seriesfix(path) for path in unloaded_paths))
@@ -900,7 +908,8 @@ class BatchFile:
                 debug_msg2 += f"    Channel {i}: label={ch.get('label', '?')}, color={ch.get('color', '?')}\n"
         
         debug_msg2 += f"[_construct_channel_managers] END\n"
-        with open("/tmp/eubi_debug.log", "a") as f:
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
             f.write(debug_msg2)
         return self.channel_managers
 

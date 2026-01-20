@@ -6,6 +6,9 @@ import tempfile
 from pathlib import Path
 from typing import Union
 
+# Ensure tempfile is imported for cross-platform temp dir handling
+import tempfile as tempfile_module
+
 # Third-party imports
 import dask
 import numpy as np
@@ -301,12 +304,14 @@ class AggregativeConverter:
                 manager._channels = channels
                 debug_msg += f"[_compute_pixel_metadata] After override - Manager {manager.series_path} channels: {[c['label'] for c in manager.channels]}\n"
                 logger.info(f"[_compute_pixel_metadata] After override - Manager {manager.series_path} channels: {[c['label'] for c in manager.channels]}")
-            with open("/tmp/eubi_debug.log", "a") as f:
+            debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+            with open(debug_log_path, "a") as f:
                 f.write(debug_msg)
         else:
             debug_msg = f"\n[_compute_pixel_metadata] NOT overriding channel names: _channel_tag_is_tuple={self._channel_tag_is_tuple}, _override_channel_names={self._override_channel_names}\n"
             logger.info(f"[_compute_pixel_metadata] NOT overriding channel names: _channel_tag_is_tuple={self._channel_tag_is_tuple}, _override_channel_names={self._override_channel_names}")
-            with open("/tmp/eubi_debug.log", "a") as f:
+            debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+            with open(debug_log_path, "a") as f:
                 f.write(debug_msg)
         #import pprint
         #pprint.pprint(f"Channel metadata: {manager.channels}")
@@ -315,7 +320,8 @@ class AggregativeConverter:
         debug_msg = f"\n[_compute_pixel_metadata] BEFORE batchdata.init and fill_default_meta\n"
         for manager in self.managers.values():
             debug_msg += f"  Manager {manager.series_path}: {len(manager.channels)} channels - {[c.get('label', '?') for c in manager.channels]}\n"
-        with open("/tmp/eubi_debug.log", "a") as f:
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
             f.write(debug_msg)
         
         self.batchdata = BatchManager()
@@ -325,7 +331,8 @@ class AggregativeConverter:
         debug_msg = f"\n[_compute_pixel_metadata] AFTER batchdata.init, BEFORE fill_default_meta\n"
         for manager in self.managers.values():
             debug_msg += f"  Manager {manager.series_path}: {len(manager.channels)} channels - {[c.get('label', '?') for c in manager.channels]}\n"
-        with open("/tmp/eubi_debug.log", "a") as f:
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
             f.write(debug_msg)
         
         await self.batchdata.fill_default_meta()
@@ -334,7 +341,8 @@ class AggregativeConverter:
         debug_msg = f"\n[_compute_pixel_metadata] AFTER fill_default_meta\n"
         for manager in self.managers.values():
             debug_msg += f"  Manager {manager.series_path}: {len(manager.channels)} channels - {[c.get('label', '?') for c in manager.channels]}\n"
-        with open("/tmp/eubi_debug.log", "a") as f:
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
             f.write(debug_msg)
 
     def squeeze_dataset(self):
