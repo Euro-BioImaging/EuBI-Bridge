@@ -17,6 +17,7 @@ dependencies:
   - zarr
   - tifffile
   - imageio
+  - tensorstore
   - pip:
     - "numpy<2.0"  # Constraint: don't upgrade numpy during pip install
     - "git+https://github.com/Euro-BioImaging/EuBI-Bridge.git@bf_bundled#egg=eubi_bridge[all]"
