@@ -115,6 +115,19 @@ def initialize_worker_process():
         traceback.print_exc()
         raise
 
+    # Ensure codec registry is fully loaded in worker process
+    # Worker processes with spawn context don't inherit codec registry from main process
+    # Must explicitly reload codec registry for zarr v2 file reading
+    try:
+        from zarr.registry import get_codec_class
+        # Force reload of codec registry from entrypoints
+        # This ensures all registered codecs (including numcodecs) are available
+        # Use 'bytes' which is a zarr native codec that always exists
+        get_codec_class('bytes', reload_config=True)
+        logger.info(f"[Worker {mp.current_process().name}] Zarr codec registry loaded")
+    except Exception as e:
+        logger.warning(f"[Worker {mp.current_process().name}] Codec registry reload: {e}")
+
     _worker_initialized = True
 
 
