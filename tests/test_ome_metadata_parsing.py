@@ -22,13 +22,20 @@ def run_eubi_command(args: list) -> subprocess.CompletedProcess:
     """Helper to run eubi CLI command."""
     import sys
     import platform
+    import shutil
     
-    # Find eubi executable - handle Windows (.exe) vs Unix
-    eubi_path = Path(sys.executable).parent / 'eubi'
-    if platform.system() == 'Windows' and not eubi_path.exists():
-        eubi_path = Path(sys.executable).parent / 'eubi.exe'
+    # Try to find eubi executable using shutil.which (works cross-platform)
+    eubi_cmd = shutil.which('eubi')
+    if not eubi_cmd:
+        # Fallback: construct path based on Python executable location
+        if platform.system() == 'Windows':
+            # On Windows, scripts are in Scripts directory
+            eubi_path = Path(sys.executable).parent / 'Scripts' / 'eubi.exe'
+        else:
+            eubi_path = Path(sys.executable).parent / 'eubi'
+        eubi_cmd = str(eubi_path)
     
-    cmd = [str(eubi_path), 'to_zarr'] + args
+    cmd = [eubi_cmd, 'to_zarr'] + args
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
