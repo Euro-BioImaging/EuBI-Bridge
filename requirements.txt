@@ -22,7 +22,7 @@ imageio-ffmpeg==0.6.0
 install-jdk
 natsort>=0.0.0
 nd2>=0.0.0
-numpy>=2.3.2
+numpy>=1.24
 pydantic>=2.11.7
 pylibczirw>=0.0.0
 readlif==0.6.5

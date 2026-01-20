@@ -188,7 +188,7 @@ def get_requirements():
         "lz4>=4.4.4",
         "natsort>=0.0.0",
         "nd2>=0.0.0",
-        "numpy>=2.3.2",
+        "numpy>=1.24",  # Flexible: pip chooses compatible version based on system
         "pydantic>=2.11.7",
         "pylibczirw>=0.0.0",
         "readlif==0.6.5",
