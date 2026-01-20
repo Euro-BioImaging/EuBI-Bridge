@@ -111,6 +111,51 @@ def run_eubi_command(args: list) -> subprocess.CompletedProcess:
     return result
 
 
+def find_eubi_executable():
+    """Find eubi executable using the same logic as run_eubi_command."""
+    import sys
+    import platform
+    import shutil
+    import os
+    
+    # Ensure Scripts directory is in PATH (important for Windows)
+    scripts_dir = os.path.join(sys.prefix, "Scripts")
+    if scripts_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = scripts_dir + os.pathsep + os.environ.get("PATH", "")
+    
+    # Try to find eubi executable using shutil.which (works cross-platform)
+    eubi_cmd = shutil.which('eubi')
+    
+    # If not in PATH, try constructing the path
+    if not eubi_cmd:
+        if platform.system() == 'Windows':
+            # Windows: Try Scripts directory first, then bin
+            possible_paths = [
+                Path(sys.executable).parent / 'Scripts' / 'eubi.exe',
+                Path(sys.executable).parent / 'Scripts' / 'eubi',
+                Path(sys.executable).parent / 'eubi.exe',
+                Path(sys.executable).parent / 'eubi',
+            ]
+            for path in possible_paths:
+                if path.exists():
+                    eubi_cmd = str(path)
+                    break
+        else:
+            # Unix/Mac: Look in same directory as Python
+            eubi_path = Path(sys.executable).parent / 'eubi'
+            if eubi_path.exists():
+                eubi_cmd = str(eubi_path)
+    
+    if not eubi_cmd:
+        raise RuntimeError(
+            f"Could not find eubi executable on {platform.system()}\n"
+            f"Python: {sys.executable}\n"
+            f"Searched: shutil.which(), {Path(sys.executable).parent}/Scripts, {Path(sys.executable).parent}"
+        )
+    
+    return eubi_cmd
+
+
 class TestZarrFormat:
     """Tests for zarr format version selection."""
     
@@ -460,10 +505,9 @@ class TestOverwrite:
         run_eubi_command([str(imagej_tiff_zyx), str(output)])
         
         # Second conversion without overwrite should fail
-        import sys
-        eubi_path = Path(sys.executable).parent / 'eubi'
+        eubi_path = find_eubi_executable()
         result = subprocess.run(
-            [str(eubi_path), 'to_zarr', str(imagej_tiff_zyx), str(output), '--overwrite', 'False'],
+            [eubi_path, 'to_zarr', str(imagej_tiff_zyx), str(output), '--overwrite', 'False'],
             capture_output=True,
             text=True
         )
