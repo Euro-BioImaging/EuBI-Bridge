@@ -36,7 +36,7 @@ jobs:
         echo "Installing test dependencies..."
         pip install pytest pytest-cov numpy tifffile imageio-ffmpeg zarr
         echo "Verifying installation..."
-        python -c "import eubi_bridge; import zarr; print('✓ All packages imported successfully')"
+        python -c "import eubi_bridge; import zarr; print('[SUCCESS] All packages imported successfully')"
     
     - name: Run tests with pytest
       run: |
@@ -107,7 +107,7 @@ jobs:
         echo "Installing test dependencies..."
         pip install pytest numpy tifffile imageio-ffmpeg zarr
         echo "Verifying installation..."
-        python -c "import eubi_bridge; import zarr; print('✓ All packages imported successfully')"
+        python -c "import eubi_bridge; import zarr; print('[SUCCESS] All packages imported successfully')"
     
     - name: Run integration tests
       run: |
