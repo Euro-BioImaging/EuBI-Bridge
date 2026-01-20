@@ -290,8 +290,15 @@ def soft_start_jvm() -> None:
         # Prepare JVM arguments
         jvm_kwargs = {
             'classpath': classpath,
-            'convertStrings': False
+            'convertStrings': False,
+            'ignoreUnrecognized': True,  # Allow extra -D options
         }
+
+        # Add headless mode for HPC/cluster environments without X11
+        # This prevents AWT from trying to load X11 libraries
+        jvm_args = ['-Djava.awt.headless=true']
+        if jvm_args:
+            jvm_kwargs['extra_options'] = jvm_args
 
         # Use bundled libjvm
         try:
