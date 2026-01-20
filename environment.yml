@@ -1,0 +1,11 @@
+name: eubi-bridge
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy
+  - scipy
+  - pip
+  - pip:
+    - "git+https://github.com/Euro-BioImaging/EuBI-Bridge.git@bf_bundled#egg=eubi_bridge[all]"
+prefix: null  # Allow users to specify via -p flag or CONDA_PREFIX
