@@ -2,6 +2,7 @@ import asyncio
 import multiprocessing as mp
 import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from pathlib import Path
 from typing import Union
 
 import numpy as np
@@ -157,15 +158,13 @@ async def run_conversions_from_filepaths(
             )
             tasks.append(task)
 
-        # Gather with return_exceptions to see all failures
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Gather without catching exceptions - let them propagate naturally
+        # This ensures errors are clearly visible to the user
+        results = await asyncio.gather(*tasks)
 
         # Log results
         for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"[Main] Task {i} failed: {result}")
-            else:
-                logger.info(f"[Main] Task {i} succeeded: {result}")
+            logger.info(f"[Main] Task {i} succeeded: {result}")
 
     return results
 
@@ -364,6 +363,37 @@ async def run_conversions_with_concatenation(
         ):
     """Convert with concatenation using threads (safe for large Dask arrays)."""
 
+    # Validate that tags are provided for concatenation axes
+    if concatenation_axes:
+        # Normalize concatenation_axes to a list
+        if isinstance(concatenation_axes, str):
+            concat_axes_list = list(concatenation_axes.lower())
+        else:
+            concat_axes_list = list(concatenation_axes)
+        
+        # Map axes to their corresponding tag parameters
+        axis_to_tag = {
+            't': time_tag,
+            'c': channel_tag,
+            'z': z_tag,
+            'y': y_tag,
+            'x': x_tag,
+        }
+        
+        # Check that each concatenation axis has a corresponding tag
+        missing_tags = []
+        for axis in concat_axes_list:
+            if axis in axis_to_tag and axis_to_tag[axis] is None:
+                missing_tags.append(axis)
+        
+        if missing_tags:
+            raise ValueError(
+                f"When using --concatenation_axes '{concatenation_axes}', "
+                f"you must provide tags for concatenation axes: {', '.join(missing_tags)}. "
+                f"For example: --{missing_tags[0]}_tag 'value' "
+                f"to identify files belonging to each {missing_tags[0]} group."
+            )
+
     # input_path = f"/home/oezdemir/data/original/steyer/amst"
     # output_path = f"/home/oezdemir/data/zarr/steyer/result"
     # scene_index = 0
@@ -394,6 +424,41 @@ async def run_conversions_with_concatenation(
 
     tags = [time_tag,channel_tag,z_tag,y_tag,x_tag]
     filepaths_accepted = _parse_filepaths_with_tags(filepaths, tags)
+
+    # Validate that each user-provided tag matches at least some files
+    # If the user provides a tag, they expect it to match files
+    provided_tags = {
+        'time_tag': time_tag,
+        'channel_tag': channel_tag,
+        'z_tag': z_tag,
+        'y_tag': y_tag,
+        'x_tag': x_tag,
+    }
+    # Filter to only tags that were actually provided (non-None)
+    provided_tags = {k: v for k, v in provided_tags.items() if v is not None}
+    
+    for tag_name, tag_value in provided_tags.items():
+        # Normalize tag to list
+        tag_list = _parse_tag(tag_value)
+        if not isinstance(tag_list, (list, tuple)):
+            tag_list = [tag_list]
+        
+        # Check if this tag matches any files
+        tag_matches_any = False
+        for tag_item in tag_list:
+            for filepath in filepaths:
+                if str(tag_item) in filepath:
+                    tag_matches_any = True
+                    break
+            if tag_matches_any:
+                break
+        
+        if not tag_matches_any:
+            raise ValueError(
+                f"Tag '{tag_name}={tag_value}' does not match any files in the input directory.\n"
+                f"Available files: {[Path(p).name for p in filepaths]}\n"
+                f"Please ensure your tags correctly identify files."
+            )
 
     # --- Initialize AggregativeConverter and digest arrays ---
     base = AggregativeConverter(series = scene_index,

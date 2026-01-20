@@ -211,6 +211,7 @@ class AggregativeConverter:
                   for x in axes_of_concatenation
                   if x in axes
                   ]
+        logger.info(f"[digest] axes_of_concatenation={axes_of_concatenation}, axlist={axlist}")
         await self.batchfile._construct_managers(
             axes=axlist,
             series=self._series,
@@ -218,12 +219,15 @@ class AggregativeConverter:
             **kwargs
         )
 
+        logger.info(f"[digest] About to call _construct_channel_managers")
         await self.batchfile._construct_channel_managers(
             series=self._series,
             metadata_reader=metadata_reader,
             **kwargs
         )
+        logger.info(f"[digest] _construct_channel_managers completed")
         await self.batchfile._complete_process(axlist)
+        logger.info(f"[digest] _complete_process completed")
 
         output_path = self._input_path or kwargs.get('output_path')
 
@@ -275,21 +279,63 @@ class AggregativeConverter:
             )
 
         if self._channel_tag_is_tuple and self._override_channel_names:
+            debug_msg = f"\n[_compute_pixel_metadata] OVERRIDING CHANNEL NAMES\n"
+            debug_msg += f"[_compute_pixel_metadata] self.channel_tag = {self.channel_tag}\n"
+            debug_msg += f"[_compute_pixel_metadata] self._channel_tag_is_tuple = {self._channel_tag_is_tuple}\n"
+            logger.info(f"[_compute_pixel_metadata] OVERRIDING CHANNEL NAMES")
+            logger.info(f"[_compute_pixel_metadata] self.channel_tag = {self.channel_tag}")
+            logger.info(f"[_compute_pixel_metadata] self._channel_tag_is_tuple = {self._channel_tag_is_tuple}")
             # Do this also for non-tuple channel tags
             for manager in self.managers.values():
                 channels = manager.channels
+                debug_msg += f"[_compute_pixel_metadata] Manager {manager.series_path} has {len(channels)} channels\n"
+                logger.info(f"[_compute_pixel_metadata] Manager {manager.series_path} has {len(channels)} channels")
                 for idx, (channel, tagitem) in enumerate(zip(channels,
                                                            self.channel_tag
                                                            )
                                                        ):
+                    debug_msg += f"[_compute_pixel_metadata] Setting channel {idx} label from '{channel['label']}' to '{tagitem}'\n"
+                    logger.info(f"[_compute_pixel_metadata] Setting channel {idx} label from '{channel['label']}' to '{tagitem}'")
                     channel['label'] = tagitem
                     channels[idx] = channel
                 manager._channels = channels
+                debug_msg += f"[_compute_pixel_metadata] After override - Manager {manager.series_path} channels: {[c['label'] for c in manager.channels]}\n"
+                logger.info(f"[_compute_pixel_metadata] After override - Manager {manager.series_path} channels: {[c['label'] for c in manager.channels]}")
+            with open("/tmp/eubi_debug.log", "a") as f:
+                f.write(debug_msg)
+        else:
+            debug_msg = f"\n[_compute_pixel_metadata] NOT overriding channel names: _channel_tag_is_tuple={self._channel_tag_is_tuple}, _override_channel_names={self._override_channel_names}\n"
+            logger.info(f"[_compute_pixel_metadata] NOT overriding channel names: _channel_tag_is_tuple={self._channel_tag_is_tuple}, _override_channel_names={self._override_channel_names}")
+            with open("/tmp/eubi_debug.log", "a") as f:
+                f.write(debug_msg)
         #import pprint
         #pprint.pprint(f"Channel metadata: {manager.channels}")
+        
+        # DEBUG: before batchdata
+        debug_msg = f"\n[_compute_pixel_metadata] BEFORE batchdata.init and fill_default_meta\n"
+        for manager in self.managers.values():
+            debug_msg += f"  Manager {manager.series_path}: {len(manager.channels)} channels - {[c.get('label', '?') for c in manager.channels]}\n"
+        with open("/tmp/eubi_debug.log", "a") as f:
+            f.write(debug_msg)
+        
         self.batchdata = BatchManager()
         await self.batchdata.init(self.managers)
+        
+        # DEBUG: after init, before fill_default_meta
+        debug_msg = f"\n[_compute_pixel_metadata] AFTER batchdata.init, BEFORE fill_default_meta\n"
+        for manager in self.managers.values():
+            debug_msg += f"  Manager {manager.series_path}: {len(manager.channels)} channels - {[c.get('label', '?') for c in manager.channels]}\n"
+        with open("/tmp/eubi_debug.log", "a") as f:
+            f.write(debug_msg)
+        
         await self.batchdata.fill_default_meta()
+        
+        # DEBUG: after fill_default_meta
+        debug_msg = f"\n[_compute_pixel_metadata] AFTER fill_default_meta\n"
+        for manager in self.managers.values():
+            debug_msg += f"  Manager {manager.series_path}: {len(manager.channels)} channels - {[c.get('label', '?') for c in manager.channels]}\n"
+        with open("/tmp/eubi_debug.log", "a") as f:
+            f.write(debug_msg)
 
     def squeeze_dataset(self):
         self.batchdata.squeeze()

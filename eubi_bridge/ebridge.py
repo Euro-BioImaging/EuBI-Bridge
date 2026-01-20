@@ -633,19 +633,19 @@ class EuBIBridge:
                     **self.conversion_params,
                     **self.downscale_params}
         extra_kwargs = {key: kwargs[key] for key in kwargs if key not in combined}
-        run_conversions(os.path.abspath(input_path),
-                        output_path,
-                        includes=includes,
-                        excludes=excludes,
-                        time_tag = time_tag,
-                        channel_tag = channel_tag,
-                        z_tag = z_tag,
-                        y_tag = y_tag,
-                        x_tag = x_tag,
-                        concatenation_axes = concatenation_axes,
-                        **combined,
-                        **extra_kwargs
-                        )
+        results = run_conversions(os.path.abspath(input_path),
+                                  output_path,
+                                  includes=includes,
+                                  excludes=excludes,
+                                  time_tag = time_tag,
+                                  channel_tag = channel_tag,
+                                  z_tag = z_tag,
+                                  y_tag = y_tag,
+                                  x_tag = x_tag,
+                                  concatenation_axes = concatenation_axes,
+                                  **combined,
+                                  **extra_kwargs
+                                  )
         t1 = time.time()
         logger.info(f"Conversion complete for all datasets.")
         logger.info(f"Elapsed for conversion + downscaling: {(t1 - t0) / 60} min.")

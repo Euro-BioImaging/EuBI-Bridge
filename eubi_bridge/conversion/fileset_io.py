@@ -522,6 +522,15 @@ class FileSet:
         # Split the group by all dimension tags except the one specified by the axis
         to_split = [tag for tag in self.dimension_tags if tag != dimension_tag]
         group = self._split_by(*to_split)
+        
+        import sys
+        with open("/tmp/eubi_debug.log", "a") as f:
+            f.write(f"\n[concatenate_along] axis={axis}, dimension_tag={dimension_tag}\n")
+            f.write(f"[concatenate_along] to_split={to_split}\n")
+            f.write(f"[concatenate_along] self.axis_tags={self.axis_tags}\n")
+            f.write(f"[concatenate_along] Groups created by _split_by:\n")
+            for k, v in group.items():
+                f.write(f"  Group '{k}': {v}\n")
 
         tag_is_tuple = False
         if isinstance(dimension_tag, (tuple, list)):
@@ -539,6 +548,8 @@ class FileSet:
             else:
                 sorted_paths = paths
             logger.info(f"Sorted paths for concatenation: {sorted_paths}")
+            with open("/tmp/eubi_debug.log", "a") as f:
+                f.write(f"[concatenate_along] Group '{key}': sorted_paths={sorted_paths}\n")
             # Get slices and shapes for each path
             group_slices = [self.slice_dict[path] for path in sorted_paths]
             group_shapes = [self.shape_dict[path] for path in sorted_paths]
@@ -564,7 +575,11 @@ class FileSet:
             if self.array_dict is not None:
                 group_arrays = [self.array_dict[path] for path in sorted_paths]
                 logger.info(f"Arrays being concatenated in the order: {sorted_paths}")
+                with open("/tmp/eubi_debug.log", "a") as f:
+                    f.write(f"  Concatenating arrays with shapes: {[arr.shape for arr in group_arrays]}\n")
                 new_array = self.concatenate(group_arrays, axis=axis)
+                with open("/tmp/eubi_debug.log", "a") as f:
+                    f.write(f"  Result array shape: {new_array.shape}\n")
 
             # Update dictionaries with new values
             for path, slc, reduced_path in zip(sorted_paths,
@@ -720,15 +735,30 @@ class BatchFile:
         sub_filesets = {}
         axis_tags = copy.deepcopy(fileset.axis_tags)
 
+        debug_msg = f"\n[split_channel_groups] fileset.axis_tags = {fileset.axis_tags}\n"
+        debug_msg += f"[split_channel_groups] fileset.path_dict keys = {list(fileset.path_dict.keys())}\n"
+        debug_msg += f"[split_channel_groups] fileset.group keys = {list(fileset.group.keys())}\n"
+        
         if all([item is None for item in axis_tags]):
+            debug_msg += f"[split_channel_groups] All axis_tags are None - using path_dict\n"
             groups = copy.deepcopy(fileset.path_dict)
             for key, value in groups.items():
                 groups[key] = [value]
         elif fileset.axis_tags[1] is None:
+            debug_msg += f"[split_channel_groups] axis_tags[1] is None - using group\n"
             groups = copy.deepcopy(fileset.group)
         else:
+            debug_msg += f"[split_channel_groups] Splitting by channel tag: {fileset.axis_tags[1]}\n"
             axis_tags[1] = None
             groups = fileset._split_by(fileset.axis_tags[1])
+            debug_msg += f"[split_channel_groups] Groups after _split_by: {list(groups.keys())}\n"
+            for k, v in groups.items():
+                debug_msg += f"  {k}: {v}\n"
+        
+        # Write debug output to file
+        with open("/tmp/eubi_debug.log", "a") as f:
+            f.write(debug_msg)
+        
         return groups
 
     async def _construct_managers(self,
@@ -759,35 +789,72 @@ class BatchFile:
         return self.managers
 
     def _fuse_channels(self): # Concatenates channel metadata actually.
+        """Merge channel metadata from all channel files into each output manager.
+        
+        When concatenating along the channel axis, all input channels should be
+        merged into a single channel list, and this list should be assigned to
+        the output managers (not the individual channel file managers).
+        """
+        debug_msg = f"\n[_fuse_channels] START\n"
+        debug_msg += f"[_fuse_channels] self.channel_sample_paths = {self.channel_sample_paths}\n"
+        debug_msg += f"[_fuse_channels] Number of channel sample paths = {len(self.channel_sample_paths)}\n"
+        debug_msg += f"[_fuse_channels] self.channel_managers.keys() = {list(self.channel_managers.keys())}\n"
+        debug_msg += f"[_fuse_channels] Number of channel managers = {len(self.channel_managers)}\n"
+        debug_msg += f"[_fuse_channels] self.managers.keys() = {list(self.managers.keys())}\n"
+        debug_msg += f"[_fuse_channels] Number of output managers = {len(self.managers)}\n"
+        
         channelsdict = {
             key: self.channel_managers[key].channels
-            for
-            key in self.channel_sample_paths # List that keeps the channel order
+            for key in self.channel_sample_paths # List that keeps the channel order
         }
+        
+        debug_msg += f"[_fuse_channels] channelsdict keys = {list(channelsdict.keys())}\n"
+        for key, channels in channelsdict.items():
+            debug_msg += f"  {key}: {len(channels)} channels\n"
+            for i, ch in enumerate(channels):
+                debug_msg += f"    Channel {i}: label={ch.get('label', '?')}, color={ch.get('color', '?')}\n"
+        
         channelslist = []
         for key in self.channel_sample_paths: # List that keeps the channel order
             # This is where channel metadata are properly sorted.
             channelslist.extend(channelsdict[key])
-        for path in self.channel_sample_paths:
-            manager = self.channel_managers[path]
+        
+        debug_msg += f"[_fuse_channels] Total merged channels = {len(channelslist)}\n"
+        debug_msg += f"[_fuse_channels] Merged channel labels = {[c.get('label', '?') for c in channelslist]}\n"
+        
+        # Update all output managers with the merged channel list
+        # NOT the channel_managers (which are individual files)
+        debug_msg += f"[_fuse_channels] Updating {len(self.managers)} output managers with merged channels\n"
+        for manager in self.managers.values():
+            debug_msg += f"  Manager {manager.series_path}: before={len(manager.channels)} channels, after={len(channelslist)} channels\n"
             manager._channels = channelslist
-            self.managers[path] = manager
+        
+        debug_msg += f"[_fuse_channels] END\n"
+        with open("/tmp/eubi_debug.log", "a") as f:
+            f.write(debug_msg)
 
     async def _construct_channel_managers(self,
                       series: int = None,
                       metadata_reader: str = 'bfio',
                       **kwargs
                       ):
+        debug_msg = f"\n[_construct_channel_managers] START\n"
         if series is None:
             series = 0
         if np.isscalar(series) and (series != 'all'):
             series = [series]
 
         grs = self.split_channel_groups()
+        debug_msg += f"[_construct_channel_managers] Channel groups from split_channel_groups: {list(grs.keys())}\n"
+        debug_msg += f"[_construct_channel_managers] Number of groups: {len(grs)}\n"
+        for k, v in grs.items():
+            debug_msg += f"  Group '{k}': {v}\n"
 
         self.channel_sample_paths = [grs[grname][0]
                                         for grname in grs
                                      ]
+        debug_msg += f"[_construct_channel_managers] Channel sample paths: {self.channel_sample_paths}\n"
+        debug_msg += f"[_construct_channel_managers] Number of channel sample paths: {len(self.channel_sample_paths)}\n"
 
         channel_managers = {}
         unloaded_paths = []
@@ -796,6 +863,14 @@ class BatchFile:
                 channel_managers[path] = self.managers[path]
             else:
                 unloaded_paths.append(path)
+
+        debug_msg += f"[_construct_channel_managers] Paths already in managers: {len(self.channel_sample_paths) - len(unloaded_paths)}\n"
+        debug_msg += f"[_construct_channel_managers] Paths to load: {len(unloaded_paths)}\n"
+        if unloaded_paths:
+            debug_msg += f"  Unloaded paths: {unloaded_paths}\n"
+
+        with open("/tmp/eubi_debug.log", "a") as f:
+            f.write(debug_msg)
 
         pruned_paths = list(set(prune_seriesfix(path) for path in unloaded_paths))
         managers = [ArrayManager(path,
@@ -809,10 +884,24 @@ class BatchFile:
             channel_managers.update(**manager.loaded_scenes)
 
         self.channel_managers = {key: channel_managers[key] for key in self.channel_sample_paths}
+        
+        debug_msg2 = f"[_construct_channel_managers] Final channel_managers.keys() = {list(self.channel_managers.keys())}\n"
+        debug_msg2 += f"[_construct_channel_managers] Final number of channel managers = {len(self.channel_managers)}\n"
+        
         for path in self.channel_sample_paths:
             manager = self.channel_managers[path]
+            debug_msg2 += f"[_construct_channel_managers] Before fix_bad_channels - {path}: {len(manager.channels)} channels\n"
+            for i, ch in enumerate(manager.channels):
+                debug_msg2 += f"    Channel {i}: label={ch.get('label', '?')}, color={ch.get('color', '?')}\n"
             manager._ensure_correct_channels()
             manager.fix_bad_channels()
+            debug_msg2 += f"[_construct_channel_managers] After fix_bad_channels - {path}: {len(manager.channels)} channels\n"
+            for i, ch in enumerate(manager.channels):
+                debug_msg2 += f"    Channel {i}: label={ch.get('label', '?')}, color={ch.get('color', '?')}\n"
+        
+        debug_msg2 += f"[_construct_channel_managers] END\n"
+        with open("/tmp/eubi_debug.log", "a") as f:
+            f.write(debug_msg2)
         return self.channel_managers
 
     async def _complete_process(self,

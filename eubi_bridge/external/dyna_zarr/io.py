@@ -22,6 +22,7 @@ from queue import Queue
 from .tiff_reader import read_tiff_lazy
 from .codecs import Codecs
 from .dynamic_array import DynamicArray
+from .utils import parse_dtype
 
 
 def _parse_storage_location(file_path):
@@ -532,10 +533,8 @@ def write_array(
     final_chunks = chunks if chunks is not None else tuple([256] * len(input_shape_temp))
     final_dtype = dtype if dtype is not None else array.dtype
     
-    if hasattr(final_dtype, 'name'):
-        final_dtype_str = final_dtype.name
-    else:
-        final_dtype_str = str(final_dtype).replace('dtype(\'', '').replace('\')', '')
+    # Parse dtype for both Zarr v2 and v3 formats
+    final_dtype_obj, final_dtype_v2_str, final_dtype_v3_name = parse_dtype(final_dtype)
     
     final_format = zarr_format if zarr_format is not None else 3
     
@@ -608,7 +607,7 @@ def write_array(
                         }
                     }
                 ],
-                'data_type': final_dtype_str,
+                'data_type': final_dtype_v3_name,
             }
         else:
             # Zarr v3 without sharding
@@ -623,15 +622,14 @@ def write_array(
                     'configuration': {'separator': '/'}
                 },
                 'codecs': final_codecs.to_v3_config(),
-                'data_type': final_dtype_str,
+                'data_type': final_dtype_v3_name,
             }
     else:
-        # Zarr v2 - need numpy dtype string format like '<f4'
-        v2_dtype = np.dtype(final_dtype).str
+        # Zarr v2 - use the parsed v2 dtype format
         ts_spec['metadata'] = {
             'shape': list(input_shape_temp),
             'chunks': list(final_chunks),
-            'dtype': v2_dtype,
+            'dtype': final_dtype_v2_str,
             'dimension_separator': '/',
             'compressor': final_codecs.to_v2_config(),
         }
@@ -718,6 +716,10 @@ def write_array(
                     
                     # Read actual data using _read_direct to avoid creating SliceTransform
                     data = input_array._read_direct(chunk_slice)
+                    
+                    # Convert dtype if needed (allows unsafe casting if explicitly requested)
+                    if data.dtype != final_dtype_obj:
+                        data = data.astype(final_dtype_obj, copy=False)
                     
                     chunk_queue.put((chunk_slice, data))
                     

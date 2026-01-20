@@ -262,6 +262,7 @@ async def _prepare_manager(manager: ArrayManager, kwargs: Dict) -> None:
         manager,
         channel_intensity_limits='from_dtype'
     )
+    
     manager.fix_bad_channels()
     if kwargs.get('verbose', False): # TODO: Verify the verbosity check.
         logger.info(f"The manager array shape before squeezing: {manager.array.shape}")
@@ -417,6 +418,7 @@ async def _load_input_manager(input_path: Union[str, ArrayManager],
         skip_dask=kwargs.get('skip_dask', True),
     )
     await manager.init()
+    
     manager.fill_default_meta()
     if kwargs.get('verbose', False):
         logger.info(f"The manager array is of type: {type(manager.array)}")   
@@ -557,13 +559,13 @@ def unary_worker_sync(input_path: Union[str, ArrayManager],
     Safe for multiprocessing with proper exception handling.
     """
     if kwargs.get('verbose', False):
-        logger.info(f"[Worker] Processing: {input_path}", file=sys.stderr, flush=True)
+        logger.info(f"[Worker] Processing: {input_path}")
 
     # Run the async worker
     asyncio.run(unary_worker(input_path, output_path, **kwargs))
 
     if kwargs.get('verbose', False):
-        logger.info(f"[Worker] Completed: {input_path}", file=sys.stderr, flush=True)
+        logger.info(f"[Worker] Completed: {input_path}")
 
     return {"status": "success", "input": str(input_path), "output": output_path}
 
@@ -631,6 +633,12 @@ def metadata_reader_sync(input_path: Union[str, ArrayManager],
 
         # Initialize the manager (load metadata from file)
         asyncio.run(manager.init())
+        
+        # DEBUG: Check channels after init
+        logger.info(f"[DEBUG] After manager.init():")
+        logger.info(f"  manager.omemeta = {manager.omemeta}")
+        logger.info(f"  manager._channels = {manager._channels}")
+        logger.info(f"  manager.channels property = {manager.channels}")
         
         # Fill default metadata
         manager.fill_default_meta()

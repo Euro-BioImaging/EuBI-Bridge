@@ -102,12 +102,16 @@ def patch_fire_no_literal_eval_for(*arg_names):
 # --- Main ---
 def main():
     import fire
+    import sys
     
     patch_fire_no_literal_eval_for("includes", "excludes")
 
     # JVM is now lazily initialized only when needed (in to_zarr, show_pixel_meta, etc.)
     # Don't set spawn here - already set at module level
-    fire.Fire(EuBIBridge)
+    result = fire.Fire(EuBIBridge)
+    # If result is an exception, exit with code 1
+    if isinstance(result, Exception):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

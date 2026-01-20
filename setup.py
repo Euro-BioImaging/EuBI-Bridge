@@ -218,10 +218,16 @@ def get_requirements():
             "streamlit>=1.52.1",
             "matplotlib",
         ],
+        "test": [
+            "pytest>=7.0",
+            "pytest-cov>=4.0",
+        ],
         "all": [
             "fire>=0.0.0",
             "streamlit>=1.52.1",
             "matplotlib",
+            "pytest>=7.0",
+            "pytest-cov>=4.0",
         ],
     }
 
