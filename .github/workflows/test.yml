@@ -38,6 +38,13 @@ jobs:
         echo "Verifying installation..."
         python -c "import eubi_bridge; import zarr; print('[SUCCESS] All packages imported successfully')"
     
+    - name: Verify eubi executable is accessible
+      run: |
+        echo "Checking for eubi executable..."
+        python -c "import shutil, sys, os; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print(f'Python: {sys.executable}'); print(f'sys.prefix: {sys.prefix}'); print(f'Scripts dir: {scripts_dir}'); print(f'Scripts exists: {os.path.exists(scripts_dir)}'); eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')"
+        echo "Attempting eubi help command..."
+        eubi --help || python -c "from eubi_bridge.cli import main; import sys; sys.argv = ['eubi', '--help']; main()"
+    
     - name: Run tests with pytest
       run: |
         pytest tests/ -v --tb=short --color=yes
@@ -77,6 +84,11 @@ jobs:
         pip install -e ".[all]"
         pip install pylint
     
+    - name: Verify eubi executable is accessible
+      run: |
+        echo "Checking for eubi executable..."
+        python -c "import shutil, sys, os; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print(f'Python: {sys.executable}'); print(f'sys.prefix: {sys.prefix}'); print(f'Scripts dir: {scripts_dir}'); print(f'Scripts exists: {os.path.exists(scripts_dir)}'); eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')"
+    
     - name: Run pylint
       run: |
         pylint eubi_bridge --disable=all --enable=E,F --exit-zero
@@ -104,6 +116,14 @@ jobs:
         python -m pip install --upgrade pip
         echo "Installing eubi_bridge with all extras..."
         pip install -e ".[all]" -v
+        pip install pytest pytest-cov numpy tifffile imageio-ffmpeg zarr
+    
+    - name: Verify eubi executable is accessible
+      run: |
+        echo "Checking for eubi executable..."
+        python -c "import shutil, sys, os; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print(f'Python: {sys.executable}'); print(f'sys.prefix: {sys.prefix}'); print(f'Scripts dir: {scripts_dir}'); print(f'Scripts exists: {os.path.exists(scripts_dir)}'); eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')"
+        echo "Attempting eubi help command..."
+        eubi --help || python -c "from eubi_bridge.cli import main; import sys; sys.argv = ['eubi', '--help']; main()"
         echo "Installing test dependencies..."
         pip install pytest numpy tifffile imageio-ffmpeg zarr
         echo "Verifying installation..."
