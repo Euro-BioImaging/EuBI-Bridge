@@ -11,6 +11,12 @@ dependencies:
   - numexpr
   - pandas
   - cython
+  - pyarrow
+  - dask
+  - xarray
+  - zarr
+  - tifffile
+  - imageio
   - pip:
     - "numpy<2.0"  # Constraint: don't upgrade numpy during pip install
     - "git+https://github.com/Euro-BioImaging/EuBI-Bridge.git@bf_bundled#egg=eubi_bridge[all]"
