@@ -31,8 +31,12 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        pip install -e .
-        pip install pytest pytest-cov numpy tifffile imageio-ffmpeg
+        echo "Installing eubi_bridge..."
+        pip install -e . -v
+        echo "Installing test dependencies..."
+        pip install pytest pytest-cov numpy tifffile imageio-ffmpeg zarr
+        echo "Verifying installation..."
+        python -c "import eubi_bridge; import zarr; print('✓ All packages imported successfully')"
     
     - name: Run tests with pytest
       run: |
@@ -98,8 +102,12 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .
-        pip install pytest numpy tifffile imageio-ffmpeg
+        echo "Installing eubi_bridge..."
+        pip install -e . -v
+        echo "Installing test dependencies..."
+        pip install pytest numpy tifffile imageio-ffmpeg zarr
+        echo "Verifying installation..."
+        python -c "import eubi_bridge; import zarr; print('✓ All packages imported successfully')"
     
     - name: Run integration tests
       run: |
