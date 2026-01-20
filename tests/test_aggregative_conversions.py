@@ -23,17 +23,53 @@ def run_eubi_command(args: list) -> subprocess.CompletedProcess:
     import sys
     import platform
     import shutil
+    import os
+    
+    # Ensure Scripts directory is in PATH (important for Windows)
+    scripts_dir = os.path.join(sys.prefix, "Scripts")
+    if scripts_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = scripts_dir + os.pathsep + os.environ.get("PATH", "")
     
     # Try to find eubi executable using shutil.which (works cross-platform)
     eubi_cmd = shutil.which('eubi')
+    
+    # If not in PATH, try constructing the path
     if not eubi_cmd:
-        # Fallback: construct path based on Python executable location
         if platform.system() == 'Windows':
-            # On Windows, scripts are in Scripts directory
-            eubi_path = Path(sys.executable).parent / 'Scripts' / 'eubi.exe'
+            # Windows: Try Scripts directory first, then bin
+            possible_paths = [
+                Path(sys.executable).parent / 'Scripts' / 'eubi.exe',
+                Path(sys.executable).parent / 'Scripts' / 'eubi',
+                Path(sys.executable).parent / 'eubi.exe',
+                Path(sys.executable).parent / 'eubi',
+            ]
+            for path in possible_paths:
+                if path.exists():
+                    eubi_cmd = str(path)
+                    break
         else:
+            # Unix/Mac: Look in same directory as Python
             eubi_path = Path(sys.executable).parent / 'eubi'
-        eubi_cmd = str(eubi_path)
+            if eubi_path.exists():
+                eubi_cmd = str(eubi_path)
+    
+    # If still not found, provide diagnostic info
+    if not eubi_cmd:
+        print(f"DEBUG: eubi not found via shutil.which()")
+        print(f"DEBUG: Python executable: {sys.executable}")
+        print(f"DEBUG: Python directory: {Path(sys.executable).parent}")
+        print(f"DEBUG: PATH: {os.environ.get('PATH', 'NOT SET')}")
+        if platform.system() == 'Windows':
+            scripts_dir = Path(sys.executable).parent / 'Scripts'
+            print(f"DEBUG: Scripts directory: {scripts_dir}")
+            print(f"DEBUG: Scripts directory exists: {scripts_dir.exists()}")
+            if scripts_dir.exists():
+                print(f"DEBUG: Contents of Scripts: {list(scripts_dir.iterdir())}")
+        raise RuntimeError(
+            f"Could not find eubi executable on {platform.system()}\n"
+            f"Python: {sys.executable}\n"
+            f"Searched: shutil.which(), {Path(sys.executable).parent}/Scripts, {Path(sys.executable).parent}"
+        )
     
     cmd = [eubi_cmd, 'to_zarr'] + args
     result = subprocess.run(cmd, capture_output=True, text=True)
