@@ -42,8 +42,12 @@ jobs:
       run: |
         echo "Checking for eubi executable..."
         python -c "import shutil, sys, os; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print(f'Python: {sys.executable}'); print(f'sys.prefix: {sys.prefix}'); print(f'Scripts dir: {scripts_dir}'); print(f'Scripts exists: {os.path.exists(scripts_dir)}'); eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')"
-        echo "Attempting eubi help command..."
-        eubi --help || python -c "from eubi_bridge.cli import main; import sys; sys.argv = ['eubi', '--help']; main()"
+        echo "Contents of Scripts directory:"
+        python -c "import os, sys; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print([f for f in os.listdir(scripts_dir) if 'eubi' in f.lower() or f.endswith('.exe')])"
+        echo "Reinstalling with verbose to check for setup.py entry_points..."
+        pip install -e ".[all]" --force-reinstall --no-cache-dir 2>&1 | head -100
+        echo "Checking for eubi again after reinstall..."
+        python -c "import shutil; eubi = shutil.which('eubi'); print(f'After reinstall, eubi found: {eubi}')"
     
     - name: Run tests with pytest
       run: |
@@ -88,6 +92,8 @@ jobs:
       run: |
         echo "Checking for eubi executable..."
         python -c "import shutil, sys, os; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print(f'Python: {sys.executable}'); print(f'sys.prefix: {sys.prefix}'); print(f'Scripts dir: {scripts_dir}'); print(f'Scripts exists: {os.path.exists(scripts_dir)}'); eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')"
+        echo "Contents of Scripts directory:"
+        python -c "import os, sys; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print([f for f in os.listdir(scripts_dir) if 'eubi' in f.lower() or f.endswith('.exe')])"
     
     - name: Run pylint
       run: |
@@ -122,8 +128,12 @@ jobs:
       run: |
         echo "Checking for eubi executable..."
         python -c "import shutil, sys, os; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print(f'Python: {sys.executable}'); print(f'sys.prefix: {sys.prefix}'); print(f'Scripts dir: {scripts_dir}'); print(f'Scripts exists: {os.path.exists(scripts_dir)}'); eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')"
-        echo "Attempting eubi help command..."
-        eubi --help || python -c "from eubi_bridge.cli import main; import sys; sys.argv = ['eubi', '--help']; main()"
+        echo "Contents of Scripts directory:"
+        python -c "import os, sys; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print([f for f in os.listdir(scripts_dir) if 'eubi' in f.lower() or f.endswith('.exe')])"
+        echo "Reinstalling with verbose to check for setup.py entry_points..."
+        pip install -e ".[all]" --force-reinstall --no-cache-dir 2>&1 | head -100
+        echo "Checking for eubi again after reinstall..."
+        python -c "import shutil; eubi = shutil.which('eubi'); print(f'After reinstall, eubi found: {eubi}')"
         echo "Installing test dependencies..."
         pip install pytest numpy tifffile imageio-ffmpeg zarr
         echo "Verifying installation..."
