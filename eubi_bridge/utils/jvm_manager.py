@@ -287,18 +287,15 @@ def soft_start_jvm() -> None:
 
         logger.info(f"Starting JVM with {len(jars)} bioformats JARs + jpype JAR")
 
-        # Prepare JVM arguments
+        # Prepare JVM arguments - pass as positional args to startJVM()
+        # These are passed to the JVM at startup
+        jvm_args = ['-Djava.awt.headless=true']  # Disable GUI for HPC/headless environments
+
+        # Prepare JVM keyword arguments
         jvm_kwargs = {
             'classpath': classpath,
-            'convertStrings': False,
-            'ignoreUnrecognized': True,  # Allow extra -D options
+            'convertStrings': False
         }
-
-        # Add headless mode for HPC/cluster environments without X11
-        # This prevents AWT from trying to load X11 libraries
-        jvm_args = ['-Djava.awt.headless=true']
-        if jvm_args:
-            jvm_kwargs['extra_options'] = jvm_args
 
         # Use bundled libjvm
         try:
@@ -310,9 +307,9 @@ def soft_start_jvm() -> None:
             logger.warning("Attempting to start JVM without explicit jvmpath")
             jvm_path = None
 
-        # Start JVM with explicit classpath
+        # Start JVM with explicit classpath and headless mode
         try:
-            jpype.startJVM(**jvm_kwargs)
+            jpype.startJVM(*jvm_args, **jvm_kwargs)
         except Exception as e:
             logger.error(f"JPype start failed: {e}")
             traceback.print_exc()
