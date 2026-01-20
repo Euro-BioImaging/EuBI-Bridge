@@ -90,7 +90,7 @@ def download_and_extract_jdk():
     
     # Check if JDK already exists locally
     if jdk_platform_path.exists() and list(jdk_platform_path.glob('**/*')):
-        print(f"✓ JDK for {platform_id} already present at {jdk_platform_path}")
+        print(f"[OK] JDK for {platform_id} already present at {jdk_platform_path}")
         return
     
     print(f"\n{'='*70}")
@@ -124,13 +124,13 @@ def download_and_extract_jdk():
         if file_size < 1000000:  # Less than 1 MB = likely an error page
             raise RuntimeError(f"Downloaded file too small ({file_size} bytes), likely 404 or error page")
         
-        print(f"✓ Downloaded JDK ({file_size // 1024 // 1024} MB)")
+        print(f"[OK] Downloaded JDK ({file_size // 1024 // 1024} MB)")
         
         # Extract to target directory
         print(f"Extracting JDK...")
         with tarfile.open(tmp_path, "r:gz") as tar:
             tar.extractall(path=jdk_platform_path)
-        print(f"✓ Extracted JDK to {jdk_platform_path}")
+        print(f"[OK] Extracted JDK to {jdk_platform_path}")
         print(f"{'='*70}\n")
         
     except Exception as e:
