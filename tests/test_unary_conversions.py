@@ -38,7 +38,13 @@ from tests.validation_utils import (
 def run_eubi_command(args: list) -> subprocess.CompletedProcess:
     """Helper to run eubi CLI command."""
     import sys
+    import platform
+    
+    # Find eubi executable - handle Windows (.exe) vs Unix
     eubi_path = Path(sys.executable).parent / 'eubi'
+    if platform.system() == 'Windows' and not eubi_path.exists():
+        eubi_path = Path(sys.executable).parent / 'eubi.exe'
+    
     cmd = [str(eubi_path), 'to_zarr'] + args
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
