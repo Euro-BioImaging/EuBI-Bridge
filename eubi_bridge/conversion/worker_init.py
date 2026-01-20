@@ -60,6 +60,13 @@ def initialize_worker_process():
 
     logger.info(f"[Worker {mp.current_process().name}] Starting initialization...")
 
+    # === CRITICAL: Import tensorstore to register zarr2 driver ===
+    # TensorStore's zarv2 driver is registered via C++ static initializers
+    # that run when the C++ extension module loads. This must happen in
+    # each spawned process separately (spawn context doesn't inherit registrations).
+    import tensorstore as ts  # noqa: F401
+    logger.debug(f"[Worker {mp.current_process().name}] TensorStore imported - zarv2 driver registered")
+
     # Patch xsdata BEFORE any ome_types imports
     _patch_xsdata_for_cython()
 
@@ -114,19 +121,6 @@ def initialize_worker_process():
         import traceback
         traceback.print_exc()
         raise
-
-    # Ensure codec registry is fully loaded in worker process
-    # Worker processes with spawn context don't inherit codec registry from main process
-    # Must explicitly reload codec registry for zarr v2 file reading
-    try:
-        from zarr.registry import get_codec_class
-        # Force reload of codec registry from entrypoints
-        # This ensures all registered codecs (including numcodecs) are available
-        # Use 'bytes' which is a zarr native codec that always exists
-        get_codec_class('bytes', reload_config=True)
-        logger.info(f"[Worker {mp.current_process().name}] Zarr codec registry loaded")
-    except Exception as e:
-        logger.warning(f"[Worker {mp.current_process().name}] Codec registry reload: {e}")
 
     _worker_initialized = True
 
