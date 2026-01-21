@@ -51,7 +51,7 @@ async def run_worker_with_retries(loop, pool, worker_func, *args, max_retries=3,
     Raises:
         Exception: Original exception if all retries exhausted
     """
-    from concurrent.futures import BrokenProcessPool
+    from concurrent.futures.process import BrokenProcessPool
     
     task_label = f"Task {task_id}" if task_id is not None else "Task"
     
