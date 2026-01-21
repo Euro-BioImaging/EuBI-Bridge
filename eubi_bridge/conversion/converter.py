@@ -29,6 +29,52 @@ def _warmup_worker():
     return None
 
 
+async def run_worker_with_retries(loop, pool, worker_func, *args, max_retries=3, base_delay=0.5, task_id=None):
+    """
+    Execute a worker function with automatic retry on transient failures.
+    
+    Retries only on BrokenProcessPool exceptions (worker crashes). Other exceptions
+    fail immediately without retry.
+    
+    Args:
+        loop: asyncio event loop
+        pool: Executor (ProcessPoolExecutor or ThreadPoolExecutor)
+        worker_func: Function to execute in worker
+        *args: Arguments to pass to worker_func
+        max_retries: Maximum number of attempts (default: 3 = 1 initial + 2 retries)
+        base_delay: Initial delay in seconds before first retry (default: 0.5)
+        task_id: Optional task identifier for logging
+    
+    Returns:
+        Result from worker_func
+        
+    Raises:
+        Exception: Original exception if all retries exhausted
+    """
+    from concurrent.futures import BrokenProcessPool
+    
+    task_label = f"Task {task_id}" if task_id is not None else "Task"
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await loop.run_in_executor(pool, worker_func, *args)
+        except BrokenProcessPool as e:
+            if attempt == max_retries:
+                logger.error(f"{task_label} failed after {max_retries} attempts: {e}")
+                raise
+            
+            # Calculate exponential backoff delay
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                f"{task_label} attempt {attempt}/{max_retries} failed with BrokenProcessPool. "
+                f"Retrying in {delay:.1f}s... Error: {str(e)[:100]}"
+            )
+            await asyncio.sleep(delay)
+    
+    # Should never reach here, but for safety
+    raise RuntimeError(f"{task_label} exhausted all {max_retries} attempts")
+
+
 async def run_metadata_collection_from_filepaths(
         input_path,
         **global_kwargs
@@ -51,6 +97,7 @@ async def run_metadata_collection_from_filepaths(
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))
     use_threading = global_kwargs.get("use_threading", False)
+    max_retries = int(global_kwargs.get("max_retries", 3))
 
     # Import worker function
     from eubi_bridge.conversion.conversion_worker import metadata_reader_sync
@@ -82,12 +129,15 @@ async def run_metadata_collection_from_filepaths(
             job_kwargs = row.to_dict()
             input_path_job = job_kwargs.pop('input_path')
 
-            # Submit to executor
-            task = loop.run_in_executor(
+            # Submit to executor with retry wrapper
+            task = run_worker_with_retries(
+                loop,
                 pool,
                 metadata_reader_sync,
                 input_path_job,
-                job_kwargs
+                job_kwargs,
+                max_retries=max_retries,
+                task_id=idx
             )
             tasks.append(task)
             
@@ -132,6 +182,7 @@ async def run_conversions_from_filepaths(
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))
     use_threading = global_kwargs.get("use_threading", False)
+    max_retries = int(global_kwargs.get("max_retries", 3))
 
     # Import worker function
     from eubi_bridge.conversion.conversion_worker import unary_worker_sync
@@ -164,13 +215,16 @@ async def run_conversions_from_filepaths(
             input_path_job = job_kwargs.pop('input_path')
             output_path = job_kwargs.pop('output_path')
 
-            # Submit to executor
-            task = loop.run_in_executor(
+            # Submit to executor with retry wrapper
+            task = run_worker_with_retries(
+                loop,
                 pool,
                 unary_worker_sync,
                 input_path_job,
                 output_path,
-                job_kwargs
+                job_kwargs,
+                max_retries=max_retries,
+                task_id=idx
             )
             tasks.append(task)
             
@@ -513,6 +567,7 @@ async def run_conversions_with_concatenation(
         managers.append(man)
 
     # --- Use ThreadPoolExecutor for aggregative conversion ---
+    max_retries = int(kwargs.get("max_retries", 3))
     pool = ThreadPoolExecutor(max_workers=max_workers)
     # pool = ProcessPoolExecutor(max_workers=max_workers,
     #                            mp_context=mp.get_context("spawn")
@@ -520,14 +575,17 @@ async def run_conversions_with_concatenation(
     try:
         loop = asyncio.get_running_loop()
         tasks = [
-            loop.run_in_executor(
+            run_worker_with_retries(
+                loop,
                 pool,
                 aggregative_worker_sync,
                 manager,
                 os.path.join(output_path, name),
                 dict(kwargs),
+                max_retries=max_retries,
+                task_id=idx
             )
-            for manager, name in zip(managers, names)
+            for idx, (manager, name) in enumerate(zip(managers, names))
         ]
         results = await asyncio.gather(*tasks)
     finally:

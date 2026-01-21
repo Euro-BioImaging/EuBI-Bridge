@@ -132,7 +132,8 @@ class EuBIBridge:
                 region_size_mb = 512,
                 max_concurrency = 4,  # limit how many writes run at once
                 memory_per_worker = '4GB',
-                tensorstore_data_copy_concurrency = 1  # limit CPU cores for tensorstore data copying in downscaler
+                tensorstore_data_copy_concurrency = 1,  # limit CPU cores for tensorstore data copying in downscaler
+                max_retries = 3  # maximum attempts per task (1 initial + retries) with exponential backoff
                 ),
             readers=dict(
                 as_mosaic=False,
@@ -378,7 +379,8 @@ class EuBIBridge:
                           on_local_cluster: bool = 'default',
                           on_slurm: bool = 'default',
                           use_threading: bool = 'default',
-                          tensorstore_data_copy_concurrency: int = 'default'
+                          tensorstore_data_copy_concurrency: int = 'default',
+                          max_retries: int = 'default'
                           ):
         """
         Updates cluster configuration settings. To update the current default value for a parameter, provide that parameter with a value other than 'default'.
@@ -390,6 +392,7 @@ class EuBIBridge:
             - max_concurrency (int, optional): Maximum number of concurrent operations.
             - use_threading (bool, optional): Use threading instead of multiprocessing (for cluster compatibility).
             - tensorstore_data_copy_concurrency (int, optional): Limit on CPU cores used concurrently for tensorstore data copying/encoding/decoding during downscaling. Lower values reduce thread contention. Default: 1 (serialized, safest).
+            - max_retries (int, optional): Maximum attempts for worker tasks. If a worker crashes, retry up to this many times with exponential backoff. Default: 3 (1 initial + 2 retries).
 
         Args:
             max_workers (int, optional): Size of the pool for sync writer.
@@ -400,6 +403,7 @@ class EuBIBridge:
             on_slurm (bool, optional): Whether to use SLURM cluster.
             use_threading (bool, optional): Use threading instead of multiprocessing.
             tensorstore_data_copy_concurrency (int, optional): CPU core limit for tensorstore data copying in downscaler. Default: 1.
+            max_retries (int, optional): Maximum attempts per task with exponential backoff. Default: 3.
 
         Returns:
             None
@@ -414,7 +418,8 @@ class EuBIBridge:
             'on_local_cluster': on_local_cluster,
             'on_slurm': on_slurm,
             'use_threading': use_threading,
-            'tensorstore_data_copy_concurrency': tensorstore_data_copy_concurrency
+            'tensorstore_data_copy_concurrency': tensorstore_data_copy_concurrency,
+            'max_retries': max_retries
         }
 
         for key in params:
