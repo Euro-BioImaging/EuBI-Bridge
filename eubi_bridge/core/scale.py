@@ -178,14 +178,29 @@ class Downscaler:
                 # Fallback for stores without .root attribute
                 self.base_array_root = self.array.store.path
             arraypath = self.array.path
-            ts_path = os.path.join(self.base_array_root,arraypath)
-            kvstore = make_kvstore(ts_path)
+            
+            logger = __import__('eubi_bridge.utils.logging_config', fromlist=['get_logger']).get_logger(__name__)
+            logger.info(f"[Downscaler] base_array_root={self.base_array_root}")
+            logger.info(f"[Downscaler] arraypath={arraypath}")
+            logger.info(f"[Downscaler] store type={type(self.array.store)}")
+            logger.info(f"[Downscaler] store={self.array.store}")
+            
+            # Create kvstore pointing to the zarr store ROOT, not the array path
+            # The array path is specified separately in the 'path' parameter
+            kvstore = make_kvstore(self.base_array_root)
+            logger.info(f"[Downscaler] kvstore={kvstore}")
 
             self.downscale_method = 'ts'
+            # Use appropriate driver based on zarr format
+            # zarr v2 uses "zarr2" driver, zarr v3 uses "zarr3" driver
+            zarr_format = self.array.metadata.zarr_format
+            driver_name = "zarr3" if zarr_format == 3 else "zarr2"
+            logger.info(f"[Downscaler] Opening with driver={driver_name}, path={arraypath}")
             self.array = ts.open(
                 {
-                    "driver": f"zarr{self.array.metadata.zarr_format}",
-                    "kvstore": kvstore
+                    "driver": driver_name,
+                    "kvstore": kvstore,
+                    "path": arraypath  # Specify array path separately
                 },
                 open=True,
             ).result()
