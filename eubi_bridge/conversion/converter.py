@@ -73,9 +73,9 @@ async def run_metadata_collection_from_filepaths(
     with executor_class(**executor_kwargs) as pool:
         loop = asyncio.get_running_loop()
         
-        # NOTE: Pre-warming workers disabled due to potential race conditions
-        # in JVM initialization on some clusters (especially with CZI native library).
-        # Workers will initialize JVM lazily on first task submission instead.
+        # NOTE: For ProcessPoolExecutor: Submit tasks with staggered timing to serialize
+        # worker initialization and prevent race conditions in JVM/native libraries.
+        # For ThreadPoolExecutor: Submit all at once (no race conditions, lighter weight).
 
         tasks = []
         for idx, row in df.iterrows():
@@ -90,6 +90,11 @@ async def run_metadata_collection_from_filepaths(
                 job_kwargs
             )
             tasks.append(task)
+            
+            # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
+            # This prevents simultaneous JVM/native library initialization race conditions
+            if not use_threading and idx < len(df) - 1:
+                await asyncio.sleep(0.2)
 
         # Gather with return_exceptions to see all failures
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -149,9 +154,9 @@ async def run_conversions_from_filepaths(
     with executor_class(**executor_kwargs) as pool:
         loop = asyncio.get_running_loop()
         
-        # NOTE: Pre-warming workers disabled due to potential race conditions
-        # in JVM initialization on some clusters (especially with CZI native library).
-        # Workers will initialize JVM lazily on first task submission instead.
+        # NOTE: For ProcessPoolExecutor: Submit tasks with staggered timing to serialize
+        # worker initialization and prevent race conditions in JVM/native libraries.
+        # For ThreadPoolExecutor: Submit all at once (no race conditions, lighter weight).
 
         tasks = []
         for idx, row in df.iterrows():
@@ -168,6 +173,11 @@ async def run_conversions_from_filepaths(
                 job_kwargs
             )
             tasks.append(task)
+            
+            # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
+            # This prevents simultaneous JVM/native library initialization race conditions
+            if not use_threading and idx < len(df) - 1:
+                await asyncio.sleep(0.2)
 
         # Gather without catching exceptions - let them propagate naturally
         # This ensures errors are clearly visible to the user
