@@ -65,12 +65,9 @@ async def run_metadata_collection_from_filepaths(
     ) as pool:
         loop = asyncio.get_running_loop()
         
-        # Pre-warm worker pool
-        warmup_futures = [
-            loop.run_in_executor(pool, _warmup_worker)
-            for _ in range(max_workers)
-        ]
-        await asyncio.gather(*warmup_futures)
+        # NOTE: Pre-warming workers disabled due to potential race conditions
+        # in JVM initialization on some clusters (especially with CZI native library).
+        # Workers will initialize JVM lazily on first task submission instead.
 
         tasks = []
         for idx, row in df.iterrows():
@@ -134,13 +131,9 @@ async def run_conversions_from_filepaths(
     ) as pool:
         loop = asyncio.get_running_loop()
         
-        # Pre-warm worker pool: force JVM initialization in all workers
-        # This prevents ~30s delay when first tasks are submitted
-        warmup_futures = [
-            loop.run_in_executor(pool, _warmup_worker)
-            for _ in range(max_workers)
-        ]
-        await asyncio.gather(*warmup_futures)
+        # NOTE: Pre-warming workers disabled due to potential race conditions
+        # in JVM initialization on some clusters (especially with CZI native library).
+        # Workers will initialize JVM lazily on first task submission instead.
 
         tasks = []
         for idx, row in df.iterrows():
