@@ -627,6 +627,10 @@ class EuBIBridge:
                 y_tag: Union[str, tuple] = None,
                 x_tag: Union[str, tuple] = None,
                 concatenation_axes: Union[int, tuple, str] = None,
+                max_workers: int = None,
+                max_retries: int = None,
+                tensorstore_data_copy_concurrency: int = None,
+                use_threading: bool = None,
                 **kwargs # metadata kwargs such as pixel sizes and channel info
                 ):
         """Synchronous wrapper for the async to_zarr_async method."""
@@ -638,6 +642,17 @@ class EuBIBridge:
         logger.info(f"Conversion starting.")
         if output_path is None:
             assert input_path.endswith(('.csv', '.tsv', '.txt', '.xlsx'))
+        
+        # Add explicit parameters to kwargs if provided
+        if max_workers is not None:
+            kwargs['max_workers'] = max_workers
+        if max_retries is not None:
+            kwargs['max_retries'] = max_retries
+        if tensorstore_data_copy_concurrency is not None:
+            kwargs['tensorstore_data_copy_concurrency'] = tensorstore_data_copy_concurrency
+        if use_threading is not None:
+            kwargs['use_threading'] = use_threading
+        
         self.cluster_params = self._collect_params('cluster', **kwargs)
         self.readers_params = self._collect_params('readers', **kwargs)
         self.conversion_params = self._collect_params('conversion', **kwargs)

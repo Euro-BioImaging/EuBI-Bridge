@@ -9,6 +9,9 @@ import tensorstore as ts
 import zarr
 
 from eubi_bridge.utils.storage_utils import make_kvstore
+from eubi_bridge.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def simple_downscale(
@@ -280,6 +283,6 @@ class Downscaler:
             if key in self.param_names:
                 self.__setattr__(key, value)
             else:
-                warnings.warn(f"The given parameter name '{key}' is not valid, ignoring it..")
+                logger.warning(f"The given parameter name '{key}' is not valid, ignoring it..")
         await self.run()
         return self
