@@ -41,7 +41,7 @@ async def run_metadata_collection_from_filepaths(
     
     Args:
         input_path: Path to files or directory or CSV/XLSX file
-        **global_kwargs: Global configuration parameters
+        **global_kwargs: Global configuration parameters (supports use_threading flag)
     
     Returns:
         List of metadata dictionaries for each file
@@ -50,19 +50,27 @@ async def run_metadata_collection_from_filepaths(
 
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))
-
-    # Get spawn context explicitly
-    ctx = mp.get_context("spawn")
+    use_threading = global_kwargs.get("use_threading", False)
 
     # Import worker function
     from eubi_bridge.conversion.conversion_worker import metadata_reader_sync
 
-    # Create executor with spawn context AND initializer
-    with ProcessPoolExecutor(
-            max_workers=max_workers,
-            mp_context=ctx,
-            initializer=initialize_worker_process  # Initialize JVM once per worker
-    ) as pool:
+    # Choose executor based on use_threading flag
+    if use_threading:
+        logger.info("Using ThreadPoolExecutor for metadata collection (threading mode)")
+        executor_class = ThreadPoolExecutor
+        executor_kwargs = {"max_workers": max_workers}
+    else:
+        logger.info("Using ProcessPoolExecutor for metadata collection (multiprocessing mode)")
+        ctx = mp.get_context("spawn")
+        executor_class = ProcessPoolExecutor
+        executor_kwargs = {
+            "max_workers": max_workers,
+            "mp_context": ctx,
+            "initializer": initialize_worker_process
+        }
+
+    with executor_class(**executor_kwargs) as pool:
         loop = asyncio.get_running_loop()
         
         # NOTE: Pre-warming workers disabled due to potential race conditions
@@ -106,29 +114,39 @@ async def run_conversions_from_filepaths(
     Run parallel conversions where each job's parameters (including input/output dirs)
     are specified via kwargs or a CSV/XLSX file.
 
+    Supports both multiprocessing (default) and threading modes via use_threading flag.
+
     Args:
         input_path:
             - list of file paths, OR
             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
-        **global_kwargs: global defaults for all conversions
+        **global_kwargs: global defaults for all conversions (supports use_threading flag)
     """
     df = take_filepaths(input_path, **global_kwargs)
 
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))
-
-    # Get spawn context explicitly
-    ctx = mp.get_context("spawn")
+    use_threading = global_kwargs.get("use_threading", False)
 
     # Import worker function
     from eubi_bridge.conversion.conversion_worker import unary_worker_sync
 
-    # Create executor with spawn context AND initializer
-    with ProcessPoolExecutor(
-            max_workers=max_workers,
-            mp_context=ctx,
-            initializer=initialize_worker_process  # Initialize JVM once per worker
-    ) as pool:
+    # Choose executor based on use_threading flag
+    if use_threading:
+        logger.info("Using ThreadPoolExecutor for conversions (threading mode)")
+        executor_class = ThreadPoolExecutor
+        executor_kwargs = {"max_workers": max_workers}
+    else:
+        logger.info("Using ProcessPoolExecutor for conversions (multiprocessing mode)")
+        ctx = mp.get_context("spawn")
+        executor_class = ProcessPoolExecutor
+        executor_kwargs = {
+            "max_workers": max_workers,
+            "mp_context": ctx,
+            "initializer": initialize_worker_process
+        }
+
+    with executor_class(**executor_kwargs) as pool:
         loop = asyncio.get_running_loop()
         
         # NOTE: Pre-warming workers disabled due to potential race conditions

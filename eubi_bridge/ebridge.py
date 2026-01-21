@@ -126,6 +126,7 @@ class EuBIBridge:
             cluster=dict(
                 on_local_cluster = False,
                 on_slurm=False,
+                use_threading=False,
                 max_workers=4,  # size of the pool for sync writer
                 queue_size = 4,
                 region_size_mb = 512,
@@ -374,7 +375,8 @@ class EuBIBridge:
                           memory_per_worker: int = 'default',
                           max_concurrency: int = 'default',
                           on_local_cluster: bool = 'default',
-                          on_slurm: bool = 'default'
+                          on_slurm: bool = 'default',
+                          use_threading: bool = 'default'
                           ):
         """
         Updates cluster configuration settings. To update the current default value for a parameter, provide that parameter with a value other than 'default'.
@@ -384,12 +386,16 @@ class EuBIBridge:
             - queue_size (int, optional): Number of batches to process in parallel.
             - region_size_mb (int, optional): Memory limit in MB for each batch.
             - max_concurrency (int, optional): Maximum number of concurrent operations.
+            - use_threading (bool, optional): Use threading instead of multiprocessing (for cluster compatibility).
 
         Args:
             max_workers (int, optional): Size of the pool for sync writer.
             queue_size (int, optional): Number of batches to process in parallel.
             region_size_mb (int, optional): Memory limit in MB for each batch.
             max_concurrency (int, optional): Maximum number of concurrent operations.
+            on_local_cluster (bool, optional): Whether to use local Dask cluster.
+            on_slurm (bool, optional): Whether to use SLURM cluster.
+            use_threading (bool, optional): Use threading instead of multiprocessing.
 
         Returns:
             None
@@ -402,7 +408,8 @@ class EuBIBridge:
             'memory_per_worker': memory_per_worker,
             'max_concurrency': max_concurrency,
             'on_local_cluster': on_local_cluster,
-            'on_slurm': on_slurm
+            'on_slurm': on_slurm,
+            'use_threading': use_threading
         }
 
         for key in params:
