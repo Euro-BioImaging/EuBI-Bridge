@@ -29,21 +29,27 @@ def _warmup_worker():
     return None
 
 
-async def run_worker_with_retries(loop, pool, worker_func, *args, max_retries=3, base_delay=0.5, task_id=None):
+async def run_worker_with_retries(loop, executor_class, executor_kwargs, worker_func, *args, max_retries=3, base_delay=0.5, task_id=None, use_threading=False):
     """
     Execute a worker function with automatic retry on transient failures.
+    
+    For ProcessPoolExecutor, creates a fresh pool for each retry attempt since
+    a broken pool cannot be reused. For ThreadPoolExecutor, reuses the same pool
+    since thread pools don't break on individual task failures.
     
     Retries only on BrokenProcessPool exceptions (worker crashes). Other exceptions
     fail immediately without retry.
     
     Args:
         loop: asyncio event loop
-        pool: Executor (ProcessPoolExecutor or ThreadPoolExecutor)
+        executor_class: Executor class (ProcessPoolExecutor or ThreadPoolExecutor)
+        executor_kwargs: Keyword arguments for executor initialization
         worker_func: Function to execute in worker
         *args: Arguments to pass to worker_func
         max_retries: Maximum number of attempts (default: 3 = 1 initial + 2 retries)
         base_delay: Initial delay in seconds before first retry (default: 0.5)
         task_id: Optional task identifier for logging
+        use_threading: Whether using ThreadPoolExecutor (affects retry strategy)
     
     Returns:
         Result from worker_func
@@ -57,7 +63,17 @@ async def run_worker_with_retries(loop, pool, worker_func, *args, max_retries=3,
     
     for attempt in range(1, max_retries + 1):
         try:
-            return await loop.run_in_executor(pool, worker_func, *args)
+            # For ThreadPoolExecutor, reuse same pool across retries
+            # For ProcessPoolExecutor, create fresh pool for each attempt
+            if use_threading:
+                # ThreadPoolExecutor doesn't break on individual task failures
+                with executor_class(**executor_kwargs) as pool:
+                    return await loop.run_in_executor(pool, worker_func, *args)
+            else:
+                # ProcessPoolExecutor breaks when worker crashes, need fresh pool
+                with executor_class(**executor_kwargs) as pool:
+                    return await loop.run_in_executor(pool, worker_func, *args)
+                    
         except BrokenProcessPool as e:
             if attempt == max_retries:
                 logger.error(f"{task_label} failed after {max_retries} attempts: {e}")
@@ -67,9 +83,13 @@ async def run_worker_with_retries(loop, pool, worker_func, *args, max_retries=3,
             delay = base_delay * (2 ** (attempt - 1))
             logger.warning(
                 f"{task_label} attempt {attempt}/{max_retries} failed with BrokenProcessPool. "
-                f"Retrying in {delay:.1f}s... Error: {str(e)[:100]}"
+                f"Recreating pool and retrying in {delay:.1f}s..."
             )
             await asyncio.sleep(delay)
+        except Exception as e:
+            # Non-transient errors (FileNotFoundError, etc.) fail immediately
+            logger.error(f"{task_label} failed with non-transient error: {e}")
+            raise
     
     # Should never reach here, but for safety
     raise RuntimeError(f"{task_label} exhausted all {max_retries} attempts")
@@ -117,44 +137,45 @@ async def run_metadata_collection_from_filepaths(
             "initializer": initialize_worker_process
         }
 
-    with executor_class(**executor_kwargs) as pool:
-        loop = asyncio.get_running_loop()
+    loop = asyncio.get_running_loop()
+    
+    # NOTE: For ProcessPoolExecutor: Submit tasks with staggered timing to serialize
+    # worker initialization and prevent race conditions in JVM/native libraries.
+    # For ThreadPoolExecutor: Submit all at once (no race conditions, lighter weight).
+
+    tasks = []
+    for idx, row in df.iterrows():
+        job_kwargs = row.to_dict()
+        input_path_job = job_kwargs.pop('input_path')
+
+        # Submit to executor with retry wrapper (creates fresh pool per retry)
+        task = run_worker_with_retries(
+            loop,
+            executor_class,
+            executor_kwargs,
+            metadata_reader_sync,
+            input_path_job,
+            job_kwargs,
+            max_retries=max_retries,
+            task_id=idx,
+            use_threading=use_threading
+        )
+        tasks.append(task)
         
-        # NOTE: For ProcessPoolExecutor: Submit tasks with staggered timing to serialize
-        # worker initialization and prevent race conditions in JVM/native libraries.
-        # For ThreadPoolExecutor: Submit all at once (no race conditions, lighter weight).
+        # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
+        # This prevents simultaneous JVM/native library initialization race conditions
+        if not use_threading and idx < len(df) - 1:
+            await asyncio.sleep(0.2)
 
-        tasks = []
-        for idx, row in df.iterrows():
-            job_kwargs = row.to_dict()
-            input_path_job = job_kwargs.pop('input_path')
+    # Gather with return_exceptions to see all failures
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Submit to executor with retry wrapper
-            task = run_worker_with_retries(
-                loop,
-                pool,
-                metadata_reader_sync,
-                input_path_job,
-                job_kwargs,
-                max_retries=max_retries,
-                task_id=idx
-            )
-            tasks.append(task)
-            
-            # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
-            # This prevents simultaneous JVM/native library initialization race conditions
-            if not use_threading and idx < len(df) - 1:
-                await asyncio.sleep(0.2)
-
-        # Gather with return_exceptions to see all failures
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Log results
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"[Main] Task {i} failed: {result}")
-            elif isinstance(result, dict) and result.get('status') == 'error':
-                logger.error(f"[Main] Task {i} failed: {result.get('error')}")
+    # Log results
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"[Main] Task {i} failed: {result}")
+        elif isinstance(result, dict) and result.get('status') == 'error':
+            logger.error(f"[Main] Task {i} failed: {result.get('error')}")
 
     return results
 
@@ -202,44 +223,45 @@ async def run_conversions_from_filepaths(
             "initializer": initialize_worker_process
         }
 
-    with executor_class(**executor_kwargs) as pool:
-        loop = asyncio.get_running_loop()
+    loop = asyncio.get_running_loop()
+    
+    # NOTE: For ProcessPoolExecutor: Submit tasks with staggered timing to serialize
+    # worker initialization and prevent race conditions in JVM/native libraries.
+    # For ThreadPoolExecutor: Submit all at once (no race conditions, lighter weight).
+
+    tasks = []
+    for idx, row in df.iterrows():
+        job_kwargs = row.to_dict()
+        input_path_job = job_kwargs.pop('input_path')
+        output_path = job_kwargs.pop('output_path')
+
+        # Submit to executor with retry wrapper (creates fresh pool per retry)
+        task = run_worker_with_retries(
+            loop,
+            executor_class,
+            executor_kwargs,
+            unary_worker_sync,
+            input_path_job,
+            output_path,
+            job_kwargs,
+            max_retries=max_retries,
+            task_id=idx,
+            use_threading=use_threading
+        )
+        tasks.append(task)
         
-        # NOTE: For ProcessPoolExecutor: Submit tasks with staggered timing to serialize
-        # worker initialization and prevent race conditions in JVM/native libraries.
-        # For ThreadPoolExecutor: Submit all at once (no race conditions, lighter weight).
+        # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
+        # This prevents simultaneous JVM/native library initialization race conditions
+        if not use_threading and idx < len(df) - 1:
+            await asyncio.sleep(0.2)
 
-        tasks = []
-        for idx, row in df.iterrows():
-            job_kwargs = row.to_dict()
-            input_path_job = job_kwargs.pop('input_path')
-            output_path = job_kwargs.pop('output_path')
+    # Gather without catching exceptions - let them propagate naturally
+    # This ensures errors are clearly visible to the user
+    results = await asyncio.gather(*tasks)
 
-            # Submit to executor with retry wrapper
-            task = run_worker_with_retries(
-                loop,
-                pool,
-                unary_worker_sync,
-                input_path_job,
-                output_path,
-                job_kwargs,
-                max_retries=max_retries,
-                task_id=idx
-            )
-            tasks.append(task)
-            
-            # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
-            # This prevents simultaneous JVM/native library initialization race conditions
-            if not use_threading and idx < len(df) - 1:
-                await asyncio.sleep(0.2)
-
-        # Gather without catching exceptions - let them propagate naturally
-        # This ensures errors are clearly visible to the user
-        results = await asyncio.gather(*tasks)
-
-        # Log results
-        for i, result in enumerate(results):
-            logger.info(f"[Main] Task {i} succeeded: {result}")
+    # Log results
+    for i, result in enumerate(results):
+        logger.info(f"[Main] Task {i} succeeded: {result}")
 
     return results
 
@@ -568,28 +590,26 @@ async def run_conversions_with_concatenation(
 
     # --- Use ThreadPoolExecutor for aggregative conversion ---
     max_retries = int(kwargs.get("max_retries", 3))
-    pool = ThreadPoolExecutor(max_workers=max_workers)
-    # pool = ProcessPoolExecutor(max_workers=max_workers,
-    #                            mp_context=mp.get_context("spawn")
-    #                            )
-    try:
-        loop = asyncio.get_running_loop()
-        tasks = [
-            run_worker_with_retries(
-                loop,
-                pool,
-                aggregative_worker_sync,
-                manager,
-                os.path.join(output_path, name),
-                dict(kwargs),
-                max_retries=max_retries,
-                task_id=idx
-            )
-            for idx, (manager, name) in enumerate(zip(managers, names))
-        ]
-        results = await asyncio.gather(*tasks)
-    finally:
-        pool.shutdown(wait=True)
+    executor_class = ThreadPoolExecutor
+    executor_kwargs = {"max_workers": max_workers}
+    
+    loop = asyncio.get_running_loop()
+    tasks = [
+        run_worker_with_retries(
+            loop,
+            executor_class,
+            executor_kwargs,
+            aggregative_worker_sync,
+            manager,
+            os.path.join(output_path, name),
+            dict(kwargs),
+            max_retries=max_retries,
+            task_id=idx,
+            use_threading=True
+        )
+        for idx, (manager, name) in enumerate(zip(managers, names))
+    ]
+    results = await asyncio.gather(*tasks)
 
     return results
 
