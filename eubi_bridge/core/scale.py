@@ -1,7 +1,7 @@
 import asyncio
 import dataclasses
 import os.path
-from typing import Union
+from typing import Union, Optional, Dict, Any
 
 import dask.array as da
 import numpy as np
@@ -155,6 +155,25 @@ class Downscaler:
     output_chunks: Union[list, tuple] = None
     backend: str = 'numpy'
     downscale_method: str = 'simple'
+    
+    def get_tensorstore_context(self) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve tensorstore context from worker initialization, if available.
+        
+        Returns the context set by initialize_worker_process() if called in a worker
+        process. Falls back to None if not in a worker context.
+        
+        Returns
+        -------
+        dict or None
+            Tensorstore context dict with data_copy_concurrency limits, or None
+            if not available (will use tensorstore defaults).
+        """
+        try:
+            from eubi_bridge.conversion import worker_init
+            return getattr(worker_init, '_tensorstore_context', None)
+        except (ImportError, AttributeError):
+            return None
 
     def __post_init__(self):
         # if self.output_chunks is None:
@@ -164,11 +183,13 @@ class Downscaler:
             kvstore = make_kvstore(store_path)
             self.base_array_root = os.path.abspath(self.array)
             self.downscale_method = 'ts'
+            ts_context = self.get_tensorstore_context()
             self.array = ts.open(
                 {
                     "driver": "zarr",
                     "kvstore": kvstore
                 },
+                context=ts_context,
                 open=True,
             ).result()
         elif isinstance(self.array, zarr.Array):
@@ -196,12 +217,14 @@ class Downscaler:
             zarr_format = self.array.metadata.zarr_format
             driver_name = "zarr3" if zarr_format == 3 else "zarr2"
             logger.info(f"[Downscaler] Opening with driver={driver_name}, path={arraypath}")
+            ts_context = self.get_tensorstore_context()
             self.array = ts.open(
                 {
                     "driver": driver_name,
                     "kvstore": kvstore,
                     "path": arraypath  # Specify array path separately
                 },
+                context=ts_context,
                 open=True,
             ).result()
         else:

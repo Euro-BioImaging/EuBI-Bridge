@@ -131,7 +131,8 @@ class EuBIBridge:
                 queue_size = 4,
                 region_size_mb = 512,
                 max_concurrency = 4,  # limit how many writes run at once
-                memory_per_worker = '4GB'
+                memory_per_worker = '4GB',
+                tensorstore_data_copy_concurrency = 1  # limit CPU cores for tensorstore data copying in downscaler
                 ),
             readers=dict(
                 as_mosaic=False,
@@ -376,7 +377,8 @@ class EuBIBridge:
                           max_concurrency: int = 'default',
                           on_local_cluster: bool = 'default',
                           on_slurm: bool = 'default',
-                          use_threading: bool = 'default'
+                          use_threading: bool = 'default',
+                          tensorstore_data_copy_concurrency: int = 'default'
                           ):
         """
         Updates cluster configuration settings. To update the current default value for a parameter, provide that parameter with a value other than 'default'.
@@ -387,6 +389,7 @@ class EuBIBridge:
             - region_size_mb (int, optional): Memory limit in MB for each batch.
             - max_concurrency (int, optional): Maximum number of concurrent operations.
             - use_threading (bool, optional): Use threading instead of multiprocessing (for cluster compatibility).
+            - tensorstore_data_copy_concurrency (int, optional): Limit on CPU cores used concurrently for tensorstore data copying/encoding/decoding during downscaling. Lower values reduce thread contention. Default: 1 (serialized, safest).
 
         Args:
             max_workers (int, optional): Size of the pool for sync writer.
@@ -396,6 +399,7 @@ class EuBIBridge:
             on_local_cluster (bool, optional): Whether to use local Dask cluster.
             on_slurm (bool, optional): Whether to use SLURM cluster.
             use_threading (bool, optional): Use threading instead of multiprocessing.
+            tensorstore_data_copy_concurrency (int, optional): CPU core limit for tensorstore data copying in downscaler. Default: 1.
 
         Returns:
             None
@@ -409,7 +413,8 @@ class EuBIBridge:
             'max_concurrency': max_concurrency,
             'on_local_cluster': on_local_cluster,
             'on_slurm': on_slurm,
-            'use_threading': use_threading
+            'use_threading': use_threading,
+            'tensorstore_data_copy_concurrency': tensorstore_data_copy_concurrency
         }
 
         for key in params:
