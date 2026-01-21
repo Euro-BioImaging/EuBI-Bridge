@@ -129,11 +129,11 @@ class EuBIBridge:
                 use_threading=False,
                 max_workers=4,  # size of the pool for sync writer
                 queue_size = 4,
-                region_size_mb = 512,
+                region_size_mb = 256,
                 max_concurrency = 4,  # limit how many writes run at once
-                memory_per_worker = '4GB',
-                tensorstore_data_copy_concurrency = 1,  # limit CPU cores for tensorstore data copying in downscaler
-                max_retries = 3  # maximum attempts per task (1 initial + retries) with exponential backoff
+                memory_per_worker = '1GB',
+                tensorstore_data_copy_concurrency = 4,  # limit CPU cores for tensorstore data copying in downscaler
+                max_retries = 10  # maximum attempts per task (1 initial + retries) with exponential backoff
                 ),
             readers=dict(
                 as_mosaic=False,
