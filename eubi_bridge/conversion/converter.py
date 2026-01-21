@@ -50,6 +50,7 @@ async def run_metadata_collection_from_filepaths(
 
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))
+    max_retries = int(global_kwargs.get("max_retries", 3))
     use_threading = global_kwargs.get("use_threading", False)
 
     # Import worker function
@@ -74,7 +75,6 @@ async def run_metadata_collection_from_filepaths(
     
     # Create ONE shared executor for all tasks
     pool = None
-    recreate_attempted = False
     
     try:
         # Create main shared pool
@@ -86,28 +86,46 @@ async def run_metadata_collection_from_filepaths(
             input_path_job = job_kwargs.pop('input_path')
             
             async def submit_task(pool, idx, input_path_job, job_kwargs):
-                """Submit task to main pool, fall back to temporary pool if broken."""
+                """Submit task with per-task retry tracking. Retries reset on success."""
                 from concurrent.futures.process import BrokenProcessPool
                 
-                try:
-                    return await loop.run_in_executor(pool, metadata_reader_sync, input_path_job, job_kwargs)
-                except BrokenProcessPool as e:
-                    if use_threading:
-                        raise
-                    
-                    # Create temporary single-worker pool just for this failed task
-                    logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
-                    ctx = mp.get_context("spawn")
-                    temp_pool = ProcessPoolExecutor(
-                        max_workers=1,
-                        mp_context=ctx,
-                        initializer=initialize_worker_process
-                    )
-                    
+                retries_left = max_retries  # Per-task retry counter
+                
+                while retries_left >= 0:
                     try:
-                        return await loop.run_in_executor(temp_pool, metadata_reader_sync, input_path_job, job_kwargs)
-                    finally:
-                        temp_pool.shutdown(wait=True)
+                        # Try main pool
+                        return await loop.run_in_executor(pool, metadata_reader_sync, input_path_job, job_kwargs)
+                    except BrokenProcessPool:
+                        if use_threading:
+                            raise
+                        
+                        logger.warning(f"Task {idx}: Main pool broken, {retries_left} retries left")
+                        
+                        # Try temporary pool
+                        ctx = mp.get_context("spawn")
+                        temp_pool = ProcessPoolExecutor(
+                            max_workers=1,
+                            mp_context=ctx,
+                            initializer=initialize_worker_process
+                        )
+                        
+                        try:
+                            result = await loop.run_in_executor(temp_pool, metadata_reader_sync, input_path_job, job_kwargs)
+                            # Success! Task recovered
+                            logger.info(f"Task {idx}: Recovered with temporary pool")
+                            return result
+                        except Exception as e:
+                            # Temp pool also failed
+                            retries_left -= 1
+                            if retries_left >= 0:
+                                logger.warning(f"Task {idx}: Temp pool failed ({retries_left} retries left): {e}")
+                            else:
+                                logger.error(f"Task {idx}: Exhausted all {max_retries} retries: {e}")
+                        finally:
+                            temp_pool.shutdown(wait=True)
+                
+                # All retries exhausted
+                raise RuntimeError(f"Task {idx} exhausted all {max_retries} retries for {input_path_job}")
             
             task = submit_task(pool, idx, input_path_job, job_kwargs)
             tasks.append(task)
@@ -122,12 +140,26 @@ async def run_metadata_collection_from_filepaths(
         if pool is not None:
             pool.shutdown(wait=True)
     
-    # Log results
+    # Log results and track failures
+    failed_tasks = []
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error(f"[Main] Task {i} failed: {result}")
+            failed_tasks.append((i, str(result)))
         elif isinstance(result, dict) and result.get('status') == 'error':
             logger.error(f"[Main] Task {i} failed: {result.get('error')}")
+            failed_tasks.append((i, result.get('error', 'Unknown error')))
+    
+    # If any task failed, raise an error to prevent silent incomplete outputs
+    if failed_tasks:
+        error_summary = "\n".join([
+            f"  Task {idx}: {error}" 
+            for idx, error in failed_tasks
+        ])
+        raise RuntimeError(
+            f"Metadata collection failed for {len(failed_tasks)}/{len(results)} files. "
+            f"Failed tasks:\n{error_summary}"
+        )
 
     return results
 
@@ -154,6 +186,7 @@ async def run_conversions_from_filepaths(
 
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))
+    max_retries = int(global_kwargs.get("max_retries", 3))
     use_threading = global_kwargs.get("use_threading", False)
 
     # Import worker function
@@ -176,7 +209,7 @@ async def run_conversions_from_filepaths(
 
     loop = asyncio.get_running_loop()
     
-    # Create ONE shared executor for all tasks with pool recreation on failure
+    # Create ONE shared executor for all tasks
     pool = None
     
     try:
@@ -190,28 +223,46 @@ async def run_conversions_from_filepaths(
             output_path = job_kwargs.pop('output_path')
 
             async def submit_task(pool, idx, input_path_job, output_path, job_kwargs):
-                """Submit task to main pool, fall back to temporary pool if broken."""
+                """Submit task with per-task retry tracking. Retries reset on success."""
                 from concurrent.futures.process import BrokenProcessPool
                 
-                try:
-                    return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
-                except BrokenProcessPool as e:
-                    if use_threading:
-                        raise
-                    
-                    # Create temporary single-worker pool just for this failed task
-                    logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
-                    ctx = mp.get_context("spawn")
-                    temp_pool = ProcessPoolExecutor(
-                        max_workers=1,
-                        mp_context=ctx,
-                        initializer=initialize_worker_process
-                    )
-                    
+                retries_left = max_retries  # Per-task retry counter
+                
+                while retries_left >= 0:
                     try:
-                        return await loop.run_in_executor(temp_pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
-                    finally:
-                        temp_pool.shutdown(wait=True)
+                        # Try main pool
+                        return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
+                    except BrokenProcessPool:
+                        if use_threading:
+                            raise
+                        
+                        logger.warning(f"Task {idx}: Main pool broken, {retries_left} retries left")
+                        
+                        # Try temporary pool
+                        ctx = mp.get_context("spawn")
+                        temp_pool = ProcessPoolExecutor(
+                            max_workers=1,
+                            mp_context=ctx,
+                            initializer=initialize_worker_process
+                        )
+                        
+                        try:
+                            result = await loop.run_in_executor(temp_pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
+                            # Success! Task recovered, return immediately
+                            logger.info(f"Task {idx}: Recovered with temporary pool")
+                            return result
+                        except Exception as e:
+                            # Temp pool also failed
+                            retries_left -= 1
+                            if retries_left >= 0:
+                                logger.warning(f"Task {idx}: Temp pool failed ({retries_left} retries left): {e}")
+                            else:
+                                logger.error(f"Task {idx}: Exhausted all {max_retries} retries: {e}")
+                        finally:
+                            temp_pool.shutdown(wait=True)
+                
+                # All retries exhausted
+                raise RuntimeError(f"Task {idx} exhausted all {max_retries} retries for {input_path_job}")
             
             task = submit_task(pool, idx, input_path_job, output_path, job_kwargs)
             tasks.append(task)
@@ -226,12 +277,31 @@ async def run_conversions_from_filepaths(
         if pool is not None:
             pool.shutdown(wait=True)
 
-    # Log results
+    # Log results and track failures
+    failed_tasks = []
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error(f"[Main] Task {i} failed: {result}")
+            failed_tasks.append((i, str(result)))
+        elif isinstance(result, dict):
+            if result.get('status') == 'error':
+                logger.error(f"[Main] Task {i} failed: {result.get('error')}")
+                failed_tasks.append((i, result.get('error', 'Unknown error')))
+            else:
+                logger.info(f"[Main] Task {i} succeeded: {result}")
         else:
             logger.info(f"[Main] Task {i} succeeded: {result}")
+    
+    # If any task failed, raise an error to prevent silent incomplete outputs
+    if failed_tasks:
+        error_summary = "\n".join([
+            f"  Task {idx}: {error}" 
+            for idx, error in failed_tasks
+        ])
+        raise RuntimeError(
+            f"Conversion failed for {len(failed_tasks)}/{len(results)} tasks. "
+            f"Output directory may be incomplete. Failed tasks:\n{error_summary}"
+        )
 
     return results
 
