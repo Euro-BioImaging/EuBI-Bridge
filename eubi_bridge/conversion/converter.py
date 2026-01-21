@@ -77,7 +77,7 @@ async def run_metadata_collection_from_filepaths(
     recreate_attempted = False
     
     try:
-        # Create initial pool
+        # Create main shared pool
         pool = executor_class(**executor_kwargs)
         
         tasks = []
@@ -86,24 +86,28 @@ async def run_metadata_collection_from_filepaths(
             input_path_job = job_kwargs.pop('input_path')
             
             async def submit_task(pool, idx, input_path_job, job_kwargs):
-                """Submit a task with pool recreation on failure."""
-                nonlocal recreate_attempted
+                """Submit task to main pool, fall back to temporary pool if broken."""
                 from concurrent.futures.process import BrokenProcessPool
                 
                 try:
                     return await loop.run_in_executor(pool, metadata_reader_sync, input_path_job, job_kwargs)
                 except BrokenProcessPool as e:
-                    if recreate_attempted or use_threading:
+                    if use_threading:
                         raise
                     
-                    # Recreate pool once for ProcessPoolExecutor
-                    logger.warning(f"Task {idx}: Pool broken, recreating...")
-                    pool.shutdown(wait=False)
-                    recreate_attempted = True
-                    pool = executor_class(**executor_kwargs)
+                    # Create temporary single-worker pool just for this failed task
+                    logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
+                    ctx = mp.get_context("spawn")
+                    temp_pool = ProcessPoolExecutor(
+                        max_workers=1,
+                        mp_context=ctx,
+                        initializer=initialize_worker_process
+                    )
                     
-                    # Retry on new pool
-                    return await loop.run_in_executor(pool, metadata_reader_sync, input_path_job, job_kwargs)
+                    try:
+                        return await loop.run_in_executor(temp_pool, metadata_reader_sync, input_path_job, job_kwargs)
+                    finally:
+                        temp_pool.shutdown(wait=True)
             
             task = submit_task(pool, idx, input_path_job, job_kwargs)
             tasks.append(task)
@@ -174,10 +178,9 @@ async def run_conversions_from_filepaths(
     
     # Create ONE shared executor for all tasks with pool recreation on failure
     pool = None
-    recreate_attempted = False
     
     try:
-        # Create initial pool
+        # Create main shared pool
         pool = executor_class(**executor_kwargs)
         
         tasks = []
@@ -187,24 +190,28 @@ async def run_conversions_from_filepaths(
             output_path = job_kwargs.pop('output_path')
 
             async def submit_task(pool, idx, input_path_job, output_path, job_kwargs):
-                """Submit a task with pool recreation on failure."""
-                nonlocal recreate_attempted
+                """Submit task to main pool, fall back to temporary pool if broken."""
                 from concurrent.futures.process import BrokenProcessPool
                 
                 try:
                     return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
                 except BrokenProcessPool as e:
-                    if recreate_attempted or use_threading:
+                    if use_threading:
                         raise
                     
-                    # Recreate pool once for ProcessPoolExecutor
-                    logger.warning(f"Task {idx}: Pool broken, recreating...")
-                    pool.shutdown(wait=False)
-                    recreate_attempted = True
-                    pool = executor_class(**executor_kwargs)
+                    # Create temporary single-worker pool just for this failed task
+                    logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
+                    ctx = mp.get_context("spawn")
+                    temp_pool = ProcessPoolExecutor(
+                        max_workers=1,
+                        mp_context=ctx,
+                        initializer=initialize_worker_process
+                    )
                     
-                    # Retry on new pool
-                    return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
+                    try:
+                        return await loop.run_in_executor(temp_pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
+                    finally:
+                        temp_pool.shutdown(wait=True)
             
             task = submit_task(pool, idx, input_path_job, output_path, job_kwargs)
             tasks.append(task)
@@ -552,27 +559,32 @@ async def run_conversions_with_concatenation(
         managers.append(man)
 
     # --- Use ThreadPoolExecutor for aggregative conversion ---
-    max_retries = int(kwargs.get("max_retries", 3))
+    # Note: ThreadPoolExecutor doesn't have BrokenProcessPool issues, so no retry logic needed
     executor_class = ThreadPoolExecutor
     executor_kwargs = {"max_workers": max_workers}
     
     loop = asyncio.get_running_loop()
-    tasks = [
-        run_worker_with_retries(
-            loop,
-            executor_class,
-            executor_kwargs,
-            aggregative_worker_sync,
-            manager,
-            os.path.join(output_path, name),
-            dict(kwargs),
-            max_retries=max_retries,
-            task_id=idx,
-            use_threading=True
-        )
-        for idx, (manager, name) in enumerate(zip(managers, names))
-    ]
-    results = await asyncio.gather(*tasks)
+    
+    try:
+        pool = executor_class(**executor_kwargs)
+        
+        tasks = []
+        for idx, (manager, name) in enumerate(zip(managers, names)):
+            output_path_job = os.path.join(output_path, name)
+            
+            task = loop.run_in_executor(
+                pool,
+                aggregative_worker_sync,
+                manager,
+                output_path_job,
+                dict(kwargs)
+            )
+            tasks.append(task)
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True)
 
     return results
 
