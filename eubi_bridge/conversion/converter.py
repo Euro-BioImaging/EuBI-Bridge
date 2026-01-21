@@ -219,6 +219,9 @@ async def run_conversions_from_filepaths(
                 
                 while retries_left >= 0:
                     try:
+                        # Force overwrite=True on retry attempts to handle incomplete arrays from failed attempts
+                        if retries_left < max_retries:  # This is a retry (not the first attempt)
+                            job_kwargs['overwrite'] = True
                         # Try main pool
                         return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
                     except Exception as e:
