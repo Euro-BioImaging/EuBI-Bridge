@@ -86,30 +86,28 @@ async def run_metadata_collection_from_filepaths(
             input_path_job = job_kwargs.pop('input_path')
             
             async def submit_task(pool, idx, input_path_job, job_kwargs):
-                """Submit task with per-task retry tracking. Retries on main pool only."""
-                retries_left = max_retries  # Per-task retry counter
+                """Submit task to main pool, fall back to temporary pool if broken."""
+                from concurrent.futures.process import BrokenProcessPool
                 
-                while retries_left >= 0:
+                try:
+                    return await loop.run_in_executor(pool, metadata_reader_sync, input_path_job, job_kwargs)
+                except BrokenProcessPool as e:
+                    if use_threading:
+                        raise
+                    
+                    # Main pool is broken, create temporary single-worker pool just for this failed task
+                    logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
+                    ctx = mp.get_context("spawn")
+                    temp_pool = ProcessPoolExecutor(
+                        max_workers=1,
+                        mp_context=ctx,
+                        initializer=initialize_worker_process
+                    )
+                    
                     try:
-                        # Try main pool
-                        return await loop.run_in_executor(pool, metadata_reader_sync, input_path_job, job_kwargs)
-                    except Exception as e:
-                        retries_left -= 1
-                        if retries_left >= 0:
-                            logger.warning(
-                                f"Task {idx}: ⚠️  Attempt failed. Retrying on main pool... "
-                                f"[Attempt {max_retries - retries_left}/{max_retries}] "
-                                f"[{retries_left} retries left] Error: {type(e).__name__}"
-                            )
-                        else:
-                            logger.error(
-                                f"Task {idx}: ❌ FATAL - Exhausted all {max_retries} retry attempts. "
-                                f"File '{Path(input_path_job).name}' will be marked as failed. "
-                                f"Error: {type(e).__name__}: {str(e)[:100]}"
-                            )
-                
-                # All retries exhausted
-                raise RuntimeError(f"Task {idx} exhausted all {max_retries} retries for {input_path_job}")
+                        return await loop.run_in_executor(temp_pool, metadata_reader_sync, input_path_job, job_kwargs)
+                    finally:
+                        temp_pool.shutdown(wait=True, timeout=10)
             
             task = submit_task(pool, idx, input_path_job, job_kwargs)
             tasks.append(task)
@@ -214,30 +212,29 @@ async def run_conversions_from_filepaths(
             output_path = job_kwargs.pop('output_path')
 
             async def submit_task(pool, idx, input_path_job, output_path, job_kwargs):
-                """Submit task with per-task retry tracking. Retries on main pool only."""
-                retries_left = max_retries  # Per-task retry counter
+                """Submit task to main pool, fall back to temporary pool if broken."""
+                from concurrent.futures.process import BrokenProcessPool
                 
-                while retries_left >= 0:
+                try:
+                    return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
+                except BrokenProcessPool as e:
+                    if use_threading:
+                        raise
+                    
+                    # Main pool is broken, create temporary single-worker pool just for this failed task
+                    logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
+                    job_kwargs['overwrite'] = True  # Force overwrite in temp pool
+                    ctx = mp.get_context("spawn")
+                    temp_pool = ProcessPoolExecutor(
+                        max_workers=1,
+                        mp_context=ctx,
+                        initializer=initialize_worker_process
+                    )
+                    
                     try:
-                        # Force overwrite=True on retry attempts to handle incomplete arrays from failed attempts
-                        if retries_left < max_retries:  # This is a retry (not the first attempt)
-                            job_kwargs['overwrite'] = True
-                        # Try main pool
-                        return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
-                    except Exception as e:
-                        retries_left -= 1
-                        if retries_left >= 0:
-                            logger.warning(
-                                f"Task {idx}: ⚠️  Attempt failed. Retrying on main pool... "
-                                f"[Attempt {max_retries - retries_left}/{max_retries}] "
-                                f"[{retries_left} retries left] Error: {type(e).__name__}"
-                            )
-                        else:
-                            logger.error(
-                                f"Task {idx}: ❌ FATAL - Exhausted all {max_retries} retry attempts. "
-                                f"File '{Path(input_path_job).name}' will be marked as failed. "
-                                f"Error: {type(e).__name__}: {str(e)[:100]}"
-                            )
+                        return await loop.run_in_executor(temp_pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
+                    finally:
+                        temp_pool.shutdown(wait=True, timeout=10)
                 
                 # All retries exhausted
                 raise RuntimeError(f"Task {idx} exhausted all {max_retries} retries for {input_path_job}")
