@@ -253,23 +253,20 @@ def reduce_paths_flexible(paths: Iterable[str],
         # Categorical case: merge categorical dimension tags
         unique_vals = list(dimension_tag)
         
-        # Split paths into directory and filename
-        common_dir = os.path.dirname(paths[0])
-        filenames = [os.path.basename(p) for p in paths]
-        
-        # Find which tag appears in each filename and extract before/after parts
+        # Find which tag appears in each full path and extract before/after parts
+        # Search in the full path, not just the basename, to handle nested directories
         before_parts = []
         after_parts = []
         found_tags = []
         tag_indices = []
         
-        for filename in filenames:
+        for fullpath in paths:
             found = False
             for tag in unique_vals:
-                if tag in filename:
-                    idx = filename.find(tag)
-                    before = filename[:idx]
-                    after = filename[idx + len(tag):]
+                if tag in fullpath:
+                    idx = fullpath.find(tag)
+                    before = fullpath[:idx]
+                    after = fullpath[idx + len(tag):]
                     
                     before_parts.append(before)
                     after_parts.append(after)
@@ -279,7 +276,7 @@ def reduce_paths_flexible(paths: Iterable[str],
                     break
             
             if not found:
-                raise ValueError(f"No tags {unique_vals} found in {filename}")
+                raise ValueError(f"No tags {unique_vals} found in {fullpath}")
         
         # Find common prefix of all before_parts
         common_before = os.path.commonprefix(before_parts)
@@ -304,9 +301,9 @@ def reduce_paths_flexible(paths: Iterable[str],
         
         # Final result = common_before + merged_content + replace_with + common_after_suffix
         # This ensures replace_with is placed right after the merged content, not at the end
-        result_filename = common_before + merged_content + f'{replace_with}' + common_after_suffix
+        result_path = common_before + merged_content + f'{replace_with}' + common_after_suffix
         
-        return os.path.join(common_dir, result_filename)
+        return result_path
 
     else:
         raise ValueError("dimension_tag must be a string or a tuple/list of strings")
