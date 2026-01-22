@@ -1,61 +1,62 @@
-import scyjava
-
-# Disable all Maven/JGO endpoints BEFORE bioio/bioformats is imported
-scyjava.config.endpoints.clear()
-scyjava.config.maven_offline = True
-scyjava.config.jgo_disabled = True
-
-import warnings
-
-from eubi_bridge.utils.array_utils import autocompute_chunk_shape
-from eubi_bridge.utils.jvm_manager import soft_start_jvm
-from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
-                                          sensitive_glob, take_filepaths)
-
-warnings.filterwarnings(
-    "ignore",
-    message="Dask configuration key 'distributed.p2p.disk' has been deprecated",
-    category=FutureWarning,
-    module="dask.config",
-)
-warnings.filterwarnings(
-    "ignore",
-    message="Could not parse tiff pixel size",
-    category=UserWarning,
-    module="bioio_tifffile.reader",
-)
-
 import os
-import pprint
 import shutil
 import tempfile
 import time
+import warnings
 from pathlib import Path
 from typing import Union
 
-import dask
-import numpy as np
-import psutil
-import s3fs
-import zarr
-from dask import array as da
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
-from eubi_bridge.conversion.converter import run_conversions
-from eubi_bridge.conversion.updater import run_updates
-# from eubi_bridge.ngff.multiscales import Pyramid
-# from eubi_bridge.ngff import defaults
-from eubi_bridge.core.data_manager import BatchManager
 from eubi_bridge.utils.logging_config import get_logger
-#from eubi_bridge.utils.metadata_utils import get_printables, print_printable
 
 # Set up logger for this module
 logger = get_logger(__name__)
 _console = Console()
+
+# Heavy imports are deferred to only when needed (config commands don't need them)
+# - scyjava, zarr, dask, numpy, psutil, s3fs, etc. are imported on-demand in methods
+
+
+def _ensure_heavy_imports():
+    """Lazy-load heavy modules only when needed for actual conversions."""
+    global dask, np, psutil, s3fs, zarr, da, AggregativeConverter, run_conversions, run_updates
+    
+    if 'dask' in globals():
+        return  # Already imported
+    
+    import scyjava
+    scyjava.config.endpoints.clear()
+    scyjava.config.maven_offline = True
+    scyjava.config.jgo_disabled = True
+    
+    import dask
+    import numpy as np
+    import psutil
+    import s3fs
+    import zarr
+    from dask import array as da
+    
+    # Suppress warnings
+    warnings.filterwarnings(
+        "ignore",
+        message="Dask configuration key 'distributed.p2p.disk' has been deprecated",
+        category=FutureWarning,
+        module="dask.config",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message="Could not parse tiff pixel size",
+        category=UserWarning,
+        module="bioio_tifffile.reader",
+    )
+    
+    from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
+    from eubi_bridge.conversion.converter import run_conversions
+    from eubi_bridge.conversion.updater import run_updates
 
 
 
@@ -189,18 +190,66 @@ class EuBIBridge:
             )
         )
 
-        config_gr = zarr.open_group(configpath, mode='a')
-        config = config_gr.attrs
-        for key in self.root_defaults.keys():
-            if key not in config.keys():
-                config[key] = {}
-                for subkey in self.root_defaults[key].keys():
-                    if subkey not in config[key].keys():
-                        config[key][subkey] = self.root_defaults[key][subkey]
-            config_gr.attrs[key] = config[key]
-        self.config = dict(config_gr.attrs)
-        self.config_gr = config_gr
+        # Store configpath for lazy loading
+        self._configpath = configpath
+        self._config = None  # Lazy-loaded config cache
         self._dask_temp_dir = None
+
+    def _get_json_path(self):
+        """Get path to JSON config file."""
+        return Path(self._configpath) / '.eubi_config.json'
+
+    def _load_config_from_json(self):
+        """Load config from JSON file (the single source of truth)."""
+        import json
+        json_path = self._get_json_path()
+        if json_path.exists():
+            try:
+                with open(json_path, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                return None
+        return None
+
+    def _save_config_to_json(self, config):
+        """Save config to JSON file (the single source of truth)."""
+        import json
+        json_path = self._get_json_path()
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(json_path, 'w') as f:
+                json.dump(config, f, indent=2)
+        except IOError as e:
+            logger.warning(f"Failed to save config JSON: {e}")
+
+    def _ensure_config_loaded(self):
+        """Lazy-load config from JSON file (the single source of truth)."""
+        if self._config is not None:
+            return  # Already loaded
+        
+        # Try to load from JSON first
+        config = self._load_config_from_json()
+        
+        # If JSON doesn't exist, initialize from defaults and save
+        if config is None:
+            config = {}
+            for key in self.root_defaults.keys():
+                config[key] = dict(self.root_defaults[key])
+            self._save_config_to_json(config)
+        
+        self._config = config
+
+    @property
+    def config(self):
+        """Get config, lazy-loading if needed."""
+        self._ensure_config_loaded()
+        return self._config
+
+    @config.setter
+    def config(self, value):
+        """Set config value and persist to JSON."""
+        self._config = value
+        self._save_config_to_json(value)
 
     def _optimize_dask_config(self):
         """Optimize Dask configuration for maximum conversion speed and memory efficiency.
@@ -282,8 +331,7 @@ class EuBIBridge:
         """
         Resets the cluster, conversion and downscale parameters to the installation defaults.
         """
-        self.config_gr.attrs.update(self.root_defaults)
-        self.config = dict(self.config_gr.attrs)
+        self.config = dict(self.root_defaults)
 
     def _print_config_unified(self, title: str, config_sections: dict):
         """Print all config sections in a single table with section headers as rows."""
@@ -327,12 +375,20 @@ class EuBIBridge:
     def show_config(self):
         """
         Displays the current cluster, conversion, and downscale parameters with rich formatting.
+        Uses JSON file for fast read-only access (no zarr overhead).
         """
         _console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
         _console.print("[bold cyan]Current Configuration[/bold cyan]")
         _console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
         
-        sections = {k: v for k, v in self.config.items() if k in ['cluster', 'readers', 'conversion', 'downscale']}
+        # Try to load config from JSON first (fast, no zarr overhead)
+        config = self._load_config_from_json()
+        
+        # If JSON doesn't exist, load from zarr and cache it
+        if config is None:
+            config = self.config  # This triggers lazy zarr loading
+        
+        sections = {k: v for k, v in config.items() if k in ['cluster', 'readers', 'conversion', 'downscale']}
         self._print_config_unified("Configuration", sections)
         _console.print()
 
@@ -426,7 +482,7 @@ class EuBIBridge:
             if key in self.config['cluster'].keys():
                 if params[key] != 'default':
                     self.config['cluster'][key] = params[key]
-        self.config_gr.attrs['cluster'] = self.config['cluster']
+        self._save_config_to_json(self.config)
 
     def configure_readers(self,
                           as_mosaic: bool = 'default',
@@ -462,7 +518,7 @@ class EuBIBridge:
             if key in self.config['readers'].keys():
                 if params[key] != 'default':
                     self.config['readers'][key] = params[key]
-        self.config_gr.attrs['readers'] = self.config['readers']
+        self._save_config_to_json(self.config)
 
     def configure_conversion(self,
                              zarr_format: int = 'default',
@@ -570,7 +626,7 @@ class EuBIBridge:
             if key in self.config['conversion'].keys():
                 if params[key] != 'default':
                     self.config['conversion'][key] = params[key]
-        self.config_gr.attrs['conversion'] = self.config['conversion']
+        self._save_config_to_json(self.config)
 
     def configure_downscale(self,
                             # downscale_method: str = 'default',
@@ -614,7 +670,7 @@ class EuBIBridge:
             if key in self.config['downscale'].keys():
                 if params[key] != 'default':
                     self.config['downscale'][key] = params[key]
-        self.config_gr.attrs['downscale'] = self.config['downscale']
+        self._save_config_to_json(self.config)
 
     def to_zarr(self,
                 input_path,
@@ -634,7 +690,11 @@ class EuBIBridge:
                 **kwargs # metadata kwargs such as pixel sizes and channel info
                 ):
         """Synchronous wrapper for the async to_zarr_async method."""
+        # Ensure heavy modules are loaded (scyjava, zarr, dask, etc.)
+        _ensure_heavy_imports()
+        
         # Initialize JVM for image reading (needs Java-based Bio-Formats)
+        from eubi_bridge.utils.jvm_manager import soft_start_jvm
         soft_start_jvm()
         
         t0 = time.time()
@@ -710,7 +770,11 @@ class EuBIBridge:
         """
         import asyncio
         
+        # Ensure heavy modules are loaded (scyjava, zarr, dask, etc.)
+        _ensure_heavy_imports()
+        
         # Initialize JVM for image reading
+        from eubi_bridge.utils.jvm_manager import soft_start_jvm
         soft_start_jvm()
 
         # Get parameters
@@ -874,7 +938,11 @@ class EuBIBridge:
             None
         """
 
+        # Ensure heavy modules are loaded (scyjava, zarr, dask, etc.)
+        _ensure_heavy_imports()
+        
         # Initialize JVM for image reading (needs Java-based Bio-Formats)
+        from eubi_bridge.utils.jvm_manager import soft_start_jvm
         soft_start_jvm()
 
         # Collect cluster and conversion parameters
@@ -929,12 +997,15 @@ class EuBIBridge:
             includes: Include file patterns
             excludes: Exclude file patterns
             **kwargs: Additional parameters for cluster and conversion configuration.
-
         Returns:
             None
         """
 
+        # Ensure heavy modules are loaded (scyjava, zarr, dask, etc.)
+        _ensure_heavy_imports()
+        
         # Initialize JVM for image reading (needs Java-based Bio-Formats)
+        from eubi_bridge.utils.jvm_manager import soft_start_jvm
         soft_start_jvm()
 
         # Collect cluster and conversion parameters
