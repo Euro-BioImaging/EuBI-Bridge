@@ -769,13 +769,26 @@ class EuBIBridge:
             None
         """
         import asyncio
+        from eubi_bridge.utils.path_utils import take_filepaths
         
-        # Ensure heavy modules are loaded (scyjava, zarr, dask, etc.)
-        _ensure_heavy_imports()
+        # Check if all input files are OME-Zarr format
+        try:
+            df = take_filepaths(input_path, **kwargs)
+            all_zarr = all(path.endswith('.zarr') for path in df['input_path'])
+        except (ValueError, KeyError):
+            all_zarr = False
         
-        # Initialize JVM for image reading
-        from eubi_bridge.utils.jvm_manager import soft_start_jvm
-        soft_start_jvm()
+        # Only initialize JVM if we have non-Zarr files
+        if not all_zarr:
+            logger.info("Non-Zarr files detected. Initializing JVM for Bio-Formats image reading.")
+            # Ensure heavy modules are loaded (scyjava, zarr, dask, etc.)
+            _ensure_heavy_imports()
+            
+            # Initialize JVM for image reading (needed for Bio-Formats)
+            from eubi_bridge.utils.jvm_manager import soft_start_jvm
+            soft_start_jvm()
+        else:
+            logger.info("All inputs are OME-Zarr files. Skipping JVM initialization.")
 
         # Get parameters
         self.cluster_params = self._collect_params('cluster', **kwargs)
