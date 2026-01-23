@@ -216,7 +216,8 @@ async def run_conversions_from_filepaths(
         for idx, row in df.iterrows():
             job_kwargs = row.to_dict()
             input_path_job = job_kwargs.pop('input_path')
-            output_path = job_kwargs.pop('output_path')
+            # Pop output_path from row if it exists (CSV column), otherwise use the parameter
+            output_path_job = job_kwargs.pop('output_path', output_path)
             # Filter out None values from CSV - missing parameters should use defaults from global_kwargs, not None
             job_kwargs = {k: v for k, v in job_kwargs.items() if v is not None}
             
@@ -229,12 +230,12 @@ async def run_conversions_from_filepaths(
             merged_kwargs.pop('input_path', None)
             merged_kwargs.pop('output_path', None)
 
-            async def submit_task(pool, idx, input_path_job, output_path, merged_kwargs):
+            async def submit_task(pool, idx, input_path_job, output_path_job, merged_kwargs):
                 """Submit task to main pool, fall back to temporary pool if broken."""
                 from concurrent.futures.process import BrokenProcessPool
                 
                 try:
-                    return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, merged_kwargs)
+                    return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path_job, merged_kwargs)
                 except BrokenProcessPool as e:
                     if use_threading:
                         raise
@@ -257,7 +258,7 @@ async def run_conversions_from_filepaths(
                 # All retries exhausted
                 raise RuntimeError(f"Task {idx} exhausted all {max_retries} retries for {input_path_job}")
             
-            task = submit_task(pool, idx, input_path_job, output_path, merged_kwargs)
+            task = submit_task(pool, idx, input_path_job, output_path_job, merged_kwargs)
             tasks.append(task)
             
             # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
