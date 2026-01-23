@@ -726,6 +726,10 @@ class EuBIBridge:
             **self._collect_params('downscale', **cli_kwargs)
         }
         
+        # Capture any extra kwargs that aren't in known config sections
+        # These are metadata parameters like y_scale, x_scale, channel_colors, etc.
+        extra_kwargs = {key: kwargs[key] for key in kwargs if key not in merged_params}
+        
         # Store for reference
         self.cluster_params = self._collect_params('cluster', **cli_kwargs)
         self.readers_params = self._collect_params('readers', **cli_kwargs)
@@ -744,7 +748,8 @@ class EuBIBridge:
                                   y_tag = y_tag,
                                   x_tag = x_tag,
                                   concatenation_axes = concatenation_axes,
-                                  **merged_params
+                                  **merged_params,
+                                  **extra_kwargs
                                   )
         t1 = time.time()
         logger.info(f"Conversion complete for all datasets.")
