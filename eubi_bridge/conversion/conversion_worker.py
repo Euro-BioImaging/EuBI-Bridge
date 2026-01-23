@@ -425,10 +425,28 @@ async def _load_input_manager(input_path: Union[str, ArrayManager],
 
     # Load scenes
     series = kwargs.get('scene_index', 'all')
+    # Parse comma-separated string indices like "0,2,4" from CSV to list [0, 2, 4]
+    # This handles CSV parameters that bypass Fire CLI's automatic parsing
+    if isinstance(series, str) and series != 'all' and ',' in series:
+        series = [int(x.strip()) for x in series.split(',')]
+    elif isinstance(series, str) and series != 'all':
+        try:
+            series = int(series)
+        except ValueError:
+            pass  # Keep as string if not a number
     await manager.load_scenes(scene_indices=series)
 
     # Load tiles if specified
     mosaic_tile_index = kwargs.get('mosaic_tile_index')
+    # Parse comma-separated string indices like "0,1" from CSV to list [0, 1]
+    if isinstance(mosaic_tile_index, str) and ',' in mosaic_tile_index:
+        mosaic_tile_index = [int(x.strip()) for x in mosaic_tile_index.split(',')]
+    elif isinstance(mosaic_tile_index, str):
+        try:
+            mosaic_tile_index = int(mosaic_tile_index)
+        except ValueError:
+            mosaic_tile_index = None  # Invalid tile index
+    
     if mosaic_tile_index is not None and len(manager.loaded_scenes) > 1:
         logger.warning(f"Currently cannot load multiple scenes and multiple tiles at the same time.\n"
                     f"Will load only the first tile.")
