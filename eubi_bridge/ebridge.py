@@ -703,28 +703,37 @@ class EuBIBridge:
         if output_path is None:
             assert input_path.endswith(('.csv', '.tsv', '.txt', '.xlsx'))
         
-        # Add explicit parameters to kwargs if provided
+        # Extract explicit CLI parameters (from function arguments)
+        cli_kwargs = {}
         if max_workers is not None:
-            kwargs['max_workers'] = max_workers
+            cli_kwargs['max_workers'] = max_workers
         if max_retries is not None:
-            kwargs['max_retries'] = max_retries
+            cli_kwargs['max_retries'] = max_retries
         if tensorstore_data_copy_concurrency is not None:
-            kwargs['tensorstore_data_copy_concurrency'] = tensorstore_data_copy_concurrency
+            cli_kwargs['tensorstore_data_copy_concurrency'] = tensorstore_data_copy_concurrency
         if use_threading is not None:
-            kwargs['use_threading'] = use_threading
+            cli_kwargs['use_threading'] = use_threading
         
-        self.cluster_params = self._collect_params('cluster', **kwargs)
-        self.readers_params = self._collect_params('readers', **kwargs)
-        self.conversion_params = self._collect_params('conversion', **kwargs)
-        # self.conversion_params = self._collect_params('conversion',
-        #                                               channel_intensity_limits = channel_intensity_limits,
-        #                                               **kwargs)
-        self.downscale_params = self._collect_params('downscale', **kwargs)
-        combined = {**self.cluster_params,
-                    **self.readers_params,
-                    **self.conversion_params,
-                    **self.downscale_params}
-        extra_kwargs = {key: kwargs[key] for key in kwargs if key not in combined}
+        # Add additional kwargs that are CLI parameters (from **kwargs)
+        cli_kwargs.update({k: v for k, v in kwargs.items() if k not in ['channel_intensity_limits']})
+        
+        # Stage 1 triage: CLI > Config (using _collect_params which already does this)
+        # Call _collect_params WITH cli_kwargs so CLI params override config defaults
+        merged_params = {
+            **self._collect_params('cluster', **cli_kwargs),
+            **self._collect_params('readers', **cli_kwargs),
+            **self._collect_params('conversion', **cli_kwargs),
+            **self._collect_params('downscale', **cli_kwargs)
+        }
+        
+        # Store for reference
+        self.cluster_params = self._collect_params('cluster', **cli_kwargs)
+        self.readers_params = self._collect_params('readers', **cli_kwargs)
+        self.conversion_params = self._collect_params('conversion', **cli_kwargs)
+        self.downscale_params = self._collect_params('downscale', **cli_kwargs)
+        
+        # Pass merged_params to run_conversions
+        # Stage 2 triage will happen in converter: CSV > merged_params
         results = run_conversions(os.path.abspath(input_path),
                                   output_path,
                                   includes=includes,
@@ -735,8 +744,7 @@ class EuBIBridge:
                                   y_tag = y_tag,
                                   x_tag = x_tag,
                                   concatenation_axes = concatenation_axes,
-                                  **combined,
-                                  **extra_kwargs
+                                  **merged_params
                                   )
         t1 = time.time()
         logger.info(f"Conversion complete for all datasets.")

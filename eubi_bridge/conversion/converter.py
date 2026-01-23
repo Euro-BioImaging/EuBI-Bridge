@@ -157,11 +157,16 @@ async def run_metadata_collection_from_filepaths(
 
 async def run_conversions_from_filepaths(
         input_path,
+        output_path = None,
         **global_kwargs
 ):
     """
     Run parallel conversions where each job's parameters (including input/output dirs)
     are specified via kwargs or a CSV/XLSX file.
+
+    Parameter triage (2-stage process):
+    1. global_kwargs already contain merged CLI+config params (CLI > config)
+    2. CSV row parameters override everything (CSV > CLI > config)
 
     Supports both multiprocessing (default) and threading modes via use_threading flag.
 
@@ -169,8 +174,10 @@ async def run_conversions_from_filepaths(
         input_path:
             - list of file paths, OR
             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
-        **global_kwargs: global defaults for all conversions (supports use_threading flag)
+        output_path: Output directory for conversions
+        **global_kwargs: Pre-merged parameters (CLI params already override config defaults)
     """
+    
     df = take_filepaths(input_path, **global_kwargs)
 
     # --- Setup concurrency ---
@@ -210,22 +217,31 @@ async def run_conversions_from_filepaths(
             job_kwargs = row.to_dict()
             input_path_job = job_kwargs.pop('input_path')
             output_path = job_kwargs.pop('output_path')
-            # Filter out None values from CSV - missing parameters should use config defaults, not None
+            # Filter out None values from CSV - missing parameters should use defaults from global_kwargs, not None
             job_kwargs = {k: v for k, v in job_kwargs.items() if v is not None}
+            
+            # Apply final parameter triage: CSV > (CLI > config)
+            # global_kwargs already has CLI > config triage applied
+            # Now CSV params override global_kwargs
+            merged_kwargs = {**global_kwargs}
+            merged_kwargs.update(job_kwargs)
+            # Remove input_path and output_path from merged_kwargs since they're passed as positional arguments
+            merged_kwargs.pop('input_path', None)
+            merged_kwargs.pop('output_path', None)
 
-            async def submit_task(pool, idx, input_path_job, output_path, job_kwargs):
+            async def submit_task(pool, idx, input_path_job, output_path, merged_kwargs):
                 """Submit task to main pool, fall back to temporary pool if broken."""
                 from concurrent.futures.process import BrokenProcessPool
                 
                 try:
-                    return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
+                    return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path, merged_kwargs)
                 except BrokenProcessPool as e:
                     if use_threading:
                         raise
                     
                     # Main pool is broken, create temporary single-worker pool just for this failed task
                     logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
-                    job_kwargs['overwrite'] = True  # Force overwrite in temp pool
+                    merged_kwargs['overwrite'] = True  # Force overwrite in temp pool
                     ctx = mp.get_context("spawn")
                     temp_pool = ProcessPoolExecutor(
                         max_workers=1,
@@ -234,14 +250,14 @@ async def run_conversions_from_filepaths(
                     )
                     
                     try:
-                        return await loop.run_in_executor(temp_pool, unary_worker_sync, input_path_job, output_path, job_kwargs)
+                        return await loop.run_in_executor(temp_pool, unary_worker_sync, input_path_job, output_path, merged_kwargs)
                     finally:
                         temp_pool.shutdown(wait=True, timeout=10)
                 
                 # All retries exhausted
                 raise RuntimeError(f"Task {idx} exhausted all {max_retries} retries for {input_path_job}")
             
-            task = submit_task(pool, idx, input_path_job, output_path, job_kwargs)
+            task = submit_task(pool, idx, input_path_job, output_path, merged_kwargs)
             tasks.append(task)
             
             # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
@@ -648,6 +664,12 @@ def run_conversions(
         output_path,
         **kwargs
 ):
+    """
+    Run conversions with proper parameter triage:
+    1. CSV parameters (highest priority - per-job overrides)
+    2. Pre-merged CLI+config parameters (already triaged in ebridge.py)
+    """
+    
     axes_of_concatenation = kwargs.get('concatenation_axes',
                                        None)
     verbose = kwargs.get('verbose',
