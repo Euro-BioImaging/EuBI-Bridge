@@ -210,6 +210,8 @@ async def run_conversions_from_filepaths(
             job_kwargs = row.to_dict()
             input_path_job = job_kwargs.pop('input_path')
             output_path = job_kwargs.pop('output_path')
+            # Filter out None values from CSV - missing parameters should use config defaults, not None
+            job_kwargs = {k: v for k, v in job_kwargs.items() if v is not None}
 
             async def submit_task(pool, idx, input_path_job, output_path, job_kwargs):
                 """Submit task to main pool, fall back to temporary pool if broken."""

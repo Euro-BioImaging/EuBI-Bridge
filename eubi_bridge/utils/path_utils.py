@@ -275,6 +275,19 @@ def take_filepaths(
             df = pd.read_excel(input_path)
         else:
             raise ValueError("Unsupported file format. Use .csv or .xlsx")
+        
+        # Convert NaN values to None so they don't interfere with parameter handling
+        # Empty CSV cells and various NA placeholders become NaN from pandas, but configuration 
+        # defaults are designed to handle None values, not NaN
+        # Pandas automatically recognizes these as NA/null:
+        #   - Empty string (default)
+        #   - 'N/A', 'n/a', 'NA', 'nan', 'NaN', '-NaN', '-nan'
+        #   - 'NULL', 'null'
+        #   - '#N/A', '#NA' (Excel errors)
+        #   - '<NA>', '<na>' (Pandas markers)
+        #   - Excel infinity variants ('-1.#IND', '1.#IND', etc.)
+        # First convert to object dtype, then replace NaN with None
+        df = df.astype(object).where(pd.notna(df), None)
     elif os.path.isdir(input_path) or os.path.isfile(input_path) or '*' in input_path:
         filepaths = take_filepaths_from_path(input_path, **global_kwargs)
         df = pd.DataFrame(filepaths, columns=["input_path"])

@@ -747,19 +747,24 @@ class EuBIBridge:
                         includes=None,
                         excludes=None,
                         series: int = None,
+                        output_file: str = None,
                         **kwargs
                         ):
         """
         Display pixel-level and channel metadata for all datasets in input_path.
 
-        Uses parallel metadata collection to efficiently read metadata from multiple
-        image files, then displays the results in a formatted table.
+        For OME-Zarr inputs: Uses fast ThreadPoolExecutor-based metadata extraction (no JVM).
+        For other formats: Uses parallel ProcessPoolExecutor-based collection with Bio-Formats.
 
         Args:
             input_path (Union[Path, str]): Path to input file or directory.
             includes (str, optional): Filename patterns to filter for (comma-separated).
             excludes (str, optional): Filename patterns to filter against (comma-separated).
             series (int, optional): Series index to read. Defaults to configured scene_index.
+            output_file (str, optional): Path to save formatted metadata. Auto-detects format:
+                                        - .html extension: Save as HTML file with styling
+                                        - .txt extension: Save as plain text file
+                                        - None: Print to console only
             **kwargs: Additional configuration overrides.
 
         Prints:
@@ -775,11 +780,19 @@ class EuBIBridge:
         try:
             df = take_filepaths(input_path, **kwargs)
             all_zarr = all(path.endswith('.zarr') for path in df['input_path'])
+            zarr_paths = df['input_path'].tolist() if all_zarr else None
         except (ValueError, KeyError):
             all_zarr = False
+            zarr_paths = None
         
-        # Only initialize JVM if we have non-Zarr files
-        if not all_zarr:
+        # Fast path: OME-Zarr metadata extraction (no JVM, no worker processes)
+        if all_zarr:
+            logger.info(f"Fast path: Reading metadata from {len(zarr_paths)} OME-Zarr files (no JVM).")
+            from eubi_bridge.utils.metadata_utils import read_ome_zarr_metadata_from_collection
+            metadata_list = asyncio.run(read_ome_zarr_metadata_from_collection(input_path))
+        
+        # Slow path: Bio-Formats metadata extraction (requires JVM, uses threading for efficiency)
+        else:
             logger.info("Non-Zarr files detected. Initializing JVM for Bio-Formats image reading.")
             # Ensure heavy modules are loaded (scyjava, zarr, dask, etc.)
             _ensure_heavy_imports()
@@ -787,54 +800,43 @@ class EuBIBridge:
             # Initialize JVM for image reading (needed for Bio-Formats)
             from eubi_bridge.utils.jvm_manager import soft_start_jvm
             soft_start_jvm()
-        else:
-            logger.info("All inputs are OME-Zarr files. Skipping JVM initialization.")
 
-        # Get parameters
-        self.cluster_params = self._collect_params('cluster', **kwargs)
-        self.readers_params = self._collect_params('readers', **kwargs)
-        self.conversion_params = self._collect_params('conversion', **kwargs)
+            # Get parameters
+            self.cluster_params = self._collect_params('cluster', **kwargs)
+            self.readers_params = self._collect_params('readers', **kwargs)
+            self.conversion_params = self._collect_params('conversion', **kwargs)
 
-        if series is None:
-            series = self.readers_params['scene_index']
+            if series is None:
+                series = self.readers_params['scene_index']
 
-        # Combine all parameters for workers
-        combined_params = {
-            **self.cluster_params,
-            **self.readers_params,
-            **self.conversion_params,
-        }
-        combined_params['series'] = series
+            # Combine all parameters for workers
+            combined_params = {
+                **self.cluster_params,
+                **self.readers_params,
+                **self.conversion_params,
+            }
+            combined_params['series'] = series
+            
+            # Force use_threading=True for metadata collection (IO-bound, no need for multiprocessing)
+            # This avoids expensive JVM worker process initialization and is much faster
+            combined_params['use_threading'] = True
+            # Increase workers for metadata-only collection (IO-bound, not CPU-bound)
+            combined_params['max_workers'] = min(16, max(8, len(df['input_path'])))
 
-        # Import and run metadata collection
-        from eubi_bridge.conversion.converter import run_metadata_collection_from_filepaths
+            # Import and run metadata collection
+            from eubi_bridge.conversion.converter import run_metadata_collection_from_filepaths
 
-        metadata_list = asyncio.run(run_metadata_collection_from_filepaths(
-            input_path,
-            includes=includes,
-            excludes=excludes,
-            **combined_params
-        ))
+            metadata_list = asyncio.run(run_metadata_collection_from_filepaths(
+                input_path,
+                includes=includes,
+                excludes=excludes,
+                **combined_params
+            ))
 
-        # Display results
+        # Display results with custom formatting
         _console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
         _console.print("[bold cyan]Image Metadata Summary[/bold cyan]")
         _console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
-
-        # Create table for metadata display
-        table = Table(
-            title="Pixel & channel metadata (in the axis order: TCZYX)",
-            title_style="bold cyan",
-            show_header=True,
-            header_style="bold white on blue",
-            padding=(0, 1),
-            border_style="blue"
-        )
-        table.add_column("File", style="magenta", width=40, no_wrap=False)
-        table.add_column("Shape", style="yellow", width=25)
-        table.add_column("Scale & Units", style="green", width=25)
-        table.add_column("Dtype", style="white", width=12)
-        table.add_column("Channels", style="bright_magenta", width=30)
 
         def _format_scale_value(value):
             """Format scale value to 3 significant figures."""
@@ -850,22 +852,43 @@ class EuBIBridge:
                 return f"{val_float:.2e}"
             return str(value)
 
-        # Populate table with metadata
-        for metadata in metadata_list:
+        def _wrap_text(text, width):
+            """Wrap text to specified width, preserving lines."""
+            if len(text) <= width:
+                return text
+            lines = []
+            for line in text.split('\n'):
+                if len(line) <= width:
+                    lines.append(line)
+                else:
+                    # Break long lines at word boundaries
+                    words = line.split()
+                    current_line = []
+                    for word in words:
+                        if len(' '.join(current_line + [word])) <= width:
+                            current_line.append(word)
+                        else:
+                            if current_line:
+                                lines.append(' '.join(current_line))
+                            current_line = [word]
+                    if current_line:
+                        lines.append(' '.join(current_line))
+            return '\n'.join(lines)
+
+        # Process and display each file's metadata
+        for idx, metadata in enumerate(metadata_list):
+            if idx > 0:
+                _console.print("[cyan]" + "─" * 100 + "[/cyan]")  # Separator line
+            
             if metadata.get('status') == 'error':
                 input_file = metadata.get('input_path', 'Unknown')
                 error_msg = metadata.get('error', 'Unknown error')
-                table.add_row(
-                    f"[red]{Path(input_file).name}[/red]",
-                    f"[red]ERROR[/red]",
-                    f"[red]{error_msg}[/red]",
-                    "-",
-                    "-"
-                )
+                _console.print(f"[red bold]File:[/red bold] {Path(input_file).name}")
+                _console.print(f"[red]ERROR:[/red] {error_msg}\n")
                 continue
 
             # Extract metadata fields
-            input_file = Path(metadata['input_path']).name
+            input_file = metadata['input_path']
             axes = metadata.get('axes', 'Unknown')
             shape = metadata.get('shape', {})
             scale = metadata.get('scale', {})
@@ -873,15 +896,18 @@ class EuBIBridge:
             dtype = metadata.get('dtype', 'Unknown')
             channels = metadata.get('channels', [])
 
-            # Format shape as key-value pairs (vertical)
+            # Print file path (full path, wrapped if needed)
+            _console.print(f"[magenta bold]File:[/magenta bold] {_wrap_text(input_file, 90)}")
+
+            # Print shape
             shape_lines = []
             for ax in axes:
                 ax_display = {'t': 'time', 'c': 'channels', 'z': 'z', 'y': 'y', 'x': 'x'}.get(ax, ax)
                 val = shape.get(ax, '?')
-                shape_lines.append(f"{ax_display}: {val}")
-            shape_str = '\n'.join(shape_lines) if shape_lines else 'Unknown'
+                shape_lines.append(f"  {ax_display}: {val}")
+            _console.print(f"[yellow bold]Shape:[/yellow bold]\n" + '\n'.join(shape_lines))
 
-            # Format scale and units as key-value pairs (vertical, skip channel)
+            # Print scale and units
             scale_unit_lines = []
             for ax in axes:
                 if ax == 'c':  # Skip channel axis
@@ -893,35 +919,197 @@ class EuBIBridge:
                 if scale_val != '?':
                     formatted_scale = _format_scale_value(scale_val)
                     if unit_val:
-                        scale_unit_lines.append(f"{ax_display}: {formatted_scale} {unit_val}")
+                        scale_unit_lines.append(f"  {ax_display}: {formatted_scale} {unit_val}")
                     else:
-                        scale_unit_lines.append(f"{ax_display}: {formatted_scale}")
+                        scale_unit_lines.append(f"  {ax_display}: {formatted_scale}")
                 else:
-                    scale_unit_lines.append(f"{ax_display}: ?")
+                    scale_unit_lines.append(f"  {ax_display}: ?")
             
-            scale_unit_str = '\n'.join(scale_unit_lines) if scale_unit_lines else 'Unknown'
+            _console.print(f"[green bold]Scale & Units:[/green bold]\n" + '\n'.join(scale_unit_lines))
 
-            # Format channels as key-value pairs
-            channel_lines = []
-            for i, ch in enumerate(channels):
-                label = ch.get('label', f"Channel {i}")
-                color = ch.get('color', None)
-                color_display = color if color else "None"
-                channel_lines.append(f"[bold]Label: {label}[/bold]")
-                channel_lines.append(f"[bold]Color: {color_display}[/bold]")
+            # Print dtype
+            _console.print(f"[white bold]Data Type:[/white bold] {dtype}")
+
+            # Print channels
+            if channels:
+                _console.print(f"[bright_magenta bold]Channels:[/bright_magenta bold]")
+                for i, ch in enumerate(channels):
+                    label = ch.get('label', f"Channel {i}")
+                    color = ch.get('color', None)
+                    color_display = color if color else "None"
+                    _console.print(f"  [{i}] Label: {_wrap_text(label, 80)}, Color: {color_display}")
+            else:
+                _console.print(f"[bright_magenta bold]Channels:[/bright_magenta bold] None")
             
-            channel_str = '\n'.join(channel_lines) if channel_lines else 'No channels'
+            _console.print()  # Blank line between entries
 
-            table.add_row(
-                f"[bold]{input_file}[/bold]",
-                shape_str,
-                scale_unit_str,
-                f"[white]{dtype}[/white]",
-                channel_str
-            )
-
-        _console.print(table)
+        _console.print("[cyan]" + "═" * 100 + "[/cyan]")  # Final separator
         _console.print()
+        
+        # Optionally save to file
+        if output_file:
+            from rich.console import Console as RichConsole
+            
+            with open(output_file, 'w') as f:
+                file_console = RichConsole(file=f, width=100, force_terminal=True, legacy_windows=False)
+                
+                # Re-render all output to file
+                file_console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
+                file_console.print("[bold cyan]Image Metadata Summary[/bold cyan]")
+                file_console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
+                
+                for idx, metadata in enumerate(metadata_list):
+                    if idx > 0:
+                        file_console.print("[cyan]" + "─" * 100 + "[/cyan]")
+                    
+                    if metadata.get('status') == 'error':
+                        input_file = metadata.get('input_path', 'Unknown')
+                        error_msg = metadata.get('error', 'Unknown error')
+                        file_console.print(f"[red bold]File:[/red bold] {Path(input_file).name}")
+                        file_console.print(f"[red]ERROR:[/red] {error_msg}\n")
+                        continue
+
+                    input_file = metadata['input_path']
+                    axes = metadata.get('axes', 'Unknown')
+                    shape = metadata.get('shape', {})
+                    scale = metadata.get('scale', {})
+                    units = metadata.get('units', {})
+                    dtype = metadata.get('dtype', 'Unknown')
+                    channels = metadata.get('channels', [])
+
+                    file_console.print(f"[magenta bold]File:[/magenta bold] {_wrap_text(input_file, 90)}")
+
+                    shape_lines = []
+                    for ax in axes:
+                        ax_display = {'t': 'time', 'c': 'channels', 'z': 'z', 'y': 'y', 'x': 'x'}.get(ax, ax)
+                        val = shape.get(ax, '?')
+                        shape_lines.append(f"  {ax_display}: {val}")
+                    file_console.print(f"[yellow bold]Shape:[/yellow bold]\n" + '\n'.join(shape_lines))
+
+                    scale_unit_lines = []
+                    for ax in axes:
+                        if ax == 'c':
+                            continue
+                        ax_display = {'t': 'time', 'z': 'z', 'y': 'y', 'x': 'x'}.get(ax, ax)
+                        scale_val = scale.get(ax, '?')
+                        unit_val = units.get(ax, '')
+                        
+                        if scale_val != '?':
+                            formatted_scale = _format_scale_value(scale_val)
+                            if unit_val:
+                                scale_unit_lines.append(f"  {ax_display}: {formatted_scale} {unit_val}")
+                            else:
+                                scale_unit_lines.append(f"  {ax_display}: {formatted_scale}")
+                        else:
+                            scale_unit_lines.append(f"  {ax_display}: ?")
+                    
+                    file_console.print(f"[green bold]Scale & Units:[/green bold]\n" + '\n'.join(scale_unit_lines))
+                    file_console.print(f"[white bold]Data Type:[/white bold] {dtype}")
+
+                    if channels:
+                        file_console.print(f"[bright_magenta bold]Channels:[/bright_magenta bold]")
+                        for i, ch in enumerate(channels):
+                            label = ch.get('label', f"Channel {i}")
+                            color = ch.get('color', None)
+                            color_display = color if color else "None"
+                            file_console.print(f"  [{i}] Label: {_wrap_text(label, 80)}, Color: {color_display}")
+                    else:
+                        file_console.print(f"[bright_magenta bold]Channels:[/bright_magenta bold] None")
+                    
+                    file_console.print()
+                
+                file_console.print("[cyan]" + "═" * 100 + "[/cyan]")
+            
+            logger.info(f"Metadata saved to {output_file} (text format)")
+        
+        # Optionally save to HTML
+        if output_file and output_file.lower().endswith('.html'):
+            from rich.console import Console as RichConsole
+            
+            with open(output_file, 'w') as f:
+                html_console = RichConsole(
+                    file=f,
+                    width=100,
+                    force_terminal=True,
+                    legacy_windows=False,
+                    record=True
+                )
+                
+                # Re-render all output to HTML console
+                html_console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
+                html_console.print("[bold cyan]Image Metadata Summary[/bold cyan]")
+                html_console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
+                
+                for idx, metadata in enumerate(metadata_list):
+                    if idx > 0:
+                        html_console.print("[cyan]" + "─" * 100 + "[/cyan]")
+                    
+                    if metadata.get('status') == 'error':
+                        input_file = metadata.get('input_path', 'Unknown')
+                        error_msg = metadata.get('error', 'Unknown error')
+                        html_console.print(f"[red bold]File:[/red bold] {Path(input_file).name}")
+                        html_console.print(f"[red]ERROR:[/red] {error_msg}\n")
+                        continue
+
+                    input_file = metadata['input_path']
+                    axes = metadata.get('axes', 'Unknown')
+                    shape = metadata.get('shape', {})
+                    scale = metadata.get('scale', {})
+                    units = metadata.get('units', {})
+                    dtype = metadata.get('dtype', 'Unknown')
+                    channels = metadata.get('channels', [])
+
+                    html_console.print(f"[magenta bold]File:[/magenta bold] {_wrap_text(input_file, 90)}")
+
+                    shape_lines = []
+                    for ax in axes:
+                        ax_display = {'t': 'time', 'c': 'channels', 'z': 'z', 'y': 'y', 'x': 'x'}.get(ax, ax)
+                        val = shape.get(ax, '?')
+                        shape_lines.append(f"  {ax_display}: {val}")
+                    html_console.print(f"[yellow bold]Shape:[/yellow bold]\n" + '\n'.join(shape_lines))
+
+                    scale_unit_lines = []
+                    for ax in axes:
+                        if ax == 'c':
+                            continue
+                        ax_display = {'t': 'time', 'z': 'z', 'y': 'y', 'x': 'x'}.get(ax, ax)
+                        scale_val = scale.get(ax, '?')
+                        unit_val = units.get(ax, '')
+                        
+                        if scale_val != '?':
+                            formatted_scale = _format_scale_value(scale_val)
+                            if unit_val:
+                                scale_unit_lines.append(f"  {ax_display}: {formatted_scale} {unit_val}")
+                            else:
+                                scale_unit_lines.append(f"  {ax_display}: {formatted_scale}")
+                        else:
+                            scale_unit_lines.append(f"  {ax_display}: ?")
+                    
+                    html_console.print(f"[green bold]Scale & Units:[/green bold]\n" + '\n'.join(scale_unit_lines))
+                    html_console.print(f"[white bold]Data Type:[/white bold] {dtype}")
+
+                    if channels:
+                        html_console.print(f"[bright_magenta bold]Channels:[/bright_magenta bold]")
+                        for i, ch in enumerate(channels):
+                            label = ch.get('label', f"Channel {i}")
+                            color = ch.get('color', None)
+                            color_display = color if color else "None"
+                            html_console.print(f"  [{i}] Label: {_wrap_text(label, 80)}, Color: {color_display}")
+                    else:
+                        html_console.print(f"[bright_magenta bold]Channels:[/bright_magenta bold] None")
+                    
+                    html_console.print()
+                
+                html_console.print("[cyan]" + "═" * 100 + "[/cyan]")
+                
+                # Export to HTML
+                html_content = html_console.export_html()
+            
+            # Write HTML file
+            with open(output_file, 'w') as f:
+                f.write(html_content)
+            
+            logger.info(f"Metadata saved to {output_file} (HTML format)")
 
     def update_pixel_meta(self,
                           input_path: Union[Path, str],

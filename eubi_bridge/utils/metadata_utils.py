@@ -300,7 +300,7 @@ class ChannelParser:
         Raises:
             ValueError: If format is invalid
         """
-        if not formatted_str or formatted_str is None:
+        if not formatted_str or formatted_str is (None, 'auto'):
             return {}
         
         result = {}
@@ -388,4 +388,91 @@ def parse_channels(manager, **kwargs):
     """
     result = ChannelParser(manager, **kwargs).parse()
     return result
+
+
+def read_ome_zarr_metadata(zarr_path: str) -> dict:
+    """
+    Read metadata from a single OME-Zarr file using Pyramid.
+    
+    Fast, lightweight metadata extraction without JVM or ArrayManager.
+    
+    Parameters
+    ----------
+    zarr_path : str
+        Path to OME-Zarr file
+    
+    Returns
+    -------
+    dict
+        Metadata dictionary with keys:
+        - status: "success" or "error"
+        - input_path: The zarr path
+        - axes: Axis order string (e.g., 'tczyx')
+        - shape: Dict mapping axis to size
+        - scale: Dict mapping axis to scale value
+        - units: Dict mapping axis to unit
+        - dtype: Data type
+        - channels: List of channel metadata
+        - error: Error message (if status is "error")
+    """
+    try:
+        from eubi_bridge.ngff.multiscales import Pyramid
+        
+        pyr = Pyramid(zarr_path)
+        
+        return {
+            "status": "success",
+            "input_path": str(zarr_path),
+            "axes": pyr.axes,
+            "shape": dict(zip(pyr.axes, pyr.shape)),
+            "scale": dict(zip(pyr.axes, pyr.meta.get_base_scale())),
+            "units": pyr.meta.unit_dict,
+            "dtype": str(pyr.dtype),
+            "channels": pyr.meta.get_channels(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to read OME-Zarr metadata from {zarr_path}: {e}")
+        return {
+            "status": "error",
+            "input_path": str(zarr_path),
+            "error": str(e),
+        }
+
+
+async def read_ome_zarr_metadata_from_collection(collection_dir: str) -> list:
+    """
+    Read metadata from all OME-Zarr files in a collection directory.
+    
+    Finds all .zarr subdirectories in collection_dir and reads their metadata
+    using ThreadPoolExecutor (lightweight, no JVM or worker processes).
+    
+    Parameters
+    ----------
+    collection_dir : str
+        Path to directory containing OME-Zarr files
+    
+    Returns
+    -------
+    list
+        List of metadata dictionaries (one per zarr file)
+    """
+    from pathlib import Path
+    from concurrent.futures import ThreadPoolExecutor
+    
+    # Find all .zarr directories in the collection
+    collection_path = Path(collection_dir)
+    zarr_paths = sorted([p for p in collection_path.glob('**/*.zarr') if p.is_dir()])
+    
+    if not zarr_paths:
+        logger.warning(f"No .zarr directories found in {collection_dir}")
+        return []
+    
+    logger.info(f"Found {len(zarr_paths)} OME-Zarr files in collection")
+    
+    results = []
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(read_ome_zarr_metadata, str(path)) for path in zarr_paths]
+        results = [f.result() for f in futures]
+    
+    return results
 
