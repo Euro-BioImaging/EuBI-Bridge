@@ -1148,16 +1148,13 @@ class EuBIBridge:
             series (int, optional): Series index to process.
             time_scale, z_scale, y_scale, x_scale ((int, float), optional): Scaling factors for the respective dimensions.
             time_unit, z_unit, y_unit, x_unit (str, optional): Units for the respective dimensions.
-            Returns:
+            **kwargs: Additional parameters for cluster and conversion configuration.
+        Returns:
             None
         """
 
-        # Ensure heavy modules are loaded (scyjava, zarr, dask, etc.)
-        _ensure_heavy_imports()
-        
-        # Initialize JVM for image reading (needs Java-based Bio-Formats)
-        from eubi_bridge.utils.jvm_manager import soft_start_jvm
-        soft_start_jvm()
+        # Import run_updates (only needed function for metadata modification)
+        from eubi_bridge.conversion.updater import run_updates
 
         # Collect cluster and conversion parameters
         self.cluster_params = self._collect_params('cluster', **kwargs)
@@ -1210,17 +1207,10 @@ class EuBIBridge:
             channel_intensity_limits: 'from_dtype', 'from_array', or 'auto'
             includes: Include file patterns
             excludes: Exclude file patterns
-            **kwargs: Additional parameters for cluster and conversion configuration.
-        Returns:
-            None
         """
 
-        # Ensure heavy modules are loaded (scyjava, zarr, dask, etc.)
-        _ensure_heavy_imports()
-        
-        # Initialize JVM for image reading (needs Java-based Bio-Formats)
-        from eubi_bridge.utils.jvm_manager import soft_start_jvm
-        soft_start_jvm()
+        # Import run_updates (only needed function for metadata modification)
+        from eubi_bridge.conversion.updater import run_updates
 
         # Collect cluster and conversion parameters
         self.cluster_params = self._collect_params('cluster', **kwargs)
