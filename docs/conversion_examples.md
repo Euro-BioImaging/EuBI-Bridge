@@ -24,7 +24,7 @@ Command examples loosely organized by use case. Copy and paste these commands, a
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr
 ```
 
 **Windows (Command Prompt or PowerShell):**
@@ -36,7 +36,7 @@ Verify the output:
 
 **Unix/macOS:**
 ```bash
-eubi show_pixel_meta ~/codash_output/small_dataset_zarr
+eubi show_pixel_meta $HOME/codash_output/small_dataset_zarr
 ```
 
 **Windows:**
@@ -48,7 +48,7 @@ eubi show_pixel_meta %USERPROFILE%\codash_output\small_dataset_zarr
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_new_chunks --auto_chunk False --y_chunk 64 --x_chunk 64
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_new_chunks --auto_chunk False --y_chunk 64 --x_chunk 64
 ```
 
 **Windows:**
@@ -60,7 +60,7 @@ eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_new_ch
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_6_layers --n_layers 6
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_6_layers --n_layers 6
 ```
 
 **Windows:**
@@ -72,7 +72,7 @@ eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_6_laye
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_v0.5 --auto_chunk False --y_chunk 64 --x_chunk 64 --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_v0.5 --auto_chunk False --y_chunk 64 --x_chunk 64 --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
 ```
 
 **Windows:**
@@ -88,7 +88,7 @@ eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_v0.5 -
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_inc_filtered --includes .tiff
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_inc_filtered --includes .tiff
 ```
 
 **Windows:**
@@ -100,7 +100,7 @@ eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_inc_fi
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_ex_filtered --excludes .jpg
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_ex_filtered --excludes .jpg
 ```
 
 **Windows:**
@@ -112,7 +112,7 @@ eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_ex_fil
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_multi_inc_filtered --includes .oir,.lsm
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_multi_inc_filtered --includes .oir,.lsm
 ```
 
 **Windows:**
@@ -124,7 +124,7 @@ eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_multi_
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_multi_ex_filtered --excludes .oir,.lsm
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_multi_ex_filtered --excludes .oir,.lsm
 ```
 
 **Windows:**
@@ -136,7 +136,7 @@ eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_multi_
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr "small_dataset/*.tif" ~/codash_output/small_dataset_zarr_wildcards
+eubi to_zarr "small_dataset/*.tif" $HOME/codash_output/small_dataset_zarr_wildcards
 ```
 
 **Windows:**
@@ -164,7 +164,7 @@ eubi show_pixel_meta "small_dataset\*oir"
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset/23052022_D3_0001.oir ~/codash_output/small_image_with_metadata --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --channel_labels "0,GFP;1,mCherry;2,BF" --channel_colors "0,yellow;1,magenta;2,white"
+eubi to_zarr small_dataset/23052022_D3_0001.oir $HOME/codash_output/small_image_with_metadata --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --channel_labels "0,GFP;1,mCherry;2,BF" --channel_colors "0,yellow;1,magenta;2,white"
 ```
 
 **Windows:**
@@ -176,7 +176,7 @@ eubi to_zarr small_dataset\23052022_D3_0001.oir %USERPROFILE%\codash_output\smal
 
 **Unix/macOS:**
 ```bash
-eubi show_pixel_meta "~/codash_output/small_image_with_metadata/*.zarr"
+eubi show_pixel_meta "$HOME/codash_output/small_image_with_metadata/*.zarr"
 ```
 
 **Windows:**
@@ -188,7 +188,7 @@ eubi show_pixel_meta "%USERPROFILE%\codash_output\small_image_with_metadata\*.za
 
 **Unix/macOS:**
 ```bash
-eubi update_pixel_meta "~/codash_output/small_image_with_metadata/*.zarr" --y_scale 0.2 --x_scale 0.2
+eubi update_pixel_meta "$HOME/codash_output/small_image_with_metadata/*.zarr" --y_scale 0.2 --x_scale 0.2
 ```
 
 **Windows:**
@@ -200,7 +200,7 @@ eubi update_pixel_meta "%USERPROFILE%\codash_output\small_image_with_metadata\*.
 
 **Unix/macOS:**
 ```bash
-eubi show_pixel_meta "~/codash_output/small_image_with_metadata/*.zarr"
+eubi show_pixel_meta "$HOME/codash_output/small_image_with_metadata/*.zarr"
 ```
 
 **Windows:**
@@ -220,7 +220,7 @@ Combine files into channels and time points:
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr multidim_dataset ~/codash_output/multidim_dataset_concat_zarr --channel_tag growing,moving,noise --time_tag step --concatenation_axes ct
+eubi to_zarr multidim_dataset $HOME/codash_output/multidim_dataset_concat_zarr --channel_tag growing,moving,noise --time_tag step --concatenation_axes ct
 ```
 
 **Windows:**
@@ -232,7 +232,7 @@ eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_conca
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr multidim_dataset_nested ~/codash_output/multidim_dataset_nested_concat_zarr --channel_tag growing,moving,noise --time_tag step --concatenation_axes ct
+eubi to_zarr multidim_dataset_nested $HOME/codash_output/multidim_dataset_nested_concat_zarr --channel_tag growing,moving,noise --time_tag step --concatenation_axes ct
 ```
 
 **Windows:**
@@ -244,7 +244,7 @@ eubi to_zarr multidim_dataset_nested %USERPROFILE%\codash_output\multidim_datase
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr multidim_dataset_nested ~/codash_output/multidim_dataset_nested_concat_zarr --channel_tag noise,growing,moving --time_tag step --concatenation_axes ct --override_channel_names
+eubi to_zarr multidim_dataset_nested $HOME/codash_output/multidim_dataset_nested_concat_zarr --channel_tag noise,growing,moving --time_tag step --concatenation_axes ct --override_channel_names
 ```
 
 **Windows:**
@@ -260,7 +260,7 @@ eubi to_zarr multidim_dataset_nested %USERPROFILE%\codash_output\multidim_datase
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr multidim_dataset ~/codash_output/multidim_dataset_concat_along_time_zarr --channel_tag moving,noise,growing --time_tag step --concatenation_axes t --override_channel_names
+eubi to_zarr multidim_dataset $HOME/codash_output/multidim_dataset_concat_along_time_zarr --channel_tag moving,noise,growing --time_tag step --concatenation_axes t --override_channel_names
 ```
 
 **Windows:**
@@ -272,7 +272,7 @@ eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_conca
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr "medium_dataset/PK2*.ome.tiff" ~/codash_output/multidim_dataset_concat_filtered_zarr --channel_tag ch --concatenation_axes c --skip_dask
+eubi to_zarr "medium_dataset/PK2*.ome.tiff" $HOME/codash_output/multidim_dataset_concat_filtered_zarr --channel_tag ch --concatenation_axes c --skip_dask
 ```
 
 **Windows:**
@@ -284,7 +284,7 @@ eubi to_zarr "medium_dataset\PK2*.ome.tiff" %USERPROFILE%\codash_output\multidim
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr multidim_dataset ~/codash_output/multidim_dataset_concat_zarr_with_metadata --channel_tag moving,noise,growing --time_tag step --concatenation_axes ct --time_scale 18 --time_unit millisecond --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --override_channel_names --channel_colors "0,red;1,green;2,white"
+eubi to_zarr multidim_dataset $HOME/codash_output/multidim_dataset_concat_zarr_with_metadata --channel_tag moving,noise,growing --time_tag step --concatenation_axes ct --time_scale 18 --time_unit millisecond --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --override_channel_names --channel_colors "0,red;1,green;2,white"
 ```
 
 **Windows:**
@@ -296,7 +296,7 @@ eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_conca
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr multidim_dataset ~/codash_output/multidim_dataset_concat_zarr_with_metadata --channel_tag moving,noise,growing --time_tag step --concatenation_axes ct --time_scale 18 --time_unit millisecond --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --override_channel_names --channel_colors "0,red;1,green;2,white" --time_range 0,5
+eubi to_zarr multidim_dataset $HOME/codash_output/multidim_dataset_concat_zarr_with_metadata --channel_tag moving,noise,growing --time_tag step --concatenation_axes ct --time_scale 18 --time_unit millisecond --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --override_channel_names --channel_colors "0,red;1,green;2,white" --time_range 0,5
 ```
 
 **Windows:**
@@ -329,7 +329,7 @@ eubi to_zarr selection.csv
 
 **Unix/macOS:**
 ```bash
-eubi show_pixel_meta ~/codash_output/from_csv_zarr
+eubi show_pixel_meta $HOME/codash_output/from_csv_zarr
 ```
 
 **Windows:**
@@ -345,7 +345,7 @@ eubi show_pixel_meta %USERPROFILE%\codash_output\from_csv_zarr
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr "medium_dataset/*.czi" ~/codash_output/multiseries_dataset --scene_index all
+eubi to_zarr "medium_dataset/*.czi" $HOME/codash_output/multiseries_dataset --scene_index all
 ```
 
 **Windows:**
@@ -357,7 +357,7 @@ eubi to_zarr "medium_dataset\*.czi" %USERPROFILE%\codash_output\multiseries_data
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr medium_dataset/19_07_19_Lennard.lif ~/codash_output/multiseries_dataset --scene_index 2,4,6
+eubi to_zarr medium_dataset/19_07_19_Lennard.lif $HOME/codash_output/multiseries_dataset --scene_index 2,4,6
 ```
 
 **Windows:**
@@ -373,7 +373,7 @@ Re-chunk and reformat existing OME-Zarr files:
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr ~/codash_output/multidim_dataset_concat_filtered_zarr/PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr ~/codash_output/multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
+eubi to_zarr $HOME/codash_output/multidim_dataset_concat_filtered_zarr/PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr $HOME/codash_output/multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
 ```
 
 **Windows:**
@@ -416,7 +416,7 @@ eubi show_config
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr INPUT_DIR ~/output/OUTPUT_NAME --y_scale 0.5 --x_scale 0.5 --y_unit micrometer --x_unit micrometer
+eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --y_scale 0.5 --x_scale 0.5 --y_unit micrometer --x_unit micrometer
 ```
 
 **Windows:**
@@ -428,7 +428,7 @@ eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --y_scale 0.5 --x_scale 
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr INPUT_DIR ~/output/OUTPUT_NAME --zarr_format 3 --y_shard_coef 3 --x_shard_coef 3
+eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --zarr_format 3 --y_shard_coef 3 --x_shard_coef 3
 ```
 
 **Windows:**
@@ -440,7 +440,7 @@ eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --zarr_format 3 --y_shar
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr INPUT_DIR ~/output/OUTPUT_NAME --auto_chunk False --y_chunk 32 --x_chunk 32 --z_chunk 16
+eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --auto_chunk False --y_chunk 32 --x_chunk 32 --z_chunk 16
 ```
 
 **Windows:**
@@ -452,7 +452,7 @@ eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --auto_chunk False --y_c
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr INPUT_DIR ~/output/OUTPUT_NAME --n_layers 5 --auto_chunk False --y_chunk 128 --x_chunk 128 --z_chunk 64 --zarr_format 3
+eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --n_layers 5 --auto_chunk False --y_chunk 128 --x_chunk 128 --z_chunk 64 --zarr_format 3
 ```
 
 **Windows:**
@@ -464,7 +464,7 @@ eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --n_layers 5 --auto_chun
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr dataset_directory ~/output/combined_dataset --channel_tag ch0,ch1,ch2 --time_tag t --z_tag slice --concatenation_axes ctz --y_scale 0.5 --x_scale 0.5 --override_channel_names --channel_labels "0,DAPI;1,GFP;2,RFP" --channel_colors "0,0000FF;1,00FF00;2,FF0000"
+eubi to_zarr dataset_directory $HOME/output/combined_dataset --channel_tag ch0,ch1,ch2 --time_tag t --z_tag slice --concatenation_axes ctz --y_scale 0.5 --x_scale 0.5 --override_channel_names --channel_labels "0,DAPI;1,GFP;2,RFP" --channel_colors "0,0000FF;1,00FF00;2,FF0000"
 ```
 
 **Windows:**
