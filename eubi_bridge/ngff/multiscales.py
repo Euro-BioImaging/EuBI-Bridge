@@ -1,16 +1,26 @@
-import zarr
-from pathlib import Path
-from typing import Optional, Dict, List, Any, Tuple, Union, Iterable, ClassVar
+import asyncio
 import copy
-import numpy as np
+from pathlib import Path
+from typing import Any, ClassVar, Dict, Iterable, List, Optional, Tuple, Union
+
 import dask.array as da
-from eubi_bridge.ngff import defaults
-from eubi_bridge.core.scale import Downscaler
-from eubi_bridge.utils.convenience import make_json_safe
+import numpy as np
+import zarr
 from natsort import natsorted
 
+from eubi_bridge.core.scale import Downscaler
+from eubi_bridge.ngff import defaults
+from eubi_bridge.utils.json_utils import make_json_safe
+from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.external.dyna_zarr import operations as ops
+from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
 
-def is_zarr_group(path: (str, Path)
+
+logger = get_logger(__name__)
+
+
+
+def is_zarr_group(path: Union[str, Path]
                   ):
     try:
         _ = zarr.open_group(path, mode='r')
@@ -307,11 +317,11 @@ class NGFFMetadataHandler:
         self.metadata['omero'] = omero_meta['omero']
         self._pending_changes = True
 
-    def add_channel(self, ### TODO: NEED TO BE UPDATED!!!
-                    color: str = "808080",
-                    label: str = None,
-                    dtype=None) -> None:
-        """Add a channel to the OMERO metadata."""
+    def _get_window_meta(self,
+                         dtype=None,
+                         start_intensity: Union[int, float] = None,
+                         end_intensity: Union[int, float] = None
+                         ):
         assert dtype is not None, f"dtype cannot be None"
         min = 0
         if np.issubdtype(dtype, np.integer):
@@ -320,6 +330,25 @@ class NGFFMetadataHandler:
             max = float(np.finfo(dtype).max)
         else:
             raise ValueError(f"Unsupported dtype {dtype}")
+
+        if start_intensity is None:
+            start_intensity = min
+        if end_intensity is None:
+            end_intensity = max
+        return min,max,start_intensity,end_intensity
+
+    def add_channel(self, ### TODO: NEED TO BE UPDATED!!!
+                    color: str = "808080",
+                    label: str = None,
+                    dtype=None,
+                    start_intensity: Union[int, float] = None,
+                    end_intensity: Union[int, float] = None
+                    ) -> None:
+        """Add a channel to the OMERO metadata."""
+
+        min,max,start_intensity,end_intensity = self._get_window_meta(dtype=dtype,
+                                                                     start_intensity=start_intensity,
+                                                                     end_intensity=end_intensity)
 
         if 'omero' not in self.metadata:
             self.metadata['omero'] = {
@@ -336,12 +365,50 @@ class NGFFMetadataHandler:
             'coefficient': 1,
             'active': True,
             'label': label or f"Channel {len(self.metadata['omero']['channels'])}",
-            'window': {'min': min, 'max': max, 'start': min, 'end': max},
+            'window': {'min': min, 'max': max, 'start': start_intensity, 'end': end_intensity},
             'family': 'linear',
             'inverted': False
         }
 
         self.metadata['omero']['channels'].append(channel)
+        self._pending_changes = True
+
+    def update_channel(self,
+                    idx: int,
+                    color: str = "808080",
+                    label: str = None,
+                    dtype=None,
+                    start_intensity: Union[int, float] = None,
+                    end_intensity: Union[int, float] = None
+                    ) -> None:
+        """Add a channel to the OMERO metadata."""
+        channel_len = len(self.channels)
+        if idx > channel_len:
+            raise ValueError(f"Index {idx} is out of bounds for {channel_len} channels")
+
+        min, max, start_intensity, end_intensity = self._get_window_meta(dtype=dtype,
+                                                                         start_intensity=start_intensity,
+                                                                         end_intensity=end_intensity)
+
+        channel = self.metadata['omero']['channels'][idx]
+        channel['color'] = color
+        channel['label'] = label or f"Channel {idx}"
+        channel['window'] = {'min': min, 'max': max, 'start': start_intensity, 'end': end_intensity}
+
+        self.metadata['omero']['channels'][idx] = channel
+        self._pending_changes = True
+
+    def _validate_channel(self, channel):
+        channel_keys = ['color', 'coefficient', 'active', 'label', 'window', 'family', 'inverted']
+        for key in channel_keys:
+            if key not in channel:
+                raise ValueError(f"Channel must have {key} key")
+        return
+
+    def set_channels(self, channels):
+        for channel in channels:
+            self._validate_channel(channel)
+        self.metadata['omero']['channels'] = channels
         self._pending_changes = True
 
     def get_channels(self) -> List[Dict[str, Any]]:
@@ -355,13 +422,14 @@ class NGFFMetadataHandler:
         if 'omero' not in self.metadata or 'channels' not in self.metadata['omero']:
             return []
 
-        return [
-            {
-                'label': channel.get('label', f"Channel {i}"),
-                'color': channel.get('color', '808080')
-            }
-            for i, channel in enumerate(self.metadata['omero']['channels'])
-        ]
+        # return [
+        #     {
+        #         'label': channel.get('label', f"Channel {i}"),
+        #         'color': channel.get('color', '808080')
+        #     }
+        #     for i, channel in enumerate(self.metadata['omero']['channels'])
+        # ]
+        return self.metadata['omero']['channels']
 
     def parse_axes(self,  ###
                    axis_order: str,
@@ -686,21 +754,59 @@ def calculate_n_layers(shape: Tuple[int, ...],
 
 class Pyramid:
     def __init__(self,
-                 gr: (zarr.Group, zarr.storage.StoreLike, Path, str) = None
+                 gr: Union[zarr.Group, zarr.storage.StoreLike, Path, str] = None
                  # An NGFF group. This contains the multiscales metadata in attrs and image layers as
                  ):
+        """Initialize a Pyramid from an NGFF-compliant Zarr group or create empty.
+        
+        Parameters
+        ----------
+        gr : Union[zarr.Group, zarr.storage.StoreLike, Path, str], optional
+            An NGFF-compliant Zarr group, storage path, or Path object.
+            If provided, metadata is read from the group. If None, creates
+            an empty pyramid to be filled with from_array() or from_ngff().
+            
+        Notes
+        -----
+        The Pyramid class supports three array storage modes:
+        - **Zarr persistent**: Arrays stored in a zarr.Group on disk/cloud
+        - **In-memory (lazy)**: Arrays stored in _array_layers (dask, DynamicArray, or numpy)
+        - **Hybrid**: Both zarr and in-memory layers can coexist
+        
+        Use the `layers` property to transparently access arrays from either storage mode.
+        """
         self.meta = None
         self.gr = None
+        self._array_layers = {}  # In-memory array storage (dask, DynamicArray, numpy)
         if gr is not None:
             self.from_ngff(gr)
 
     def __repr__(self):
+        """Return string representation of pyramid.
+        
+        Returns
+        -------
+        str
+            Description showing number of layers if available, or generic 'NGFF'.
+        """
         try:
             return f"NGFF with {self.nlayers} layers."
-        except:
+        except (AttributeError, TypeError):
             return f"NGFF."
 
     def from_ngff(self, gr):
+        """Load pyramid from an NGFF-compliant Zarr group.
+        
+        Parameters
+        ----------
+        gr : zarr.Group or str or Path
+            Zarr group or path to Zarr store containing NGFF metadata.
+            
+        Returns
+        -------
+        self
+            Returns self for method chaining.
+        """
         self.meta = NGFFMetadataHandler()
         self.meta.connect_to_group(gr)
         self.meta.read_metadata()
@@ -709,23 +815,60 @@ class Pyramid:
 
     @property
     def dtype(self):
+        """Get the data type of the base (full resolution) array.
+        
+        Returns
+        -------
+        numpy.dtype
+            Data type of the highest resolution level.
+        """
         return self.base_array.dtype
 
     @property
     def shape(self):
+        """Get the shape of the base (full resolution) array.
+        
+        Returns
+        -------
+        tuple
+            Shape tuple of the highest resolution level array.
+        """
         return self.base_array.shape
 
     def from_array(self,
-                   array: (np.ndarray, da.Array, zarr.Array),
+                   array: Union[np.ndarray, da.Array, zarr.Array],
                    axis_order: str = None,
                    unit_list: List[str] = None,
                    scale: List[float] = None,
                    version: str = "0.4",
                    name: str = "Series 0",
                    ):
-        """Take an numpy or dask array and create a pyramid from it. No need to write as NGFF."""
-        if not isinstance(array, da.Array):
-            array = da.from_array(array)
+        """Create a pyramid from any array type without writing to NGFF store.
+        
+        Initializes an in-memory pyramid structure with metadata but does not
+        create a Zarr store. Preserves the input array type (dask, DynamicArray, numpy, etc.).
+        Use store_as_ngff() to write to disk.
+        
+        Parameters
+        ----------
+        array : Union[np.ndarray, da.Array, zarr.Array]
+            Input array to create pyramid from. Type is preserved (not converted to dask).
+        axis_order : str, optional
+            Axis order string (e.g., 'tczyx'). If None, uses defaults for array ndim.
+        unit_list : List[str], optional
+            List of units for each axis. If None, uses defaults.
+        scale : List[float], optional
+            List of scale factors for each axis. If None, uses defaults.
+        version : str, optional
+            NGFF metadata version ('0.4' or '0.5'). Default is '0.4'.
+        name : str, optional
+            Name for the image series. Default is 'Series 0'.
+            
+        Returns
+        -------
+        self
+            Returns self for method chaining.
+        """
         ndim = array.ndim
         if axis_order is None:
             axes = defaults.axis_order[:ndim]
@@ -739,21 +882,18 @@ class Pyramid:
             scale = [defaults.scale_map[ax] for ax in axes]
         else:
             scale = scale[:ndim]
-        # self.meta = NGFFMetadataHandler()
-        self._dask_layers = {'0': array}
-        # omerometa = copy.deepcopy(self.meta.metadata['omero'])
+        # Store array in in-memory layer storage, preserving its type (dask, DynamicArray, numpy, etc.)
+        self._array_layers = {'0': array}
         self.meta = NGFFMetadataHandler()
         self.meta.create_new(version=version, name=name)
         self.meta.parse_axes(axis_order, unit_list)
         self.meta.set_scale(pth = '0', scale = scale)
-        # self.meta.metadata['omero'] = omerometa
         return self
 
     def to5D(self):
-        arrs = self.dask_arrays
+        arrs = self.layers  # Use layers to preserve array types
         axes = self.axes
         channels = copy.copy(self.meta.metadata['omero']['channels'])
-        # print(f"channels copied: {channels}")
         axes_to_add = [ax for ax in 'tczyx' if ax not in axes]
         if len(axes_to_add) == 0:
             return self
@@ -776,7 +916,12 @@ class Pyramid:
                 else:
                     new_shape.append(1)
                     new_scale.append(defaults.scale_map[ax])
-            arr = arr.reshape(new_shape)
+            # Preserve array type when reshaping
+            if hasattr(arr, 'reshape'):
+                arr = arr.reshape(new_shape)
+            else:
+                # For arrays that don't support reshape directly
+                arr = np.asarray(arr).reshape(new_shape)
             arrlist.append(arr)
             scalelist.append(new_scale)
         pyr = Pyramid().from_arrays(arrays = arrlist,
@@ -791,14 +936,14 @@ class Pyramid:
         return pyr
 
     def squeeze(self):
-        arrays = self.dask_arrays
+        arrays = self.layers  # Use layers to preserve array types
         basearr = self.base_array
         if all(n > 1 for n in basearr.shape):
             return self
         if isinstance(basearr, zarr.Array):
-            logger.warn(f"Zarr arrays are not supported for squeeze operation.\n"
+            logger.warning(f"Zarr arrays are not supported for squeeze operation.\n"
                         f"Zarr array for the path {self.series_path} is being converted to dask array.")
-            array = da.from_array(self.array)
+            array = da.from_zarr(basearr)
         else:
             array = basearr
         shapedict = dict(zip(self.axes, self.shape))
@@ -820,15 +965,22 @@ class Pyramid:
                     scale_level.append(scale_level_dict[ax])
             newscales.append(scale_level)
         singlet_indices = tuple([self.axes.index(ax) for ax in singlet_axes])
-        arrays = []
-        for key in natsorted(self.dask_arrays.keys()):
-            arr = self.dask_arrays[key]
-            newarray = da.squeeze(arr, axis = singlet_indices)
-            arrays.append(newarray)
-        # print(f"newaxes: {newaxes}")
-        # print(f"newunits: {newunits}")
-        # print(f"newscales: {newscales}")
-        squeezed = Pyramid().from_arrays(arrays, axis_order = newaxes, unit_list = newunits, scales = newscales, version = self.meta.version, name = self.meta.tag)
+        arrays_squeezed = []
+        for key in natsorted(arrays.keys()):
+            arr = arrays[key]
+            # Use dask squeeze for dask arrays, handle other types
+            if isinstance(arr, da.Array):
+                newarray = da.squeeze(arr, axis = singlet_indices)
+            elif isinstance(arr, DynamicArray):
+                newarray = ops.squeeze(arr, axis = singlet_indices) if singlet_axes else arr
+            elif hasattr(arr, 'squeeze'):
+                # Try to use native squeeze method if available
+                newarray = arr.squeeze(axis = singlet_indices) if singlet_axes else arr
+            else:
+                # Fallback for arrays without squeeze method
+                newarray = np.squeeze(np.asarray(arr), axis = singlet_indices if singlet_axes else None)
+            arrays_squeezed.append(newarray)
+        squeezed = Pyramid().from_arrays(arrays_squeezed, axis_order = newaxes, unit_list = newunits, scales = newscales, version = self.meta.version, name = self.meta.tag)
         return squeezed
 
     def from_arrays(self,
@@ -839,6 +991,31 @@ class Pyramid:
                    version: str = "0.4",
                    name: str = "Series 0",
                    ):
+        """Create a pyramid from a list of arrays at different resolutions.
+        
+        Supports any array type: dask arrays, DynamicArray, zarr arrays, or numpy arrays.
+        Stores arrays in _array_layers for in-memory access via the layers property.
+        
+        Parameters
+        ----------
+        arrays : List[Union[np.ndarray, da.Array, zarr.Array]]
+            List of arrays from lowest to highest resolution.
+        axis_order : str, optional
+            Axis order string (e.g., 'tczyx'). If None, uses defaults for array ndim.
+        unit_list : List[str], optional
+            List of units for each axis. If None, uses defaults.
+        scales : List[float], optional
+            List of scale factors for each array. If None, computed from shape ratios.
+        version : str, optional
+            NGFF metadata version ('0.4' or '0.5'). Default is '0.4'.
+        name : str, optional
+            Name for the image series. Default is 'Series 0'.
+            
+        Returns
+        -------
+        self
+            Returns self for method chaining.
+        """
 
         if isinstance(arrays, (np.ndarray, da.Array, zarr.Array)):
             arrays = [arrays]
@@ -846,7 +1023,8 @@ class Pyramid:
         ndim = base_array.ndim
         try:
             base_scale = scales['0']
-        except:
+        except (KeyError, TypeError):
+            # Try numeric index if string key fails
             base_scale = scales[0]
         if axis_order is None:
             axes = defaults.axis_order[:ndim]
@@ -861,12 +1039,11 @@ class Pyramid:
             base_scale = [defaults.scale_map[ax] for ax in axes]
         else:
             base_scale = base_scale[:ndim]
-        # self.meta = NGFFMetadataHandler()
-        self._dask_layers = {'0': base_array}
+        # Store arrays in in-memory layer storage (supports dask, DynamicArray, numpy)
+        self._array_layers = {'0': base_array}
         self.meta = NGFFMetadataHandler()
         self.meta.create_new(version=version, name=name)
         self.meta.parse_axes(axis_order, unit_list)
-        # self.meta.set_scale(pth = '0', scale = base_scale)
         self.meta.add_dataset(path = '0', scale = base_scale)
         if len(arrays) > 1:
             for i, array in enumerate(arrays[1:]):
@@ -875,11 +1052,11 @@ class Pyramid:
                 else:
                     scale = scales[i+1]
                 self.meta.add_dataset(path = f'{i+1}', scale = scale)
-                self._dask_layers[f'{i+1}'] = array
+                self._array_layers[f'{i+1}'] = array
         return self
 
     def to_ngff(self,
-                store: (zarr.Group, zarr.storage.StoreLike, Path, str),
+                store: Union[zarr.Group, zarr.storage.StoreLike, Path, str],
                 version: str = "0.5"
                 ):
         newmeta = NGFFMetadataHandler()
@@ -901,10 +1078,30 @@ class Pyramid:
         return self.meta.nlayers
 
     @property
-    def layers(self):
+    def layers(self) -> Dict[str, Union[da.Array, zarr.Array]]:
+        """Get all array layers across all resolutions.
+        
+        Returns arrays from either persistent zarr storage or in-memory storage,
+        depending on which mode is active. This property provides transparent access
+        to arrays regardless of storage backend.
+        
+        Returns
+        -------
+        Dict[str, Union[da.Array, zarr.Array]]
+            Dictionary mapping resolution paths ('0', '1', etc.) to array objects.
+            - If zarr group exists (self.gr): Returns zarr arrays from disk/cloud
+            - If no zarr group: Returns in-memory arrays from _array_layers
+            
+        Notes
+        -----
+        Array types in _array_layers can be:
+        - dask.array.Array: Lazy-evaluated numerical arrays
+        - DynamicArray: In-memory lazy arrays with transformations
+        - numpy.ndarray: Regular numpy arrays (not lazy)
+        """
         if self.gr is None:
-            return self._dask_layers
-        # return {path: self.gr[path] for path in self.gr.array_keys()}
+            return self._array_layers
+        # Return zarr arrays from persistent storage
         return {path: self.gr[path] for path in self.meta.resolution_paths}
 
     @property
@@ -920,11 +1117,40 @@ class Pyramid:
         return scale_factordict
 
 
-    def get_dask_data(self):
+    def get_dask_data(self) -> Dict[str, Union[da.Array, object]]:
+        """Get all array layers, converting zarr to dask but preserving other types.
+        
+        Provides access to arrays while preserving their type. Only zarr arrays are
+        converted to dask. Supports multiple array types from _array_layers (dask, 
+        DynamicArray, numpy).
+        
+        Returns
+        -------
+        Dict[str, Union[da.Array, object]]
+            Dictionary mapping resolution paths to arrays.
+            - In-memory arrays (_array_layers): Returned as-is (preserves type)
+            - Zarr arrays: Converted to dask arrays via da.from_zarr()
+            
+        Notes
+        -----
+        For in-memory storage, this method returns arrays in their native type:
+        - dask.array.Array: Lazy evaluation preserved
+        - DynamicArray: Lazy evaluation with transformations preserved
+        - numpy.ndarray: Standard numpy arrays
+        - Zarr arrays: Converted to dask for consistent computation API
+        """
         if self.gr is None:
-            return self._dask_layers
-        # return {str(path): da.from_zarr(self.layers[path]) for path in self.gr.array_keys()}
-        return {str(path): da.from_zarr(self.layers[path]) for path in self.meta.resolution_paths}
+            # Return in-memory arrays preserving their type (dask, DynamicArray, numpy)
+            return self._array_layers
+        # Convert only zarr arrays to dask for consistent computation access
+        result = {}
+        for path in self.meta.resolution_paths:
+            arr = self.layers[path]
+            if isinstance(arr, zarr.Array):
+                result[str(path)] = da.from_zarr(arr)
+            else:
+                result[str(path)] = arr
+        return result
 
     @property
     def dask_arrays(self):

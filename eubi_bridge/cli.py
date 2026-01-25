@@ -1,5 +1,5 @@
-import os
 import multiprocessing as mp
+import os
 
 # === CRITICAL: Set multiprocessing method FIRST ===
 # This MUST happen before any other imports that might create process pools
@@ -44,9 +44,10 @@ try:
 except ImportError:
     pass  # JGO not installed, even better
 
-# === Now safe to import other modules ===
-import fire
 import warnings
+
+# === Now safe to import other modules ===
+# Note: fire is imported lazily in main() to allow core library usage without CLI dependency
 
 
 # Patch xsdata for Cython compatibility BEFORE importing anything that uses ome_types
@@ -75,8 +76,8 @@ def _patch_xsdata_for_cython():
 
 _patch_xsdata_for_cython()
 
-from eubi_bridge.utils.convenience import soft_start_jvm
 from eubi_bridge.ebridge import EuBIBridge
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger, setup_logging
 
 logger = get_logger(__name__)
@@ -100,13 +101,20 @@ def patch_fire_no_literal_eval_for(*arg_names):
 
 # --- Main ---
 def main():
+    import fire
+    import sys
+    
+    # JDK is bundled in the wheel during build via _build_backend.py
+    # No runtime download needed - it's already in the package
+    
     patch_fire_no_literal_eval_for("includes", "excludes")
 
-    # Start JVM with bundled JARs only
-    soft_start_jvm()
-
+    # JVM is now lazily initialized only when needed (in to_zarr, show_pixel_meta, etc.)
     # Don't set spawn here - already set at module level
-    fire.Fire(EuBIBridge)
+    result = fire.Fire(EuBIBridge)
+    # If result is an exception, exit with code 1
+    if isinstance(result, Exception):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

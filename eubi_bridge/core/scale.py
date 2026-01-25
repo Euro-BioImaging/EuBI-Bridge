@@ -1,27 +1,44 @@
-import os.path
-
-import zarr, dataclasses
-import numpy as np, zarr
-import dask.array as da
-import tensorstore as ts
 import asyncio
-from eubi_bridge.utils.convenience import make_kvstore
+import dataclasses
+import os.path
+from typing import Union, Optional, Dict, Any
+
+import dask.array as da
+import numpy as np
+import tensorstore as ts
+import zarr
+
+from eubi_bridge.utils.storage_utils import make_kvstore
+from eubi_bridge.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def simple_downscale(
                      darr,
-                     scale_factor: (tuple, list, np.ndarray) = None,
+                     scale_factor: Union[tuple, list, np.ndarray] = None,
                      backend = 'numpy' # placeholder
                      ):
-    """
-    Downscale a Dask array along each dimension by given scale factors.
-
-    Parameters:
-    arr (dask.array): The input n-dimensional Dask array.
-    scale_factors (tuple): The downsampling factors for each dimension.
-
-    Returns:
-    dask.array: The downscaled Dask array.
+    """Downscale a Dask array using simple stride slicing.
+    
+    Parameters
+    ----------
+    darr : dask.array.Array
+        Input Dask array to downscale.
+    scale_factor : Union[tuple, list, np.ndarray]
+        Downsampling factors for each dimension.
+    backend : str, optional
+        Backend to use (placeholder for future use). Default is 'numpy'.
+        
+    Returns
+    -------
+    dask.array.Array
+        Downscaled Dask array.
+        
+    Raises
+    ------
+    ValueError
+        If scale_factor length doesn't match array dimensions.
     """
     if len(scale_factor) != darr.ndim:
         raise ValueError("scale_factors must have the same length as the array's number of dimensions")
@@ -30,8 +47,27 @@ def simple_downscale(
     return downscaled_arr
 
 def mean_downscale(arr: da.Array,
-                   scale_factor: (tuple, list, np.ndarray) = None
+                   scale_factor: Union[tuple, list, np.ndarray] = None
                    ):
+    """Downscale a Dask array using mean coarsening.
+    
+    Parameters
+    ----------
+    arr : dask.array.Array
+        Input Dask array to downscale.
+    scale_factor : Union[tuple, list, np.ndarray]
+        Downsampling factors for each dimension.
+        
+    Returns
+    -------
+    dask.array.Array
+        Downscaled Dask array with mean aggregation.
+        
+    Raises
+    ------
+    ValueError
+        If scale_factor length doesn't match array dimensions.
+    """
     if len(scale_factor) != arr.ndim:
         raise ValueError("scale_factors must have the same length as the array's number of dimensions")
     axes = dict({idx: factor for idx, factor in enumerate(scale_factor)})
@@ -40,8 +76,27 @@ def mean_downscale(arr: da.Array,
     return downscaled_arr
 
 def median_downscale(arr: da.Array,
-                   scale_factor: (tuple, list, np.ndarray) = None
+                   scale_factor: Union[tuple, list, np.ndarray] = None
                    ):
+    """Downscale a Dask array using median coarsening.
+    
+    Parameters
+    ----------
+    arr : dask.array.Array
+        Input Dask array to downscale.
+    scale_factor : Union[tuple, list, np.ndarray]
+        Downsampling factors for each dimension.
+        
+    Returns
+    -------
+    dask.array.Array
+        Downscaled Dask array with median aggregation.
+        
+    Raises
+    ------
+    ValueError
+        If scale_factor length doesn't match array dimensions.
+    """
     if len(scale_factor) != arr.ndim:
         raise ValueError("scale_factors must have the same length as the array's number of dimensions")
     axes = dict({idx: factor for idx, factor in enumerate(scale_factor)})
@@ -49,8 +104,8 @@ def median_downscale(arr: da.Array,
                                 axes = axes, trim_excess = True).astype(arr.dtype)
     return downscaled_arr
 
-async def ts_downscale(arr: (zarr.Array, str),
-                          scale_factor: (tuple, list, np.ndarray) = None
+async def ts_downscale(arr: Union[zarr.Array, str],
+                          scale_factor: Union[tuple, list, np.ndarray] = None
                           ):
     # Method 1: Try using tensorstore's virtual downsampling if available
     return ts.downsample(arr,
@@ -59,10 +114,10 @@ async def ts_downscale(arr: (zarr.Array, str),
 
 @dataclasses.dataclass
 class DownscaleManager:
-    base_shape: (list, tuple)
-    scale_factor: (list, tuple)
-    n_layers: (list, tuple)
-    scale: (list, tuple) = None
+    base_shape: Union[list, tuple]
+    scale_factor: Union[list, tuple]
+    n_layers: Union[list, tuple]
+    scale: Union[list, tuple] = None
 
     def __post_init__(self):
         ndim = len(self.base_shape)
@@ -96,13 +151,32 @@ class DownscaleManager:
 
 @dataclasses.dataclass
 class Downscaler:
-    array: (da.Array, zarr.Array, str)
-    scale_factor: (list, tuple)
+    array: Union[da.Array, zarr.Array, str]
+    scale_factor: Union[list, tuple]
     n_layers: int
-    scale: (list, tuple) = None
-    output_chunks: (list, tuple) = None
+    scale: Union[list, tuple] = None
+    output_chunks: Union[list, tuple] = None
     backend: str = 'numpy'
     downscale_method: str = 'simple'
+    
+    def get_tensorstore_context(self) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve tensorstore context from worker initialization, if available.
+        
+        Returns the context set by initialize_worker_process() if called in a worker
+        process. Falls back to None if not in a worker context.
+        
+        Returns
+        -------
+        dict or None
+            Tensorstore context dict with data_copy_concurrency limits, or None
+            if not available (will use tensorstore defaults).
+        """
+        try:
+            from eubi_bridge.conversion import worker_init
+            return getattr(worker_init, '_tensorstore_context', None)
+        except (ImportError, AttributeError):
+            return None
 
     def __post_init__(self):
         # if self.output_chunks is None:
@@ -112,28 +186,48 @@ class Downscaler:
             kvstore = make_kvstore(store_path)
             self.base_array_root = os.path.abspath(self.array)
             self.downscale_method = 'ts'
+            ts_context = self.get_tensorstore_context()
             self.array = ts.open(
                 {
                     "driver": "zarr",
                     "kvstore": kvstore
                 },
+                context=ts_context,
                 open=True,
             ).result()
         elif isinstance(self.array, zarr.Array):
             try:
                 self.base_array_root = os.path.abspath(str(self.array.store.root))
-            except:
+            except AttributeError:
+                # Fallback for stores without .root attribute
                 self.base_array_root = self.array.store.path
             arraypath = self.array.path
-            ts_path = os.path.join(self.base_array_root,arraypath)
-            kvstore = make_kvstore(ts_path)
+            
+            logger = __import__('eubi_bridge.utils.logging_config', fromlist=['get_logger']).get_logger(__name__)
+            logger.info(f"[Downscaler] base_array_root={self.base_array_root}")
+            logger.info(f"[Downscaler] arraypath={arraypath}")
+            logger.info(f"[Downscaler] store type={type(self.array.store)}")
+            logger.info(f"[Downscaler] store={self.array.store}")
+            
+            # Create kvstore pointing to the zarr store ROOT, not the array path
+            # The array path is specified separately in the 'path' parameter
+            kvstore = make_kvstore(self.base_array_root)
+            logger.info(f"[Downscaler] kvstore={kvstore}")
 
             self.downscale_method = 'ts'
+            # Use appropriate driver based on zarr format
+            # zarr v2 uses "zarr2" driver, zarr v3 uses "zarr3" driver
+            zarr_format = self.array.metadata.zarr_format
+            driver_name = "zarr3" if zarr_format == 3 else "zarr2"
+            logger.info(f"[Downscaler] Opening with driver={driver_name}, path={arraypath}")
+            ts_context = self.get_tensorstore_context()
             self.array = ts.open(
                 {
-                    "driver": f"zarr{self.array.metadata.zarr_format}",
-                    "kvstore": kvstore
+                    "driver": driver_name,
+                    "kvstore": kvstore,
+                    "path": arraypath  # Specify array path separately
                 },
+                context=ts_context,
                 open=True,
             ).result()
         else:
@@ -189,6 +283,6 @@ class Downscaler:
             if key in self.param_names:
                 self.__setattr__(key, value)
             else:
-                warnings.warn(f"The given parameter name '{key}' is not valid, ignoring it..")
+                logger.warning(f"The given parameter name '{key}' is not valid, ignoring it..")
         await self.run()
         return self

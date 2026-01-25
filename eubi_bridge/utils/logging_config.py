@@ -1,12 +1,18 @@
 import logging
 import sys
-import bfio  # must import first
+
 from rich.console import Console
 from rich.logging import RichHandler
 
 
 def setup_logging(level=logging.INFO):
     """Configure rich-colored logging for eubi_bridge, silence everything else."""
+    
+    # Import bfio here (not at module level) to avoid slowdown in config-only commands
+    try:
+        import bfio
+    except ImportError:
+        pass  # bfio is optional
 
     # Create a Rich console that *always* emits color
     console = Console(force_terminal=True, color_system="auto")

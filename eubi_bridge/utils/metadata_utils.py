@@ -1,3 +1,8 @@
+import copy
+
+import numpy as np
+
+from eubi_bridge.utils.json_utils import make_json_safe
 from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -122,176 +127,352 @@ class ChannelMap:
             return None
 
 
-def parse_channels(manager,
-                   **kwargs
-                   ):
+class ChannelParser:
+    """Orchestrates channel metadata parsing and customization.
+    
+    Handles initialization, intensity window application, parameter parsing,
+    validation, and application of user customizations to channel metadata.
+    """
+    
+    def __init__(self, manager, **kwargs):
+        """Initialize parser with manager and parameters.
+        
+        Args:
+            manager: ArrayManager instance with array and metadata
+            **kwargs: Channel customization parameters
+        """
+        self.manager = manager
+        self.kwargs = kwargs
+        self.output = None
+        self.channel_count = None
+        self.channel_intensity_limits = kwargs.get('channel_intensity_limits', 'from_dtype')
+    
+    def parse(self):
+        """Execute full parsing pipeline and return JSON-safe metadata.
+        
+        Returns:
+            List of JSON-safe channel metadata dictionaries
+        """
+        self._init_channels()
+        self._apply_intensity_windows()
+        self._apply_user_customizations()
+        return make_json_safe(self.output)
+    
+    def _init_channels(self):
+        """Initialize default channels from manager and merge with manager channels."""
+        dtype = self.kwargs.get('dtype') or self.manager.array.dtype
+        self.channel_count = self._get_channel_count()
+        
+        default_channels = generate_channel_metadata(
+            num_channels=self.channel_count,
+            dtype=dtype
+        )
+        
+        self._merge_manager_channels(default_channels)
+        
+        self.output = copy.deepcopy(default_channels)
+        
+        assert 'coefficient' in self.output[0].keys(), \
+            "Channels parsed incorrectly!"
+    
+    def _get_channel_count(self) -> int:
+        """Get channel count from manager axes.
+        
+        Returns:
+            Number of channels in the array
+        """
+        if 'c' not in self.manager.axes:
+            return 1
+        channel_idx = self.manager.axes.index('c')
+        return self.manager.array.shape[channel_idx]
+    
+    def _merge_manager_channels(self, default_channels: list):
+        """Merge manager's channel metadata into defaults.
+        
+        Only updates fields that have non-None values in the manager channels.
+        This prevents None values from overwriting good default metadata.
+        
+        Args:
+            default_channels: List of default channel metadata dictionaries
+        """
+        if self.manager.channels is None:
+            return
+        
+        # Get channels from pyramid metadata or manager
+        # mchannels = (
+        #     self.manager.pyr.meta.omero['channels']
+        #     if hasattr(self.manager, 'pyr') and self.manager.pyr is not None
+        #     else self.manager.channels
+        # )
+        
+        mchannels = self.manager.channels
 
-    dtype = kwargs.get('dtype', None)
-    # starting_channels = kwargs.get('starting_channels', None)
-    if dtype is None:
-        dtype = manager.array.dtype
-    if 'c' not in manager.axes:
-        channel_count = 1
-    else:
-        channel_idx = manager.axes.index('c')
-        channel_count = manager.array.shape[channel_idx]
-        # assert channel_count == len(manager.channels), f"Manager constructed incorrectly!"
-    default_channels = generate_channel_metadata(num_channels=channel_count,
-                                                 dtype=dtype)
-
-    #######--------------------------------------##########
-    # Update default channels with manager channels
-    # Keep an eye on this part!!!
-    if manager.channels is not None: ### Keep an eye on this part!!!
-        if hasattr(manager, 'pyr') and manager.pyr is not None:
-            mchannels = manager.pyr.meta.omero['channels']
-        else:
-            mchannels = manager.channels
         for idx, channel in enumerate(mchannels):
             try:
-                default_channels[idx].update(channel)
+                # Only update fields that have non-None values in manager channels
+                # This prevents None values from overwriting good defaults
+                for key, value in channel.items():
+                    if value is not None:
+                        default_channels[idx][key] = value
             except Exception as e:
                 logger.error(f"Failed to update channel {idx} with {channel}: {e}")
-    #########################################################
-
-    import copy
-    from eubi_bridge.utils.convenience import make_json_safe
-    output = copy.deepcopy(default_channels)
-    assert 'coefficient' in output[0].keys(), f"Channels parsed incorrectly!" # A very basic validation
-
-    #######-----------------------------------##################
-    # Handle channel intensity limits first
-    channel_intensity_limits = kwargs.get('channel_intensity_limits','from_dtype')
-    assert channel_intensity_limits in ('from_dtype', 'from_array', 'auto'), f"Channel intensity limits must be either 'from_dtype', 'from_array' or 'auto'"
-    from_array = channel_intensity_limits == 'from_array'
-    from_none = channel_intensity_limits == 'auto'
-    start_intensities, end_intensities = manager.compute_intensity_limits(
-                                                    from_array = from_array,
-                                                    dtype = dtype)
-    mins, maxes = manager.compute_intensity_extrema(dtype = dtype)
-    # The channel intensity window not controlled by the channel_indices parameter.
-    # Parse both channel intensity and hexadecimal color code for all channels:
-    for channel_idx in range(len(output)):
-        current_channel = output[channel_idx]
-        color = current_channel['color']
+    
+    def _apply_intensity_windows(self):
+        """Apply intensity limits and normalize color codes for all channels."""
+        assert self.channel_intensity_limits in ('from_dtype', 'from_array', 'auto'), \
+            f"Channel intensity limits must be 'from_dtype', 'from_array' or 'auto'"
+        
+        from_array = self.channel_intensity_limits == 'from_array'
+        from_none = self.channel_intensity_limits == 'auto'
+        
+        # Compute intensity values
+        start_intensities, end_intensities = \
+            self.manager.compute_intensity_limits(from_array=from_array)
+        mins, maxes = self.manager.compute_intensity_extrema(dtype=self.manager.array.dtype)
+        
+        # Apply to each channel
+        for idx in range(len(self.output)):
+            channel = self.output[idx]
+            self._normalize_color(channel)
+            
+            if not from_none:
+                channel['window'] = {
+                    'min': mins[idx],
+                    'max': maxes[idx],
+                    'start': start_intensities[idx],
+                    'end': end_intensities[idx]
+                }
+    
+    def _normalize_color(self, channel: dict):
+        """Normalize hex color code to 6-character format.
+        
+        Args:
+            channel: Channel metadata dictionary to modify in-place
+        """
+        color = channel['color']
+        
         if color.startswith('#'):
             color = color[1:]
+        
         if len(color) == 6:
-            pass
+            pass  # Already correct
         elif len(color) == 12:
-            logger.warn(f"The color code is being parsed from 12- to 6-hex format.")
-            # print(f"The color code is being parsed from 12- {color} to 6-hex {color[::2]} format.")
+            logger.warning("Color code parsed from 12-hex to 6-hex format")
             color = color[::2]
         else:
-            logger.warn(f"The color code does not follow a hex format."
-                        f"The color code is truncated to the first 6 characters." )
-            # print(f"The color code is truncated to the first 6 characters: {color[:6]}.")
+            logger.warning("Color code doesn't follow hex format, truncating to 6 characters")
             color = color[:6]
-        current_channel['color'] = color
-        window = {
-            'min': mins[channel_idx],
-            'max': maxes[channel_idx],
-            'start': start_intensities[channel_idx],
-            'end': end_intensities[channel_idx]
-        }
-        if not from_none:
-            current_channel['window'] = window
-        output[channel_idx] = current_channel
-    #######-----------------------------------##################
+        
+        channel['color'] = color
+    
+    def _apply_user_customizations(self):
+        """Parse, validate, and apply user-provided customizations."""
+        indices, labels, colors = self._parse_user_parameters()
+    
+    def _apply_user_customizations(self):
+        """Parse, validate, and apply user-provided customizations."""
+        # Parse indexed signature format for labels and colors
+        label_dict = self._parse_indexed_string(
+            self.kwargs.get('channel_labels', '')
+        )
+        color_dict = self._parse_indexed_string(
+            self.kwargs.get('channel_colors', '')
+        )
+        
+        # Early return if no customizations requested
+        if not label_dict and not color_dict:
+            return
+        
+        self._apply_customizations(label_dict, color_dict)
+    
+    def _parse_indexed_string(self, formatted_str: str) -> dict:
+        """Parse indexed signature format into dictionary.
+        
+        Format: "idx1,value1;idx2,value2;idx3,value3"
+        Example: "0,Red;1,Green;2,Blue"
+        
+        Args:
+            formatted_str: String with signature format, or None/empty
+            
+        Returns:
+            Dictionary mapping channel indices to values
+            
+        Raises:
+            ValueError: If format is invalid
+        """
+        if not formatted_str or formatted_str is (None, 'auto'):
+            return {}
+        
+        result = {}
+        try:
+            for pair in formatted_str.split(';'):
+                pair = pair.strip()
+                if not pair:
+                    continue
+                
+                parts = pair.split(',', 1)
+                if len(parts) != 2:
+                    raise ValueError(f"Invalid pair '{pair}', expected 'index,value'")
+                
+                idx_str, value = parts
+                try:
+                    idx = int(idx_str.strip())
+                except ValueError:
+                    raise ValueError(f"Invalid index '{idx_str}', must be integer")
+                
+                result[idx] = value.strip()
+        except Exception as e:
+            raise ValueError(f"Failed to parse format string '{formatted_str}': {e}")
+        
+        return result
+    
+    def _apply_customizations(self, label_dict: dict, color_dict: dict):
+        """Apply label and color customizations to specified channels.
+        
+        Args:
+            label_dict: Dict mapping channel indices to labels
+            color_dict: Dict mapping channel indices to colors
+        """
+        cm = ChannelMap()
+        
+        # Collect all indices to update
+        all_indices = set(label_dict.keys()) | set(color_dict.keys())
+        
+        for channel_idx in sorted(all_indices):
+            # Validate index is in range
+            if channel_idx >= self.channel_count or channel_idx < 0:
+                logger.warning(
+                    f"Channel {channel_idx} out of range [0:{self.channel_count-1}] "
+                    f"for {self.manager.series_path}, skipping"
+                )
+                continue
+            
+            channel = self.output[channel_idx]
+            
+            # Apply label if provided
+            if channel_idx in label_dict:
+                label = label_dict[channel_idx]
+                if label not in ('', 'auto'):
+                    channel['label'] = label
+            
+            # Apply color if provided (convert color name to hex if needed)
+            if channel_idx in color_dict:
+                colorname = color_dict[channel_idx]
+                if colorname not in ('', 'auto'):
+                    # Try to convert color name to hex
+                    hex_color = cm[colorname]
+                    channel['color'] = hex_color if hex_color is not None else colorname
 
-    channel_indices = kwargs.get('channel_indices', [])
 
-    if channel_indices == 'all':
-        channel_indices = list(range(channel_count))
-    if not hasattr(channel_indices, '__len__'):
-        channel_indices = [channel_indices]
-    channel_labels = kwargs.get('channel_labels', None)
-    channel_colors = kwargs.get('channel_colors', None)
-    if channel_labels in ('auto', None):
-        channel_labels = [channel_labels] * len(channel_indices)
-    if channel_colors in ('auto', None):
-        channel_colors = [channel_colors] * len(channel_indices)
+def parse_channels(manager, **kwargs):
+    """Parse and customize channel metadata.
+    
+    Handles channel initialization, intensity window computation, and user
+    customizations (labels, colors).
+    
+    Args:
+        manager: ArrayManager instance with array and metadata
+        **kwargs: Customization parameters:
+            - dtype: Data type (default: from manager)
+            - channel_labels: Labels in format "idx1,label1;idx2,label2;..." (default: '')
+            - channel_colors: Colors in format "idx1,color1;idx2,color2;..." (default: '')
+            - channel_intensity_limits: 'from_dtype', 'from_array', or 'auto'
+    
+    Returns:
+        List of JSON-safe channel metadata dictionaries
+        
+    Examples:
+        >>> parse_channels(manager, 
+        ...     channel_labels="0,Red;1,Green;2,Blue",
+        ...     channel_colors="0,FF0000;1,00FF00;2,0000FF")
+    """
+    result = ChannelParser(manager, **kwargs).parse()
+    return result
 
-    import numpy as np
+
+def read_ome_zarr_metadata(zarr_path: str) -> dict:
+    """
+    Read metadata from a single OME-Zarr file using Pyramid.
+    
+    Fast, lightweight metadata extraction without JVM or ArrayManager.
+    
+    Parameters
+    ----------
+    zarr_path : str
+        Path to OME-Zarr file
+    
+    Returns
+    -------
+    dict
+        Metadata dictionary with keys:
+        - status: "success" or "error"
+        - input_path: The zarr path
+        - axes: Axis order string (e.g., 'tczyx')
+        - shape: Dict mapping axis to size
+        - scale: Dict mapping axis to scale value
+        - units: Dict mapping axis to unit
+        - dtype: Data type
+        - channels: List of channel metadata
+        - error: Error message (if status is "error")
+    """
     try:
-        if np.isnan(channel_indices):
-            return output
-        elif channel_indices is None:
-            return output
-        elif channel_indices == []:
-            return output
-    except:
-        pass
-    if isinstance(channel_indices, str):
-        channel_indices = [i for i in channel_indices.split(',')]
-    if isinstance(channel_labels, str):
-        channel_labels = [i for i in channel_labels.split(',')]
-    if isinstance(channel_colors, str):
-        channel_colors = [i for i in channel_colors.split(',')]
-
-    channel_indices = [int(i) for i in channel_indices]
-    items = [channel_indices, channel_labels, channel_colors, channel_intensity_limits]
-    for idx, item in enumerate(items):
-        if not isinstance(item, str) and np.isscalar(item):
-            item = [item]
-        for i, it in enumerate(item):
-            try:
-                if np.isnan(it):
-                    item[i] = 'auto'
-            except:
-                pass
-        items[idx] = item
-    channel_indices, channel_labels, channel_colors, channel_intensity_limits = items
-    # pprint.pprint(manager.path)
-    # pprint.pprint(manager.series_path)
-    # pprint.pprint(manager.array.shape)
-    # pprint.pprint(channel_indices)
-    # pprint.pprint(channel_labels)
-    # pprint.pprint(channel_colors)
-    if len(channel_indices) > channel_count:
-        logger.warn(f"For the path {manager.series_path} and array {manager.array.shape}:")
-        logger.warn(f"Channel indices wrongly specified as {channel_indices}. Being corrected to {channel_count}")
-        channel_indices = channel_indices[:channel_count]
-    if len(channel_labels) > channel_count:
-        logger.warn(f"For the path {manager.series_path} and array {manager.array.shape}:")
-        logger.warn(f"Channel labels wrongly specified as {channel_labels}. Being corrected to {channel_count}")
-        channel_labels = channel_labels[:channel_count]
-    if len(channel_colors) > channel_count:
-        logger.warn(f"For the path {manager.series_path} and array {manager.array.shape}:")
-        logger.warn(f"Channel colors wrongly specified as {channel_colors}. Being corrected to {channel_count}")
-        channel_colors = channel_colors[:channel_count]
+        from eubi_bridge.ngff.multiscales import Pyramid
+        
+        pyr = Pyramid(zarr_path)
+        
+        return {
+            "status": "success",
+            "input_path": str(zarr_path),
+            "axes": pyr.axes,
+            "shape": dict(zip(pyr.axes, pyr.shape)),
+            "scale": dict(zip(pyr.axes, pyr.meta.get_base_scale())),
+            "units": pyr.meta.unit_dict,
+            "dtype": str(pyr.dtype),
+            "channels": pyr.meta.get_channels(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to read OME-Zarr metadata from {zarr_path}: {e}")
+        return {
+            "status": "error",
+            "input_path": str(zarr_path),
+            "error": str(e),
+        }
 
 
-    if not len(channel_indices) == len(channel_labels) == len(channel_colors):
-        raise ValueError(f"Channel indices, labels, colors, intensity minima and extrema must have the same length. \n"
-                         f"Currently they are {channel_indices},{channel_labels},{channel_colors} \n"
-                         f"So you need to specify --channel_indices, --channel_labels, --channel_colors, --channel_intensity_extrema with the same number of elements. \n"
-                         f"To keep specific labels or colors unchanged, add 'auto'. E.g. `--channel_indices 0,1 --channel_colors auto,red`")
+async def read_ome_zarr_metadata_from_collection(collection_dir: str) -> list:
+    """
+    Read metadata from all OME-Zarr files in a collection directory.
+    
+    Finds all .zarr subdirectories in collection_dir and reads their metadata
+    using ThreadPoolExecutor (lightweight, no JVM or worker processes).
+    
+    Parameters
+    ----------
+    collection_dir : str
+        Path to directory containing OME-Zarr files
+    
+    Returns
+    -------
+    list
+        List of metadata dictionaries (one per zarr file)
+    """
+    from pathlib import Path
+    from concurrent.futures import ThreadPoolExecutor
+    
+    # Find all .zarr directories in the collection
+    collection_path = Path(collection_dir)
+    zarr_paths = sorted([p for p in collection_path.glob('**/*.zarr') if p.is_dir()])
+    
+    if not zarr_paths:
+        logger.warning(f"No .zarr directories found in {collection_dir}")
+        return []
+    
+    logger.info(f"Found {len(zarr_paths)} OME-Zarr files in collection")
+    
+    results = []
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(read_ome_zarr_metadata, str(path)) for path in zarr_paths]
+        results = [f.result() for f in futures]
+    
+    return results
 
-    cm = ChannelMap()
-
-    if len(channel_indices) == 0:
-        return output
-
-    for idx in range(len(channel_indices)):
-        channel_idx = channel_indices[idx]
-        if channel_idx >= channel_count:
-            logger.warn(f"For the dataset {manager.series_path},\n"
-                        f"Channel index {channel_idx} is out of range -> {0}:{channel_count - 1}.\n"
-                        f"Skipping channel {channel_idx}...")
-            continue
-        current_channel = output[channel_idx]
-        if channel_labels[idx] not in (None, 'auto'):
-            current_channel['label'] = channel_labels[idx]
-        colorname = channel_colors[idx]
-        if colorname not in (None, 'auto'):
-            current_channel['color'] = cm[colorname] if cm[colorname] is not None else colorname
-         # Add the parameters that are currently hard-coded
-        # current_channel['coefficient'] = 1
-        # current_channel['active'] = True
-        # current_channel['family'] = "linear"
-        # current_channel['inverted'] = False
-        ###--------------------------------------------------------------------------------###
-        output[channel_idx] = current_channel
-    ret = make_json_safe(output)
-    return ret

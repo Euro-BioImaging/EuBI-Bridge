@@ -1,10 +1,13 @@
 import asyncio
-import numpy as np, pandas as pd
 # from distributed import LocalCluster, Client
 from concurrent.futures import ProcessPoolExecutor
+
+import numpy as np
+import pandas as pd
+
 from eubi_bridge.conversion.metadata_update_worker import update_worker_sync
-from eubi_bridge.utils.convenience import take_filepaths
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.path_utils import take_filepaths
 
 logger = get_logger(__name__)
 # Suppress noisy logs

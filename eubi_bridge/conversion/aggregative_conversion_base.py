@@ -1,25 +1,30 @@
 # Standard library imports
+import logging
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Union
+
+# Ensure tempfile is imported for cross-platform temp dir handling
+import tempfile as tempfile_module
 
 # Third-party imports
 import dask
 import numpy as np
 
+from eubi_bridge.conversion.fileset_io import BatchFile
 # Local application imports
 from eubi_bridge.core.data_manager import BatchManager
-from eubi_bridge.core.readers import read_single_image, read_single_image_delayed
-from eubi_bridge.conversion.fileset_io import BatchFile
+from eubi_bridge.core.readers import (read_single_image,
+                                      read_single_image_delayed)
+from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
-from eubi_bridge.ngff.defaults import unit_map, scale_map, default_axes
-from eubi_bridge.utils.convenience import (
-    take_filepaths
-)
+from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.path_utils import take_filepaths
 
 # Configure logging
-# logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
-# warnings.filterwarnings('ignore')
+logger = get_logger(__name__)
 
 
 
@@ -60,7 +65,7 @@ class AggregativeConverter:
 
         # Ensure the input path is absolute
         if input_path is not None:
-            if not input_path.startswith(os.sep):
+            if not Path(input_path).is_absolute():
                 input_path = os.path.abspath(input_path)
 
         # Initialize instance variables
@@ -124,10 +129,9 @@ class AggregativeConverter:
                                             includes = includes,
                                             excludes = excludes)
             self.filepaths = df.input_path.tolist()
-        try:
-            readers_params.pop('scene_index')
-        except:
-            pass
+        
+        # Remove scene_index from readers_params if present (handled separately below)
+        readers_params.pop('scene_index', None)
 
         futures = [ ### This must change. Read all series from within the function.
                     ### Function must return a list of series.
@@ -210,6 +214,7 @@ class AggregativeConverter:
                   for x in axes_of_concatenation
                   if x in axes
                   ]
+        logger.info(f"[digest] axes_of_concatenation={axes_of_concatenation}, axlist={axlist}")
         await self.batchfile._construct_managers(
             axes=axlist,
             series=self._series,
@@ -217,12 +222,15 @@ class AggregativeConverter:
             **kwargs
         )
 
+        logger.info(f"[digest] About to call _construct_channel_managers")
         await self.batchfile._construct_channel_managers(
             series=self._series,
             metadata_reader=metadata_reader,
             **kwargs
         )
+        logger.info(f"[digest] _construct_channel_managers completed")
         await self.batchfile._complete_process(axlist)
+        logger.info(f"[digest] _complete_process completed")
 
         output_path = self._input_path or kwargs.get('output_path')
 
@@ -274,25 +282,74 @@ class AggregativeConverter:
             )
 
         if self._channel_tag_is_tuple and self._override_channel_names:
+            debug_msg = f"\n[_compute_pixel_metadata] OVERRIDING CHANNEL NAMES\n"
+            debug_msg += f"[_compute_pixel_metadata] self.channel_tag = {self.channel_tag}\n"
+            debug_msg += f"[_compute_pixel_metadata] self._channel_tag_is_tuple = {self._channel_tag_is_tuple}\n"
+            logger.info(f"[_compute_pixel_metadata] OVERRIDING CHANNEL NAMES")
+            logger.info(f"[_compute_pixel_metadata] self.channel_tag = {self.channel_tag}")
+            logger.info(f"[_compute_pixel_metadata] self._channel_tag_is_tuple = {self._channel_tag_is_tuple}")
             # Do this also for non-tuple channel tags
             for manager in self.managers.values():
                 channels = manager.channels
+                debug_msg += f"[_compute_pixel_metadata] Manager {manager.series_path} has {len(channels)} channels\n"
+                logger.info(f"[_compute_pixel_metadata] Manager {manager.series_path} has {len(channels)} channels")
                 for idx, (channel, tagitem) in enumerate(zip(channels,
                                                            self.channel_tag
                                                            )
                                                        ):
+                    debug_msg += f"[_compute_pixel_metadata] Setting channel {idx} label from '{channel['label']}' to '{tagitem}'\n"
+                    logger.info(f"[_compute_pixel_metadata] Setting channel {idx} label from '{channel['label']}' to '{tagitem}'")
                     channel['label'] = tagitem
                     channels[idx] = channel
                 manager._channels = channels
+                debug_msg += f"[_compute_pixel_metadata] After override - Manager {manager.series_path} channels: {[c['label'] for c in manager.channels]}\n"
+                logger.info(f"[_compute_pixel_metadata] After override - Manager {manager.series_path} channels: {[c['label'] for c in manager.channels]}")
+            debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+            with open(debug_log_path, "a") as f:
+                f.write(debug_msg)
+        else:
+            debug_msg = f"\n[_compute_pixel_metadata] NOT overriding channel names: _channel_tag_is_tuple={self._channel_tag_is_tuple}, _override_channel_names={self._override_channel_names}\n"
+            logger.info(f"[_compute_pixel_metadata] NOT overriding channel names: _channel_tag_is_tuple={self._channel_tag_is_tuple}, _override_channel_names={self._override_channel_names}")
+            debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+            with open(debug_log_path, "a") as f:
+                f.write(debug_msg)
+        #import pprint
+        #pprint.pprint(f"Channel metadata: {manager.channels}")
+        
+        # DEBUG: before batchdata
+        debug_msg = f"\n[_compute_pixel_metadata] BEFORE batchdata.init and fill_default_meta\n"
+        for manager in self.managers.values():
+            debug_msg += f"  Manager {manager.series_path}: {len(manager.channels)} channels - {[c.get('label', '?') for c in manager.channels]}\n"
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
+            f.write(debug_msg)
+        
         self.batchdata = BatchManager()
         await self.batchdata.init(self.managers)
+        
+        # DEBUG: after init, before fill_default_meta
+        debug_msg = f"\n[_compute_pixel_metadata] AFTER batchdata.init, BEFORE fill_default_meta\n"
+        for manager in self.managers.values():
+            debug_msg += f"  Manager {manager.series_path}: {len(manager.channels)} channels - {[c.get('label', '?') for c in manager.channels]}\n"
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
+            f.write(debug_msg)
+        
         await self.batchdata.fill_default_meta()
+        
+        # DEBUG: after fill_default_meta
+        debug_msg = f"\n[_compute_pixel_metadata] AFTER fill_default_meta\n"
+        for manager in self.managers.values():
+            debug_msg += f"  Manager {manager.series_path}: {len(manager.channels)} channels - {[c.get('label', '?') for c in manager.channels]}\n"
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
+            f.write(debug_msg)
 
     def squeeze_dataset(self):
         self.batchdata.squeeze()
 
     async def transpose_dataset(self,
-                          dimension_order=Union[str, tuple, list]
+                          dimension_order: Union[str, tuple, list] = None
                           ):
         """
         Transpose the dataset according to the given dimension order.
@@ -401,3 +458,39 @@ class AggregativeConverter:
             processed_shard_coeffs[output_path] = final_shard_coeffs
 
         return processed_chunk_sizes, processed_shard_coeffs
+
+    def _cleanup_temp_dir(self):
+        """Clean up temporary directory if it exists.
+
+        Properly handles both tempfile.TemporaryDirectory objects and string paths.
+        """
+        if self._dask_temp_dir is None:
+            return
+
+        try:
+            if isinstance(self._dask_temp_dir, tempfile.TemporaryDirectory):
+                self._dask_temp_dir.cleanup()
+            elif isinstance(self._dask_temp_dir, (str, Path)):
+                path = Path(self._dask_temp_dir)
+                if path.exists():
+                    shutil.rmtree(path)
+        except Exception as e:
+            logger.warning(f"Error cleaning up temporary directory: {e}")
+        finally:
+            self._dask_temp_dir = None
+
+    def __enter__(self):
+        """Context manager entry for resource management."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with proper cleanup."""
+        self._cleanup_temp_dir()
+        return False
+
+    def __del__(self):
+        """Destructor to ensure cleanup on garbage collection."""
+        try:
+            self._cleanup_temp_dir()
+        except Exception:
+            pass  # Silence errors during destruction

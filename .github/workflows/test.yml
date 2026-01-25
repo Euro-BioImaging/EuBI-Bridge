@@ -1,0 +1,139 @@
+name: EuBI-Bridge Test Suite
+
+on:
+  push:
+    branches: [ main, develop, bf_bundled ]
+  pull_request:
+    branches: [ main, develop, bf_bundled ]
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  test:
+    name: Test on Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.11', '3.12']
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        echo "Installing eubi_bridge with all extras..."
+        pip install -e ".[all]" -v
+        echo "Installing additional test dependencies..."
+        pip install pytest pytest-cov numpy tifffile imageio-ffmpeg zarr
+        echo "Verifying installation..."
+        python -c "import eubi_bridge; import zarr; import tifffile; import numpy; print('[SUCCESS] All packages imported successfully')"
+        echo "Checking for eubi executable..."
+        python -c "import shutil; eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')" || echo "eubi not in PATH, will be discovered at runtime"
+    
+    - name: Verify eubi executable is accessible
+      run: |
+        echo "Checking for eubi executable..."
+        python -c "import shutil, sys, os; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print(f'Python: {sys.executable}'); print(f'sys.prefix: {sys.prefix}'); print(f'Scripts dir: {scripts_dir}'); print(f'Scripts exists: {os.path.exists(scripts_dir)}'); eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')"
+        echo "Contents of Scripts directory (if it exists):"
+        python -c "import os, sys; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print([f for f in os.listdir(scripts_dir) if 'eubi' in f.lower() or f.endswith('.exe')] if os.path.exists(scripts_dir) else 'Scripts directory does not exist (normal on Unix platforms)')"
+        echo "Reinstalling with verbose to check for setup.py entry_points..."
+        pip install -e ".[all]" --force-reinstall --no-cache-dir 2>&1 | head -100
+        echo "Checking for eubi again after reinstall..."
+        python -c "import shutil; eubi = shutil.which('eubi'); print(f'After reinstall, eubi found: {eubi}')"
+    
+    - name: Run tests with pytest
+      run: |
+        pytest tests/ -v --tb=short --color=yes
+      env:
+        # Disable JVM network access in offline-friendly mode
+        MAVEN_OFFLINE: 'true'
+        JGO_CACHE_DIR: '/dev/null'
+    
+    - name: Run tests with coverage
+      run: |
+        pytest tests/ --cov=eubi_bridge --cov-report=xml --cov-report=term-missing -v
+      continue-on-error: true
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-${{ matrix.os }}-py${{ matrix.python-version }}
+      continue-on-error: true
+
+  lint:
+    name: Lint with Pylance
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        pip install -e ".[all]" --no-build-isolation -v
+        pip install pylint
+    
+    - name: Verify eubi executable is accessible
+      run: |
+        echo "Checking for eubi executable..."
+        python -c "import shutil, sys, os; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print(f'Python: {sys.executable}'); print(f'sys.prefix: {sys.prefix}'); print(f'Scripts dir: {scripts_dir}'); print(f'Scripts exists: {os.path.exists(scripts_dir)}'); eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')"
+        echo "Contents of Scripts directory (if it exists):"
+        python -c "import os, sys; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print([f for f in os.listdir(scripts_dir) if 'eubi' in f.lower() or f.endswith('.exe')] if os.path.exists(scripts_dir) else 'Scripts directory does not exist (normal on Unix platforms)')"
+    
+    - name: Run pylint
+      run: |
+        pylint eubi_bridge --disable=all --enable=E,F --exit-zero
+      continue-on-error: true
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        echo "Installing eubi_bridge with all extras..."
+        pip install -e ".[all]" -v
+        echo "Installing additional test dependencies..."
+        pip install pytest pytest-cov numpy tifffile imageio-ffmpeg zarr
+        echo "Verifying installation..."
+        python -c "import eubi_bridge; import zarr; import tifffile; import numpy; print('[SUCCESS] All packages imported successfully')"
+        echo "Checking for eubi executable..."
+        python -c "import shutil; eubi = shutil.which('eubi'); print(f'eubi found: {eubi}')" || echo "eubi not in PATH, will be discovered at runtime"
+    
+    - name: Run integration tests
+      run: |
+        pytest tests/test_unary_conversions.py tests/test_aggregative_conversions.py -v --tb=short -x
+      env:
+        MAVEN_OFFLINE: 'true'
+        JGO_CACHE_DIR: '/dev/null'

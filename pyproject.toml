@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "packaging"]
+build-backend = "_build_backend"
+backend-path = ["."]
+
+[project]
+name = "eubi_bridge"
+version = "0.1.0c1"
+description = "A package for converting datasets to OME-Zarr format."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+authors = [
+    {name = "Bugra Özdemir", email = "bugraa.ozdemir@gmail.com"}
+]
+license = {text = "MIT"}
+dependencies = [
+    "aicspylibczi>=0.0.0",
+    "asciitree>=0.3.3",
+    "bfio>=0.0.0",
+    "bioformats_jar>=0.0.0",
+    "bioio-base>=0.0.0",
+    "bioio-bioformats==1.1.0",
+    "bioio-czi==2.1.0",
+    "bioio-imageio==1.1.0",
+    "bioio-lif==1.1.0",
+    "bioio-nd2==1.1.0",
+    "bioio-ome-tiff-fork-by-bugra==0.0.1b2",
+    "bioio-tifffile-fork-by-bugra>=0.0.1b2",
+    "cmake==4.0.2",
+    "dask>=2024.12.1",
+    "dask-jobqueue>=0.0.0",
+    "distributed>=2024.12.1",
+    "elementpath==5.0.1",
+    "fasteners==0.19",
+    "imageio==2.27.0",
+    "imageio-ffmpeg==0.6.0",
+    "install-jdk",
+    "lz4>=4.4.4",
+    "natsort>=0.0.0",
+    "nd2>=0.0.0",
+    "numpy>=1.24",
+    "pydantic>=2.11.7",
+    "pylibczirw>=0.0.0",
+    "readlif==0.6.5",
+    "s3fs>=0.0.0",
+    "scipy>=1.8",
+    "tensorstore>=0.0.0",
+    "tifffile>=2025.5.21",
+    "validators==0.35.0",
+    "xarray>=0.0.0",
+    "xmlschema>=0.0.0",
+    "xmltodict==0.14.2",
+    "zarr>=3.0",
+    "zstandard>=0.0.0",
+    "blosc2>=3.7.1",
+    "aiofiles>=24.1.0",
+    "psutil>=7.0.0",
+    "rich>=14.1.0",
+    "h5py",
+    "fire>=0.0.0",
+]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.scripts]
+eubi = "eubi_bridge.cli:main"
+eubi-gui = "eubi_bridge.app:main"
+
+[project.optional-dependencies]
+gui = ["streamlit>=1.52.1", "matplotlib"]
+test = ["pytest>=7.0", "pytest-cov>=4.0"]
+all = [
+    "streamlit>=1.52.1",
+    "matplotlib",
+    "pytest>=7.0",
+    "pytest-cov>=4.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/Euro-BioImaging/EuBI-Bridge"

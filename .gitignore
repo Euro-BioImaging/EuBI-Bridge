@@ -15,6 +15,8 @@ pip-wheel-metadata/
 conda-recipe/build/
 conda-recipe/.cache/
 
+.github/copilot-instructions.md
+
 .ipynb_checkpoints/
 
 *.log
@@ -28,6 +30,15 @@ Thumbs.db
 *.swp
 *.swo
 
+# JDK binaries - distributed via GitHub Releases, not versioned in repo
+# Project root JDK directories (original source)
+bioformats/jdk/darwin/
+bioformats/jdk/linux/
+bioformats/jdk/win32/
+# JDK tar.gz archives (uploaded to GitHub Releases)
+bioformats/jdk_archives/
+# Package-level JDK (downloaded during pip install)
+eubi_bridge/bioformats/jdk/
 htmlcov/
 .coverage
 .tox/
@@ -40,3 +51,4 @@ pytest_debug.log
 .cache/
 
 todo.md
+CODE_REVIEW.md

@@ -5,26 +5,28 @@ This module provides async workers for converting image data to zarr format,
 supporting both unary (single-file) and aggregative (multi-file) conversion modes.
 """
 
-# Add these imports at the top of conversion_worker.py
-from eubi_bridge.conversion.worker_init import safe_worker_wrapper
-import sys
-
-
-from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, \
-    autocompute_chunk_shape, soft_start_jvm
-
-# soft_start_jvm()
-
 import asyncio
 import os
-from typing import Union, Dict, Tuple, Optional, Any
+import sys
+from typing import Any, Dict, Optional, Tuple, Union
 
 import pandas as pd
 
+# Add these imports at the top of conversion_worker.py
+from eubi_bridge.conversion.worker_init import safe_worker_wrapper
 from eubi_bridge.core.data_manager import ArrayManager
 from eubi_bridge.core.writers import store_multiscale_async
+from eubi_bridge.utils.array_utils import autocompute_chunk_shape
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.metadata_utils import parse_channels
+from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
+                                          sensitive_glob, take_filepaths)
+
+# soft_start_jvm()
+
+
+
 
 logger = get_logger(__name__)
 
@@ -120,32 +122,127 @@ def _parse_axis_params(manager: ArrayManager, kwargs: Dict,
 
 
 def parse_chunks(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse chunk sizes for each axis."""
+    """Parse chunk sizes for each axis.
+    
+    Extracts chunk size parameters from kwargs for each dimension in the array.
+    Uses default chunk sizes if not specified.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing dimension information.
+    **kwargs
+        Keyword arguments containing axis-specific chunk sizes.
+        
+    Returns
+    -------
+    Tuple
+        Chunk sizes for each axis in the array.
+    """
     return _parse_axis_params(manager, kwargs, 0, DEFAULT_CHUNKS)
 
 
 def parse_shard_coefs(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse shard coefficients for each axis."""
+    """Parse shard coefficients for each axis.
+    
+    Shard coefficients control how chunks are organized into shards
+    for optimized storage and access patterns.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing dimension information.
+    **kwargs
+        Keyword arguments containing shard coefficient values.
+        
+    Returns
+    -------
+    Tuple
+        Shard coefficients for each axis.
+    """
     return _parse_axis_params(manager, kwargs, 1, DEFAULT_SHARD_COEFS)
 
 
 def parse_scales(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse scale values for each axis."""
+    """Parse scale values for each axis.
+    
+    Scale values define the physical size of pixels/voxels along each dimension,
+    essential for NGFF metadata and proper image interpretation.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing dimension and scale information.
+    **kwargs
+        Keyword arguments containing axis-specific scale values.
+        
+    Returns
+    -------
+    Tuple
+        Scale values for each axis.
+    """
     return _parse_axis_params(manager, kwargs, 2, manager.scaledict)
 
 
 def parse_scale_factors(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse scale factors for each axis."""
+    """Parse scale factors for each axis.
+    
+    Scale factors determine the downsampling ratio for each pyramid level.
+    Defines how dimensions shrink as we move down the resolution hierarchy.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing dimension information.
+    **kwargs
+        Keyword arguments containing axis-specific scale factor values.
+        
+    Returns
+    -------
+    Tuple
+        Scale factors for each axis in the pyramid.
+    """
     return _parse_axis_params(manager, kwargs, 3, DEFAULT_SCALE_FACTORS)
 
 
 def parse_units(manager: ArrayManager, **kwargs) -> Tuple:
-    """Parse unit values for each axis (excluding channel)."""
+    """Parse unit values for each axis (excluding channel).
+    
+    Units specify the physical measurement unit for each dimension
+    (e.g., 'micrometer' for spatial, 'second' for temporal).
+    Channel axis always has no physical unit.
+    
+    Parameters
+    ----------
+    manager : ArrayManager
+        Array manager containing unit information.
+    **kwargs
+        Keyword arguments containing axis-specific unit values.
+        
+    Returns
+    -------
+    Tuple
+        Unit strings for each non-channel axis.
+    """
     return _parse_axis_params(manager, kwargs, 4, manager.unitdict)
 
 
 def _extract_cropping_slices(kwargs: Dict) -> list:
-    """Extract cropping range parameters from kwargs."""
+    """Extract cropping range parameters from kwargs.
+    
+    Collects all cropping-related keyword arguments that define
+    rectangular regions of interest in the dataset.
+    
+    Parameters
+    ----------
+    kwargs : Dict
+        Keyword arguments containing potential cropping parameters.
+        
+    Returns
+    -------
+    list
+        List of cropping parameter values.
+    """
     return [kwargs.get(key) for key in kwargs if key in CROPPING_PARAMS]
 
 
@@ -163,11 +260,12 @@ async def _prepare_manager(manager: ArrayManager, kwargs: Dict) -> None:
     # Parse and fix channel metadata
     manager._channels = parse_channels(
         manager,
-        channel_indices='all',
         channel_intensity_limits='from_dtype'
     )
+    
     manager.fix_bad_channels()
-
+    if kwargs.get('verbose', False): # TODO: Verify the verbosity check.
+        logger.info(f"The manager array shape before squeezing: {manager.array.shape}")
     # Apply optional transformations
     if kwargs.get('squeeze'):
         manager.squeeze()
@@ -222,11 +320,21 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         sem: Semaphore for concurrency control
     """
     async with sem:
+        if kwargs.get('verbose', False):
+            logger.info(f"The manager array shape before preparation: {manager.array.shape}")
         await _prepare_manager(manager, kwargs)
 
         scale_factors = parse_scale_factors(manager, **kwargs)
 
         # Store multiscale data
+        channel_meta = parse_channels(
+            manager,
+            **dict(kwargs, channel_intensity_limits='from_dtype')
+        )
+        if kwargs.get('verbose', False): # TODO: Verify the verbosity here.
+            logger.info(f"The manager array shape before storing: {manager.array.shape}")
+        #import pprint
+        #pprint.pprint(f"Channel metadata before storing: {channel_meta}")
         await store_multiscale_async(
             arr=manager.array,
             dtype=kwargs.get('dtype'),
@@ -235,10 +343,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             axes=manager.axes,
             scales=parse_scales(manager, **kwargs),
             units=parse_units(manager, **kwargs),
-            channel_meta=parse_channels(
-                manager,
-                **dict(kwargs, channel_intensity_limits='from_dtype')
-            ),
+            channel_meta=channel_meta,
             auto_chunk=kwargs.get('auto_chunk', True),
             output_chunks=parse_chunks(manager, **kwargs),
             output_shard_coefficients=parse_shard_coefs(manager, **kwargs),
@@ -247,9 +352,13 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             min_dimension_size=kwargs.get('min_dimension_size', 64),
             scale_factors=parse_scale_factors(manager, **kwargs),
             max_concurrency=kwargs.get('max_concurrency', 4),
+            region_size_mb=kwargs.get('region_size_mb', 128),
             compute_batch_size=kwargs.get('compute_batch_size', 4),
+            queue_size=kwargs.get('queue_size', 8),
             memory_limit_per_batch=kwargs.get('memory_limit_per_batch', 1024),
-            verbose = kwargs.get('verbose', False)
+            verbose=kwargs.get('verbose', False),
+            compressor=kwargs.get('compressor', 'blosc'),
+            compressor_params=kwargs.get('compressor_params', {})
         )
 
         # Update channel metadata if needed
@@ -309,17 +418,37 @@ async def _load_input_manager(input_path: Union[str, ArrayManager],
         skip_dask=kwargs.get('skip_dask', True),
     )
     await manager.init()
+    
     manager.fill_default_meta()
-    print(f"Manager array is of type {manager.array}")
+    if kwargs.get('verbose', False):
+        logger.info(f"The manager array is of type: {type(manager.array)}")   
 
     # Load scenes
     series = kwargs.get('scene_index', 'all')
+    # Parse comma-separated string indices like "0,2,4" from CSV to list [0, 2, 4]
+    # This handles CSV parameters that bypass Fire CLI's automatic parsing
+    if isinstance(series, str) and series != 'all' and ',' in series:
+        series = [int(x.strip()) for x in series.split(',')]
+    elif isinstance(series, str) and series != 'all':
+        try:
+            series = int(series)
+        except ValueError:
+            pass  # Keep as string if not a number
     await manager.load_scenes(scene_indices=series)
 
     # Load tiles if specified
     mosaic_tile_index = kwargs.get('mosaic_tile_index')
+    # Parse comma-separated string indices like "0,1" from CSV to list [0, 1]
+    if isinstance(mosaic_tile_index, str) and ',' in mosaic_tile_index:
+        mosaic_tile_index = [int(x.strip()) for x in mosaic_tile_index.split(',')]
+    elif isinstance(mosaic_tile_index, str):
+        try:
+            mosaic_tile_index = int(mosaic_tile_index)
+        except ValueError:
+            mosaic_tile_index = None  # Invalid tile index
+    
     if mosaic_tile_index is not None and len(manager.loaded_scenes) > 1:
-        logger.warn(f"Currently cannot load multiple scenes and multiple tiles at the same time.\n"
+        logger.warning(f"Currently cannot load multiple scenes and multiple tiles at the same time.\n"
                     f"Will load only the first tile.")
     elif mosaic_tile_index is not None and len(manager.loaded_scenes) <= 1:
         await manager.load_tiles(tile_indices=mosaic_tile_index)
@@ -416,7 +545,8 @@ async def aggregative_worker(manager: ArrayManager,
     sem = asyncio.Semaphore(max_concurrency)
 
     output_path_full = f"{output_path}.zarr"
-    print(f"Manager array is of type {manager.array}")
+    if kwargs.get('verbose', False):
+        logger.info(f"The manager array is of type: {type(manager.array)}")
     await _process_single_scene(manager, output_path_full, kwargs, sem)
 
 
@@ -446,12 +576,14 @@ def unary_worker_sync(input_path: Union[str, ArrayManager],
     Synchronous wrapper for unary_worker.
     Safe for multiprocessing with proper exception handling.
     """
-    print(f"[Worker] Processing: {input_path}", file=sys.stderr, flush=True)
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Processing: {input_path}")
 
     # Run the async worker
     asyncio.run(unary_worker(input_path, output_path, **kwargs))
 
-    print(f"[Worker] Completed: {input_path}", file=sys.stderr, flush=True)
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Completed: {input_path}")
 
     return {"status": "success", "input": str(input_path), "output": output_path}
 
@@ -464,10 +596,90 @@ def aggregative_worker_sync(manager: ArrayManager,
     Synchronous wrapper for aggregative_worker.
     Safe for multiprocessing with proper exception handling.
     """
-    print(f"[Worker] Processing aggregative: {output_path}", file=sys.stderr, flush=True)
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Processing aggregative: {output_path}")
 
     asyncio.run(aggregative_worker(manager, output_path, **kwargs))
 
-    print(f"[Worker] Completed aggregative: {output_path}", file=sys.stderr, flush=True)
-
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Completed aggregative: {output_path}")  
     return {"status": "success", "output": output_path}
+
+
+@safe_worker_wrapper
+def metadata_reader_sync(input_path: Union[str, ArrayManager],
+                         kwargs: dict) -> dict:
+    """
+    Synchronous worker for reading metadata from a single image file.
+    
+    Initializes an ArrayManager for the input file, reads its metadata,
+    and returns a structured dictionary of metadata information.
+    
+    Args:
+        input_path: Path to image file
+        kwargs: Job parameters (series, skip_dask, metadata_reader, etc.)
+    
+    Returns:
+        Dictionary containing:
+        - status: "success" or "error"
+        - input_path: Input file path
+        - series: Series index
+        - axes: Axis order (e.g., 'tczyx')
+        - shape: Array shape dictionary
+        - scale: Scale factors dictionary
+        - units: Units dictionary
+        - dtype: Data type
+        - channels: List of channel metadata dictionaries
+        - error: Error message (if status is "error")
+    """
+    if kwargs.get('verbose', False):
+        logger.info(f"[MetadataReader] Reading metadata: {input_path}")
+
+    try:
+        # Extract relevant parameters
+        series = kwargs.get('series', 0)
+        skip_dask = kwargs.get('skip_dask', False)
+        metadata_reader = kwargs.get('metadata_reader', 'bfio')
+
+        # Initialize ArrayManager
+        manager = ArrayManager( # TODO: implement a new metadata reader for this functionality. ArrayManager is for conversion and completes missing axes!
+            path=input_path,
+            series=series,
+            skip_dask=skip_dask,
+            metadata_reader=metadata_reader,
+        )
+
+        # Initialize the manager (load metadata from file)
+        asyncio.run(manager.init())
+        
+
+        # Fill default metadata
+        manager.fill_default_meta()
+        manager.fix_bad_channels()
+
+        # Extract metadata
+        metadata = {
+            "status": "success",
+            "input_path": str(input_path),
+            "series": series,
+            "axes": manager.axes,
+            "shape": dict(manager.shapedict),
+            "scale": dict(manager.scaledict),
+            "units": dict(manager.unitdict),
+            "dtype": str(manager.array.dtype),
+            "channels": manager.channels,
+            "ndim": manager.ndim,
+        }
+
+        if kwargs.get('verbose', False):
+            logger.info(f"[MetadataReader] Completed: {input_path}")
+
+        return metadata
+
+    except Exception as e:
+        logger.error(f"[MetadataReader] Error reading {input_path}: {str(e)}")
+        return {
+            "status": "error",
+            "input_path": str(input_path),
+            "error": str(e),
+        }

@@ -1,46 +1,116 @@
+"""
+Reader for NGFF/Zarr pyramid datasets.
+"""
+
+from typing import Any, Optional
+
+import dask
+import dask.array as da
 import fsspec
 import numpy as np
-
+import zarr
 from dask import delayed
-import dask, zarr
+
+from eubi_bridge.core.reader_interface import ImageReader
+from eubi_bridge.ngff.multiscales import Pyramid
+from eubi_bridge.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
-# The block below moved to the 'ebridge.py' module in the 'to_zarr' method.
-# import scyjava
-# import jpype
-# # IMPORTANT: jvm must be started before importing bioio_bioformats readers
-# if not scyjava.jvm_started():
-#     scyjava.config.endpoints.append("ome:formats-gpl:6.7.0")
-#     scyjava.start_jvm()
-
-def read_pyramid(input_path, aszarr, **kwargs):
-    from eubi_bridge.ngff.multiscales import Pyramid
-    pyr = Pyramid(input_path)
-    class MockImg:
-        def __init__(self, pyr, path, aszarr):
-            if aszarr:
-                self.pyr = pyr
+class NGFFReader(ImageReader):
+    """
+    Reader for NGFF (Next-Generation File Format) Zarr datasets.
+    
+    NGFF is the OME's standard for hierarchical image data in Zarr format,
+    including multi-scale (pyramid) representations.
+    """
+    
+    def __init__(self, path: str, pyr: Pyramid, aszarr: bool = False, **kwargs):
+        """
+        Initialize NGFF reader.
+        
+        Parameters
+        ----------
+        path : str
+            Path to the Zarr group.
+        pyr : Pyramid
+            Initialized Pyramid object.
+        aszarr : bool, default False
+            Whether to return zarr arrays or converted 5D arrays.
+        """
+        self._path = path
+        self.pyr = pyr
+        self.aszarr = aszarr
+        self.series = 0
+        self._set_series_path()
+        # NGFF stores pyramids with scales, typically represented as series
+        self.n_scenes_val = 1  # NGFF typically has one pyramid per group
+    
+    @property
+    def path(self) -> str:
+        """Path to the Zarr group."""
+        return self._path
+    
+    @property
+    def series_path(self) -> str:
+        """Current series identifier."""
+        return self._series_path
+    
+    @property
+    def n_scenes(self) -> int:
+        """Number of scenes (typically 1 for NGFF)."""
+        return self.n_scenes_val
+    
+    @property
+    def n_tiles(self) -> int:
+        """NGFF doesn't support tiles."""
+        return 1
+    
+    def _set_series_path(self) -> None:
+        """Update series path."""
+        self._series_path = self._path + f'_{self.series}'
+    
+    def set_scene(self, scene_index: int) -> None:
+        """Set the current scene (no-op for NGFF, only one scene)."""
+        if scene_index != 0:
+            logger.warning("NGFF typically has only one scene. Using scene 0.")
+        self.series = 0
+        self._set_series_path()
+    
+    def set_tile(self, tile_index: int) -> None:
+        """No-op for NGFF (no tile support)."""
+        if tile_index != 0:
+            logger.warning("NGFF does not support tiles. Ignoring set_tile().")
+    
+    def get_image_dask_data(self, **kwargs) -> da.Array:
+        """Get base image layer as dask array."""
+        try:
+            if self.aszarr:
+                return self.pyr.layers['0']
             else:
-                self.pyr = pyr.to5D()
-            self.path = path
-            self.set_scene(0)
-            self._set_series_path()
-            self.n_scenes = 1
-        def _set_series_path(self): # placeholder
-            # self.series_path = self.path
-            self.series_path = self.path + f'_{self.series}'
+                return self.pyr.base_array
+        except Exception as e:
+            raise RuntimeError(f"Failed to read pyramid data: {str(e)}") from e
 
-        def get_image_dask_data(self, *args, **kwargs): ### This does not have to be dask!!!
-            try:
-                if aszarr:
-                    return self.pyr.layers['0']
-                else:
-                    return self.pyr.base_array
-            except Exception as e:
-                raise RuntimeError(f"Failed to read image data: {str(e)}") from e
-        def set_scene(self, scene_index: int): ### For the moment, this is a placeholder.
-            self.series = 0
-            if scene_index != 0:
-                print(f"Only scene 0 is supported for now. Falling back to scene 0.")
-    mock = MockImg(pyr, input_path, aszarr)
-    return mock
+
+def read_pyramid(input_path: str, aszarr: bool = False, **kwargs) -> NGFFReader:
+    """
+    Read an NGFF/Zarr pyramid dataset.
+    
+    Parameters
+    ----------
+    input_path : str
+        Path to the Zarr group.
+    aszarr : bool, default False
+        Whether to return zarr arrays or converted 5D arrays.
+    **kwargs
+        Additional keyword arguments (unused).
+        
+    Returns
+    -------
+    NGFFReader
+        A reader instance implementing the ImageReader interface.
+    """
+    pyr = Pyramid(input_path)
+    return NGFFReader(input_path, pyr, aszarr=aszarr, **kwargs)

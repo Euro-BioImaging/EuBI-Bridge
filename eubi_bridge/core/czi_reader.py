@@ -1,10 +1,122 @@
-import numpy as np
-import os
-from typing import Union, Iterable
-import dask.array as da
+"""
+Reader for Zeiss CZI microscopy files.
+"""
 
+import os
+from typing import Any, Iterable, Optional, Union
+
+import dask.array as da
+import numpy as np
+
+from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.utils.logging_config import get_logger
+
 logger = get_logger(__name__)
+
+
+class CZIReader(ImageReader):
+    """
+    Reader for Zeiss CZI microscopy files.
+    
+    Supports both single-image and mosaic (tiled) reading with dimension
+    mapping for non-standard dimensions (views, phases, illuminations, etc.).
+    """
+    
+    def __init__(
+        self,
+        path: str,
+        img: Any,
+        index_map: dict,
+        as_mosaic: bool = False,
+        **kwargs
+    ):
+        """
+        Initialize CZI reader.
+        
+        Parameters
+        ----------
+        path : str
+            Path to the CZI file.
+        img : bioio Reader
+            Initialized bioio CZI reader.
+        index_map : dict
+            Mapping of non-standard dimensions to their indices.
+        as_mosaic : bool, default False
+            Whether to read as mosaic (tiled) image.
+        """
+        self._path = path
+        self.img = img
+        self.index_map = index_map
+        self.as_mosaic = as_mosaic
+        self.series = 0
+        self.tile = 0
+        self._set_series_path()
+    
+    @property
+    def path(self) -> str:
+        """Path to the CZI file."""
+        return self._path
+    
+    @property
+    def series_path(self) -> str:
+        """Current series identifier."""
+        return self._series_path
+    
+    @property
+    def n_scenes(self) -> int:
+        """Number of scenes in the file."""
+        return len(self.img.scenes)
+    
+    @property
+    def n_tiles(self) -> int:
+        """Number of mosaic tiles in the current scene."""
+        if hasattr(self.img.dims, 'M'):
+            return self.img.dims.M
+        elif hasattr(self.img._dims, 'M'):
+            return self.img._dims.M
+        else:
+            return 1
+    
+    @property
+    def scenes(self):
+        """Available scenes."""
+        return self.img.scenes
+    
+    def _set_series_path(self, add_tile_index: bool = False) -> None:
+        """Update the series path based on current scene/tile."""
+        if add_tile_index:
+            tile_index = self.index_map.get('M', 0)
+            self._series_path = self._path + f'_{self.series}' + f'_tile{self.tile}'
+        else:
+            self._series_path = self._path + f'_{self.series}'
+    
+    def set_scene(self, scene_index: int) -> None:
+        """Set the current scene/series."""
+        if scene_index < 0 or scene_index >= self.n_scenes:
+            raise IndexError(f"Scene index {scene_index} out of range [0, {self.n_scenes})")
+        self.index_map['S'] = scene_index
+        self.series = scene_index
+        self.img.set_scene(scene_index)
+        self._set_series_path()
+    
+    def set_tile(self, tile_index: int) -> None:
+        """Set the current mosaic tile."""
+        if tile_index < 0 or tile_index >= self.n_tiles:
+            raise IndexError(f"Tile index {tile_index} out of range [0, {self.n_tiles})")
+        self.index_map['M'] = tile_index
+        self.tile = tile_index
+        self._set_series_path()
+    
+    def get_image_dask_data(self, **kwargs) -> da.Array:
+        """Get image data as dask array with dimension order TCZYX."""
+        try:
+            return self.img.get_image_dask_data(
+                dimension_order_out='TCZYX',
+                **self.index_map
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to read image data from {self._path}: {str(e)}") from e
+
 
 def read_czi(
     input_path: str,
@@ -15,28 +127,46 @@ def read_czi(
     scene_index: Union[int, Iterable[int]] = 0,
     rotation_index: int = 0,
     mosaic_tile_index: int = 0,
-    sample_index: int = 0
-) -> da.Array:
+    sample_index: int = 0,
+    **kwargs
+) -> CZIReader:
     """
     Read a CZI (Zeiss microscopy) file with specified dimension indices.
 
-    Args:
-        input_path: Path to the CZI file.
-        as_mosaic: Whether to read as a mosaic (tiled) image.
-        view_index: Index for the view dimension (v).
-        phase_index: Index for the phase dimension (h).
-        illumination_index: Index for the illumination dimension (i).
-        scene_index: Index for the scene dimension (s).
-        rotation_index: Index for the rotation dimension (r).
-        mosaic_tile_index: Index for the mosaic tile dimension (m).
-        sample_index: Index for the sample dimension (a).
+    Parameters
+    ----------
+    input_path : str
+        Path to the CZI file.
+    as_mosaic : bool, default False
+        Whether to read as a mosaic (tiled) image.
+    view_index : int, default 0
+        Index for the view dimension (v).
+    phase_index : int, default 0
+        Index for the phase dimension (h).
+    illumination_index : int, default 0
+        Index for the illumination dimension (i).
+    scene_index : int, default 0
+        Index for the scene dimension (s).
+    rotation_index : int, default 0
+        Index for the rotation dimension (r).
+    mosaic_tile_index : int, default 0
+        Index for the mosaic tile dimension (m).
+    sample_index : int, default 0
+        Index for the sample dimension (a).
+    **kwargs
+        Additional keyword arguments (unused).
 
-    Returns:
-        dask.array.Array: The image data with dimension order TCZYX.
+    Returns
+    -------
+    CZIReader
+        A reader instance implementing the ImageReader interface.
 
-    Raises:
-        FileNotFoundError: If the input file doesn't exist.
-        ValueError: If invalid dimension indices are provided.
+    Raises
+    ------
+    FileNotFoundError
+        If the input file doesn't exist.
+    RuntimeError
+        If the CZI file cannot be opened.
     """
     if not os.path.isfile(input_path):
         raise FileNotFoundError(f"File not found: {input_path}")
@@ -92,52 +222,8 @@ def read_czi(
         for dim in nonstandard_dims
         if dim in czi_dim_map
     }
-    class MockImg:
-        def __init__(self, img, path, index_map):
-            self.img = img
-            self.path = path
-            self.index_map = index_map
-            self.set_scene(0)
-            self.set_tile(0)
-            self._set_series_path()
-        @property
-        def n_scenes(self):
-            return len(self.img.scenes)
-        @property
-        def n_tiles(self):
-            if hasattr(self.img.dims, 'M'):
-                return self.img.dims.M
-            elif hasattr(self.img._dims, 'M'):
-                return self.img._dims.M
-            else:
-                return 1
-        @property
-        def scenes(self):
-            return self.img.scenes
-        def _set_series_path(self, add_tile_index = False):
-            # self.series_path = os.path.splitext(self.path)[0] + f'_{self.series}' + os.path.splitext(self.path)[1]
-            if add_tile_index:
-                tile_index = self.index_map.get('M', 0)
-                self.series_path = self.path + f'_{self.series}' + f'_tile{self.tile}'
-            else:
-                self.series_path = self.path + f'_{self.series}'
-        def get_image_dask_data(self, *args, **kwargs):
-            try:
-                return self.img.get_image_dask_data(dimension_order_out='TCZYX',
-                                                    **self.index_map)
-            except Exception as e:
-                raise RuntimeError(f"Failed to read image data: {str(e)}") from e
-        def set_scene(self, scene_index: int):
-            self.index_map['S'] = scene_index
-            self.series = scene_index
-            self.img.set_scene(scene_index)
-            self._set_series_path()
-        def set_tile(self, mosaic_tile_index: int):
-            self.index_map['M'] = mosaic_tile_index
-            self.tile = mosaic_tile_index
-            self._set_series_path()
-    mock = MockImg(img, input_path, index_map)
-    return mock
+    
+    return CZIReader(input_path, img, index_map, as_mosaic=as_mosaic, **kwargs)
 
 
 

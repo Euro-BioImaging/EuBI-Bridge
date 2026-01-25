@@ -1,6 +1,7 @@
 import copy
-import re
 import os
+import re
+import tempfile
 from typing import Dict, Iterable, List, Union
 
 import dask.array as da
@@ -8,10 +9,11 @@ import numpy as np
 from dask import delayed
 from natsort import natsorted
 
-from eubi_bridge.core.data_manager import ArrayManager, ChannelIterator #, prune_seriesfix
+from eubi_bridge.core.data_manager import (ArrayManager,  # , prune_seriesfix
+                                           ChannelIterator)
 from eubi_bridge.utils.logging_config import get_logger
-
-# Set up logger for this module
+from eubi_bridge.external.dyna_zarr import operations as ops, DynamicArray
+                        
 logger = get_logger(__name__)
 
 transpose_list = lambda l: list(map(list, zip(*l)))
@@ -137,6 +139,88 @@ def accumulate_slices_along_axis(shapes: Iterable,
     return slices
 
 
+def find_consensus_sequence(strings: List[str]) -> tuple:
+    """
+    Find consensus sequence using column-based majority voting.
+    
+    Pads all strings to the same length with '_', then identifies
+    which positions have differing characters across the strings.
+    
+    Args:
+        strings: List of strings to find consensus from
+        
+    Returns:
+        (consensus_str, variable_positions_list): Consensus string and list of 
+        positions where characters differ
+    """
+    if not strings:
+        return '', []
+    
+    max_len = max(len(s) for s in strings)
+    padded_strings = [s.ljust(max_len, '_') for s in strings]
+    
+    consensus_chars = []
+    variable_positions = []
+    
+    for pos in range(max_len):
+        chars_at_pos = [s[pos] for s in padded_strings]
+        
+        # Find most common character (majority voting)
+        char_counts = {}
+        for ch in chars_at_pos:
+            char_counts[ch] = char_counts.get(ch, 0) + 1
+        
+        most_common = max(char_counts.items(), key=lambda x: x[1])[0]
+        consensus_chars.append(most_common)
+        
+        # Check if all characters at this position are the same
+        if len(set(chars_at_pos)) > 1:
+            variable_positions.append(pos)
+    
+    return ''.join(consensus_chars), variable_positions
+
+
+def subtract_tags_from_filenames(filenames: List[str], tags: List[str]) -> Dict:
+    """
+    Subtract tags from filenames, returning before/after parts separately.
+    
+    Args:
+        filenames: List of filenames (basenames, not full paths)
+        tags: List of tags to find and remove from each filename
+        
+    Returns:
+        Dict with keys:
+            - 'before_parts': Strings before each tag
+            - 'after_parts': Strings after each tag
+            - 'tag_positions': Index where each tag starts
+            - 'mappings': Tuples of (filename, tag, before, after, position)
+    """
+    before_parts = []
+    after_parts = []
+    tag_positions = []
+    mappings = []
+    
+    for filename, tag in zip(filenames, tags):
+        idx = filename.find(tag)
+        if idx == -1:
+            raise ValueError(f"Tag '{tag}' not found in filename '{filename}'")
+        
+        before = filename[:idx]
+        after = filename[idx + len(tag):]
+        
+        before_parts.append(before)
+        after_parts.append(after)
+        tag_positions.append(idx)
+        mappings.append((filename, tag, before, after, idx))
+    
+    return {
+        'before_parts': before_parts,
+        'after_parts': after_parts,
+        'tag_positions': tag_positions,
+        'mappings': mappings
+    }
+
+
 def reduce_paths_flexible(paths: Iterable[str],
                           dimension_tag: Union[str, tuple, list],
                           replace_with: str = 'set') -> str:
@@ -145,47 +229,84 @@ def reduce_paths_flexible(paths: Iterable[str],
 
     - If `dimension_tag` is a string (e.g., 'T' or 'Channel'), it's assumed to be followed by digits;
       the digits are replaced with `replace_with`.
-    - If `dimension_tag` is a tuple/list (e.g., ('blue', 'red')), those are treated as categorical tokens
-      and replaced with their joined value plus `replace_with`.
+    - If `dimension_tag` is a tuple/list (e.g., ('Au', 'Apo')), collects the parts containing these
+      tokens from all paths and combines them with the replace_with suffix.
     """
 
     paths = list(paths)
     if not paths:
         return ""
+    
+    if len(paths) == 1:
+        return paths[0]
 
     if isinstance(dimension_tag, str):
-        # Match like 'T0001', 'Channel2', etc.
+        # Numeric case: Match like 'T0001', 'Channel2', etc.
         pattern = re.compile(rf'({re.escape(dimension_tag)})(\d+)')
         def replace_tag(path):
             return pattern.sub(lambda m: m.group(1) + replace_with, path)
+        
+        replaced_paths = [replace_tag(p) for p in paths]
+        return replaced_paths[0]
 
     elif isinstance(dimension_tag, (tuple, list)):
-        # Categorical case: match only if surrounded by boundaries like /, _, -, ., or start/end of string
+        # Categorical case: merge categorical dimension tags
         unique_vals = list(dimension_tag)
-        joined_val = ''.join(unique_vals) + replace_with
-
-        # Example: match (^|/|_|-|.)blue(?=$|/|_|-|.)
-        pattern = re.compile(
-            rf'(?:(?<=^)|(?<=[/_\-.]))({"|".join(map(re.escape, unique_vals))})(?=$|[\/_\-.])'
-        )
-
-        def replace_tag(path):
-            return pattern.sub(joined_val, path)
+        
+        # Find which tag appears in each full path and extract before/after parts
+        # Search in the full path, not just the basename, to handle nested directories
+        before_parts = []
+        after_parts = []
+        found_tags = []
+        tag_indices = []
+        
+        for fullpath in paths:
+            found = False
+            for tag in unique_vals:
+                if tag in fullpath:
+                    idx = fullpath.find(tag)
+                    before = fullpath[:idx]
+                    after = fullpath[idx + len(tag):]
+                    
+                    before_parts.append(before)
+                    after_parts.append(after)
+                    found_tags.append(tag)
+                    tag_indices.append(idx)
+                    found = True
+                    break
+            
+            if not found:
+                raise ValueError(f"No tags {unique_vals} found in {fullpath}")
+        
+        # Find common prefix of all before_parts
+        common_before = os.path.commonprefix(before_parts)
+        
+        # Find common suffix of all after_parts
+        reversed_after_parts = [s[::-1] for s in after_parts]
+        common_after_reversed = os.path.commonprefix(reversed_after_parts)
+        common_after_suffix = common_after_reversed[::-1]
+        
+        # Extract variable parts: what's left after removing common prefix/suffix
+        variable_before_parts = [b[len(common_before):] for b in before_parts]
+        variable_after_parts = [a[:-len(common_after_suffix)] if common_after_suffix else a for a in after_parts]
+        
+        # Interleave: For each file, merge: variable_before[i] + tag[i] + variable_after[i]
+        # Then concatenate all these merged units
+        merged_units = []
+        for var_before, tag, var_after in zip(variable_before_parts, found_tags, variable_after_parts):
+            unit = var_before + tag + var_after
+            merged_units.append(unit)
+        
+        merged_content = ''.join(merged_units)
+        
+        # Final result = common_before + merged_content + replace_with + common_after_suffix
+        # This ensures replace_with is placed right after the merged content, not at the end
+        result_path = common_before + merged_content + f'{replace_with}' + common_after_suffix
+        
+        return result_path
 
     else:
         raise ValueError("dimension_tag must be a string or a tuple/list of strings")
-
-    # Apply replacement
-    replaced_paths = [replace_tag(p) for p in paths]
-
-    # Now combine all paths token-wise
-    tokenized = [re.split(r'([/_\-.])', p) for p in replaced_paths]
-    merged_tokens = []
-    for tokens in zip(*tokenized):
-        uniq = list(dict.fromkeys(tokens))  # preserve order
-        merged_tokens.append(''.join(uniq))
-
-    return ''.join(merged_tokens)
 
 
 def parse_channel_tag_from_string(channel_tag: str) -> tuple:
@@ -271,6 +392,13 @@ class FileSet:
         }
         self.path_dict = dict(zip(filepaths, filepaths))
 
+    def concatenate(self, arrays, axis: int):
+        concatenate = ops.concatenate
+        for arr in self.array_dict.values():
+            if isinstance(arr, da.Array):
+                concatenate = da.concatenate
+        return concatenate(arrays, axis=axis)
+
     def get_numerics_per_dimension_tag(self,
                                        dimension_tag: str
                                        ) -> List[str]:
@@ -290,7 +418,7 @@ class FileSet:
             ['0001', '0002']
         """
         filepaths = list(self.group.values())[0]
-        matches = get_matches(f'{dimension_tag}\d+', filepaths)
+        matches = get_matches(rf'{dimension_tag}\d+', filepaths)
         spans = [match.string[match.start():match.end()] for match in matches]
         numerics = [get_numerics(span)[0] for span in spans]
         # TODO: add an incrementality validator
@@ -354,7 +482,7 @@ class FileSet:
             else:
                 numeric_dict = {}
                 for key, filepaths in group.items():
-                    matches = get_matches(f'{dim}\d+', filepaths)
+                    matches = get_matches(rf'{dim}\d+', filepaths)
                     spans = [match.string[match.start():match.end()] for match in matches]
                     spans = [span.replace(dim, '') for span in spans]  ### remove search term from the spans
                     numerics = [get_numerics(span)[0] for span in spans]
@@ -392,6 +520,16 @@ class FileSet:
         # Split the group by all dimension tags except the one specified by the axis
         to_split = [tag for tag in self.dimension_tags if tag != dimension_tag]
         group = self._split_by(*to_split)
+        
+        import sys
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
+            f.write(f"\n[concatenate_along] axis={axis}, dimension_tag={dimension_tag}\n")
+            f.write(f"[concatenate_along] to_split={to_split}\n")
+            f.write(f"[concatenate_along] self.axis_tags={self.axis_tags}\n")
+            f.write(f"[concatenate_along] Groups created by _split_by:\n")
+            for k, v in group.items():
+                f.write(f"  Group '{k}': {v}\n")
 
         tag_is_tuple = False
         if isinstance(dimension_tag, (tuple, list)):
@@ -409,6 +547,9 @@ class FileSet:
             else:
                 sorted_paths = paths
             logger.info(f"Sorted paths for concatenation: {sorted_paths}")
+            debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+            with open(debug_log_path, "a") as f:
+                f.write(f"[concatenate_along] Group '{key}': sorted_paths={sorted_paths}\n")
             # Get slices and shapes for each path
             group_slices = [self.slice_dict[path] for path in sorted_paths]
             group_shapes = [self.shape_dict[path] for path in sorted_paths]
@@ -424,13 +565,23 @@ class FileSet:
                 dimension_tag,
                 replace_with=f'_{self.AXIS_DICT[axis]}set'
             )
+            #print(f"Group reduced paths: {group_reduced_paths}")
+            #print(f"Dimension tag: {dimension_tag}")
+            #print(f"New reduced path: {new_reduced_path}")
+            #print(f"Replacing with: _{self.AXIS_DICT[axis]}set")
             new_reduced_paths = [new_reduced_path] * len(group_reduced_paths)
 
             # If arrays are present, concatenate them
             if self.array_dict is not None:
                 group_arrays = [self.array_dict[path] for path in sorted_paths]
                 logger.info(f"Arrays being concatenated in the order: {sorted_paths}")
-                new_array = da.concatenate(group_arrays, axis=axis)
+                debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+                with open(debug_log_path, "a") as f:
+                    f.write(f"  Concatenating arrays with shapes: {[arr.shape for arr in group_arrays]}\n")
+                new_array = self.concatenate(group_arrays, axis=axis)
+                debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+                with open(debug_log_path, "a") as f:
+                    f.write(f"  Result array shape: {new_array.shape}\n")
 
             # Update dictionaries with new values
             for path, slc, reduced_path in zip(sorted_paths,
@@ -442,7 +593,8 @@ class FileSet:
                 self.path_dict[path] = reduced_path
                 if self.array_dict is not None:
                     self.array_dict[path] = new_array
-
+        #import pprint
+        #pprint.pprint(self.path_dict)
         return group
 
     def get_concatenated_array_paths(self):
@@ -585,15 +737,31 @@ class BatchFile:
         sub_filesets = {}
         axis_tags = copy.deepcopy(fileset.axis_tags)
 
+        debug_msg = f"\n[split_channel_groups] fileset.axis_tags = {fileset.axis_tags}\n"
+        debug_msg += f"[split_channel_groups] fileset.path_dict keys = {list(fileset.path_dict.keys())}\n"
+        debug_msg += f"[split_channel_groups] fileset.group keys = {list(fileset.group.keys())}\n"
+        
         if all([item is None for item in axis_tags]):
+            debug_msg += f"[split_channel_groups] All axis_tags are None - using path_dict\n"
             groups = copy.deepcopy(fileset.path_dict)
             for key, value in groups.items():
                 groups[key] = [value]
         elif fileset.axis_tags[1] is None:
+            debug_msg += f"[split_channel_groups] axis_tags[1] is None - using group\n"
             groups = copy.deepcopy(fileset.group)
         else:
+            debug_msg += f"[split_channel_groups] Splitting by channel tag: {fileset.axis_tags[1]}\n"
             axis_tags[1] = None
             groups = fileset._split_by(fileset.axis_tags[1])
+            debug_msg += f"[split_channel_groups] Groups after _split_by: {list(groups.keys())}\n"
+            for k, v in groups.items():
+                debug_msg += f"  {k}: {v}\n"
+        
+        # Write debug output to file
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
+            f.write(debug_msg)
+        
         return groups
 
     async def _construct_managers(self,
@@ -615,43 +783,82 @@ class BatchFile:
                                  series = 0,
                                  metadata_reader = metadata_reader,
                                  **kwargs) for path in pruned_paths]
-        self.managers = {}
+        self.managers = {} # Speed up this part
         for manager in managers:
+            logger.info(f"Reference manager: {manager.path} constructed.")
             await manager.init()
             await manager.load_scenes(series)
             self.managers.update(**manager.loaded_scenes)
         return self.managers
 
     def _fuse_channels(self): # Concatenates channel metadata actually.
+        """Merge channel metadata from all channel files into each output manager.
+        
+        When concatenating along the channel axis, all input channels should be
+        merged into a single channel list, and this list should be assigned to
+        the output managers (not the individual channel file managers).
+        """
+        debug_msg = f"\n[_fuse_channels] START\n"
+        debug_msg += f"[_fuse_channels] self.channel_sample_paths = {self.channel_sample_paths}\n"
+        debug_msg += f"[_fuse_channels] Number of channel sample paths = {len(self.channel_sample_paths)}\n"
+        debug_msg += f"[_fuse_channels] self.channel_managers.keys() = {list(self.channel_managers.keys())}\n"
+        debug_msg += f"[_fuse_channels] Number of channel managers = {len(self.channel_managers)}\n"
+        debug_msg += f"[_fuse_channels] self.managers.keys() = {list(self.managers.keys())}\n"
+        debug_msg += f"[_fuse_channels] Number of output managers = {len(self.managers)}\n"
+        
         channelsdict = {
             key: self.channel_managers[key].channels
-            for
-            key in self.channel_sample_paths # List that keeps the channel order
+            for key in self.channel_sample_paths # List that keeps the channel order
         }
+        
+        debug_msg += f"[_fuse_channels] channelsdict keys = {list(channelsdict.keys())}\n"
+        for key, channels in channelsdict.items():
+            debug_msg += f"  {key}: {len(channels)} channels\n"
+            for i, ch in enumerate(channels):
+                debug_msg += f"    Channel {i}: label={ch.get('label', '?')}, color={ch.get('color', '?')}\n"
+        
         channelslist = []
         for key in self.channel_sample_paths: # List that keeps the channel order
             # This is where channel metadata are properly sorted.
             channelslist.extend(channelsdict[key])
-        for path in self.channel_sample_paths:
-            manager = self.channel_managers[path]
+        
+        debug_msg += f"[_fuse_channels] Total merged channels = {len(channelslist)}\n"
+        debug_msg += f"[_fuse_channels] Merged channel labels = {[c.get('label', '?') for c in channelslist]}\n"
+        
+        # Update all output managers with the merged channel list
+        # NOT the channel_managers (which are individual files)
+        debug_msg += f"[_fuse_channels] Updating {len(self.managers)} output managers with merged channels\n"
+        for manager in self.managers.values():
+            debug_msg += f"  Manager {manager.series_path}: before={len(manager.channels)} channels, after={len(channelslist)} channels\n"
             manager._channels = channelslist
-            self.managers[path] = manager
+        
+        debug_msg += f"[_fuse_channels] END\n"
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
+            f.write(debug_msg)
 
     async def _construct_channel_managers(self,
                       series: int = None,
                       metadata_reader: str = 'bfio',
                       **kwargs
                       ):
+        debug_msg = f"\n[_construct_channel_managers] START\n"
         if series is None:
             series = 0
         if np.isscalar(series) and (series != 'all'):
             series = [series]
 
         grs = self.split_channel_groups()
+        debug_msg += f"[_construct_channel_managers] Channel groups from split_channel_groups: {list(grs.keys())}\n"
+        debug_msg += f"[_construct_channel_managers] Number of groups: {len(grs)}\n"
+        for k, v in grs.items():
+            debug_msg += f"  Group '{k}': {v}\n"
 
         self.channel_sample_paths = [grs[grname][0]
                                         for grname in grs
                                      ]
+        debug_msg += f"[_construct_channel_managers] Channel sample paths: {self.channel_sample_paths}\n"
+        debug_msg += f"[_construct_channel_managers] Number of channel sample paths: {len(self.channel_sample_paths)}\n"
 
         channel_managers = {}
         unloaded_paths = []
@@ -660,6 +867,15 @@ class BatchFile:
                 channel_managers[path] = self.managers[path]
             else:
                 unloaded_paths.append(path)
+
+        debug_msg += f"[_construct_channel_managers] Paths already in managers: {len(self.channel_sample_paths) - len(unloaded_paths)}\n"
+        debug_msg += f"[_construct_channel_managers] Paths to load: {len(unloaded_paths)}\n"
+        if unloaded_paths:
+            debug_msg += f"  Unloaded paths: {unloaded_paths}\n"
+
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
+            f.write(debug_msg)
 
         pruned_paths = list(set(prune_seriesfix(path) for path in unloaded_paths))
         managers = [ArrayManager(path,
@@ -673,10 +889,25 @@ class BatchFile:
             channel_managers.update(**manager.loaded_scenes)
 
         self.channel_managers = {key: channel_managers[key] for key in self.channel_sample_paths}
+        
+        debug_msg2 = f"[_construct_channel_managers] Final channel_managers.keys() = {list(self.channel_managers.keys())}\n"
+        debug_msg2 += f"[_construct_channel_managers] Final number of channel managers = {len(self.channel_managers)}\n"
+        
         for path in self.channel_sample_paths:
             manager = self.channel_managers[path]
+            debug_msg2 += f"[_construct_channel_managers] Before fix_bad_channels - {path}: {len(manager.channels)} channels\n"
+            for i, ch in enumerate(manager.channels):
+                debug_msg2 += f"    Channel {i}: label={ch.get('label', '?')}, color={ch.get('color', '?')}\n"
             manager._ensure_correct_channels()
             manager.fix_bad_channels()
+            debug_msg2 += f"[_construct_channel_managers] After fix_bad_channels - {path}: {len(manager.channels)} channels\n"
+            for i, ch in enumerate(manager.channels):
+                debug_msg2 += f"    Channel {i}: label={ch.get('label', '?')}, color={ch.get('color', '?')}\n"
+        
+        debug_msg2 += f"[_construct_channel_managers] END\n"
+        debug_log_path = os.path.join(tempfile.gettempdir(), "eubi_debug.log")
+        with open(debug_log_path, "a") as f:
+            f.write(debug_msg2)
         return self.channel_managers
 
     async def _complete_process(self,

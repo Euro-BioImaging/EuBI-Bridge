@@ -1,142 +1,310 @@
-from eubi_bridge.utils.convenience import sensitive_glob, is_zarr_group, is_zarr_array, take_filepaths, \
-    autocompute_chunk_shape, soft_start_jvm
-
-# soft_start_jvm()
-
-import os, multiprocessing as mp
-
-# os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
-
-# Ensure the environment is inherited by forked/spawned processes
-# multiprocessing.set_start_method("spawn", force=True)
 import asyncio
-import s3fs
-import numpy as np, pandas as pd
-from natsort import natsorted
-# from distributed import LocalCluster, Client
-# import logging
-from typing import Union
+import multiprocessing as mp
+import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
-from eubi_bridge.conversion.conversion_worker import unary_worker_sync, aggregative_worker_sync
-from eubi_bridge.utils.convenience import take_filepaths, soft_start_jvm
-from eubi_bridge.utils.logging_config import get_logger
-from eubi_bridge.conversion.worker_init import initialize_worker_process
+from pathlib import Path
+from typing import Union
 
+import numpy as np
+import pandas as pd
+import s3fs
+from natsort import natsorted
+
+from eubi_bridge.conversion.aggregative_conversion_base import \
+    AggregativeConverter
+from eubi_bridge.conversion.conversion_worker import (aggregative_worker_sync,
+                                                      unary_worker_sync)
+from eubi_bridge.conversion.worker_init import initialize_worker_process
+from eubi_bridge.utils.array_utils import autocompute_chunk_shape
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
+from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
+                                          sensitive_glob, take_filepaths)
 
 logger = get_logger(__name__)
+
+
+def _warmup_worker():
+    """Dummy function to trigger worker initialization without doing any work."""
+    return None
+
+
+async def run_metadata_collection_from_filepaths(
+        input_path,
+        **global_kwargs
+):
+    """
+    Collect metadata from image files in parallel.
+    
+    Similar to run_conversions_from_filepaths but collects and returns
+    metadata information instead of converting files.
+    
+    Args:
+        input_path: Path to files or directory or CSV/XLSX file
+        **global_kwargs: Global configuration parameters (supports use_threading flag)
+    
+    Returns:
+        List of metadata dictionaries for each file
+    """
+    df = take_filepaths(input_path, **global_kwargs)
+
+    # --- Setup concurrency ---
+    max_workers = int(global_kwargs.get("max_workers", 4))
+    max_retries = int(global_kwargs.get("max_retries", 3))
+    use_threading = global_kwargs.get("use_threading", False)
+
+    # Import worker function
+    from eubi_bridge.conversion.conversion_worker import metadata_reader_sync
+
+    # Choose executor based on use_threading flag
+    if use_threading:
+        logger.info("Using ThreadPoolExecutor for metadata collection (threading mode)")
+        executor_class = ThreadPoolExecutor
+        executor_kwargs = {"max_workers": max_workers}
+    else:
+        logger.info("Using ProcessPoolExecutor for metadata collection (multiprocessing mode)")
+        ctx = mp.get_context("spawn")
+        executor_class = ProcessPoolExecutor
+        executor_kwargs = {
+            "max_workers": max_workers,
+            "mp_context": ctx,
+            "initializer": initialize_worker_process
+        }
+
+    loop = asyncio.get_running_loop()
+    
+    # Create ONE shared executor for all tasks
+    pool = None
+    
+    try:
+        # Create main shared pool
+        pool = executor_class(**executor_kwargs)
+        
+        tasks = []
+        for idx, row in df.iterrows():
+            job_kwargs = row.to_dict()
+            input_path_job = job_kwargs.pop('input_path')
+            
+            async def submit_task(pool, idx, input_path_job, job_kwargs):
+                """Submit task to main pool, fall back to temporary pool if broken."""
+                from concurrent.futures.process import BrokenProcessPool
+                
+                try:
+                    return await loop.run_in_executor(pool, metadata_reader_sync, input_path_job, job_kwargs)
+                except BrokenProcessPool as e:
+                    if use_threading:
+                        raise
+                    
+                    # Main pool is broken, create temporary single-worker pool just for this failed task
+                    logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
+                    ctx = mp.get_context("spawn")
+                    temp_pool = ProcessPoolExecutor(
+                        max_workers=1,
+                        mp_context=ctx,
+                        initializer=initialize_worker_process
+                    )
+                    
+                    try:
+                        return await loop.run_in_executor(temp_pool, metadata_reader_sync, input_path_job, job_kwargs)
+                    finally:
+                        temp_pool.shutdown(wait=True)
+            
+            task = submit_task(pool, idx, input_path_job, job_kwargs)
+            tasks.append(task)
+            
+            # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
+            if not use_threading and idx < len(df) - 1:
+                await asyncio.sleep(0.2)
+        
+        # Gather results
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        if pool is not None:
+            try:
+                pool.shutdown(wait=True)
+            except Exception as e:
+                logger.warning(f"Error shutting down main pool: {e}. Attempting force shutdown...")
+                try:
+                    pool.shutdown(wait=False)
+                except Exception as e2:
+                    logger.error(f"Failed to force shutdown main pool: {e2}")
+    
+    # Log results and track failures
+    failed_tasks = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"[Main] Task {i} failed: {result}")
+            failed_tasks.append((i, str(result)))
+        elif isinstance(result, dict) and result.get('status') == 'error':
+            logger.error(f"[Main] Task {i} failed: {result.get('error')}")
+            failed_tasks.append((i, result.get('error', 'Unknown error')))
+    
+    # If any task failed, raise an error to prevent silent incomplete outputs
+    if failed_tasks:
+        error_summary = "\n".join([
+            f"  Task {idx}: {error}" 
+            for idx, error in failed_tasks
+        ])
+        raise RuntimeError(
+            f"Metadata collection failed for {len(failed_tasks)}/{len(results)} files. "
+            f"Failed tasks:\n{error_summary}"
+        )
+
+    return results
+
 
 
 
 async def run_conversions_from_filepaths(
         input_path,
+        output_path = None,
         **global_kwargs
 ):
     """
     Run parallel conversions where each job's parameters (including input/output dirs)
     are specified via kwargs or a CSV/XLSX file.
 
+    Parameter triage (2-stage process):
+    1. global_kwargs already contain merged CLI+config params (CLI > config)
+    2. CSV row parameters override everything (CSV > CLI > config)
+
+    Supports both multiprocessing (default) and threading modes via use_threading flag.
+
     Args:
         input_path:
             - list of file paths, OR
             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
-        **global_kwargs: global defaults for all conversions
+        output_path: Output directory for conversions
+        **global_kwargs: Pre-merged parameters (CLI params already override config defaults)
     """
+    
     df = take_filepaths(input_path, **global_kwargs)
 
     # --- Setup concurrency ---
     max_workers = int(global_kwargs.get("max_workers", 4))
-
-    # Get spawn context explicitly
-    ctx = mp.get_context("spawn")
+    max_retries = int(global_kwargs.get("max_retries", 3))
+    use_threading = global_kwargs.get("use_threading", False)
 
     # Import worker function
     from eubi_bridge.conversion.conversion_worker import unary_worker_sync
 
-    # Create executor with spawn context AND initializer
-    with ProcessPoolExecutor(
-            max_workers=max_workers,
-            mp_context=ctx,
-            initializer=initialize_worker_process  # Initialize JVM once per worker
-    ) as pool:
-        loop = asyncio.get_running_loop()
+    # Choose executor based on use_threading flag
+    if use_threading:
+        logger.info("Using ThreadPoolExecutor for conversions (threading mode)")
+        executor_class = ThreadPoolExecutor
+        executor_kwargs = {"max_workers": max_workers}
+    else:
+        logger.info("Using ProcessPoolExecutor for conversions (multiprocessing mode)")
+        ctx = mp.get_context("spawn")
+        executor_class = ProcessPoolExecutor
+        executor_kwargs = {
+            "max_workers": max_workers,
+            "mp_context": ctx,
+            "initializer": initialize_worker_process
+        }
 
+    loop = asyncio.get_running_loop()
+    
+    # Create ONE shared executor for all tasks
+    pool = None
+    
+    try:
+        # Create main shared pool
+        pool = executor_class(**executor_kwargs)
+        
         tasks = []
         for idx, row in df.iterrows():
             job_kwargs = row.to_dict()
             input_path_job = job_kwargs.pop('input_path')
-            output_path = job_kwargs.pop('output_path')
+            # Pop output_path from row if it exists (CSV column), otherwise use the parameter
+            output_path_job = job_kwargs.pop('output_path', output_path)
+            # Filter out None values from CSV - missing parameters should use defaults from global_kwargs, not None
+            job_kwargs = {k: v for k, v in job_kwargs.items() if v is not None}
+            
+            # Apply final parameter triage: CSV > (CLI > config)
+            # global_kwargs already has CLI > config triage applied
+            # Now CSV params override global_kwargs
+            merged_kwargs = {**global_kwargs}
+            merged_kwargs.update(job_kwargs)
+            # Remove input_path and output_path from merged_kwargs since they're passed as positional arguments
+            merged_kwargs.pop('input_path', None)
+            merged_kwargs.pop('output_path', None)
 
-            # Submit to executor
-            task = loop.run_in_executor(
-                pool,
-                unary_worker_sync,
-                input_path_job,
-                output_path,
-                job_kwargs
-            )
+            async def submit_task(pool, idx, input_path_job, output_path_job, merged_kwargs):
+                """Submit task to main pool, fall back to temporary pool if broken."""
+                from concurrent.futures.process import BrokenProcessPool
+                
+                try:
+                    return await loop.run_in_executor(pool, unary_worker_sync, input_path_job, output_path_job, merged_kwargs)
+                except BrokenProcessPool as e:
+                    if use_threading:
+                        raise
+                    
+                    # Main pool is broken, create temporary single-worker pool just for this failed task
+                    logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
+                    merged_kwargs['overwrite'] = True  # Force overwrite in temp pool
+                    ctx = mp.get_context("spawn")
+                    temp_pool = ProcessPoolExecutor(
+                        max_workers=1,
+                        mp_context=ctx,
+                        initializer=initialize_worker_process
+                    )
+                    
+                    try:
+                        return await loop.run_in_executor(temp_pool, unary_worker_sync, input_path_job, output_path, merged_kwargs)
+                    finally:
+                        temp_pool.shutdown(wait=True)
+                
+                # All retries exhausted
+                raise RuntimeError(f"Task {idx} exhausted all {max_retries} retries for {input_path_job}")
+            
+            task = submit_task(pool, idx, input_path_job, output_path_job, merged_kwargs)
             tasks.append(task)
+            
+            # For ProcessPoolExecutor: stagger submissions to serialize worker initialization
+            if not use_threading and idx < len(df) - 1:
+                await asyncio.sleep(0.2)
 
-        # Gather with return_exceptions to see all failures
+        # Gather results
         results = await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        if pool is not None:
+            try:
+                pool.shutdown(wait=True)
+            except Exception as e:
+                logger.warning(f"Error shutting down main pool: {e}. Attempting force shutdown...")
+                try:
+                    pool.shutdown(wait=False)
+                except Exception as e2:
+                    logger.error(f"Failed to force shutdown main pool: {e2}")
 
-        # Log results
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                print(f"[Main] Task {i} failed: {result}")
+    # Log results and track failures
+    failed_tasks = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"[Main] Task {i} failed: {result}")
+            failed_tasks.append((i, str(result)))
+        elif isinstance(result, dict):
+            if result.get('status') == 'error':
+                logger.error(f"[Main] Task {i} failed: {result.get('error')}")
+                failed_tasks.append((i, result.get('error', 'Unknown error')))
             else:
-                print(f"[Main] Task {i} succeeded: {result}")
+                logger.info(f"[Main] Task {i} succeeded: {result}")
+        else:
+            logger.info(f"[Main] Task {i} succeeded: {result}")
+    
+    # If any task failed, raise an error to prevent silent incomplete outputs
+    if failed_tasks:
+        error_summary = "\n".join([
+            f"  Task {idx}: {error}" 
+            for idx, error in failed_tasks
+        ])
+        raise RuntimeError(
+            f"Conversion failed for {len(failed_tasks)}/{len(results)} tasks. "
+            f"Output directory may be incomplete. Failed tasks:\n{error_summary}"
+        )
 
     return results
-
-
-
-# async def run_conversions_from_filepaths(
-#         input_path,
-#         **global_kwargs
-# ):
-#     """
-#     Run parallel conversions where each job's parameters (including input/output dirs)
-#     are specified via kwargs or a CSV/XLSX file.
-#
-#     Args:
-#         input_path:
-#             - list of file paths, OR
-#             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
-#         **global_kwargs: global defaults for all conversions
-#     """
-#     # soft_start_jvm()
-#
-#     df = take_filepaths(input_path, **global_kwargs)
-#
-#     # --- Setup concurrency ---
-#     max_workers = int(global_kwargs.get("max_workers", 4))
-#     loop = asyncio.get_running_loop()
-#
-#     def _run_one(row):
-#         """Run one conversion with unified kwargs."""
-#         job_kwargs = row.to_dict()
-#         input_path = job_kwargs.get('input_path')
-#         output_path = job_kwargs.get('output_path')
-#         job_kwargs.pop('input_path')
-#         job_kwargs.pop('output_path')
-#         return loop.run_in_executor(
-#             pool,
-#             unary_worker_sync,
-#             input_path,
-#             output_path,
-#             job_kwargs
-#         )
-#
-#     # --- Run all conversions ---
-#     ctx = mp.get_context("spawn")
-#     with ProcessPoolExecutor(max_workers=max_workers,
-#                              mp_context=ctx
-#                              ) as pool:
-#         tasks = [_run_one(row) for _, row in df.iterrows()]
-#         results = await asyncio.gather(*tasks)
-#
-#     return results
 
 
 async def run_conversions_from_filepaths_with_local_cluster(
@@ -153,7 +321,7 @@ async def run_conversions_from_filepaths_with_local_cluster(
             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
         **global_kwargs: global defaults for all conversions
     """
-    from distributed import LocalCluster, Client
+    from distributed import Client, LocalCluster
     df = take_filepaths(input_path, **global_kwargs)
     # Optionally create dirs before running
     for odir in df["output_path"].unique():
@@ -210,11 +378,13 @@ async def run_conversions_from_filepaths_with_slurm(
                 slurm_account, slurm_partition, slurm_time, slurm_mem, slurm_cores
     """
     import os
-    from dask_jobqueue import SLURMCluster
+
     from dask.distributed import Client
-    from eubi_bridge.utils.convenience import take_filepaths
+    from dask_jobqueue import SLURMCluster
+
     from eubi_bridge.conversion.conversion_worker import unary_worker_sync
     from eubi_bridge.utils.logging_config import get_logger
+    from eubi_bridge.utils.path_utils import take_filepaths
     logger = get_logger(__name__)
 
     # --- Prepare file list ---
@@ -331,6 +501,37 @@ async def run_conversions_with_concatenation(
         ):
     """Convert with concatenation using threads (safe for large Dask arrays)."""
 
+    # Validate that tags are provided for concatenation axes
+    if concatenation_axes:
+        # Normalize concatenation_axes to a list
+        if isinstance(concatenation_axes, str):
+            concat_axes_list = list(concatenation_axes.lower())
+        else:
+            concat_axes_list = list(concatenation_axes)
+        
+        # Map axes to their corresponding tag parameters
+        axis_to_tag = {
+            't': time_tag,
+            'c': channel_tag,
+            'z': z_tag,
+            'y': y_tag,
+            'x': x_tag,
+        }
+        
+        # Check that each concatenation axis has a corresponding tag
+        missing_tags = []
+        for axis in concat_axes_list:
+            if axis in axis_to_tag and axis_to_tag[axis] is None:
+                missing_tags.append(axis)
+        
+        if missing_tags:
+            raise ValueError(
+                f"When using --concatenation_axes '{concatenation_axes}', "
+                f"you must provide tags for concatenation axes: {', '.join(missing_tags)}. "
+                f"For example: --{missing_tags[0]}_tag 'value' "
+                f"to identify files belonging to each {missing_tags[0]} group."
+            )
+
     # input_path = f"/home/oezdemir/data/original/steyer/amst"
     # output_path = f"/home/oezdemir/data/zarr/steyer/result"
     # scene_index = 0
@@ -351,6 +552,8 @@ async def run_conversions_with_concatenation(
 
     verbose = kwargs.get('verbose', None)
     override_channel_names = kwargs.get('override_channel_names', False)
+    if verbose:
+        logger.info(f"override_channel_names: {override_channel_names}")
 
     max_workers = int(kwargs.get("max_workers", 4))
     if verbose:
@@ -360,6 +563,41 @@ async def run_conversions_with_concatenation(
     tags = [time_tag,channel_tag,z_tag,y_tag,x_tag]
     filepaths_accepted = _parse_filepaths_with_tags(filepaths, tags)
 
+    # Validate that each user-provided tag matches at least some files
+    # If the user provides a tag, they expect it to match files
+    provided_tags = {
+        'time_tag': time_tag,
+        'channel_tag': channel_tag,
+        'z_tag': z_tag,
+        'y_tag': y_tag,
+        'x_tag': x_tag,
+    }
+    # Filter to only tags that were actually provided (non-None)
+    provided_tags = {k: v for k, v in provided_tags.items() if v is not None}
+    
+    for tag_name, tag_value in provided_tags.items():
+        # Normalize tag to list
+        tag_list = _parse_tag(tag_value)
+        if not isinstance(tag_list, (list, tuple)):
+            tag_list = [tag_list]
+        
+        # Check if this tag matches any files
+        tag_matches_any = False
+        for tag_item in tag_list:
+            for filepath in filepaths:
+                if str(tag_item) in filepath:
+                    tag_matches_any = True
+                    break
+            if tag_matches_any:
+                break
+        
+        if not tag_matches_any:
+            raise ValueError(
+                f"Tag '{tag_name}={tag_value}' does not match any files in the input directory.\n"
+                f"Available files: {[Path(p).name for p in filepaths]}\n"
+                f"Please ensure your tags correctly identify files."
+            )
+
     # --- Initialize AggregativeConverter and digest arrays ---
     base = AggregativeConverter(series = scene_index,
                                 override_channel_names = override_channel_names
@@ -367,7 +605,7 @@ async def run_conversions_with_concatenation(
     base.filepaths = filepaths_accepted
     common_dir = os.path.commonpath(filepaths_accepted)
     skip_dask = kwargs.get('skip_dask', False)
-    await base.read_dataset(aszarr = skip_dask)
+    await base.read_dataset(readers_params = {'aszarr': skip_dask})
     if verbose:
         logger.info(f"Concatenating along {concatenation_axes}")
     await base.digest( ### Channel concatenation also done here.
@@ -387,28 +625,37 @@ async def run_conversions_with_concatenation(
         updated_key = os.path.splitext(key)[0]
         names.append(updated_key)
         man = base.managers[key]
+        if verbose:
+            logger.info(f"Prepared manager for array '{key}' with shape {man.array.shape}")   
         managers.append(man)
 
     # --- Use ThreadPoolExecutor for aggregative conversion ---
-    pool = ThreadPoolExecutor(max_workers=max_workers)
-    # pool = ProcessPoolExecutor(max_workers=max_workers,
-    #                            mp_context=mp.get_context("spawn")
-    #                            )
+    # Note: ThreadPoolExecutor doesn't have BrokenProcessPool issues, so no retry logic needed
+    executor_class = ThreadPoolExecutor
+    executor_kwargs = {"max_workers": max_workers}
+    
+    loop = asyncio.get_running_loop()
+    
     try:
-        loop = asyncio.get_running_loop()
-        tasks = [
-            loop.run_in_executor(
+        pool = executor_class(**executor_kwargs)
+        
+        tasks = []
+        for idx, (manager, name) in enumerate(zip(managers, names)):
+            output_path_job = os.path.join(output_path, name)
+            
+            task = loop.run_in_executor(
                 pool,
                 aggregative_worker_sync,
                 manager,
-                os.path.join(output_path, name),
-                dict(kwargs),
+                output_path_job,
+                dict(kwargs)
             )
-            for manager, name in zip(managers, names)
-        ]
-        results = await asyncio.gather(*tasks)
+            tasks.append(task)
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
     finally:
-        pool.shutdown(wait=True)
+        if pool is not None:
+            pool.shutdown(wait=True)
 
     return results
 
@@ -418,6 +665,12 @@ def run_conversions(
         output_path,
         **kwargs
 ):
+    """
+    Run conversions with proper parameter triage:
+    1. CSV parameters (highest priority - per-job overrides)
+    2. Pre-merged CLI+config parameters (already triaged in ebridge.py)
+    """
+    
     axes_of_concatenation = kwargs.get('concatenation_axes',
                                        None)
     verbose = kwargs.get('verbose',

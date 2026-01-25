@@ -1,2 +1,8 @@
+include _build_backend.py
+include pyproject.toml
 recursive-include eubi_bridge/bioformats *.jar
-
+recursive-include eubi_bridge/bioformats *.xml
+recursive-include eubi_bridge/bioformats *.txt
+recursive-include eubi_bridge/external *.py
+global-exclude eubi_bridge/bioformats/jdk
+global-exclude eubi_bridge/bioformats/libjvm

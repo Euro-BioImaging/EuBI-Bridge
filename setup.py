@@ -1,74 +1,15 @@
-# -*- coding: utf-8 -*-
 """
 @author: bugra
+
+Setup configuration for EuBI-Bridge.
+
+JDK binaries are downloaded at build time (not install time) by the custom
+PEP 517 build backend (_build_backend.py) and bundled in the wheel.
 """
 
-import setuptools
 import os
+from setuptools import setup, find_packages
 
-def get_requirements():
-    """Get requirements from requirements.txt or return default requirements."""
-    requirements = [
-        "aicspylibczi>=0.0.0",
-        "asciitree>=0.3.3",
-        "bfio>=0.0.0",
-        "bioformats_jar>=0.0.0",
-        "bioio-base>=0.0.0",
-        "bioio-bioformats==1.1.0",
-        "bioio-czi==2.1.0",
-        "bioio-imageio==1.1.0",
-        "bioio-lif==1.1.0",
-        "bioio-nd2==1.1.0",
-        "bioio-ome-tiff-fork-by-bugra==0.0.1b2",
-        "bioio-tifffile-fork-by-bugra>=0.0.1b2",
-        "cmake==4.0.2",
-        "dask>=2024.12.1",
-        "dask-jobqueue>=0.0.0",
-        "distributed>=2024.12.1",
-        "elementpath==5.0.1",
-        "fasteners==0.19",
-        "fire>=0.0.0",
-        "imageio==2.27.0",
-        "imageio-ffmpeg==0.6.0",
-        "install-jdk",
-        "natsort>=0.0.0",
-        "nd2>=0.0.0",
-        "numpy>=0.0.0",
-        # "openjdk==8.*",
-        "pydantic>=2.11.7",
-        "pylibczirw>=0.0.0",
-        "readlif==0.6.5",
-        "s3fs>=0.0.0",
-        "scipy>=1.8",
-        "tensorstore>=0.0.0",
-        "tifffile>=2025.5.21",
-        "validators==0.35.0",
-        "xarray>=0.0.0",
-        "xmlschema>=0.0.0",
-        "xmltodict==0.14.2",
-        "zarr>=3.0",
-        "zstandard>=0.0.0",
-        #
-        "aiofiles>=24.1.0",
-        "blosc2>=3.7.1",
-        "fastapi>=0.116.1",
-        "lz4>=4.4.4",
-        "numpy>=2.3.2",
-        "psutil>=7.0.0",
-        "rich>=14.1.0",
-        "uvicorn>=0.35.0",
-        "websockets>=15.0.1",
-        "h5py"
-    ]
-
-    # Optionally still try to read from requirements.txt if it exists
-    # if os.path.exists('../requirements.txt'):
-    #     with open('../requirements.txt', encoding='utf-8') as f:
-    #         requirements = [
-    #             line.strip() for line in f
-    #             if line.strip() and not line.startswith('#')
-    #         ]
-    return requirements
 
 def readme():
     """Read the README file."""
@@ -78,9 +19,10 @@ def readme():
                 return f.read()
     return ""
 
-setuptools.setup(
+
+setup(
     name='eubi_bridge',
-    version='0.1.0b2',
+    version='0.1.0c1',
     author='Bugra Özdemir',
     author_email='bugraa.ozdemir@gmail.com',
     description='A package for converting datasets to OME-Zarr format.',
@@ -88,21 +30,18 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url='https://github.com/Euro-BioImaging/EuBI-Bridge',
     license='MIT',
-    packages=setuptools.find_packages(),
+    packages=find_packages(exclude=['tests', 'test_data', 'docs', '_archive', 'new_tests', 'eubi_bridge.bioformats', 'eubi_bridge.bioformats.*']),
     include_package_data=True,
     package_data={
-        "eubi_bridge": ["bioformats/*.jar"],
+        "eubi_bridge": [
+            "bioformats/**",
+        ],
     },
-    install_requires=get_requirements(),
     python_requires='>=3.11,<3.13',
-    extras_require={
-        # Include CUDA variants if needed
-        'cuda11': ['cupy-cuda11x'],
-        'cuda12': ['cupy-cuda12x'],
-    },
     entry_points={
         'console_scripts': [
-            "eubi = eubi_bridge.cli:main"
+            "eubi = eubi_bridge.cli:main",
+            "eubi-gui = eubi_bridge.app:main"
         ]
     },
 )
