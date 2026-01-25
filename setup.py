@@ -22,7 +22,7 @@ def readme():
 
 setup(
     name='eubi_bridge',
-    version='0.1.0b9',
+    version='0.1.0c1',
     author='Bugra Özdemir',
     author_email='bugraa.ozdemir@gmail.com',
     description='A package for converting datasets to OME-Zarr format.',

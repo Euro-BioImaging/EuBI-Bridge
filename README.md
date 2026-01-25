@@ -43,7 +43,7 @@ Then install EuBI-Bridge via pip in the conda environment:
 
 ```bash
 conda activate eubizarr
-pip install --no-cache-dir 'eubi-bridge[all]==0.1.0b9'
+pip install --no-cache-dir 'eubi-bridge[all]==0.1.0c1'
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
 ```
@@ -64,7 +64,7 @@ then try the following:
 ```bash
 # In the `eubizarr` environment
 mamba install cmake zlib boost # preinstall dependencies that can help build from source
-pip install --no-cache-dir eubi-bridge[all]==0.1.0b9 # try installing again with the dependencies available
+pip install --no-cache-dir eubi-bridge[all]==0.1.0c1 # try installing again with the dependencies available
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
 ````
