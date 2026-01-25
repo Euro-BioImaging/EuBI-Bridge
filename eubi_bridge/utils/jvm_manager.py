@@ -12,148 +12,6 @@ from eubi_bridge.utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def find_bundled_jdk_home() -> Optional[str]:
-    """
-    Find the bundled JDK home directory.
-    
-    Returns:
-        Path to bundled JDK home, or None if not found
-    """
-    import platform as _platform
-    
-    pkg_dir = pathlib.Path(__file__).resolve().parent.parent  # eubi_bridge/
-    jdk_base = pkg_dir / "bioformats" / "jdk"
-    
-    platform_map = {
-        "darwin": "darwin",
-        "win32": "win32", 
-        "linux": "linux",
-    }
-    
-    if sys.platform not in platform_map:
-        return None
-    
-    platform_dir = platform_map[sys.platform]
-    
-    # Architecture detection (important for darwin)
-    arch_dir = ""
-    if sys.platform == "darwin":
-        arch = _platform.machine().lower()
-        if arch in ("arm64", "aarch64"):
-            arch_dir = "arm64"
-        elif arch in ("x86_64", "amd64"):
-            arch_dir = "x86_64"
-        else:
-            arch_dir = arch
-    
-    # Build candidate paths
-    candidates = []
-    if arch_dir:
-        candidates.append(jdk_base / platform_dir / arch_dir)
-    candidates.append(jdk_base / platform_dir)
-    
-    for jdk_path in candidates:
-        # Check for macOS JDK structure (Contents/Home)
-        macos_home = jdk_path / "Contents" / "Home"
-        if macos_home.exists() and (macos_home / "bin" / "java").exists():
-            return str(macos_home)
-        
-        # Check for Linux/Windows JDK structure (bin directly)
-        if (jdk_path / "bin" / "java").exists() or (jdk_path / "bin" / "java.exe").exists():
-            return str(jdk_path)
-    
-    return None
-
-
-def get_or_install_jdk() -> Optional[str]:
-    """
-    Ensure a modern JDK is available.
-    
-    Priority order:
-    1. Bundled JDK (inside package - fully self-contained)
-    2. JAVA_HOME environment variable
-    3. install-jdk library (downloads to ~/.jdk/)
-
-    Returns:
-        Path to java executable, or None if unable to find/install JDK
-    """
-    # Priority 1: Check for bundled JDK (fully self-contained)
-    bundled_jdk_home = find_bundled_jdk_home()
-    if bundled_jdk_home:
-        java_path = pathlib.Path(bundled_jdk_home) / 'bin' / 'java'
-        if not java_path.exists():
-            java_path = pathlib.Path(bundled_jdk_home) / 'bin' / 'java.exe'
-        
-        if java_path.exists():
-            os.environ['JAVA_HOME'] = bundled_jdk_home
-            logger.info(f"Using bundled JDK: {bundled_jdk_home}")
-            return str(java_path)
-    
-    # Priority 2: Check if JAVA_HOME is set and points to a good JDK
-    java_home = os.environ.get('JAVA_HOME')
-    if java_home:
-        java_path = pathlib.Path(java_home) / 'bin' / 'java'
-        if not java_path.exists():
-            java_path = pathlib.Path(java_home) / 'bin' / 'java.exe'
-
-        if java_path.exists():
-            # Check version
-            try:
-                result = subprocess.run(
-                    [str(java_path), '-version'],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                version_output = result.stderr + result.stdout
-
-                # Check if it's Java 11+ (Bio-Formats requirement)
-                if 'version "1.' in version_output:  # Java 8 or older
-                    major_version = int(version_output.split('"')[1].split('.')[1])
-                    if major_version >= 8:
-                        logger.warning(f"Found Java {major_version} at {java_home}, but need 11+")
-                elif 'version "' in version_output:
-                    version_str = version_output.split('"')[1]
-                    major_version = int(version_str.split('.')[0])
-                    if major_version >= 11:
-                        logger.info(f"Using Java {major_version} from JAVA_HOME: {java_home}")
-                        return str(java_path)
-            except Exception as e:
-                logger.error(f"Error checking Java version: {e}")
-
-    # Priority 3: Try to use install-jdk to get a proper JDK (downloads to ~/.jdk/)
-    try:
-        import jdk
-        jdkpath = Path(jdk._JDK_DIR)
-        jdkpath.mkdir(parents=True, exist_ok=True)
-
-        installed_jdks = list(jdkpath.glob('*'))
-        if len(installed_jdks) > 0:
-            java_home = installed_jdks[0]
-            logger.info(f"Using system JDK: {java_home}")
-        else:
-            java_home = jdk.install('17')
-            logger.info(f"JDK 17 installed at: {java_home}")
-
-        # Set JAVA_HOME for this process and children
-        os.environ['JAVA_HOME'] = str(java_home)
-
-        # Return path to java executable
-        java_path = pathlib.Path(java_home) / 'bin' / 'java'
-        if not java_path.exists():
-            java_path = pathlib.Path(java_home) / 'bin' / 'java.exe'
-
-        return str(java_path)
-
-    except ImportError:
-        logger.warning("install-jdk not found. Install with: pip install install-jdk")
-        logger.warning("Falling back to system Java (may be outdated)")
-        return None
-    except Exception as e:
-        logger.error(f"Error installing JDK: {e}")
-        return None
-
-
 def find_libjvm() -> str:
     """
     Find a bundled libjvm for the current platform.
@@ -249,9 +107,6 @@ def soft_start_jvm() -> None:
     if scyjava.jvm_started():
         return
 
-    # Ensure we have a modern JDK
-    java_path = get_or_install_jdk()
-
     # Get bundled JARs directory
     pkg_dir = pathlib.Path(__file__).resolve().parent.parent
     jars_dir = pkg_dir / "bioformats"
@@ -287,8 +142,7 @@ def soft_start_jvm() -> None:
 
         logger.info(f"Starting JVM with {len(jars)} bioformats JARs + jpype JAR")
 
-        # Prepare JVM arguments - pass as positional args to startJVM()
-        # These are passed to the JVM at startup
+        # Prepare JVM arguments
         jvm_args = ['-Djava.awt.headless=true']  # Disable GUI for HPC/headless environments
 
         # Prepare JVM keyword arguments
@@ -297,7 +151,7 @@ def soft_start_jvm() -> None:
             'convertStrings': False
         }
 
-        # Use bundled libjvm
+        # Use bundled libjvm (native library)
         try:
             jvm_path = find_libjvm()
             jvm_kwargs['jvmpath'] = jvm_path
@@ -305,50 +159,35 @@ def soft_start_jvm() -> None:
         except RuntimeError as e:
             logger.warning(f"Could not find bundled libjvm - {e}")
             logger.warning("Attempting to start JVM without explicit jvmpath")
-            jvm_path = None
 
         # Start JVM with explicit classpath and headless mode
-        try:
-            jpype.startJVM(*jvm_args, **jvm_kwargs)
-        except Exception as e:
-            logger.error(f"JPype start failed: {e}")
-            traceback.print_exc()
-            raise
-
-        # Mark scyjava as started
+        jpype.startJVM(*jvm_args, **jvm_kwargs)
         scyjava._jpype_jvm = jpype
-
-        logger.info("JVM started successfully")
+        logger.info("JVM started successfully with jpype")
         return
 
     except ImportError:
         logger.warning("jpype not available, falling back to scyjava")
     except Exception as e:
-        logger.warning(f"JPype path failed, falling back to scyjava: {e}")
+        logger.warning(f"JPype startup failed, falling back to scyjava: {e}")
         traceback.print_exc()
 
-    # Method 2: Force scyjava to use local JARs only
+    # Method 2: Force scyjava to use local JARs only (fallback)
     # Clear any Maven configuration
     scyjava.config.endpoints.clear()
     scyjava.config.maven_offline = True
 
-    # Set JVM path if we have one
-    jvm_path_override = None
+    # Set bundled libjvm path if available
     try:
-        if 'jvm_kwargs' in locals():
-            jvm_path_override = jvm_kwargs.get('jvmpath')
-    except Exception:
-        pass
-
-    if jvm_path_override:
-        scyjava.config.jvm_path = str(jvm_path_override)
-    elif java_path:
-        scyjava.config.jvm_path = str(java_path)
+        jvm_path = find_libjvm()
+        scyjava.config.jvm_path = str(jvm_path)
+        logger.info(f"Using bundled libjvm with scyjava: {jvm_path}")
+    except RuntimeError:
+        logger.warning("No bundled libjvm found, will rely on JAVA_HOME")
 
     # Disable JGO by monkeypatching
     try:
         import jgo.jgo
-        original_resolve = jgo.jgo.resolve_dependencies
         jgo.jgo.resolve_dependencies = lambda *args, **kwargs: []
     except ImportError:
         pass
@@ -359,5 +198,98 @@ def soft_start_jvm() -> None:
 
     # Start JVM
     scyjava.start_jvm()
+    logger.info("JVM started successfully with scyjava")
 
-    logger.info("JVM started successfully via scyjava")
+
+def download_and_extract_jdk():
+    """
+    Download the platform-specific JDK from GitHub Releases and extract it.
+    
+    This function is called on first CLI invocation to prepare the JDK.
+    The JDK is downloaded into the installed package location.
+    
+    JDK archives are hosted on GitHub Releases:
+    - jdk_darwin_arm64.tar.gz (~178 MB) - macOS Apple Silicon
+    - jdk_darwin_x86_64.tar.gz (~172 MB) - macOS Intel
+    - jdk_linux.tar.gz (~184 MB) - Linux x86_64
+    - jdk_win32.tar.gz - Windows (if available)
+    """
+    import platform
+    import tarfile
+    import tempfile
+    import urllib.request
+    
+    GITHUB_REPO = "Euro-BioImaging/EuBI-Bridge"
+    GITHUB_RELEASE_TAG = "jdk-v11"
+    GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/download/{GITHUB_RELEASE_TAG}"
+    
+    # Get platform info
+    system = platform.system()
+    machine = platform.machine().lower()
+    
+    if system == 'Darwin':
+        platform_id = 'darwin'
+        if machine in ('arm64', 'aarch64'):
+            jdk_archive_name = 'jdk_darwin_arm64.tar.gz'
+            arch_subdir = 'arm64'
+        else:
+            jdk_archive_name = 'jdk_darwin_x86_64.tar.gz'
+            arch_subdir = 'x86_64'
+    elif system == 'Linux':
+        platform_id = 'linux'
+        jdk_archive_name = 'jdk_linux.tar.gz'
+        arch_subdir = None
+    elif system == 'Windows':
+        platform_id = 'win32'
+        jdk_archive_name = 'jdk_win32.tar.gz'
+        arch_subdir = None
+    else:
+        logger.debug(f"JDK download not supported for platform: {system}")
+        return
+    
+    # Determine JDK install path
+    pkg_dir = Path(__file__).resolve().parent.parent  # eubi_bridge/
+    jdk_base = pkg_dir / "bioformats" / "jdk"
+    
+    if arch_subdir:
+        jdk_platform_path = jdk_base / platform_id / arch_subdir
+    else:
+        jdk_platform_path = jdk_base / platform_id
+    
+    # Check if JDK already exists with binaries
+    if jdk_platform_path.exists():
+        java_bin = jdk_platform_path / "Contents" / "Home" / "bin" / "java" if system == 'Darwin' else jdk_platform_path / "bin" / "java"
+        if java_bin.exists():
+            logger.debug(f"JDK for {platform_id} already present at {jdk_platform_path}")
+            return
+    
+    logger.info(f"Downloading JDK for {platform_id}...")
+    
+    # Create directory structure
+    jdk_platform_path.mkdir(parents=True, exist_ok=True)
+    
+    # Download from GitHub
+    github_url = f"{GITHUB_RELEASES_URL}/{jdk_archive_name}"
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.tar.gz') as tmp:
+        tmp_path = tmp.name
+    
+    try:
+        urllib.request.urlretrieve(github_url, tmp_path)
+        
+        # Verify download
+        file_size = os.path.getsize(tmp_path)
+        if file_size < 1000000:
+            raise RuntimeError(f"Downloaded file too small ({file_size} bytes)")
+        
+        logger.info(f"Extracting JDK ({file_size // 1024 // 1024} MB)...")
+        with tarfile.open(tmp_path, "r:gz") as tar:
+            tar.extractall(path=jdk_platform_path)
+        
+        logger.info(f"JDK successfully downloaded and installed")
+        
+    except Exception as e:
+        logger.debug(f"JDK download failed: {e}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)

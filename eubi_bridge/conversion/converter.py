@@ -107,7 +107,7 @@ async def run_metadata_collection_from_filepaths(
                     try:
                         return await loop.run_in_executor(temp_pool, metadata_reader_sync, input_path_job, job_kwargs)
                     finally:
-                        temp_pool.shutdown(wait=True, timeout=10)
+                        temp_pool.shutdown(wait=True)
             
             task = submit_task(pool, idx, input_path_job, job_kwargs)
             tasks.append(task)
@@ -253,7 +253,7 @@ async def run_conversions_from_filepaths(
                     try:
                         return await loop.run_in_executor(temp_pool, unary_worker_sync, input_path_job, output_path, merged_kwargs)
                     finally:
-                        temp_pool.shutdown(wait=True, timeout=10)
+                        temp_pool.shutdown(wait=True)
                 
                 # All retries exhausted
                 raise RuntimeError(f"Task {idx} exhausted all {max_retries} retries for {input_path_job}")

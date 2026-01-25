@@ -104,6 +104,9 @@ def main():
     import fire
     import sys
     
+    # JDK is bundled in the wheel during build via _build_backend.py
+    # No runtime download needed - it's already in the package
+    
     patch_fire_no_literal_eval_for("includes", "excludes")
 
     # JVM is now lazily initialized only when needed (in to_zarr, show_pixel_meta, etc.)

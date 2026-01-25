@@ -16,8 +16,7 @@ from eubi_bridge.utils.array_utils import (as_dask_array, asdask,
 from eubi_bridge.utils.json_utils import (convert_np_types, is_valid_json,
                                           make_json_safe, turn2json)
 # JVM management
-from eubi_bridge.utils.jvm_manager import (find_libjvm, get_or_install_jdk,
-                                           soft_start_jvm)
+from eubi_bridge.utils.jvm_manager import (find_libjvm, soft_start_jvm)
 # Miscellaneous utilities
 from eubi_bridge.utils.misc_utils import (ChannelMap, argsorter, as_store,
                                           asstr, get_collection_paths,
@@ -41,7 +40,6 @@ __all__ = [
     # JVM
     'soft_start_jvm',
     'find_libjvm',
-    'get_or_install_jdk',
     # Arrays
     'asdask',
     'as_dask_array',

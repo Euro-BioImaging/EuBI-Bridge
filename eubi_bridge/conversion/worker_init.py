@@ -149,29 +149,6 @@ def initialize_worker_process(**kwargs):
     os.environ['JGO_CACHE_DIR'] = '/dev/null'
     os.environ['MAVEN_OFFLINE'] = 'true'
 
-    # Ensure JDK is available (worker inherits JAVA_HOME from parent if already set)
-    # But we may need to check/install if not present
-    try:
-        java_home = os.environ.get('JAVA_HOME')
-        if not java_home:
-            logger.info(f"[Worker {mp.current_process().name}] No JAVA_HOME, checking for JDK...")
-            # Try to use install-jdk
-            try:
-                from pathlib import Path
-
-                import jdk
-                jdkpath = Path(jdk._JDK_DIR)
-                jdkpath.mkdir(parents=True, exist_ok=True)
-
-                installed_jdks = list(jdkpath.glob('*'))
-                if len(installed_jdks) > 0:
-                    os.environ['JAVA_HOME'] = installed_jdks[0]
-                    logger.info(f"[Worker {mp.current_process().name}] Using JDK: {installed_jdks[0]}")
-            except ImportError:
-                logger.info(f"[Worker {mp.current_process().name}] install-jdk not available")
-    except Exception as e:
-        logger.warning(f"[Worker {mp.current_process().name}] JDK check warning: {e}")
-
     # Configure scyjava BEFORE any imports that might use Java
     import scyjava
     scyjava.config.endpoints.clear()
