@@ -652,12 +652,7 @@ def metadata_reader_sync(input_path: Union[str, ArrayManager],
         # Initialize the manager (load metadata from file)
         asyncio.run(manager.init())
         
-        # DEBUG: Check channels after init
-        logger.info(f"[DEBUG] After manager.init():")
-        logger.info(f"  manager.omemeta = {manager.omemeta}")
-        logger.info(f"  manager._channels = {manager._channels}")
-        logger.info(f"  manager.channels property = {manager.channels}")
-        
+
         # Fill default metadata
         manager.fill_default_meta()
         manager.fix_bad_channels()

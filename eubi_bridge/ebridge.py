@@ -830,10 +830,10 @@ class EuBIBridge:
             }
             combined_params['series'] = series
             
-            # Force use_threading=True for metadata collection (IO-bound, no need for multiprocessing)
-            # This avoids expensive JVM worker process initialization and is much faster
+            # Use threading for metadata collection (IO-bound, much faster without JVM startup overhead)
+            # The debug property accesses that were causing hangs have been removed
             combined_params['use_threading'] = True
-            # Increase workers for metadata-only collection (IO-bound, not CPU-bound)
+            # Increase workers for fast metadata-only collection (IO-bound, not CPU-bound)
             combined_params['max_workers'] = min(16, max(8, len(df['input_path'])))
 
             # Import and run metadata collection
