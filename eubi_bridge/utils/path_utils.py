@@ -269,6 +269,10 @@ def take_filepaths(
             )
 
         logger.info(f"Loading conversion table from {input_path}")
+        
+        # Get CSV directory for resolving relative paths
+        csv_dir = os.path.dirname(os.path.abspath(input_path))
+        
         if input_path.endswith((".csv", ".tsv", ".txt")):
             df = pd.read_csv(input_path)
         elif input_path.endswith((".xls", ".xlsx")):
@@ -288,6 +292,19 @@ def take_filepaths(
         #   - Excel infinity variants ('-1.#IND', '1.#IND', etc.)
         # First convert to object dtype, then replace NaN with None
         df = df.astype(object).where(pd.notna(df), None)
+        
+        # Resolve relative paths in input_path column to be relative to CSV directory
+        # This ensures CSV files are portable - paths are always relative to the CSV location
+        if 'input_path' in df.columns:
+            df['input_path'] = df['input_path'].apply(
+                lambda path: os.path.join(csv_dir, path) if path and not os.path.isabs(path) else path
+            )
+        
+        # Also resolve relative output_path if present
+        if 'output_path' in df.columns:
+            df['output_path'] = df['output_path'].apply(
+                lambda path: os.path.join(csv_dir, path) if path and not os.path.isabs(path) else path
+            )
     elif os.path.isdir(input_path) or os.path.isfile(input_path) or '*' in input_path:
         filepaths = take_filepaths_from_path(input_path, **global_kwargs)
         df = pd.DataFrame(filepaths, columns=["input_path"])

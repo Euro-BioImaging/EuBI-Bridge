@@ -253,7 +253,7 @@ eubi to_zarr \
 
 ### Create a CSV File
 
-Find `selection.csv`. Its content is:
+Find or create `selection.csv`. Its convent should be similar to:
 
 ```csv
 input_path,output_path,y_scale,x_scale,y_unit,x_unit,channel_labels
