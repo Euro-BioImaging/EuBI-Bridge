@@ -227,23 +227,51 @@ def parse_units(manager: ArrayManager, **kwargs) -> Tuple:
     return _parse_axis_params(manager, kwargs, 4, manager.unitdict)
 
 
-def _extract_cropping_slices(kwargs: Dict) -> list:
+def _extract_cropping_slices(kwargs: Dict) -> Dict:
     """Extract cropping range parameters from kwargs.
     
     Collects all cropping-related keyword arguments that define
-    rectangular regions of interest in the dataset.
+    rectangular regions of interest in the dataset, converting
+    string ranges to tuples suitable for crop() method.
     
     Parameters
     ----------
     kwargs : Dict
-        Keyword arguments containing potential cropping parameters.
+        Keyword arguments containing potential cropping parameters
+        (e.g., time_range="0,5", channel_range="1,3").
         
     Returns
     -------
-    list
-        List of cropping parameter values.
+    Dict
+        Dictionary mapping crop method parameter names to range tuples.
+        For example: {"trange": (0, 5), "crange": (1, 3)}
     """
-    return [kwargs.get(key) for key in kwargs if key in CROPPING_PARAMS]
+    # Map from CLI parameter names to crop() method parameter names
+    param_mapping = {
+        'time_range': 'trange',
+        'channel_range': 'crange',
+        'z_range': 'zrange',
+        'y_range': 'yrange',
+        'x_range': 'xrange',
+    }
+    
+    crop_kwargs = {}
+    for cli_param, crop_param in param_mapping.items():
+        if cli_param in kwargs and kwargs[cli_param] is not None:
+            range_str = kwargs[cli_param]
+            # Parse string like "0,5" to tuple (0, 5)
+            try:
+                if isinstance(range_str, str):
+                    range_parts = range_str.split(',')
+                    range_tuple = tuple(int(x.strip()) for x in range_parts)
+                else:
+                    # Already a tuple/list
+                    range_tuple = tuple(range_str)
+                crop_kwargs[crop_param] = range_tuple
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Failed to parse {cli_param}='{range_str}': {e}")
+    
+    return crop_kwargs
 
 
 async def _prepare_manager(manager: ArrayManager, kwargs: Dict) -> None:
@@ -270,9 +298,9 @@ async def _prepare_manager(manager: ArrayManager, kwargs: Dict) -> None:
     if kwargs.get('squeeze'):
         manager.squeeze()
 
-    cropping_slices = _extract_cropping_slices(kwargs)
-    if any(cropping_slices):
-        manager.crop(*cropping_slices)
+    cropping_kwargs = _extract_cropping_slices(kwargs)
+    if cropping_kwargs:
+        manager.crop(**cropping_kwargs)
 
 
 async def _update_channel_metadata(output_path: str, kwargs: Dict) -> None:

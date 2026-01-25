@@ -715,7 +715,7 @@ class EuBIBridge:
             cli_kwargs['use_threading'] = use_threading
         
         # Add additional kwargs that are CLI parameters (from **kwargs)
-        cli_kwargs.update({k: v for k, v in kwargs.items() if k not in ['channel_intensity_limits']})
+        cli_kwargs.update({k: v for k, v in kwargs.items() if k not in []})
         
         # Stage 1 triage: CLI > Config (using _collect_params which already does this)
         # Call _collect_params WITH cli_kwargs so CLI params override config defaults
@@ -727,7 +727,7 @@ class EuBIBridge:
         }
         
         # Capture any extra kwargs that aren't in known config sections
-        # These are metadata parameters like y_scale, x_scale, channel_colors, etc.
+        # These are metadata parameters like y_scale, x_scale, channel_colors, channel_intensity_limits, etc.
         extra_kwargs = {key: kwargs[key] for key in kwargs if key not in merged_params}
         
         # Store for reference
@@ -802,7 +802,9 @@ class EuBIBridge:
         if all_zarr:
             logger.info(f"Fast path: Reading metadata from {len(zarr_paths)} OME-Zarr files (no JVM).")
             from eubi_bridge.utils.metadata_utils import read_ome_zarr_metadata_from_collection
-            metadata_list = asyncio.run(read_ome_zarr_metadata_from_collection(input_path))
+            # Pass the expanded zarr_paths list instead of the raw input_path
+            # This handles glob patterns correctly
+            metadata_list = asyncio.run(read_ome_zarr_metadata_from_collection(zarr_paths))
         
         # Slow path: Bio-Formats metadata extraction (requires JVM, uses threading for efficiency)
         else:

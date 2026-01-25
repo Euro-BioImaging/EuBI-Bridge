@@ -1478,7 +1478,10 @@ class ArrayManager:  ### Unify the classes above.
         ### slice channels:
         if 'c' in slicedict and 'c' in self.axes:
             c_slice = slicedict.get('c')
-            channels = [omero_copy['channels'][i] for i in range(c_slice.start, c_slice.stop)]
+            # Handle None values in slice (from slice(None) for full range)
+            start = c_slice.start if c_slice.start is not None else 0
+            stop = c_slice.stop if c_slice.stop is not None else len(omero_copy['channels'])
+            channels = [omero_copy['channels'][i] for i in range(start, stop)]
             self.pyr.meta.omero['channels'] = channels
         ####
         slices = tuple([slicedict[ax] for ax in self.axes])

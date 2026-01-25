@@ -439,17 +439,16 @@ def read_ome_zarr_metadata(zarr_path: str) -> dict:
         }
 
 
-async def read_ome_zarr_metadata_from_collection(collection_dir: str) -> list:
+async def read_ome_zarr_metadata_from_collection(zarr_paths) -> list:
     """
-    Read metadata from all OME-Zarr files in a collection directory.
+    Read metadata from a list of OME-Zarr file paths.
     
-    Finds all .zarr subdirectories in collection_dir and reads their metadata
-    using ThreadPoolExecutor (lightweight, no JVM or worker processes).
+    Uses ThreadPoolExecutor (lightweight, no JVM or worker processes).
     
     Parameters
     ----------
-    collection_dir : str
-        Path to directory containing OME-Zarr files
+    zarr_paths : list or str
+        List of .zarr paths, or a directory path (will glob for .zarr subdirectories)
     
     Returns
     -------
@@ -459,19 +458,28 @@ async def read_ome_zarr_metadata_from_collection(collection_dir: str) -> list:
     from pathlib import Path
     from concurrent.futures import ThreadPoolExecutor
     
-    # Find all .zarr directories in the collection
-    collection_path = Path(collection_dir)
-    zarr_paths = sorted([p for p in collection_path.glob('**/*.zarr') if p.is_dir()])
+    # Handle both list of paths and directory path (for backward compatibility)
+    if isinstance(zarr_paths, (list, tuple)):
+        # Already have a list of paths
+        paths = sorted([Path(p) for p in zarr_paths if str(p).endswith('.zarr')])
+    else:
+        # Find all .zarr directories in the directory
+        collection_path = Path(zarr_paths)
+        paths = sorted([p for p in collection_path.glob('**/*.zarr') if p.is_dir()])
+        
+        if not paths:
+            logger.warning(f"No .zarr directories found in {zarr_paths}")
+            return []
     
-    if not zarr_paths:
-        logger.warning(f"No .zarr directories found in {collection_dir}")
+    if not paths:
+        logger.warning(f"No .zarr paths provided")
         return []
     
-    logger.info(f"Found {len(zarr_paths)} OME-Zarr files in collection")
+    logger.info(f"Found {len(paths)} OME-Zarr files")
     
     results = []
     with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = [executor.submit(read_ome_zarr_metadata, str(path)) for path in zarr_paths]
+        futures = [executor.submit(read_ome_zarr_metadata, str(path)) for path in paths]
         results = [f.result() for f in futures]
     
     return results
