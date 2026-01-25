@@ -193,14 +193,15 @@
               
                 <h1 id="eubi-bridge-conversion-examples">EuBI-Bridge Conversion Examples</h1>
 <p>Command examples loosely organized by use case. Copy and paste these commands, adjusting input/output paths for your data.</p>
+<p><strong>Select your operating system below to see the correct syntax for your platform.</strong></p>
 <h2 id="table-of-contents">Table of Contents</h2>
 <ol>
 <li><a href="#basic-unary-conversion">Basic Unary Conversion</a></li>
-<li><a href="#filtering--pattern-matching">Filtering &amp; Pattern Matching</a></li>
-<li><a href="#metadata-inspection--override">Metadata Inspection &amp; Override</a></li>
+<li><a href="#filtering-pattern-matching">Filtering &amp; Pattern Matching</a></li>
+<li><a href="#metadata-inspection-override">Metadata Inspection &amp; Override</a></li>
 <li><a href="#aggregative-conversion">Aggregative Conversion</a></li>
 <li><a href="#advanced-aggregation">Advanced Aggregation</a></li>
-<li><a href="#csv-batch-processing">CSV Based Processing</a></li>
+<li><a href="#csv-based-processing">CSV Based Processing</a></li>
 <li><a href="#multi-series-datasets">Multi-Series Datasets</a></li>
 <li><a href="#zarr-to-zarr-conversion">Zarr-to-Zarr Conversion</a></li>
 <li><a href="#configuration-management">Configuration Management</a></li>
@@ -208,254 +209,265 @@
 <hr />
 <h2 id="basic-unary-conversion">Basic Unary Conversion</h2>
 <h3 id="simple-conversion-single-input-single-output">Simple Conversion: Single Input → Single Output</h3>
+<p><strong>Unix/macOS:</strong></p>
 <pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr
 </code></pre>
+<p><strong>Windows (Command Prompt or PowerShell):</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr
+</code></pre>
 <p>Verify the output:</p>
+<p><strong>Unix/macOS:</strong></p>
 <pre><code class="language-bash">eubi show_pixel_meta ~/codash_output/small_dataset_zarr
 </code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi show_pixel_meta %USERPROFILE%\codash_output\small_dataset_zarr
+</code></pre>
 <h3 id="custom-chunk-sizes">Custom Chunk Sizes</h3>
-<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_new_chunks \
-  --auto_chunk False \
-  --y_chunk 64 \
-  --x_chunk 64
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_new_chunks --auto_chunk False --y_chunk 64 --x_chunk 64
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_new_chunks --auto_chunk False --y_chunk 64 --x_chunk 64
 </code></pre>
 <h3 id="multiple-resolution-layers-pyramid">Multiple Resolution Layers (Pyramid)</h3>
-<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_6_layers \
-  --n_layers 6
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_6_layers --n_layers 6
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_6_layers --n_layers 6
 </code></pre>
 <h3 id="ngff-v05-with-sharding">NGFF v0.5 with Sharding</h3>
-<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_v0.5 \
-  --auto_chunk False \
-  --y_chunk 64 \
-  --x_chunk 64 \
-  --zarr_format 3 \
-  --y_shard_coef 5 \
-  --x_shard_coef 5
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_v0.5 --auto_chunk False --y_chunk 64 --x_chunk 64 --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_v0.5 --auto_chunk False --y_chunk 64 --x_chunk 64 --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
 </code></pre>
 <hr />
 <h2 id="filtering-pattern-matching">Filtering &amp; Pattern Matching</h2>
 <h3 id="include-only-tiff-files">Include Only TIFF Files</h3>
-<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_inc_filtered \
-  --includes .tiff
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_inc_filtered --includes .tiff
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_inc_filtered --includes .tiff
 </code></pre>
 <h3 id="exclude-jpg-files">Exclude JPG Files</h3>
-<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_ex_filtered \
-  --excludes .jpg
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_ex_filtered --excludes .jpg
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_ex_filtered --excludes .jpg
 </code></pre>
 <h3 id="include-multiple-formats">Include Multiple Formats</h3>
-<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_multi_inc_filtered \
-  --includes .oir,.lsm
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_multi_inc_filtered --includes .oir,.lsm
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_multi_inc_filtered --includes .oir,.lsm
 </code></pre>
 <h3 id="exclude-multiple-formats">Exclude Multiple Formats</h3>
-<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_multi_ex_filtered \
-  --excludes .oir,.lsm
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr small_dataset ~/codash_output/small_dataset_zarr_multi_ex_filtered --excludes .oir,.lsm
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_multi_ex_filtered --excludes .oir,.lsm
 </code></pre>
 <h3 id="glob-pattern-matching">Glob Pattern Matching</h3>
+<p><strong>Unix/macOS:</strong></p>
 <pre><code class="language-bash">eubi to_zarr &quot;small_dataset/*.tif&quot; ~/codash_output/small_dataset_zarr_wildcards
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr &quot;small_dataset\*.tif&quot; %USERPROFILE%\codash_output\small_dataset_zarr_wildcards
 </code></pre>
 <hr />
 <h2 id="metadata-inspection-override">Metadata Inspection &amp; Override</h2>
 <h3 id="inspect-source-metadata">Inspect Source Metadata</h3>
+<p><strong>Unix/macOS:</strong></p>
 <pre><code class="language-bash">eubi show_pixel_meta &quot;small_dataset/*oir&quot;
 </code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi show_pixel_meta &quot;small_dataset\*oir&quot;
+</code></pre>
 <h3 id="convert-with-pixel-scale-units">Convert with Pixel Scale &amp; Units</h3>
-<pre><code class="language-bash">eubi to_zarr \
-  small_dataset/23052022_D3_0001.oir \
-  ~/codash_output/small_image_with_metadata \
-  --y_scale 0.5 \
-  --y_unit micrometer \
-  --x_scale 0.5 \
-  --x_unit micrometer \
-  --channel_labels &quot;0,GFP;1,mCherry;2,BF&quot; \
-  --channel_colors &quot;0,yellow;1,magenta;2,white&quot;
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr small_dataset/23052022_D3_0001.oir ~/codash_output/small_image_with_metadata --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --channel_labels &quot;0,GFP;1,mCherry;2,BF&quot; --channel_colors &quot;0,yellow;1,magenta;2,white&quot;
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset\23052022_D3_0001.oir %USERPROFILE%\codash_output\small_image_with_metadata --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --channel_labels &quot;0,GFP;1,mCherry;2,BF&quot; --channel_colors &quot;0,yellow;1,magenta;2,white&quot;
 </code></pre>
 <h3 id="verify-overridden-metadata">Verify Overridden Metadata</h3>
-<pre><code class="language-bash">eubi show_pixel_meta &quot;~/codash_output/small_image_with_metadata/*zarr&quot;
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi show_pixel_meta &quot;~/codash_output/small_image_with_metadata/*.zarr&quot;
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi show_pixel_meta &quot;%USERPROFILE%\codash_output\small_image_with_metadata\*.zarr&quot;
 </code></pre>
 <h3 id="update-metadata-in-place">Update Metadata In Place</h3>
-<pre><code class="language-bash">eubi update_pixel_meta \
-  &quot;~/codash_output/small_image_with_metadata/*zarr&quot; \
-  --y_scale 0.2 \
-  --x_scale 0.2
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi update_pixel_meta &quot;~/codash_output/small_image_with_metadata/*.zarr&quot; --y_scale 0.2 --x_scale 0.2
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi update_pixel_meta &quot;%USERPROFILE%\codash_output\small_image_with_metadata\*.zarr&quot; --y_scale 0.2 --x_scale 0.2
 </code></pre>
 <h3 id="verify-updated-metadata">Verify Updated Metadata</h3>
-<pre><code class="language-bash">eubi show_pixel_meta &quot;~/codash_output/small_image_with_metadata/*zarr&quot;
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi show_pixel_meta &quot;~/codash_output/small_image_with_metadata/*.zarr&quot;
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi show_pixel_meta &quot;%USERPROFILE%\codash_output\small_image_with_metadata\*.zarr&quot;
 </code></pre>
 <hr />
 <h2 id="aggregative-conversion">Aggregative Conversion</h2>
 <p>Concatenate multiple input files into a single output file along specified dimensions.</p>
 <h3 id="concatenate-along-all-specified-axes">Concatenate Along All Specified Axes</h3>
 <p>Combine files into channels and time points:</p>
-<pre><code class="language-bash">eubi to_zarr \
-  multidim_dataset \
-  ~/codash_output/multidim_dataset_concat_zarr \
-  --channel_tag growing,moving,noise \
-  --time_tag step \
-  --concatenation_axes ct
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr multidim_dataset ~/codash_output/multidim_dataset_concat_zarr --channel_tag growing,moving,noise --time_tag step --concatenation_axes ct
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_concat_zarr --channel_tag growing,moving,noise --time_tag step --concatenation_axes ct
 </code></pre>
 <h3 id="with-nested-directory-structure">With Nested Directory Structure</h3>
-<pre><code class="language-bash">eubi to_zarr \
-  multidim_dataset_nested \
-  ~/codash_output/multidim_dataset_nested_concat_zarr \
-  --channel_tag growing,moving,noise \
-  --time_tag step \
-  --concatenation_axes ct
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr multidim_dataset_nested ~/codash_output/multidim_dataset_nested_concat_zarr --channel_tag growing,moving,noise --time_tag step --concatenation_axes ct
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr multidim_dataset_nested %USERPROFILE%\codash_output\multidim_dataset_nested_concat_zarr --channel_tag growing,moving,noise --time_tag step --concatenation_axes ct
 </code></pre>
 <h3 id="specify-channel-order">Specify Channel Order</h3>
-<pre><code class="language-bash">eubi to_zarr \
-  multidim_dataset_nested \
-  ~/codash_output/multidim_dataset_nested_concat_zarr \
-  --channel_tag noise,growing,moving \
-  --time_tag step \
-  --concatenation_axes ct \
-  --override_channel_names
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr multidim_dataset_nested ~/codash_output/multidim_dataset_nested_concat_zarr --channel_tag noise,growing,moving --time_tag step --concatenation_axes ct --override_channel_names
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr multidim_dataset_nested %USERPROFILE%\codash_output\multidim_dataset_nested_concat_zarr --channel_tag noise,growing,moving --time_tag step --concatenation_axes ct --override_channel_names
 </code></pre>
 <hr />
 <h2 id="advanced-aggregation">Advanced Aggregation</h2>
 <h3 id="concatenate-along-time-only">Concatenate Along Time Only</h3>
-<pre><code class="language-bash">eubi to_zarr \
-  multidim_dataset \
-  ~/codash_output/multidim_dataset_concat_along_time_zarr \
-  --channel_tag moving,noise,growing \
-  --time_tag step \
-  --concatenation_axes t \
-  --override_channel_names
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr multidim_dataset ~/codash_output/multidim_dataset_concat_along_time_zarr --channel_tag moving,noise,growing --time_tag step --concatenation_axes t --override_channel_names
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_concat_along_time_zarr --channel_tag moving,noise,growing --time_tag step --concatenation_axes t --override_channel_names
 </code></pre>
 <h3 id="aggregation-with-pattern-filter">Aggregation with Pattern Filter</h3>
-<pre><code class="language-bash">eubi to_zarr \
-  &quot;medium_dataset/PK2*.ome.tiff&quot; \
-  ~/codash_output/multidim_dataset_concat_filtered_zarr \
-  --channel_tag ch \
-  --concatenation_axes c \
-  --skip_dask
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr &quot;medium_dataset/PK2*.ome.tiff&quot; ~/codash_output/multidim_dataset_concat_filtered_zarr --channel_tag ch --concatenation_axes c --skip_dask
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr &quot;medium_dataset\PK2*.ome.tiff&quot; %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr --channel_tag ch --concatenation_axes c --skip_dask
 </code></pre>
 <h3 id="aggregation-with-full-metadata-override">Aggregation with Full Metadata Override</h3>
-<pre><code class="language-bash">eubi to_zarr \
-  multidim_dataset \
-  ~/codash_output/multidim_dataset_concat_zarr_with_metadata \
-  --channel_tag moving,noise,growing \
-  --time_tag step \
-  --concatenation_axes ct \
-  --time_scale 18 \
-  --time_unit millisecond \
-  --y_scale 0.5 \
-  --y_unit micrometer \
-  --x_scale 0.5 \
-  --x_unit micrometer \
-  --override_channel_names \
-  --channel_colors &quot;0,red;1,green;2,white&quot;
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr multidim_dataset ~/codash_output/multidim_dataset_concat_zarr_with_metadata --channel_tag moving,noise,growing --time_tag step --concatenation_axes ct --time_scale 18 --time_unit millisecond --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --override_channel_names --channel_colors &quot;0,red;1,green;2,white&quot;
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_concat_zarr_with_metadata --channel_tag moving,noise,growing --time_tag step --concatenation_axes ct --time_scale 18 --time_unit millisecond --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --override_channel_names --channel_colors &quot;0,red;1,green;2,white&quot;
 </code></pre>
 <h3 id="aggregation-with-time-range-limit">Aggregation with Time Range Limit</h3>
-<pre><code class="language-bash">eubi to_zarr \
-  multidim_dataset \
-  ~/codash_output/multidim_dataset_concat_zarr_with_metadata \
-  --channel_tag moving,noise,growing \
-  --time_tag step \
-  --concatenation_axes ct \
-  --time_scale 18 \
-  --time_unit millisecond \
-  --y_scale 0.5 \
-  --y_unit micrometer \
-  --x_scale 0.5 \
-  --x_unit micrometer \
-  --override_channel_names \
-  --channel_colors &quot;0,red;1,green;2,white&quot; \
-  --time_range 0,5
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr multidim_dataset ~/codash_output/multidim_dataset_concat_zarr_with_metadata --channel_tag moving,noise,growing --time_tag step --concatenation_axes ct --time_scale 18 --time_unit millisecond --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --override_channel_names --channel_colors &quot;0,red;1,green;2,white&quot; --time_range 0,5
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_concat_zarr_with_metadata --channel_tag moving,noise,growing --time_tag step --concatenation_axes ct --time_scale 18 --time_unit millisecond --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --override_channel_names --channel_colors &quot;0,red;1,green;2,white&quot; --time_range 0,5
 </code></pre>
 <hr />
 <h2 id="csv-based-processing">CSV Based Processing</h2>
 <h3 id="create-a-csv-file">Create a CSV File</h3>
-<p>Find or create <code>selection.csv</code>. Its convent should be similar to:</p>
+<p>Find or create <code>selection.csv</code>. Its content should be similar to:</p>
 <pre><code class="language-csv">input_path,output_path,y_scale,x_scale,y_unit,x_unit,channel_labels
-small_dataset/image1.tif,~/output/image1_zarr,0.5,0.5,micrometer,micrometer,&quot;0,Red;1,Green&quot;
-small_dataset/image2.czi,~/output/image2_zarr,1.0,1.0,micrometer,micrometer,&quot;0,DAPI;1,GFP&quot;
+small_dataset/image1.tif,output/image1_zarr,0.5,0.5,micrometer,micrometer,&quot;0,Red;1,Green&quot;
+small_dataset/image2.czi,output/image2_zarr,1.0,1.0,micrometer,micrometer,&quot;0,DAPI;1,GFP&quot;
 </code></pre>
 <h3 id="convert-all-files-in-csv">Convert All Files in CSV</h3>
+<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
 <pre><code class="language-bash">eubi to_zarr selection.csv
 </code></pre>
 <h3 id="verify-results">Verify Results</h3>
+<p><strong>Unix/macOS:</strong></p>
 <pre><code class="language-bash">eubi show_pixel_meta ~/codash_output/from_csv_zarr
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi show_pixel_meta %USERPROFILE%\codash_output\from_csv_zarr
 </code></pre>
 <hr />
 <h2 id="multi-series-datasets">Multi-Series Datasets</h2>
 <h3 id="convert-all-series-from-czi-files">Convert All Series from CZI Files</h3>
-<pre><code class="language-bash">eubi to_zarr &quot;medium_dataset/*.czi&quot; \
-  ~/codash_output/multiseries_dataset \
-  --scene_index all
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr &quot;medium_dataset/*.czi&quot; ~/codash_output/multiseries_dataset --scene_index all
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr &quot;medium_dataset\*.czi&quot; %USERPROFILE%\codash_output\multiseries_dataset --scene_index all
 </code></pre>
 <h3 id="convert-selected-series-only">Convert Selected Series Only</h3>
-<pre><code class="language-bash">eubi to_zarr medium_dataset/19_07_19_Lennard.lif \
-  ~/codash_output/multiseries_dataset \
-  --scene_index 2,4,6
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr medium_dataset/19_07_19_Lennard.lif ~/codash_output/multiseries_dataset --scene_index 2,4,6
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr medium_dataset\19_07_19_Lennard.lif %USERPROFILE%\codash_output\multiseries_dataset --scene_index 2,4,6
 </code></pre>
 <hr />
 <h2 id="zarr-to-zarr-conversion">Zarr-to-Zarr Conversion</h2>
 <p>Re-chunk and reformat existing OME-Zarr files:</p>
-<pre><code class="language-bash">eubi to_zarr \
-  ~/codash_output/multidim_dataset_concat_filtered_zarr/PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr \
-  ~/codash_output/multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 \
-  --auto_chunk False \
-  --zarr_format 3 \
-  --y_shard_coef 5 \
-  --x_shard_coef 5
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr ~/codash_output/multidim_dataset_concat_filtered_zarr/PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr ~/codash_output/multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr\PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
 </code></pre>
 <hr />
 <h2 id="configuration-management">Configuration Management</h2>
 <h3 id="display-current-configuration">Display Current Configuration</h3>
+<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
 <pre><code class="language-bash">eubi show_config
 </code></pre>
 <h3 id="modify-cluster-settings">Modify Cluster Settings</h3>
+<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
 <pre><code class="language-bash">eubi configure_cluster --max_workers 3
 eubi show_config
 </code></pre>
 <h3 id="reset-to-installation-defaults">Reset to Installation Defaults</h3>
+<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
 <pre><code class="language-bash">eubi reset_config
 eubi show_config
 </code></pre>
 <hr />
 <h2 id="quick-reference-parameter-combinations">Quick Reference: Parameter Combinations</h2>
 <h3 id="standard-unary-metadata">Standard Unary + Metadata</h3>
-<pre><code class="language-bash">eubi to_zarr INPUT_DIR OUTPUT_PATH \
-  --y_scale 0.5 \
-  --x_scale 0.5 \
-  --y_unit micrometer \
-  --x_unit micrometer
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr INPUT_DIR ~/output/OUTPUT_NAME --y_scale 0.5 --x_scale 0.5 --y_unit micrometer --x_unit micrometer
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --y_scale 0.5 --x_scale 0.5 --y_unit micrometer --x_unit micrometer
 </code></pre>
 <h3 id="optimized-for-cloud-storage">Optimized for Cloud Storage</h3>
-<pre><code class="language-bash">eubi to_zarr INPUT_DIR OUTPUT_PATH \
-  --zarr_format 3 \
-  --y_shard_coef 3 \
-  --x_shard_coef 3
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr INPUT_DIR ~/output/OUTPUT_NAME --zarr_format 3 --y_shard_coef 3 --x_shard_coef 3
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --zarr_format 3 --y_shard_coef 3 --x_shard_coef 3
 </code></pre>
 <h3 id="small-datasets-memory-efficient">Small Datasets (Memory Efficient)</h3>
-<pre><code class="language-bash">eubi to_zarr INPUT_DIR OUTPUT_PATH \
-  --auto_chunk False \
-  --y_chunk 32 \
-  --x_chunk 32 \
-  --z_chunk 16
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr INPUT_DIR ~/output/OUTPUT_NAME --auto_chunk False --y_chunk 32 --x_chunk 32 --z_chunk 16
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --auto_chunk False --y_chunk 32 --x_chunk 32 --z_chunk 16
 </code></pre>
 <h3 id="large-datasets-maximum-performance">Large Datasets (Maximum Performance)</h3>
-<pre><code class="language-bash">eubi to_zarr INPUT_DIR OUTPUT_PATH \
-  --n_layers 5 \
-  --auto_chunk False \
-  --y_chunk 128 \
-  --x_chunk 128 \
-  --z_chunk 64 \
-  --zarr_format 3
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr INPUT_DIR ~/output/OUTPUT_NAME --n_layers 5 --auto_chunk False --y_chunk 128 --x_chunk 128 --z_chunk 64 --zarr_format 3
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --n_layers 5 --auto_chunk False --y_chunk 128 --x_chunk 128 --z_chunk 64 --zarr_format 3
 </code></pre>
 <h3 id="multi-file-aggregation-complete-example">Multi-File Aggregation (Complete Example)</h3>
-<pre><code class="language-bash">eubi to_zarr \
-  dataset_directory \
-  ~/output/combined_dataset \
-  --channel_tag ch0,ch1,ch2 \
-  --time_tag t \
-  --z_tag slice \
-  --concatenation_axes ctz \
-  --y_scale 0.5 \
-  --x_scale 0.5 \
-  --override_channel_names \
-  --channel_labels &quot;0,DAPI;1,GFP;2,RFP&quot; \
-  --channel_colors &quot;0,0000FF;1,00FF00;2,FF0000&quot;
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr dataset_directory ~/output/combined_dataset --channel_tag ch0,ch1,ch2 --time_tag t --z_tag slice --concatenation_axes ctz --y_scale 0.5 --x_scale 0.5 --override_channel_names --channel_labels &quot;0,DAPI;1,GFP;2,RFP&quot; --channel_colors &quot;0,0000FF;1,00FF00;2,FF0000&quot;
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr dataset_directory %USERPROFILE%\output\combined_dataset --channel_tag ch0,ch1,ch2 --time_tag t --z_tag slice --concatenation_axes ctz --y_scale 0.5 --x_scale 0.5 --override_channel_names --channel_labels &quot;0,DAPI;1,GFP;2,RFP&quot; --channel_colors &quot;0,0000FF;1,00FF00;2,FF0000&quot;
 </code></pre>
               
             </div>
