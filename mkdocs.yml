@@ -50,6 +50,7 @@ nav:
   - Home: index.md
   - CLI Usage: cli.md
   - Conversion Tutorial: conversion_tutorial.md
+  - Conversion Examples: conversion_examples.md
 
 plugins:
   - search
