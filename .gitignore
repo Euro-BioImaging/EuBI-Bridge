@@ -15,6 +15,8 @@ pip-wheel-metadata/
 conda-recipe/build/
 conda-recipe/.cache/
 
+.github/copilot-instructions.md
+
 .ipynb_checkpoints/
 
 *.log
