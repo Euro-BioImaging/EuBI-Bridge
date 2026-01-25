@@ -1,6 +1,0 @@
-input_path,output_path,zarr_format,squeeze,verbose,z_scale,y_scale,x_scale,z_unit,y_unit,x_unit,channel_labels,channel_colors
-test_data/multidim_dataset/timecourse_growing_step10_17jan.tiff,test_data/csv_output_null,2,true,true,1,0.33,0.33,micrometer,micrometer,micrometer,"0,GFP","0,00FF00"
-test_data/multidim_dataset/timecourse_growing_step11_17jan.tiff,test_data/csv_output_null,3,null,null,null,null,null,null,null,null,null,null
-test_data/multidim_dataset/timecourse_moving_step5_17jan.tiff,test_data/csv_output_null,2,null,false,2,0.5,0.5,micrometer,nanometer,nanometer,null,null
-test_data/multidim_dataset/timecourse_moving_step6_17jan.tiff,test_data/csv_output_null,null,null,true,null,null,null,null,null,null,"0,DAPI","0,0000FF"
-test_data/multidim_dataset/timecourse_noise_step8_17jan.tiff,test_data/csv_output_null,2,null,null,null,null,null,null,null,null,null,null
