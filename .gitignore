@@ -28,6 +28,9 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Exclude workflow files - docs are pre-built and committed
+.github/workflows/deploy-docs.yml
 *.swo
 
 # JDK binaries - distributed via GitHub Releases, not versioned in repo
