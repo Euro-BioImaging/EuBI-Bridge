@@ -19,11 +19,11 @@ The recommended way to install EuBI-Bridge is via pip. Create a virtual environm
 ```bash
 python -m venv venv # Python must be either version 3.11 or 3.12.
 source venv/bin/activate
-pip install 'eubi-bridge[all]==0.1.0b9' # installs both GUI and CLI
+pip install 'eubi-bridge[all]==0.1.0c1' # installs both GUI and CLI
 # OR
-# pip install 'eubi-bridge[cli]==0.1.0b9' # installs only CLI
-# pip install 'eubi-bridge[gui]==0.1.0b9' # installs only GUI
-# pip install 'eubi-bridge==0.1.0b9' # installs as a Python library, without GUI or CLI utilities.
+# pip install 'eubi-bridge[cli]==0.1.0c1' # installs only CLI
+# pip install 'eubi-bridge[gui]==0.1.0c1' # installs only GUI
+# pip install 'eubi-bridge==0.1.0c1' # installs as a Python library, without GUI or CLI utilities.
 #
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
