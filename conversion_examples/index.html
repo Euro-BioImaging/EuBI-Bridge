@@ -66,6 +66,8 @@
     </li>
     <li class="toctree-l3"><a class="reference internal" href="#multiple-resolution-layers-pyramid">Multiple Resolution Layers (Pyramid)</a>
     </li>
+    <li class="toctree-l3"><a class="reference internal" href="#specify-the-compression-algorithm">Specify the Compression Algorithm</a>
+    </li>
     <li class="toctree-l3"><a class="reference internal" href="#ngff-v05-with-sharding">NGFF v0.5 with Sharding</a>
     </li>
         </ul>
@@ -235,6 +237,13 @@
 </code></pre>
 <p><strong>Windows:</strong></p>
 <pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_6_layers --n_layers 6
+</code></pre>
+<h3 id="specify-the-compression-algorithm">Specify the Compression Algorithm</h3>
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_zstd --compressor zstd --compressor_params {level:13}
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_6_layers --compressor zstd --compressor_params {level:13}
 </code></pre>
 <h3 id="ngff-v05-with-sharding">NGFF v0.5 with Sharding</h3>
 <p><strong>Unix/macOS:</strong></p>
