@@ -4,8 +4,9 @@ repo_url: https://github.com/Euro-BioImaging/EuBI-Bridge
 
 theme:
   name: readthedocs
+  logo: eurobioimaging-logo.webp
+  logo_alt: EuBI-Bridge Logo
 #  custom_dir: docs/overrides
-#  logo: figures/logo.png
 #  code:
 #    highlighting: true
 #    light: github

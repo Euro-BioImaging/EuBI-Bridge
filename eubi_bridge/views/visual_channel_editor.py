@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, List
 from eubi_bridge.ngff.multiscales import Pyramid, NGFFMetadataHandler
+from eubi_bridge.utils.path_utils import is_ome_zarr, get_ome_zarr_version
 from functools import lru_cache
 import time
 
@@ -44,24 +45,13 @@ COLOR_PRESETS = {
 }
 
 
-def _sniff_zarr_version(zarr_path: str) -> str: # TODO: detection should be more robust and remote-friendly
-    """Sniff OME-Zarr version from file structure.
+def _sniff_zarr_version(zarr_path: str) -> str:
+    """Sniff OME-Zarr version from zarr group using native zarr format detection.
     
-    - zarr.json + ome folder = version 0.5
-    - .zattrs without ome folder = version 0.4
+    Uses zarr-native format detection which works with both local and remote URLs.
     """
-    path = Path(zarr_path)
-    
-    has_zarr_json = (path / 'zarr.json').exists()
-    has_ome_folder = (path / 'ome').exists()
-    has_zattrs = (path / '.zattrs').exists()
-    
-    if has_zarr_json and has_ome_folder:
-        return "0.5"
-    elif has_zattrs and not has_ome_folder:
-        return "0.4"
-    else:
-        return "0.4"
+    version = get_ome_zarr_version(zarr_path)
+    return version if version else "0.4"
 
 
 def _load_pyramid_with_fallback(zarr_path: str) -> Tuple[Optional[Pyramid], Optional[str]]:
@@ -233,6 +223,58 @@ def get_dtype_range(dtype: np.dtype) -> Tuple[float, float]:
     elif np.issubdtype(dtype, np.floating):
         return float(np.finfo(dtype).min), float(np.finfo(dtype).max)
     return (0.0, 255.0)
+
+
+def compute_optimal_initial_zoom(metadata: Dict, h_axis: str, v_axis: str,
+                                  canvas_size: int = CANVAS_SIZE) -> int:
+    """
+    Compute the best initial zoom level to fit the full image in the canvas.
+    
+    Finds the highest resolution level (smallest index when inverted) where
+    the full image still fits within canvas_size.
+    
+    Args:
+        metadata: Image metadata with levels_info
+        h_axis: Horizontal axis name
+        v_axis: Vertical axis name
+        canvas_size: Display canvas size (default: CANVAS_SIZE)
+    
+    Returns:
+        zoom_level: Initial zoom level (higher = higher resolution)
+    """
+    levels = metadata['levels_info']
+    if not levels:
+        return 0
+    
+    shape = metadata['shape']
+    axes = metadata['axes']
+    
+    h_idx = axes.find(h_axis.lower())
+    v_idx = axes.find(v_axis.lower())
+    
+    if h_idx < 0 or v_idx < 0:
+        h_idx = len(axes) - 1
+        v_idx = len(axes) - 2
+    
+    base_h = shape[v_idx] if v_idx >= 0 else shape[-2]
+    base_w = shape[h_idx] if h_idx >= 0 else shape[-1]
+    
+    num_levels = len(levels)
+    
+    # Start from highest resolution (zoom_level = num_levels - 1)
+    # and work down until we find a level that fits
+    for zoom_level in range(num_levels - 1, -1, -1):
+        inverted_idx = num_levels - 1 - zoom_level
+        level = levels[inverted_idx]
+        level_h = level['shape'][v_idx] if v_idx < len(level['shape']) else level['shape'][-2]
+        level_w = level['shape'][h_idx] if h_idx < len(level['shape']) else level['shape'][-1]
+        
+        # Check if this level fits in canvas
+        if level_h <= canvas_size and level_w <= canvas_size:
+            return zoom_level
+    
+    # If no level fits, return the highest zoom (highest resolution)
+    return num_levels - 1
 
 
 def select_optimal_resolution(metadata: Dict, h_axis: str, v_axis: str,
@@ -592,6 +634,7 @@ def reset_for_new_dataset():
     st.session_state.plane_cache_order = []
     st.session_state.vce_dataset_id = st.session_state.get(
         'vce_dataset_id', 0) + 1
+    st.session_state.vce_zoom_level_computed = False  # Flag to compute zoom on first render
 
     for key in list(st.session_state.keys()):
         if key.startswith('intensity_range_'):
@@ -808,22 +851,6 @@ def render_save_controls(pyr: Pyramid, num_channels: int, channels_meta: list):
 
                 except Exception as e:
                     st.error(f"Failed to update metadata: {e}")
-
-
-def is_ome_zarr(path: str) -> bool:
-    """Check if a path is an OME-Zarr directory."""
-    if not os.path.isdir(path):
-        return False
-    zattrs_path = os.path.join(path, '.zattrs')
-    if not os.path.exists(zattrs_path):
-        return False
-    try:
-        import json
-        with open(zattrs_path, 'r') as f:
-            attrs = json.load(f)
-        return 'multiscales' in attrs
-    except Exception:
-        return False
 
 
 def scan_directory_for_zarrs(browse_path: str) -> Dict:
@@ -1229,6 +1256,16 @@ def render(bridge=None):
         st.session_state.vce_fov_center = (plane_height // 2, plane_width // 2)
 
     num_levels = metadata['num_levels']
+    
+    # Compute optimal initial zoom level on first render of new dataset
+    if 'vce_zoom_level_computed' not in st.session_state:
+        st.session_state.vce_zoom_level_computed = False
+    
+    if not st.session_state.vce_zoom_level_computed:
+        st.session_state.vce_zoom_level = compute_optimal_initial_zoom(metadata, h_axis, v_axis)
+        st.session_state.vce_zoom_level_computed = True
+    
+    # Clamp zoom level to valid range
     if st.session_state.vce_zoom_level >= num_levels:
         st.session_state.vce_zoom_level = max(0, num_levels - 1)
 

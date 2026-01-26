@@ -49,7 +49,7 @@ except ImportError:
 
 st.set_page_config(
     page_title="EuBI-Bridge GUI",
-    page_icon="🔬",
+    page_icon="eurobioimaging-logo.webp",
     layout="wide"
 )
 
@@ -105,10 +105,49 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🔬 EuBI-Bridge: OME-Zarr Tool")
+import base64
+
+# Load and encode the logo as base64
+def get_logo_data_url():
+    logo_path = "eubi_logo.png"#"eurobioimaging-logo.webp"
+    try:
+        with open(logo_path, "rb") as f:
+            logo_data = base64.b64encode(f.read()).decode()
+        return f"data:image/png;base64,{logo_data}"
+    except:
+        return None
+
+
+
+# Render title, logo, and caption in a single container
+logo_data_url = get_logo_data_url()
+if logo_data_url:
+    st.markdown(f'''
+        <div style="display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 0;">
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 10px;">
+                <div style="font-size: 2.5rem; font-weight: 700; line-height: 1.1;">EuBI-Bridge</div>
+                <div style="background-color: white; padding: 8px 12px; border-radius: 6px;">
+                    <img src="{logo_data_url}" style="height: 50px; margin: 0; padding: 0; display: block;"/>
+                </div>
+            </div>
+            <div style='margin-top: -5px;'>A unified tool for OME-Zarr creation, curation and visualisation.</div>
+        </div>
+    ''', unsafe_allow_html=True)
+else:
+    st.markdown(f'''
+        <div style="display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 0;">
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 10px;">
+                <div style="font-size: 2.5rem; font-weight: 700; line-height: 1.1;">EuBI-Bridge</div>
+                <div style="background-color: white; padding: 8px 12px; border-radius: 6px; display: flex; align-items: center; justify-content: center;">
+                    <span style="font-size: 3rem;">🔬</span>
+                </div>
+            </div>
+            <div style='margin-top: -5px;'>A unified tool for OME-Zarr creation, curation and visualisation.</div>
+        </div>
+    ''', unsafe_allow_html=True)
 
 operation_mode = st.radio(
-    "Select Operation:",
+    "",
     ["🔄 Convert to OME-Zarr", "🔍 Inspect/Visualize/Edit OME-Zarr"],
     horizontal=True
 )

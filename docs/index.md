@@ -1,3 +1,7 @@
+---
+title: EuBI-Bridge - OME-Zarr Conversion Tool
+---
+
 # EuBI-Bridge
 
 EuBI-Bridge is a tool for distributed conversion of microscopic image collections to the OME-Zarr format (**v0.4 or v0.5**). 

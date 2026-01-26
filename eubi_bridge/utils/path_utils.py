@@ -100,6 +100,73 @@ def is_zarr_group(path: Union[str, Path]) -> bool:
         return False
 
 
+def is_ome_zarr(path: Union[str, Path]) -> bool:
+    """Check if a path is an OME-Zarr directory using zarr-native detection.
+    
+    Supports both zarr v2 (NGFF v0.4) and zarr v3 (NGFF v0.5):
+    - v0.5 (zarr v3): Has 'ome' attribute in root group
+    - v0.4 (zarr v2): Has 'multiscales' attribute in root group
+    
+    Works with local paths and remote URLs.
+    
+    Args:
+        path: Path to directory or remote URL
+    
+    Returns:
+        True if path is a valid OME-Zarr, False otherwise
+    """
+    import zarr
+    
+    try:
+        gr = zarr.open_group(path, mode='r')
+        # Check for OME-Zarr metadata attributes
+        # v0.5 stores metadata under 'ome' attribute
+        # v0.4 stores metadata under 'multiscales' attribute
+        return 'ome' in gr.attrs or 'multiscales' in gr.attrs
+    except Exception:
+        return False
+
+
+def get_ome_zarr_version(path: Union[str, Path]) -> Optional[str]:
+    """Get the NGFF version string from an OME-Zarr using zarr-native detection.
+    
+    Returns the NGFF specification version (e.g., "0.5" or "0.4").
+    Uses the zarr group's native format detection which works with remote URLs.
+    
+    - Zarr format 3 with 'ome' attribute = OME-Zarr v0.5
+    - Zarr format 2 with 'multiscales' attribute = OME-Zarr v0.4
+    
+    Args:
+        path: Path to OME-Zarr directory or remote URL
+    
+    Returns:
+        NGFF version string ("0.5" or "0.4"), or None if not an OME-Zarr
+    """
+    import zarr
+    
+    try:
+        gr = zarr.open_group(path, mode='r')
+        zarr_format = gr.info._zarr_format
+        
+        # Check for OME-Zarr metadata based on zarr format
+        if zarr_format == 3:
+            # Zarr v3: metadata should be in 'ome' attribute
+            if 'ome' in gr.attrs:
+                return "0.5"
+        elif zarr_format == 2:
+            # Zarr v2: metadata can be in 'multiscales' attribute
+            if 'multiscales' in gr.attrs:
+                return "0.4"
+        
+        # Fallback: default to 0.4 for v2, 0.5 for v3 if metadata found
+        if 'ome' in gr.attrs or 'multiscales' in gr.attrs:
+            return "0.5" if zarr_format == 3 else "0.4"
+        
+        return None
+    except Exception:
+        return None
+
+
 def sensitive_glob(
     pattern: str,
     recursive: bool = False,
