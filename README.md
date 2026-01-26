@@ -64,7 +64,7 @@ then try the following:
 ```bash
 # In the `eubizarr` environment
 mamba install cmake zlib boost # preinstall dependencies that can help build from source
-pip install --no-cache-dir eubi-bridge[all]==0.1.0c2 # try installing again with the dependencies available
+pip install --no-cache-dir "eubi-bridge[all]==0.1.0c2" # try installing again with the dependencies available
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
 ````
