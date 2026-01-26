@@ -68,6 +68,18 @@ eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_6_layers --n_l
 eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_6_layers --n_layers 6
 ```
 
+### Specify the Compression Algorithm
+
+**Unix/macOS:**
+```bash
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_zstd --compressor zstd --compressor_params {level:13}
+```
+
+**Windows:**
+```cmd
+eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_6_layers --compressor zstd --compressor_params {level:13}
+```
+
 ### NGFF v0.5 with Sharding
 
 **Unix/macOS:**
