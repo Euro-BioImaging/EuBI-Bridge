@@ -59,6 +59,16 @@
     <ul class="current">
     <li class="toctree-l2"><a class="reference internal" href="#table-of-contents">Table of Contents</a>
     </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration-management">Configuration Management</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#reset-to-installation-defaults">Reset to Installation Defaults</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#modify-cluster-settings">Modify Cluster Settings</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#display-current-configuration">Display Current Configuration</a>
+    </li>
+        </ul>
+    </li>
     <li class="toctree-l2"><a class="reference internal" href="#basic-unary-conversion">Basic Unary Conversion</a>
         <ul>
     <li class="toctree-l3"><a class="reference internal" href="#simple-conversion-single-input-single-output">Simple Conversion: Single Input → Single Output</a>
@@ -143,30 +153,6 @@
     </li>
     <li class="toctree-l2"><a class="reference internal" href="#zarr-to-zarr-conversion">Zarr-to-Zarr Conversion</a>
     </li>
-    <li class="toctree-l2"><a class="reference internal" href="#configuration-management">Configuration Management</a>
-        <ul>
-    <li class="toctree-l3"><a class="reference internal" href="#display-current-configuration">Display Current Configuration</a>
-    </li>
-    <li class="toctree-l3"><a class="reference internal" href="#modify-cluster-settings">Modify Cluster Settings</a>
-    </li>
-    <li class="toctree-l3"><a class="reference internal" href="#reset-to-installation-defaults">Reset to Installation Defaults</a>
-    </li>
-        </ul>
-    </li>
-    <li class="toctree-l2"><a class="reference internal" href="#quick-reference-parameter-combinations">Quick Reference: Parameter Combinations</a>
-        <ul>
-    <li class="toctree-l3"><a class="reference internal" href="#standard-unary-metadata">Standard Unary + Metadata</a>
-    </li>
-    <li class="toctree-l3"><a class="reference internal" href="#optimized-for-cloud-storage">Optimized for Cloud Storage</a>
-    </li>
-    <li class="toctree-l3"><a class="reference internal" href="#small-datasets-memory-efficient">Small Datasets (Memory Efficient)</a>
-    </li>
-    <li class="toctree-l3"><a class="reference internal" href="#large-datasets-maximum-performance">Large Datasets (Maximum Performance)</a>
-    </li>
-    <li class="toctree-l3"><a class="reference internal" href="#multi-file-aggregation-complete-example">Multi-File Aggregation (Complete Example)</a>
-    </li>
-        </ul>
-    </li>
     </ul>
                 </li>
               </ul>
@@ -199,6 +185,7 @@
 <p><strong>Select your operating system below to see the correct syntax for your platform.</strong></p>
 <h2 id="table-of-contents">Table of Contents</h2>
 <ol>
+<li><a href="#configuration-management">Configuration Management</a></li>
 <li><a href="#basic-unary-conversion">Basic Unary Conversion</a></li>
 <li><a href="#filtering-pattern-matching">Filtering &amp; Pattern Matching</a></li>
 <li><a href="#metadata-inspection-override">Metadata Inspection &amp; Override</a></li>
@@ -207,8 +194,24 @@
 <li><a href="#csv-based-processing">CSV Based Processing</a></li>
 <li><a href="#multi-series-datasets">Multi-Series Datasets</a></li>
 <li><a href="#zarr-to-zarr-conversion">Zarr-to-Zarr Conversion</a></li>
-<li><a href="#configuration-management">Configuration Management</a></li>
 </ol>
+<hr />
+<hr />
+<h2 id="configuration-management">Configuration Management</h2>
+<h3 id="reset-to-installation-defaults">Reset to Installation Defaults</h3>
+<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
+<pre><code class="language-bash">eubi reset_config
+eubi show_config
+</code></pre>
+<h3 id="modify-cluster-settings">Modify Cluster Settings</h3>
+<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
+<pre><code class="language-bash">eubi configure_cluster --channel_intensity_limits from_array
+eubi show_config
+</code></pre>
+<h3 id="display-current-configuration">Display Current Configuration</h3>
+<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
+<pre><code class="language-bash">eubi show_config
+</code></pre>
 <hr />
 <h2 id="basic-unary-conversion">Basic Unary Conversion</h2>
 <h3 id="simple-conversion-single-input-single-output">Simple Conversion: Single Input → Single Output</h3>
@@ -425,59 +428,6 @@ small_dataset/image2.czi,output/image2_zarr,1.0,1.0,micrometer,micrometer,&quot;
 </code></pre>
 <p><strong>Windows:</strong></p>
 <pre><code class="language-cmd">eubi to_zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr\PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
-</code></pre>
-<hr />
-<h2 id="configuration-management">Configuration Management</h2>
-<h3 id="display-current-configuration">Display Current Configuration</h3>
-<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
-<pre><code class="language-bash">eubi show_config
-</code></pre>
-<h3 id="modify-cluster-settings">Modify Cluster Settings</h3>
-<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
-<pre><code class="language-bash">eubi configure_cluster --max_workers 3
-eubi show_config
-</code></pre>
-<h3 id="reset-to-installation-defaults">Reset to Installation Defaults</h3>
-<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
-<pre><code class="language-bash">eubi reset_config
-eubi show_config
-</code></pre>
-<hr />
-<h2 id="quick-reference-parameter-combinations">Quick Reference: Parameter Combinations</h2>
-<h3 id="standard-unary-metadata">Standard Unary + Metadata</h3>
-<p><strong>Unix/macOS:</strong></p>
-<pre><code class="language-bash">eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --y_scale 0.5 --x_scale 0.5 --y_unit micrometer --x_unit micrometer
-</code></pre>
-<p><strong>Windows:</strong></p>
-<pre><code class="language-cmd">eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --y_scale 0.5 --x_scale 0.5 --y_unit micrometer --x_unit micrometer
-</code></pre>
-<h3 id="optimized-for-cloud-storage">Optimized for Cloud Storage</h3>
-<p><strong>Unix/macOS:</strong></p>
-<pre><code class="language-bash">eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --zarr_format 3 --y_shard_coef 3 --x_shard_coef 3
-</code></pre>
-<p><strong>Windows:</strong></p>
-<pre><code class="language-cmd">eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --zarr_format 3 --y_shard_coef 3 --x_shard_coef 3
-</code></pre>
-<h3 id="small-datasets-memory-efficient">Small Datasets (Memory Efficient)</h3>
-<p><strong>Unix/macOS:</strong></p>
-<pre><code class="language-bash">eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --auto_chunk False --y_chunk 32 --x_chunk 32 --z_chunk 16
-</code></pre>
-<p><strong>Windows:</strong></p>
-<pre><code class="language-cmd">eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --auto_chunk False --y_chunk 32 --x_chunk 32 --z_chunk 16
-</code></pre>
-<h3 id="large-datasets-maximum-performance">Large Datasets (Maximum Performance)</h3>
-<p><strong>Unix/macOS:</strong></p>
-<pre><code class="language-bash">eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --n_layers 5 --auto_chunk False --y_chunk 128 --x_chunk 128 --z_chunk 64 --zarr_format 3
-</code></pre>
-<p><strong>Windows:</strong></p>
-<pre><code class="language-cmd">eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --n_layers 5 --auto_chunk False --y_chunk 128 --x_chunk 128 --z_chunk 64 --zarr_format 3
-</code></pre>
-<h3 id="multi-file-aggregation-complete-example">Multi-File Aggregation (Complete Example)</h3>
-<p><strong>Unix/macOS:</strong></p>
-<pre><code class="language-bash">eubi to_zarr dataset_directory $HOME/output/combined_dataset --channel_tag ch0,ch1,ch2 --time_tag t --z_tag slice --concatenation_axes ctz --y_scale 0.5 --x_scale 0.5 --override_channel_names --channel_labels &quot;0,DAPI;1,GFP;2,RFP&quot; --channel_colors &quot;0,0000FF;1,00FF00;2,FF0000&quot;
-</code></pre>
-<p><strong>Windows:</strong></p>
-<pre><code class="language-cmd">eubi to_zarr dataset_directory %USERPROFILE%\output\combined_dataset --channel_tag ch0,ch1,ch2 --time_tag t --z_tag slice --concatenation_axes ctz --y_scale 0.5 --x_scale 0.5 --override_channel_names --channel_labels &quot;0,DAPI;1,GFP;2,RFP&quot; --channel_colors &quot;0,0000FF;1,00FF00;2,FF0000&quot;
 </code></pre>
               
             </div>
