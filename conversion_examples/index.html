@@ -133,6 +133,14 @@
     </li>
         </ul>
     </li>
+    <li class="toctree-l2"><a class="reference internal" href="#multi-series-datasets">Multi-Series Datasets</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#convert-selected-series-only">Convert Selected Series Only</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#convert-all-series-from-czi-files">Convert All Series from CZI Files</a>
+    </li>
+        </ul>
+    </li>
     <li class="toctree-l2"><a class="reference internal" href="#csv-based-processing">CSV Based Processing</a>
         <ul>
     <li class="toctree-l3"><a class="reference internal" href="#create-a-csv-file">Create a CSV File</a>
@@ -140,14 +148,6 @@
     <li class="toctree-l3"><a class="reference internal" href="#convert-all-files-in-csv">Convert All Files in CSV</a>
     </li>
     <li class="toctree-l3"><a class="reference internal" href="#verify-results">Verify Results</a>
-    </li>
-        </ul>
-    </li>
-    <li class="toctree-l2"><a class="reference internal" href="#multi-series-datasets">Multi-Series Datasets</a>
-        <ul>
-    <li class="toctree-l3"><a class="reference internal" href="#convert-all-series-from-czi-files">Convert All Series from CZI Files</a>
-    </li>
-    <li class="toctree-l3"><a class="reference internal" href="#convert-selected-series-only">Convert Selected Series Only</a>
     </li>
         </ul>
     </li>
@@ -191,8 +191,8 @@
 <li><a href="#metadata-inspection-override">Metadata Inspection &amp; Override</a></li>
 <li><a href="#aggregative-conversion">Aggregative Conversion</a></li>
 <li><a href="#advanced-aggregation">Advanced Aggregation</a></li>
-<li><a href="#csv-based-processing">CSV Based Processing</a></li>
 <li><a href="#multi-series-datasets">Multi-Series Datasets</a></li>
+<li><a href="#csv-based-processing">CSV Based Processing</a></li>
 <li><a href="#zarr-to-zarr-conversion">Zarr-to-Zarr Conversion</a></li>
 </ol>
 <hr />
@@ -386,6 +386,22 @@ eubi show_config
 <pre><code class="language-cmd">eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_concat_zarr_with_metadata --channel_tag moving,noise,growing --time_tag step --concatenation_axes ct --time_scale 18 --time_unit millisecond --y_scale 0.5 --y_unit micrometer --x_scale 0.5 --x_unit micrometer --override_channel_names --channel_colors &quot;0,red;1,green;2,white&quot; --time_range 0,5
 </code></pre>
 <hr />
+<h2 id="multi-series-datasets">Multi-Series Datasets</h2>
+<h3 id="convert-selected-series-only">Convert Selected Series Only</h3>
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr medium_dataset/19_07_19_Lennard.lif $HOME/codash_output/multiseries_dataset --scene_index 2,4,6
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr medium_dataset\19_07_19_Lennard.lif %USERPROFILE%\codash_output\multiseries_dataset --scene_index 2,4,6
+</code></pre>
+<h3 id="convert-all-series-from-czi-files">Convert All Series from CZI Files</h3>
+<p><strong>Unix/macOS:</strong></p>
+<pre><code class="language-bash">eubi to_zarr &quot;medium_dataset/*.czi&quot; $HOME/codash_output/multiseries_dataset --scene_index all
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr &quot;medium_dataset\*.czi&quot; %USERPROFILE%\codash_output\multiseries_dataset --scene_index all
+</code></pre>
+<hr />
 <h2 id="csv-based-processing">CSV Based Processing</h2>
 <h3 id="create-a-csv-file">Create a CSV File</h3>
 <p>Find or create <code>selection.csv</code>. Its content should be similar to:</p>
@@ -405,22 +421,6 @@ small_dataset/image2.czi,output/image2_zarr,1.0,1.0,micrometer,micrometer,&quot;
 <pre><code class="language-cmd">eubi show_pixel_meta %USERPROFILE%\codash_output\from_csv_zarr
 </code></pre>
 <hr />
-<h2 id="multi-series-datasets">Multi-Series Datasets</h2>
-<h3 id="convert-all-series-from-czi-files">Convert All Series from CZI Files</h3>
-<p><strong>Unix/macOS:</strong></p>
-<pre><code class="language-bash">eubi to_zarr &quot;medium_dataset/*.czi&quot; $HOME/codash_output/multiseries_dataset --scene_index all
-</code></pre>
-<p><strong>Windows:</strong></p>
-<pre><code class="language-cmd">eubi to_zarr &quot;medium_dataset\*.czi&quot; %USERPROFILE%\codash_output\multiseries_dataset --scene_index all
-</code></pre>
-<h3 id="convert-selected-series-only">Convert Selected Series Only</h3>
-<p><strong>Unix/macOS:</strong></p>
-<pre><code class="language-bash">eubi to_zarr medium_dataset/19_07_19_Lennard.lif $HOME/codash_output/multiseries_dataset --scene_index 2,4,6
-</code></pre>
-<p><strong>Windows:</strong></p>
-<pre><code class="language-cmd">eubi to_zarr medium_dataset\19_07_19_Lennard.lif %USERPROFILE%\codash_output\multiseries_dataset --scene_index 2,4,6
-</code></pre>
-<hr />
 <h2 id="zarr-to-zarr-conversion">Zarr-to-Zarr Conversion</h2>
 <p>Re-chunk and reformat existing OME-Zarr files:</p>
 <p><strong>Unix/macOS:</strong></p>
@@ -429,6 +429,7 @@ small_dataset/image2.czi,output/image2_zarr,1.0,1.0,micrometer,micrometer,&quot;
 <p><strong>Windows:</strong></p>
 <pre><code class="language-cmd">eubi to_zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr\PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
 </code></pre>
+<hr />
               
             </div>
           </div><footer>
