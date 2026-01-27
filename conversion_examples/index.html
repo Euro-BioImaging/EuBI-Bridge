@@ -410,8 +410,11 @@ small_dataset/image1.tif,output/image1_zarr,0.5,0.5,micrometer,micrometer,&quot;
 small_dataset/image2.czi,output/image2_zarr,1.0,1.0,micrometer,micrometer,&quot;0,DAPI;1,GFP&quot;
 </code></pre>
 <h3 id="convert-all-files-in-csv">Convert All Files in CSV</h3>
-<p><strong>Unix/macOS &amp; Windows (same for both):</strong></p>
-<pre><code class="language-bash">eubi to_zarr selection.csv
+<p><strong>Unix/macOS &amp; Windows:</strong></p>
+<pre><code class="language-bash">eubi to_zarr selection.csv $HOME/codash_output/from_csv_zarr
+</code></pre>
+<p><strong>Windows:</strong></p>
+<pre><code class="language-cmd">eubi to_zarr selection.csv %USERPROFILE%\codash_output\from_csv_zarr
 </code></pre>
 <h3 id="verify-results">Verify Results</h3>
 <p><strong>Unix/macOS:</strong></p>
