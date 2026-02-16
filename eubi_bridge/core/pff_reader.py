@@ -167,6 +167,6 @@ def read_pff(
         # Default fallback: use bioformats
         from bioio_bioformats.reader import Reader as reader
         logger.info("Using bioio-bioformats reader (fallback)")
-        img = reader(input_path, **kwargs)
+        img = reader(input_path)
         return BioIOReader(input_path, img, **kwargs)
 # pff.get_image_dask_data()

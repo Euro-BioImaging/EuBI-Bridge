@@ -6,17 +6,48 @@ Command examples loosely organized by use case. Copy and paste these commands, a
 
 ## Table of Contents
 
-1. [Basic Unary Conversion](#basic-unary-conversion)
-2. [Filtering & Pattern Matching](#filtering-pattern-matching)
-3. [Metadata Inspection & Override](#metadata-inspection-override)
-4. [Aggregative Conversion](#aggregative-conversion)
-5. [Advanced Aggregation](#advanced-aggregation)
-6. [CSV Based Processing](#csv-based-processing)
+1. [Configuration Management](#configuration-management)
+2. [Basic Unary Conversion](#basic-unary-conversion)
+3. [Filtering & Pattern Matching](#filtering-pattern-matching)
+4. [Metadata Inspection & Override](#metadata-inspection-override)
+5. [Aggregative Conversion](#aggregative-conversion)
+6. [Advanced Aggregation](#advanced-aggregation)
 7. [Multi-Series Datasets](#multi-series-datasets)
-8. [Zarr-to-Zarr Conversion](#zarr-to-zarr-conversion)
-9. [Configuration Management](#configuration-management)
+8. [CSV Based Processing](#csv-based-processing)
+9. [Zarr-to-Zarr Conversion](#zarr-to-zarr-conversion)
 
 ---
+
+---
+
+## Configuration Management
+
+### Reset to Installation Defaults
+
+**Unix/macOS & Windows (same for both):**
+```bash
+eubi reset_config
+eubi show_config
+```
+
+### Modify Conversion Settings
+
+**Unix/macOS & Windows (same for both):**
+```bash
+eubi configure_conversion --channel_intensity_limits from_array
+eubi show_config
+```
+
+
+### Display Current Configuration
+
+**Unix/macOS & Windows (same for both):**
+```bash
+eubi show_config
+```
+
+---
+
 
 ## Basic Unary Conversion
 
@@ -318,6 +349,34 @@ eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_conca
 
 ---
 
+## Multi-Series Datasets
+
+### Convert Selected Series Only
+
+**Unix/macOS:**
+```bash
+eubi to_zarr medium_dataset/19_07_19_Lennard.lif $HOME/codash_output/multiseries_dataset --scene_index 2,4,6
+```
+
+**Windows:**
+```cmd
+eubi to_zarr medium_dataset\19_07_19_Lennard.lif %USERPROFILE%\codash_output\multiseries_dataset --scene_index 2,4,6
+```
+
+### Convert All Series from CZI Files
+
+**Unix/macOS:**
+```bash
+eubi to_zarr "medium_dataset/*.czi" $HOME/codash_output/multiseries_dataset --scene_index all
+```
+
+**Windows:**
+```cmd
+eubi to_zarr "medium_dataset\*.czi" %USERPROFILE%\codash_output\multiseries_dataset --scene_index all
+```
+
+---
+
 ## CSV Based Processing
 
 ### Create a CSV File
@@ -332,9 +391,14 @@ small_dataset/image2.czi,output/image2_zarr,1.0,1.0,micrometer,micrometer,"0,DAP
 
 ### Convert All Files in CSV
 
-**Unix/macOS & Windows (same for both):**
+**Unix/macOS & Windows:**
 ```bash
-eubi to_zarr selection.csv
+eubi to_zarr selection.csv $HOME/codash_output/from_csv_zarr
+```
+
+**Windows:**
+```cmd
+eubi to_zarr selection.csv %USERPROFILE%\codash_output\from_csv_zarr
 ```
 
 ### Verify Results
@@ -347,34 +411,6 @@ eubi show_pixel_meta $HOME/codash_output/from_csv_zarr
 **Windows:**
 ```cmd
 eubi show_pixel_meta %USERPROFILE%\codash_output\from_csv_zarr
-```
-
----
-
-## Multi-Series Datasets
-
-### Convert All Series from CZI Files
-
-**Unix/macOS:**
-```bash
-eubi to_zarr "medium_dataset/*.czi" $HOME/codash_output/multiseries_dataset --scene_index all
-```
-
-**Windows:**
-```cmd
-eubi to_zarr "medium_dataset\*.czi" %USERPROFILE%\codash_output\multiseries_dataset --scene_index all
-```
-
-### Convert Selected Series Only
-
-**Unix/macOS:**
-```bash
-eubi to_zarr medium_dataset/19_07_19_Lennard.lif $HOME/codash_output/multiseries_dataset --scene_index 2,4,6
-```
-
-**Windows:**
-```cmd
-eubi to_zarr medium_dataset\19_07_19_Lennard.lif %USERPROFILE%\codash_output\multiseries_dataset --scene_index 2,4,6
 ```
 
 ---
@@ -394,93 +430,3 @@ eubi to_zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr\P
 ```
 
 ---
-
-## Configuration Management
-
-### Display Current Configuration
-
-**Unix/macOS & Windows (same for both):**
-```bash
-eubi show_config
-```
-
-### Modify Cluster Settings
-
-**Unix/macOS & Windows (same for both):**
-```bash
-eubi configure_cluster --max_workers 3
-eubi show_config
-```
-
-### Reset to Installation Defaults
-
-**Unix/macOS & Windows (same for both):**
-```bash
-eubi reset_config
-eubi show_config
-```
-
----
-
-## Quick Reference: Parameter Combinations
-
-### Standard Unary + Metadata
-
-**Unix/macOS:**
-```bash
-eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --y_scale 0.5 --x_scale 0.5 --y_unit micrometer --x_unit micrometer
-```
-
-**Windows:**
-```cmd
-eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --y_scale 0.5 --x_scale 0.5 --y_unit micrometer --x_unit micrometer
-```
-
-### Optimized for Cloud Storage
-
-**Unix/macOS:**
-```bash
-eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --zarr_format 3 --y_shard_coef 3 --x_shard_coef 3
-```
-
-**Windows:**
-```cmd
-eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --zarr_format 3 --y_shard_coef 3 --x_shard_coef 3
-```
-
-### Small Datasets (Memory Efficient)
-
-**Unix/macOS:**
-```bash
-eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --auto_chunk False --y_chunk 32 --x_chunk 32 --z_chunk 16
-```
-
-**Windows:**
-```cmd
-eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --auto_chunk False --y_chunk 32 --x_chunk 32 --z_chunk 16
-```
-
-### Large Datasets (Maximum Performance)
-
-**Unix/macOS:**
-```bash
-eubi to_zarr INPUT_DIR $HOME/output/OUTPUT_NAME --n_layers 5 --auto_chunk False --y_chunk 128 --x_chunk 128 --z_chunk 64 --zarr_format 3
-```
-
-**Windows:**
-```cmd
-eubi to_zarr INPUT_DIR %USERPROFILE%\output\OUTPUT_NAME --n_layers 5 --auto_chunk False --y_chunk 128 --x_chunk 128 --z_chunk 64 --zarr_format 3
-```
-
-### Multi-File Aggregation (Complete Example)
-
-**Unix/macOS:**
-```bash
-eubi to_zarr dataset_directory $HOME/output/combined_dataset --channel_tag ch0,ch1,ch2 --time_tag t --z_tag slice --concatenation_axes ctz --y_scale 0.5 --x_scale 0.5 --override_channel_names --channel_labels "0,DAPI;1,GFP;2,RFP" --channel_colors "0,0000FF;1,00FF00;2,FF0000"
-```
-
-**Windows:**
-```cmd
-eubi to_zarr dataset_directory %USERPROFILE%\output\combined_dataset --channel_tag ch0,ch1,ch2 --time_tag t --z_tag slice --concatenation_axes ctz --y_scale 0.5 --x_scale 0.5 --override_channel_names --channel_labels "0,DAPI;1,GFP;2,RFP" --channel_colors "0,0000FF;1,00FF00;2,FF0000"
-```
-

@@ -91,7 +91,7 @@ class AggregativeConverter:
         #     )
 
     async def read_dataset(self,
-                     chunks_yx = None,
+                     # chunks_yx = None,  # TODO: Figure out what this is for
                      readers_params = {},
                      ):
         """
@@ -138,7 +138,7 @@ class AggregativeConverter:
                     ### Then flatten the series here.
                     read_single_image_delayed(
                                       path,
-                                      chunks_yx=chunks_yx,
+                                      # chunks_yx=chunks_yx,  # TODO: Figure out what this is for
                                       # verified_for_cluster=verified_for_cluster,
                                       zarr_format = zarr_format,
                                       verbose = verbose,

@@ -154,6 +154,10 @@ def get_regions(array_shape: Tuple[int, ...],
 def get_compressor(name,
                    zarr_format = ZARR_V2,
                    **params): ### TODO: continue this, add for zarr3
+    # Handle no compression case
+    if name is None or name == '' or (isinstance(name, str) and name.lower() == 'none'):
+        return None
+    
     name = name.lower()
     assert zarr_format in (ZARR_V2, ZARR_V3)
     compression_dict2 = {
@@ -177,9 +181,13 @@ def get_compressor(name,
     }
 
     if zarr_format == ZARR_V2:
+        if name not in compression_dict2:
+            raise ValueError(f"Unsupported compressor '{name}' for Zarr v2. Supported: {list(compression_dict2.keys())}")
         compressor_name = compression_dict2[name]
         compressor_instance = getattr(numcodecs, compressor_name)
     elif zarr_format == ZARR_V3:
+        if name not in compression_dict3:
+            raise ValueError(f"Unsupported compressor '{name}' for Zarr v3. Supported: {list(compression_dict3.keys())}")
         compressor_name = compression_dict3[name]
         compressor_instance = getattr(codecs, compressor_name)
     else:
@@ -235,10 +243,11 @@ def _create_zarr_v3_array(
         overwrite: bool = False,
         **kwargs
 ) -> zarr.Array:
-    compressors = [get_compressor(compressor_config.name,
-                                  zarr_format=ZARR_V3,
-                                  **compressor_config.params)
-                   ]
+    compressor = get_compressor(compressor_config.name,
+                                zarr_format=ZARR_V3,
+                                **compressor_config.params)
+    # For Zarr v3, only include compressors if not None (no compression)
+    compressors = [compressor] if compressor is not None else []
     return zarr.create_array(
         store=store,
         shape=shape,
@@ -424,6 +433,21 @@ async def write_with_tensorstore_async(
         kvstore["file_io_concurrency"] = {"limit": int(ts_io_concurrency)}
 
     if zarr_format == 3:
+        # Build codec pipeline using proper zarr.codecs API
+        bytes_codec = codecs.BytesCodec(endian=codecs.Endian.little)
+        crc32c_codec = codecs.Crc32cCodec()
+        
+        # Get compressor codec object and convert to dict
+        compressor_codec = get_compressor(compressor, zarr_format=ZARR_V3, **compressor_params)
+        
+        # Build inner codecs list
+        inner_codecs = [bytes_codec.to_dict()]
+        if compressor_codec is not None:
+            inner_codecs.append(compressor_codec.to_dict())
+        
+        # Build index codecs list
+        index_codecs = [bytes_codec.to_dict(), crc32c_codec.to_dict()]
+        
         zarr_metadata = {
             "data_type": np.dtype(dtype).name,
             "shape": arr.shape,
@@ -434,14 +458,8 @@ async def write_with_tensorstore_async(
                     "name": "sharding_indexed",
                     "configuration": {
                         "chunk_shape": chunks,
-                        "codecs": [
-                            {"name": "bytes", "configuration": {"endian": "little"}},
-                            {"name": compressor, "configuration": compressor_params or {}}
-                        ],
-                        "index_codecs": [
-                            {"name": "bytes", "configuration": {"endian": "little"}},
-                            {"name": "crc32c"}
-                        ],
+                        "codecs": inner_codecs,
+                        "index_codecs": index_codecs,
                         "index_location": "end"
                     }
                 }
@@ -593,15 +611,21 @@ async def downscale_with_tensorstore_async(
     gr_path = os.path.dirname(base_array_path)
     pyr = Pyramid(gr_path)
 
+    # Extract region_size_mb from kwargs with default value
+    region_size_mb = kwargs.get('region_size_mb', 8.0)
+
     # min_dimension_size = kwargs.get('min_dimension_size', None)
     # scale_factor = [scale_factor_dict[ax] for ax in pyr.meta.axis_order]
-
+    
+    logger.info(f"Updating downscaler with scale_factor={scale_factor}, n_layers={n_layers}")
     await pyr.update_downscaler(scale_factor=scale_factor,
                           n_layers=n_layers,
                           downscale_method=downscale_method,
                           min_dimension_size=min_dimension_size,
                           use_tensorstore=True
                           )
+    
+    logger.info(f"Downscaler created {len(pyr.downscaler.downscaled_arrays)} layers for writing")
 
     try:
         grpath = pyr.gr.store.root
@@ -612,45 +636,86 @@ async def downscale_with_tensorstore_async(
     base_layer = pyr.layers[basepath]
     zarr_format = pyr.meta.zarr_format
 
-    try:
-        compressor_params = base_layer.compressors[0].get_config()
-    except (AttributeError, IndexError):
-        # Fallback if get_config() not available or no compressors
-        compressor_params = base_layer.compressors[0].to_dict()#dict(base_layer.codec.to_json())
-    if 'id' in compressor_params:
-        compressor_name = compressor_params['id']
-        compressor_params.pop('id')
-    elif 'name' in compressor_params:
-        compressor_name = compressor_params['name']
-        compressor_params = compressor_params['configuration']
+    # Handle no compression case (empty compressors list)
+    if len(base_layer.compressors) == 0:
+        compressor_name = None
+        compressor_params = {}
+    else:
+        try:
+            compressor_params = base_layer.compressors[0].get_config()
+        except (AttributeError, IndexError):
+            # Fallback if get_config() not available
+            compressor_params = base_layer.compressors[0].to_dict()
+        
+        if 'id' in compressor_params:
+            compressor_name = compressor_params['id']
+            compressor_params.pop('id')
+        elif 'name' in compressor_params:
+            compressor_name = compressor_params['name']
+            compressor_params = compressor_params['configuration']
+        else:
+            compressor_name = None
+            compressor_params = {}
 
     # compressor_params = dict(arr.codec.to_json())
 
+    # Write downscaled layers concurrently with fixed region size
+    # Fixed 16 MB regions ensure fast downscaling regardless of chunk size
+    downscale_region_size_mb = 16.0
+    logger.info(f"Downscaling with fixed region_size_mb={downscale_region_size_mb} MB")
+    
     coros = []
+    layer_count = 0
+    total_layers = len([k for k in pyr.downscaler.downscaled_arrays.keys() if k != '0'])
+    
     for key, arr in pyr.downscaler.downscaled_arrays.items():
         if key != '0':
-            shards = tuple(base_layer.shards) if base_layer.shards is not None else base_layer.chunks
-            params = dict(
-                arr = arr,
-                output_path=os.path.join(grpath, key),
-                output_chunks = tuple(base_layer.chunks),
-                output_shards = shards,
-                compressor = compressor_name,
-                compressor_params = compressor_params,
-                zarr_format = zarr_format,
-                dimension_names = list(pyr.axes),
-                pixel_sizes = tuple(pyr.downscaler.dm.scales[int(key)]),
-                dtype = np.dtype(arr.dtype.name),
-                # **kwargs,
-                **{k: v for k, v in kwargs.items() if k not in ('max_concurrency', 'dtype', 'compressor', 'compressor_params', 'zarr_format')}
-            )
-            #coro = write_with_tensorstore_async(**params)
-            #import pprint
-            #pprint.pprint(params)
-            coro = write_with_queue_async(**params)
-            coros.append(coro)
-
-    await asyncio.gather(*coros)
+            layer_count += 1
+            try:
+                logger.info(f"Preparing layer {key} ({layer_count}/{total_layers}) for writing...")
+                logger.info(f"Layer {key} shape: {arr.shape}, dtype: {arr.dtype}")
+                shards = tuple(base_layer.shards) if base_layer.shards is not None else base_layer.chunks
+                
+                params = dict(
+                    arr = arr,
+                    output_path=os.path.join(grpath, key),
+                    output_chunks = tuple(base_layer.chunks),
+                    output_shards = shards,
+                    compressor = compressor_name,
+                    compressor_params = compressor_params,
+                    zarr_format = zarr_format,
+                    dimension_names = list(pyr.axes),
+                    pixel_sizes = tuple(pyr.downscaler.dm.scales[int(key)]),
+                    dtype = np.dtype(arr.dtype.name),
+                    region_size_mb = downscale_region_size_mb,
+                    # **kwargs,
+                    **{k: v for k, v in kwargs.items() if k not in ('max_concurrency', 'dtype', 'compressor', 'compressor_params', 'zarr_format', 'region_size_mb')}
+                )
+                
+                coro = write_with_queue_async(**params)
+                coros.append((key, coro))
+                
+            except Exception as e:
+                logger.error(f"Failed to prepare layer {key} for writing: {e}", exc_info=True)
+                raise
+    
+    logger.info(f"Starting concurrent writes for {len(coros)} downscaled layers...")
+    
+    # Write all downscaled layers concurrently
+    try:
+        results = await asyncio.gather(*[coro for _, coro in coros], return_exceptions=True)
+        
+        # Check for exceptions in results
+        for (key, _), result in zip(coros, results):
+            if isinstance(result, Exception):
+                logger.error(f"Failed to write layer {key}: {result}", exc_info=result)
+                raise result
+        
+        logger.info(f"All downscaled layers written successfully")
+    except Exception as e:
+        logger.error(f"Error during concurrent downscale writes: {e}", exc_info=True)
+        raise
+    
     pyr = Pyramid(gr_path)
 
     return pyr
@@ -1397,23 +1462,28 @@ async def store_multiscale_async(
     if scale_factors is not None:
         logger.info(f"Starting downscaling...")
         downscale_start = time.time()
-
-        pyr = await downscale_with_tensorstore_async(
-            base_store=base_store_path,
-            scale_factor=scale_factors,
-            n_layers=n_layers,
-            min_dimension_size=min_dimension_size,
-            downscale_method=downscale_method,
-            chunks=chunks,
-            shards=shards,
-            max_concurrency=max_concurrency,
-            queue_size=queue_size,
-            region_size_mb=region_size_mb,
-            # dtype=dtype,
-            **{k: v for k, v in kwargs.items() if k != 'max_concurrency'}
-        )
-        downscale_elapsed = (time.time() - downscale_start) / 60
-        logger.info(f"Downscaling completed in {downscale_elapsed:.2f} minutes")
+        
+        try:
+            pyr = await downscale_with_tensorstore_async(
+                base_store=base_store_path,
+                scale_factor=scale_factors,
+                n_layers=n_layers,
+                min_dimension_size=min_dimension_size,
+                downscale_method=downscale_method,
+                chunks=chunks,
+                shards=shards,
+                max_concurrency=max_concurrency,
+                queue_size=queue_size,
+                region_size_mb=region_size_mb,
+                # dtype=dtype,
+                **{k: v for k, v in kwargs.items() if k != 'max_concurrency'}
+            )
+            downscale_elapsed = (time.time() - downscale_start) / 60
+            logger.info(f"Downscaling completed in {downscale_elapsed:.2f} minutes")
+        except Exception as e:
+            downscale_elapsed = (time.time() - downscale_start) / 60
+            logger.error(f"Downscaling failed after {downscale_elapsed:.2f} minutes: {e}", exc_info=True)
+            raise
     else:
         pyr = Pyramid(gr)
 

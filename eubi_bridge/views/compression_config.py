@@ -9,7 +9,7 @@ import streamlit as st
 from eubi_bridge.external.dyna_zarr.codecs import Codecs
 
 
-def render_compression_config(key_prefix=""):
+def render_compression_config(key_prefix="", zarr_format=2):
     """
     Render a compression configuration panel in Streamlit.
     
@@ -20,22 +20,38 @@ def render_compression_config(key_prefix=""):
     ----------
     key_prefix : str, optional
         Prefix for Streamlit widget keys to avoid conflicts.
+    zarr_format : int, optional
+        Zarr format version (2 or 3). Default is 2.
+        Affects parameter formatting for some compressors (e.g., Blosc shuffle).
+        Zarr v2 supports: blosc, zstd, gzip, lz4, bz2, none
+        Zarr v3 supports: blosc, zstd, gzip, none
         
     Returns
     -------
     tuple
         (compressor_name: str, compressor_params: dict)
         E.g., ('gzip', {'level': 5}) or ('blosc', {'clevel': 5, 'cname': 'lz4', 'shuffle': 1})
+        For Zarr v3 with Blosc, shuffle will be a string ('shuffle', 'noshuffle', 'bitshuffle')
     """
     with st.expander("🗜️ Compression Settings", expanded=False):
         col1, col2 = st.columns([2, 1])
         
         with col1:
+            # Format-specific compressor options
+            if zarr_format == 3:
+                # Zarr v3 only supports: blosc, gzip, zstd, crc32c (not for user selection)
+                compressor_options = ['blosc', 'zstd', 'gzip', 'none']
+                help_text = "Choose compression algorithm. Zarr v3 supports: blosc, zstd, gzip. 'blosc' is fastest, 'zstd' offers best compression, 'none' disables compression."
+            else:
+                # Zarr v2 supports all compression algorithms
+                compressor_options = ['blosc', 'zstd', 'gzip', 'lz4', 'bz2', 'none']
+                help_text = "Choose compression algorithm. 'blosc' is fastest, 'zstd' offers best compression, 'none' disables compression."
+            
             compressor = st.selectbox(
                 "Compression Algorithm",
-                options=['blosc', 'zstd', 'gzip', 'lz4', 'bz2', 'none'],
+                options=compressor_options,
                 index=0,
-                help="Choose compression algorithm. 'blosc' is fastest, 'zstd' offers best compression, 'none' disables compression.",
+                help=help_text,
                 key=f"{key_prefix}_compressor"
             )
         
@@ -61,10 +77,20 @@ def render_compression_config(key_prefix=""):
                 compressor_params['clevel'] = clevel
             
             with col2:
+                # For Zarr v3, BloscCodec only supports certain cname values
+                if zarr_format == 3:
+                    # Zarr v3 Blosc supports: lz4, zstd, zlib (limited set)
+                    blosc_cname_options = ['zstd', 'lz4', 'zlib']
+                    default_idx = 0  # zstd
+                else:
+                    # Zarr v2 supports full set
+                    blosc_cname_options = ['lz4', 'zstd', 'zlib', 'snappy', 'blosclz']
+                    default_idx = 0  # lz4
+                
                 cname = st.selectbox(
                     "Blosc Codec",
-                    options=['lz4', 'zstd', 'zlib', 'snappy', 'blosclz'],
-                    index=0,
+                    options=blosc_cname_options,
+                    index=default_idx,
                     help="Inner codec for Blosc. LZ4=fast, ZSTD=better compression",
                     key=f"{key_prefix}_blosc_cname"
                 )
@@ -78,9 +104,14 @@ def render_compression_config(key_prefix=""):
                     help="Data reordering before compression",
                     key=f"{key_prefix}_blosc_shuffle"
                 )
-                # Convert to numeric value (0, 1, 2)
-                shuffle_map = {'no shuffle': 0, 'byte shuffle': 1, 'bit shuffle': 2}
-                compressor_params['shuffle'] = shuffle_map[shuffle]
+                # Convert to appropriate format based on Zarr version
+                shuffle_map_v2 = {'no shuffle': 0, 'byte shuffle': 1, 'bit shuffle': 2}
+                shuffle_map_v3 = {'no shuffle': 'noshuffle', 'byte shuffle': 'shuffle', 'bit shuffle': 'bitshuffle'}
+                
+                if zarr_format == 3:
+                    compressor_params['shuffle'] = shuffle_map_v3[shuffle]
+                else:  # Zarr v2
+                    compressor_params['shuffle'] = shuffle_map_v2[shuffle]
         
         elif compressor == 'zstd':
             st.markdown("**ZSTD Parameters:**")
@@ -120,12 +151,13 @@ def render_compression_config(key_prefix=""):
         
         elif compressor == 'lz4':
             st.markdown("**LZ4 Parameters:**")
-            st.info("LZ4 uses default parameters (no configuration needed)")
+            st.error("⚠️ LZ4 is not available for Zarr v3! Use Blosc with cname='lz4' instead.")
             # LZ4 has no parameters in our implementation
             compressor_params = {}
         
         elif compressor == 'bz2':
             st.markdown("**BZ2 Parameters:**")
+            st.error("⚠️ BZ2 is not available for Zarr v3! Use Zstd or Gzip instead.")
             col1, col2 = st.columns([2, 2])
             
             with col1:
@@ -135,7 +167,8 @@ def render_compression_config(key_prefix=""):
                     max_value=9,
                     value=5,
                     help="1=fastest, 9=best compression",
-                    key=f"{key_prefix}_bz2_level"
+                    key=f"{key_prefix}_bz2_level",
+                    disabled=True
                 )
                 compressor_params['clevel'] = level
             

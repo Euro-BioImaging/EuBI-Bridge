@@ -1,6 +1,7 @@
 """
 Worker initialization module for multiprocessing with JVM support.
 """
+import functools
 import multiprocessing as mp
 import os
 import sys
@@ -13,6 +14,9 @@ logger = get_logger(__name__)
 _worker_initialized = False
 # Global tensorstore context for data copy concurrency
 _tensorstore_context = None
+
+
+
 
 def build_tensorstore_context(data_copy_concurrency: int = 1):
     """
@@ -101,7 +105,7 @@ def _patch_xsdata_for_cython():
         pass
 
 
-def initialize_worker_process(**kwargs):
+def initialize_worker_process(tensorstore_data_copy_concurrency=1):
     """
     Initialize worker process with JVM and proper scyjava configuration.
 
@@ -109,9 +113,8 @@ def initialize_worker_process(**kwargs):
     
     Parameters
     ----------
-    **kwargs : dict, optional
-        Additional initialization parameters:
-        - tensorstore_data_copy_concurrency (int): CPU core limit for tensorstore data copying.
+    tensorstore_data_copy_concurrency : int, optional
+        CPU core limit for tensorstore data copying. Default is 1.
     """
     global _worker_initialized, _tensorstore_context
 
@@ -122,7 +125,12 @@ def initialize_worker_process(**kwargs):
     
     # Build tensorstore context with data_copy_concurrency limit
     try:
-        data_copy_concurrency = kwargs.get('tensorstore_data_copy_concurrency', 1)
+        # For ProcessPoolExecutor with spawn context, use initargs value
+        # For ThreadPoolExecutor, also check environment variable set by parent
+        data_copy_concurrency = tensorstore_data_copy_concurrency
+        if tensorstore_data_copy_concurrency == 1 and 'EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY' in os.environ:
+            # If default value from parameter but env var is set, use env var (threading mode)
+            data_copy_concurrency = int(os.environ['EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY'])
         _tensorstore_context = build_tensorstore_context(data_copy_concurrency)
         logger.info(
             f"[Worker {mp.current_process().name}] Tensorstore context configured: "

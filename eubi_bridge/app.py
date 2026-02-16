@@ -162,6 +162,23 @@ if 'bridge' not in st.session_state:
 
 bridge = st.session_state.bridge
 
+def get_config_value(section, key, default=None):
+    """Get configuration value from bridge config, with fallback to loaded_config or default."""
+    # Try loaded_config first (user-loaded config takes precedence)
+    if 'loaded_config' in st.session_state and st.session_state.loaded_config:
+        if section in st.session_state.loaded_config and key in st.session_state.loaded_config[section]:
+            return st.session_state.loaded_config[section][key]
+    
+    # Fall back to bridge config (file-based defaults)
+    try:
+        if section in bridge.config and key in bridge.config[section]:
+            return bridge.config[section][key]
+    except Exception:
+        pass
+    
+    # Final fallback to provided default
+    return default
+
 if operation_mode == "🔍 Inspect/Visualize/Edit OME-Zarr":
     visual_channel_editor.render_sidebar_file_browser()
 else:
@@ -530,39 +547,128 @@ else:
             except Exception as e:
                 st.error(f"Error: {e}")
     with st.sidebar.expander("Config Management"):
-        config_action = st.radio("Action:", ["Use Current", "Load", "Save", "Reset"], key="conv_config_action", horizontal=True)
+        st.info("Load, save, and manage configuration profiles for your conversion parameters.")
+        config_action = st.radio("Action:", ["Use Default", "Load Custom", "Save Custom", "Reset"], key="conv_config_action", horizontal=False)
         
-        if config_action == "Load":
-            config_file = st.text_input("Config path:", f"{os.path.expanduser('~')}/.eubi_bridge/config.json", key="conv_load_path")
+        if config_action == "Load Custom":
+            config_file = st.text_input(
+                "Config File Path:",
+                value=f"{os.path.expanduser('~')}/.eubi_bridge/.eubi_config.json",
+                key="conv_load_path"
+            )
             if st.button("Load Config", key="conv_load_btn"):
                 try:
                     with open(config_file, 'r') as f:
-                        st.session_state.loaded_config = json.load(f)
-                        st.success(f"Loaded")
+                        loaded = json.load(f)
+                        st.session_state.loaded_config = loaded
+                        # Update bridge config to reflect loaded values
+                        bridge.config = loaded
+                        st.success("✅ Configuration loaded and applied!")
+                        st.rerun()
+                except FileNotFoundError:
+                    st.error(f"File not found: {config_file}")
+                except json.JSONDecodeError:
+                    st.error("Invalid JSON format in config file")
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Error loading config: {e}")
         
-        elif config_action == "Save":
-            config_file = st.text_input("Config path:", "config.json", key="conv_save_path")
-            if st.button("Save Config", key="conv_save_btn"):
+        elif config_action == "Save Custom":
+            default_save_path = f"{os.path.expanduser('~')}/.eubi_bridge/.eubi_config.json"
+            config_file = st.text_input(
+                "Config File Path:",
+                value=default_save_path,
+                key="conv_save_path"
+            )
+            if st.button("Save Current Config", key="conv_save_btn"):
                 try:
+                    # Read current GUI values from session state using the widget keys
                     config_to_save = {
-                        'cluster': dict(bridge.config['cluster']),
-                        'readers': dict(bridge.config['readers']),
-                        'conversion': dict(bridge.config['conversion']),
-                        'downscale': dict(bridge.config['downscale'])
+                        'cluster': {
+                            'on_local_cluster': st.session_state.get('conv_on_local_cluster', False),
+                            'on_slurm': st.session_state.get('conv_on_slurm', False),
+                            'use_threading': False,
+                            'max_workers': int(st.session_state.get('conv_max_workers', 4)),
+                            'queue_size': int(st.session_state.get('conv_queue_size', 4)),
+                            'region_size_mb': st.session_state.get('conv_region_size_mb', '256'),
+                            'max_concurrency': int(st.session_state.get('conv_max_concurrency', 4)),
+                            'memory_per_worker': st.session_state.get('conv_memory_per_worker', '1GB'),
+                            'tensorstore_data_copy_concurrency': 4,
+                            'max_retries': 10
+                        },
+                        'readers': {
+                            'as_mosaic': st.session_state.get('conv_as_mosaic', False),
+                            'view_index': int(st.session_state.get('conv_view_index', 0)),
+                            'phase_index': int(st.session_state.get('conv_phase_index', 0)),
+                            'illumination_index': int(st.session_state.get('conv_illumination_index', 0)),
+                            'scene_index': 'all' if st.session_state.get('conv_read_all_scenes', False) else int(st.session_state.get('conv_scene_index', '0') or 0),
+                            'rotation_index': int(st.session_state.get('conv_rotation_index', 0)),
+                            'mosaic_tile_index': 'all' if st.session_state.get('conv_read_all_tiles', False) else int(st.session_state.get('conv_mosaic_tile_index', '0') or 0),
+                            'sample_index': int(st.session_state.get('conv_sample_index', 0)),
+                        },
+                        'conversion': {
+                            'verbose': st.session_state.get('conv_verbose', False),
+                            'zarr_format': int(st.session_state.get('conv_zarr_format', 2)),
+                            'skip_dask': st.session_state.get('conv_skip_dask', False),
+                            'auto_chunk': st.session_state.get('conv_auto_chunk', True),
+                            'target_chunk_mb': float(st.session_state.get('conv_target_chunk_mb', 1.0)),
+                            'time_chunk': int(st.session_state.get('conv_time_chunk', 1)),
+                            'channel_chunk': int(st.session_state.get('conv_channel_chunk', 1)),
+                            'z_chunk': int(st.session_state.get('conv_z_chunk', 96)),
+                            'y_chunk': int(st.session_state.get('conv_y_chunk', 96)),
+                            'x_chunk': int(st.session_state.get('conv_x_chunk', 96)),
+                            'time_shard_coef': int(st.session_state.get('conv_time_shard_coef', 1)),
+                            'channel_shard_coef': int(st.session_state.get('conv_channel_shard_coef', 1)),
+                            'z_shard_coef': int(st.session_state.get('conv_z_shard_coef', 3)),
+                            'y_shard_coef': int(st.session_state.get('conv_y_shard_coef', 3)),
+                            'x_shard_coef': int(st.session_state.get('conv_x_shard_coef', 3)),
+                            'time_range': None,
+                            'channel_range': None,
+                            'z_range': None,
+                            'y_range': None,
+                            'x_range': None,
+                            'dimension_order': 'tczyx',
+                            'compressor': st.session_state.get('conv_compressor', 'blosc'),
+                            'compressor_params': st.session_state.get('conv_compressor_params', {}),
+                            'overwrite': st.session_state.get('conv_overwrite', False),
+                            'override_channel_names': st.session_state.get('conv_override_channel_names', False),
+                            'channel_intensity_limits': 'from_dtype',
+                            'metadata_reader': 'bfio',
+                            'save_omexml': st.session_state.get('conv_save_omexml', True),
+                            'squeeze': st.session_state.get('conv_squeeze', True),
+                            'dtype': 'auto'
+                        },
+                        'downscale': {
+                            'time_scale_factor': int(st.session_state.get('conv_time_scale_factor', 1)),
+                            'channel_scale_factor': int(st.session_state.get('conv_channel_scale_factor', 1)),
+                            'z_scale_factor': int(st.session_state.get('conv_z_scale_factor', 2)),
+                            'y_scale_factor': int(st.session_state.get('conv_y_scale_factor', 2)),
+                            'x_scale_factor': int(st.session_state.get('conv_x_scale_factor', 2)),
+                            'n_layers': st.session_state.get('conv_n_layers', None),
+                            'min_dimension_size': int(st.session_state.get('conv_min_dimension_size', 64)),
+                            'downscale_method': 'simple',
+                        }
                     }
+                    os.makedirs(os.path.dirname(config_file) if os.path.dirname(config_file) else '.', exist_ok=True)
                     with open(config_file, 'w') as f:
                         json.dump(config_to_save, f, indent=2)
-                    st.success(f"Saved")
+                    # Also update bridge.config so it reflects the saved values
+                    bridge.config = config_to_save
+                    st.success(f"✅ Configuration saved to {config_file}")
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Error saving config: {e}")
         
         elif config_action == "Reset":
-            if st.button("Reset to Defaults", key="conv_reset_btn"):
+            if st.button("Reset to Installation Defaults", key="conv_reset_btn"):
                 bridge.reset_config()
-                st.success("Reset")
+                if 'loaded_config' in st.session_state:
+                    del st.session_state.loaded_config
+                st.success("✅ Configuration reset to defaults")
                 st.rerun()
+        
+        else:  # "Use Default"
+            st.caption("Using default configuration from ~/.eubi_bridge/.eubi_config.json")
+            if not st.session_state.get('loaded_config'):
+                st.caption("✓ Defaults loaded successfully")
     
     input_path = st.session_state.conv_selected_input
     output_path = st.session_state.conv_selected_output
@@ -618,49 +724,56 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                         "Max Workers",
                         min_value=1,
                         max_value=64,
-                        value=bridge.config['cluster']['max_workers'],
-                        help="Number of parallel workers"
+                        value=get_config_value('cluster', 'max_workers', 4),
+                        help="Number of parallel workers",
+                        key="conv_max_workers"
                     )
     
                     queue_size = st.number_input(
                         "Queue Size",
                         min_value=1,
                         max_value=32,
-                        value=bridge.config['cluster']['queue_size'],
-                        help="Number of batches to process in parallel"
+                        value=get_config_value('cluster', 'queue_size', 4),
+                        help="Number of batches to process in parallel",
+                        key="conv_queue_size"
                     )
     
                     max_concurrency = st.number_input(
                         "Max Concurrency",
                         min_value=1,
                         max_value=64,
-                        value=bridge.config['cluster']['max_concurrency'],
-                        help="Maximum concurrent operations"
+                        value=get_config_value('cluster', 'max_concurrency', 4),
+                        help="Maximum concurrent operations",
+                        key="conv_max_concurrency"
                     )
     
                 with col2:
                     region_size_mb = st.text_input(
                         "Region Size (MB)",
-                        value=bridge.config['cluster']['region_size_mb'],
-                        help="Memory limit per batch (e.g., '1GB', '512MB')"
+                        value=str(get_config_value('cluster', 'region_size_mb', 256)),
+                        help="Memory limit per batch (e.g., '1GB', '512MB')",
+                        key="conv_region_size_mb"
                     )
     
                     memory_per_worker = st.text_input(
                         "Memory per Worker",
-                        value=bridge.config['cluster']['memory_per_worker'],
-                        help="Memory allocation per worker (e.g., '10GB')"
+                        value=str(get_config_value('cluster', 'memory_per_worker', '1GB')),
+                        help="Memory allocation per worker (e.g., '10GB')",
+                        key="conv_memory_per_worker"
                     )
     
                     on_local_cluster = st.checkbox(
                         "Use Local Dask Cluster",
-                        value=bridge.config['cluster']['on_local_cluster'],
-                        help="Enable Dask distributed cluster for large-scale processing"
+                        value=get_config_value('cluster', 'on_local_cluster', False),
+                        help="Enable Dask distributed cluster for large-scale processing",
+                        key="conv_on_local_cluster"
                     )
     
                     on_slurm = st.checkbox(
                         "Use SLURM Cluster",
-                        value=bridge.config['cluster']['on_slurm'],
-                        help="Enable SLURM cluster for HPC environments"
+                        value=get_config_value('cluster', 'on_slurm', False),
+                        help="Enable SLURM cluster for HPC environments",
+                        key="conv_on_slurm"
                     )
     
         with param_tab2:
@@ -683,11 +796,12 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                 with col1:
                     read_all_scenes = st.checkbox(
                         "Read all scenes",
-                        value=bridge.config['readers']['scene_index'] == 'all',
-                        help="Process all scenes in the file"
+                        value=get_config_value('readers', 'scene_index', 0) == 'all',
+                        help="Process all scenes in the file",
+                        key="conv_read_all_scenes"
                     )
     
-                    default_scene = bridge.config['readers']['scene_index']
+                    default_scene = get_config_value('readers', 'scene_index', 0)
                     if default_scene == 'all':
                         default_scene = 0
     
@@ -695,7 +809,8 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                         "Scene Index",
                         value=str(default_scene),
                         help="Integer or comma-separated integers (e.g., '0' or '0,1,2')",
-                        disabled=read_all_scenes
+                        disabled=read_all_scenes,
+                        key="conv_scene_index"
                     )
                     if not read_all_scenes:
                         scene_valid, scene_error = validate_index_input(scene_index, "Scene Index")
@@ -704,11 +819,12 @@ if operation_mode == "🔄 Convert to OME-Zarr":
     
                     read_all_tiles = st.checkbox(
                         "Read all tiles",
-                        value=bridge.config['readers']['mosaic_tile_index'] == 'all',
-                        help="Process all mosaic tiles in the file"
+                        value=get_config_value('readers', 'mosaic_tile_index', 0) == 'all',
+                        help="Process all mosaic tiles in the file",
+                        key="conv_read_all_tiles"
                     )
     
-                    default_mosaic = bridge.config['readers']['mosaic_tile_index']
+                    default_mosaic = get_config_value('readers', 'mosaic_tile_index', 0)
                     if default_mosaic == 'all':
                         default_mosaic = 0
     
@@ -716,7 +832,8 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                         "Mosaic Tile Index",
                         value=str(default_mosaic),
                         help="Integer or comma-separated integers (e.g., '0' or '0,1,2')",
-                        disabled=read_all_tiles
+                        disabled=read_all_tiles,
+                        key="conv_mosaic_tile_index"
                     )
                     if not read_all_tiles:
                         mosaic_valid, mosaic_error = validate_index_input(mosaic_tile_index, "Mosaic Tile Index")
@@ -725,39 +842,45 @@ if operation_mode == "🔄 Convert to OME-Zarr":
     
                     as_mosaic = st.checkbox(
                         "Read as Mosaic",
-                        value=bridge.config['readers']['as_mosaic']
+                        value=get_config_value('readers', 'as_mosaic', False),
+                        key="conv_as_mosaic"
                     )
     
                 with col2:
                     view_index = st.number_input(
                         "View Index",
                         min_value=0,
-                        value=bridge.config['readers']['view_index']
+                        value=get_config_value('readers', 'view_index', 0),
+                        key="conv_view_index"
                     )
     
                     phase_index = st.number_input(
                         "Phase Index",
                         min_value=0,
-                        value=bridge.config['readers']['phase_index']
+                        value=get_config_value('readers', 'phase_index', 0),
+                        key="conv_phase_index"
                     )
     
                     illumination_index = st.number_input(
                         "Illumination Index",
                         min_value=0,
-                        value=bridge.config['readers']['illumination_index']
+                        value=get_config_value('readers', 'illumination_index', 0),
+                        key="conv_illumination_index"
                     )
     
                 with col3:
                     rotation_index = st.number_input(
                         "Rotation Index",
                         min_value=0,
-                        value=bridge.config['readers']['rotation_index']
+                        value=get_config_value('readers', 'rotation_index', 0),
+                        key="conv_rotation_index"
                     )
     
                     sample_index = st.number_input(
                         "Sample Index",
                         min_value=0,
-                        value=bridge.config['readers']['sample_index']
+                        value=get_config_value('readers', 'sample_index', 0),
+                        key="conv_sample_index"
                     )
     
         with param_tab3:
@@ -772,54 +895,62 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                     zarr_format = st.selectbox(
                         "Zarr Format",
                         options=[2, 3],
-                        index=0 if bridge.config['conversion']['zarr_format'] == 2 else 1,
-                        help="Zarr format version"
+                        index=0 if get_config_value('conversion', 'zarr_format', 2) == 2 else 1,
+                        help="Zarr format version",
+                        key="conv_zarr_format"
                     )
     
                     dtype = st.selectbox(
                         "Data Type",
                         options=['auto', 'uint8', 'uint16', 'uint32', 'float32', 'float64'],
                         index=0,
-                        help="Output data type"
+                        help="Output data type",
+                        key="conv_dtype"
                     )
     
                     # Compression configuration with dynamic parameters
-                    compressor, compressor_params = render_compression_config(key_prefix="conv_")
+                    compressor, compressor_params = render_compression_config(key_prefix="conv_", zarr_format=zarr_format)
     
                     verbose = st.checkbox(
                         "Verbose Output",
-                        value=bridge.config['conversion']['verbose'],
-                        help="Enable detailed logging"
+                        value=get_config_value('conversion', 'verbose', False),
+                        help="Enable detailed logging",
+                        key="conv_verbose"
                     )
     
                     overwrite = st.checkbox(
                         "Overwrite Existing",
-                        value=bridge.config['conversion']['overwrite'],
-                        help="Overwrite existing output files"
+                        value=get_config_value('conversion', 'overwrite', False),
+                        help="Overwrite existing output files",
+                        key="conv_overwrite"
                     )
     
                     squeeze = st.checkbox(
                         "Squeeze Dimensions",
-                        value=bridge.config['conversion']['squeeze'],
-                        help="Remove singleton dimensions"
+                        value=get_config_value('conversion', 'squeeze', True),
+                        help="Remove singleton dimensions",
+                        key="conv_squeeze"
                     )
     
                     save_omexml = st.checkbox(
                         "Save OME-XML",
-                        value=bridge.config['conversion']['save_omexml'],
-                        help="Save OME-XML metadata"
+                        value=get_config_value('conversion', 'save_omexml', True),
+                        help="Save OME-XML metadata",
+                        key="conv_save_omexml"
                     )
     
                     override_channel_names = st.checkbox(
                         "Override Channel Names",
-                        value=bridge.config['conversion']['override_channel_names'],
-                        help="Use custom channel names from tags"
+                        value=get_config_value('conversion', 'override_channel_names', False),
+                        help="Use custom channel names from tags",
+                        key="conv_override_channel_names"
                     )
     
                     skip_dask = st.checkbox(
                         "Skip Dask",
-                        value=bridge.config['conversion'].get('skip_dask', False),
-                        help="Perform one-to-one TIFF file conversions without using dask arrays"
+                        value=get_config_value('conversion', 'skip_dask', False),
+                        help="Perform one-to-one TIFF file conversions without using dask arrays",
+                        key="conv_skip_dask"
                     )
     
                 with col2:
@@ -827,18 +958,20 @@ if operation_mode == "🔄 Convert to OME-Zarr":
     
                     auto_chunk = st.checkbox(
                         "Auto Chunk",
-                        value=bridge.config['conversion']['auto_chunk'],
-                        help="Automatically calculate chunk dimensions based on target chunk size"
+                        value=get_config_value('conversion', 'auto_chunk', True),
+                        help="Automatically calculate chunk dimensions based on target chunk size",
+                        key="conv_auto_chunk"
                     )
     
                     target_chunk_mb = st.number_input(
                         "Target Chunk Size (MB)",
                         min_value=0.1,
                         max_value=100.0,
-                        value=float(bridge.config['conversion']['target_chunk_mb']),
+                        value=float(get_config_value('conversion', 'target_chunk_mb', 1)),
                         step=0.1,
                         help="Target size for each chunk (used for auto-chunking)",
-                        disabled=not auto_chunk
+                        disabled=not auto_chunk,
+                        key="conv_target_chunk_mb"
                     )
     
                     st.markdown("**Manual Chunk Dimensions**")
@@ -847,18 +980,19 @@ if operation_mode == "🔄 Convert to OME-Zarr":
     
                     col_t, col_c = st.columns(2)
                     with col_t:
-                        time_chunk = st.number_input("Time Chunk", min_value=1, value=bridge.config['conversion']['time_chunk'],
-                                                     disabled=auto_chunk)
-                        z_chunk = st.number_input("Z Chunk", min_value=1, value=bridge.config['conversion']['z_chunk'],
-                                                  disabled=auto_chunk)
-                        x_chunk = st.number_input("X Chunk", min_value=1, value=bridge.config['conversion']['x_chunk'],
-                                                  disabled=auto_chunk)
+                        time_chunk = st.number_input("Time Chunk", min_value=1, value=get_config_value('conversion', 'time_chunk', 1),
+                                                     disabled=auto_chunk, key="conv_time_chunk")
+                        z_chunk = st.number_input("Z Chunk", min_value=1, value=get_config_value('conversion', 'z_chunk', 96),
+                                                  disabled=auto_chunk, key="conv_z_chunk")
+                        x_chunk = st.number_input("X Chunk", min_value=1, value=get_config_value('conversion', 'x_chunk', 96),
+                                                  disabled=auto_chunk, key="conv_x_chunk")
     
                     with col_c:
                         channel_chunk = st.number_input("Channel Chunk", min_value=1,
-                                                        value=bridge.config['conversion']['channel_chunk'], disabled=auto_chunk)
-                        y_chunk = st.number_input("Y Chunk", min_value=1, value=bridge.config['conversion']['y_chunk'],
-                                                  disabled=auto_chunk)
+                                                        value=get_config_value('conversion', 'channel_chunk', 1), disabled=auto_chunk,
+                                                        key="conv_channel_chunk")
+                        y_chunk = st.number_input("Y Chunk", min_value=1, value=get_config_value('conversion', 'y_chunk', 96),
+                                                  disabled=auto_chunk, key="conv_y_chunk")
     
                     st.markdown("**Sharding Coefficients**")
                     if zarr_format == 2:
@@ -867,22 +1001,22 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                     col_s1, col_s2 = st.columns(2)
                     with col_s1:
                         time_shard_coef = st.number_input("Time Shard Coef", min_value=1,
-                                                          value=bridge.config['conversion']['time_shard_coef'],
-                                                          disabled=(zarr_format == 2))
+                                                          value=get_config_value('conversion', 'time_shard_coef', 1),
+                                                          disabled=(zarr_format == 2), key="conv_time_shard_coef")
                         z_shard_coef = st.number_input("Z Shard Coef", min_value=1,
-                                                       value=bridge.config['conversion']['z_shard_coef'],
-                                                       disabled=(zarr_format == 2))
+                                                       value=get_config_value('conversion', 'z_shard_coef', 3),
+                                                       disabled=(zarr_format == 2), key="conv_z_shard_coef")
                         x_shard_coef = st.number_input("X Shard Coef", min_value=1,
-                                                       value=bridge.config['conversion']['x_shard_coef'],
-                                                       disabled=(zarr_format == 2))
+                                                       value=get_config_value('conversion', 'x_shard_coef', 3),
+                                                       disabled=(zarr_format == 2), key="conv_x_shard_coef")
     
                     with col_s2:
                         channel_shard_coef = st.number_input("Channel Shard Coef", min_value=1,
-                                                             value=bridge.config['conversion']['channel_shard_coef'],
-                                                             disabled=(zarr_format == 2))
+                                                             value=get_config_value('conversion', 'channel_shard_coef', 1),
+                                                             disabled=(zarr_format == 2), key="conv_channel_shard_coef")
                         y_shard_coef = st.number_input("Y Shard Coef", min_value=1,
-                                                       value=bridge.config['conversion']['y_shard_coef'],
-                                                       disabled=(zarr_format == 2))
+                                                       value=get_config_value('conversion', 'y_shard_coef', 3),
+                                                       disabled=(zarr_format == 2), key="conv_y_shard_coef")
     
                     st.markdown("**Dimension Ranges (optional cropping)**")
                     st.caption("Format: start,end (e.g., '0,100'). Leave empty for full range.")
@@ -899,8 +1033,9 @@ if operation_mode == "🔄 Convert to OME-Zarr":
     
                 n_layers_auto = st.checkbox(
                     "Auto-detect Number of Layers",
-                    value=bridge.config['downscale']['n_layers'] is None,
-                    help="Let the tool automatically determine the optimal number of pyramid levels based on minimum dimension size and scale factors"
+                    value=get_config_value('downscale', 'n_layers', None) is None,
+                    help="Let the tool automatically determine the optimal number of pyramid levels based on minimum dimension size and scale factors",
+                    key="conv_n_layers_auto"
                 )
     
                 col1, col2 = st.columns(2)
@@ -911,9 +1046,10 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                         "Number of Layers",
                         min_value=1,
                         max_value=10,
-                        value=bridge.config['downscale']['n_layers'] if bridge.config['downscale']['n_layers'] else 3,
+                        value=get_config_value('downscale', 'n_layers', 3) or 3,
                         help="Number of pyramid levels",
-                        disabled=n_layers_auto
+                        disabled=n_layers_auto,
+                        key="conv_n_layers"
                     )
                     if n_layers_auto:
                         n_layers = None
@@ -923,9 +1059,10 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                         "Minimum Dimension Size",
                         min_value=1,
                         max_value=512,
-                        value=bridge.config['downscale']['min_dimension_size'],
+                        value=get_config_value('downscale', 'min_dimension_size', 64),
                         help="Stop downscaling when reaching this size (used for auto-detection)",
-                        disabled=not n_layers_auto
+                        disabled=not n_layers_auto,
+                        key="conv_min_dimension_size"
                     )
     
                 with col2:
@@ -933,15 +1070,20 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                     st.caption("Used for auto-detection when enabled" if n_layers_auto else "Applied to each pyramid level")
     
                     time_scale_factor = st.number_input("Time Scale Factor", min_value=1,
-                                                        value=bridge.config['downscale']['time_scale_factor'])
+                                                        value=get_config_value('downscale', 'time_scale_factor', 1),
+                                                        key="conv_time_scale_factor")
                     channel_scale_factor = st.number_input("Channel Scale Factor", min_value=1,
-                                                           value=bridge.config['downscale']['channel_scale_factor'])
+                                                           value=get_config_value('downscale', 'channel_scale_factor', 1),
+                                                           key="conv_channel_scale_factor")
                     z_scale_factor = st.number_input("Z Scale Factor", min_value=1,
-                                                     value=bridge.config['downscale']['z_scale_factor'])
+                                                     value=get_config_value('downscale', 'z_scale_factor', 2),
+                                                     key="conv_z_scale_factor")
                     y_scale_factor = st.number_input("Y Scale Factor", min_value=1,
-                                                     value=bridge.config['downscale']['y_scale_factor'])
+                                                     value=get_config_value('downscale', 'y_scale_factor', 2),
+                                                     key="conv_y_scale_factor")
                     x_scale_factor = st.number_input("X Scale Factor", min_value=1,
-                                                     value=bridge.config['downscale']['x_scale_factor'])
+                                                     value=get_config_value('downscale', 'x_scale_factor', 2),
+                                                     key="conv_x_scale_factor")
         
         with param_tab5:
             with st.container(height=450, border=True):
@@ -1096,7 +1238,6 @@ if operation_mode == "🔄 Convert to OME-Zarr":
                         'z_range': parse_range(z_range),
                         'y_range': parse_range(y_range),
                         'x_range': parse_range(x_range),
-                        'compressor': compressor,
                         'overwrite': overwrite,
                         'override_channel_names': override_channel_names,
                         'channel_intensity_limits': 'from_dtype' if channel_intensity_limits == 'From Datatype' else 'from_array',

@@ -395,7 +395,9 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         save_omexml = kwargs.get('save_omexml', True)
         # Save OME-XML metadata if needed
         if save_omexml:
-            await manager.save_omexml(output_path, overwrite=True)
+            new_manager = ArrayManager(output_path, skip_dask=kwargs.get('skip_dask', True))
+            await new_manager.init()
+            await new_manager.save_omexml(output_path, overwrite=True)
 
 
 def _generate_output_path(base_path: str, series_path: str,

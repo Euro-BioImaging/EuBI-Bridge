@@ -62,13 +62,15 @@ async def run_metadata_collection_from_filepaths(
         executor_class = ThreadPoolExecutor
         executor_kwargs = {"max_workers": max_workers}
     else:
-        logger.info("Using ProcessPoolExecutor for metadata collection (multiprocessing mode)")
+        # Pass tensorstore_data_copy_concurrency via initargs to worker processes
+        tensorstore_data_copy_concurrency = global_kwargs.get('tensorstore_data_copy_concurrency', 1)
         ctx = mp.get_context("spawn")
         executor_class = ProcessPoolExecutor
         executor_kwargs = {
             "max_workers": max_workers,
             "mp_context": ctx,
-            "initializer": initialize_worker_process
+            "initializer": initialize_worker_process,
+            "initargs": (tensorstore_data_copy_concurrency,)
         }
 
     loop = asyncio.get_running_loop()
@@ -97,11 +99,13 @@ async def run_metadata_collection_from_filepaths(
                     
                     # Main pool is broken, create temporary single-worker pool just for this failed task
                     logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
+                    tensorstore_data_copy_concurrency = global_kwargs.get('tensorstore_data_copy_concurrency', 1)
                     ctx = mp.get_context("spawn")
                     temp_pool = ProcessPoolExecutor(
                         max_workers=1,
                         mp_context=ctx,
-                        initializer=initialize_worker_process
+                        initializer=initialize_worker_process,
+                        initargs=(tensorstore_data_copy_concurrency,)
                     )
                     
                     try:
@@ -194,13 +198,15 @@ async def run_conversions_from_filepaths(
         executor_class = ThreadPoolExecutor
         executor_kwargs = {"max_workers": max_workers}
     else:
-        logger.info("Using ProcessPoolExecutor for conversions (multiprocessing mode)")
+        # Pass tensorstore_data_copy_concurrency via initargs to worker processes
+        tensorstore_data_copy_concurrency = global_kwargs.get('tensorstore_data_copy_concurrency', 1)
         ctx = mp.get_context("spawn")
         executor_class = ProcessPoolExecutor
         executor_kwargs = {
             "max_workers": max_workers,
             "mp_context": ctx,
-            "initializer": initialize_worker_process
+            "initializer": initialize_worker_process,
+            "initargs": (tensorstore_data_copy_concurrency,)
         }
 
     loop = asyncio.get_running_loop()
@@ -243,11 +249,14 @@ async def run_conversions_from_filepaths(
                     # Main pool is broken, create temporary single-worker pool just for this failed task
                     logger.warning(f"Task {idx}: Main pool broken, using temporary worker...")
                     merged_kwargs['overwrite'] = True  # Force overwrite in temp pool
+                    tensorstore_data_copy_concurrency = global_kwargs.get('tensorstore_data_copy_concurrency', 1)
+                    os.environ['EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY'] = str(tensorstore_data_copy_concurrency)
                     ctx = mp.get_context("spawn")
                     temp_pool = ProcessPoolExecutor(
                         max_workers=1,
                         mp_context=ctx,
-                        initializer=initialize_worker_process
+                        initializer=initialize_worker_process,
+                        initargs=(tensorstore_data_copy_concurrency,)
                     )
                     
                     try:
@@ -500,7 +509,6 @@ async def run_conversions_with_concatenation(
         **kwargs
         ):
     """Convert with concatenation using threads (safe for large Dask arrays)."""
-
     # Validate that tags are provided for concatenation axes
     if concatenation_axes:
         # Normalize concatenation_axes to a list
@@ -631,6 +639,11 @@ async def run_conversions_with_concatenation(
 
     # --- Use ThreadPoolExecutor for aggregative conversion ---
     # Note: ThreadPoolExecutor doesn't have BrokenProcessPool issues, so no retry logic needed
+    # For threading mode, set tensorstore_data_copy_concurrency via environment variable
+    # (threads inherit parent process environment, unlike spawn processes)
+    tensorstore_data_copy_concurrency = kwargs.get('tensorstore_data_copy_concurrency', 1)
+    os.environ['EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY'] = str(tensorstore_data_copy_concurrency)
+    
     executor_class = ThreadPoolExecutor
     executor_kwargs = {"max_workers": max_workers}
     
