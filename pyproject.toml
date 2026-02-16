@@ -68,13 +68,17 @@ classifiers = [
 [project.scripts]
 eubi = "eubi_bridge.cli:main"
 eubi-gui = "eubi_bridge.app:main"
+eubi-gui-qt6 = "eubi_bridge.gui.main:main"
 
 [project.optional-dependencies]
 gui = ["streamlit>=1.52.1", "matplotlib"]
+gui-qt6 = ["PyQt6>=6.6.0", "PyQt6-sip>=13.6.0", "matplotlib"]
 test = ["pytest>=7.0", "pytest-cov>=4.0"]
 all = [
     "streamlit>=1.52.1",
     "matplotlib",
+    "PyQt6>=6.6.0",
+    "PyQt6-sip>=13.6.0",
     "pytest>=7.0",
     "pytest-cov>=4.0"
 ]
