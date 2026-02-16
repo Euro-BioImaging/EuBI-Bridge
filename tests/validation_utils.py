@@ -395,27 +395,65 @@ def validate_sharding_metadata(output_path: Union[str, Path],
 def validate_compression(output_path: Union[str, Path],
                         expected_compressor: str,
                         resolution: str = '0') -> bool:
-    """Validate compression codec."""
+    """Validate compression codec for both Zarr v2 and v3."""
     actual_path = get_actual_zarr_path(output_path)
     gr = zarr.open_group(actual_path, mode='r')
     array = gr[resolution]
     
-    # Get compressor name
-    if hasattr(array, 'compressor') and array.compressor is not None:
-        compressor_name = type(array.compressor).__name__.lower()
-    elif hasattr(array, 'metadata') and array.metadata is not None:
-        # Zarr v3: check codecs
-        codecs = array.metadata.get('codecs', [])
-        compressor_names = [c.get('name') for c in codecs if 'codec' in c.get('name', '')]
-        compressor_name = compressor_names[0] if compressor_names else 'none'
-    else:
-        compressor_name = 'none'
+    # Get Zarr format version
+    zarr_format = validate_zarr_format(output_path)
     
-    # Normalize comparison
-    if expected_compressor.lower() not in compressor_name.lower():
-        raise AssertionError(
-            f"Expected compressor {expected_compressor}, got {compressor_name}"
-        )
+    # Get compressor name based on Zarr version
+    if zarr_format == 2:
+        # Zarr v2: use .compressor (deprecated but works)
+        if hasattr(array, 'compressor') and array.compressor is not None:
+            compressor_name = type(array.compressor).__name__.lower()
+        else:
+            compressor_name = 'none'
+    else:
+        # Zarr v3: use .compressors property
+        if hasattr(array, 'compressors') and array.compressors:
+            # Get first compressor name from the tuple of codecs
+            # Filter out BytesCodec and other non-compressor codecs
+            for codec in array.compressors:
+                codec_name = type(codec).__name__.lower()
+                if codec_name not in ('bytescodec', 'crc32ccodec', 'transposecoder'):
+                    compressor_name = codec_name
+                    break
+            else:
+                compressor_name = 'none'
+        else:
+            compressor_name = 'none'
+    
+    # Normalize comparison - handle both codec class names and string names
+    expected_lower = expected_compressor.lower()
+    if expected_lower == 'blosc':
+        # For Zarr v3, BloscCodec is the class name
+        if not (expected_lower in compressor_name or 'bloscodec' in compressor_name):
+            raise AssertionError(
+                f"Expected compressor {expected_compressor}, got {compressor_name}"
+            )
+    elif expected_lower == 'zstd':
+        if not (expected_lower in compressor_name or 'zstdcodec' in compressor_name):
+            raise AssertionError(
+                f"Expected compressor {expected_compressor}, got {compressor_name}"
+            )
+    elif expected_lower == 'gzip':
+        if not (expected_lower in compressor_name or 'gzipcodec' in compressor_name):
+            raise AssertionError(
+                f"Expected compressor {expected_compressor}, got {compressor_name}"
+            )
+    elif expected_lower == 'none':
+        if compressor_name != 'none':
+            raise AssertionError(
+                f"Expected no compression, got {compressor_name}"
+            )
+    else:
+        # Generic comparison
+        if expected_lower not in compressor_name:
+            raise AssertionError(
+                f"Expected compressor {expected_compressor}, got {compressor_name}"
+            )
     
     return True
 
