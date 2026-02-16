@@ -19,11 +19,11 @@ The recommended way to install EuBI-Bridge is via pip. Create a virtual environm
 ```bash
 python -m venv venv # Python must be either version 3.11 or 3.12.
 source venv/bin/activate
-pip install 'eubi-bridge[all]==0.1.0c3' # installs both GUI and CLI
+pip install 'eubi-bridge[all]==0.1.0c4' # installs both GUI and CLI
 # OR
-# pip install 'eubi-bridge[cli]==0.1.0c3' # installs only CLI
-# pip install 'eubi-bridge[gui]==0.1.0c3' # installs only GUI
-# pip install 'eubi-bridge==0.1.0c3' # installs as a Python library, without GUI or CLI utilities.
+# pip install 'eubi-bridge[cli]==0.1.0c4' # installs only CLI
+# pip install 'eubi-bridge[gui]==0.1.0c4' # installs only GUI
+# pip install 'eubi-bridge==0.1.0c4' # installs as a Python library, without GUI or CLI utilities.
 #
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
@@ -43,7 +43,7 @@ Then install EuBI-Bridge via pip in the conda environment:
 
 ```bash
 conda activate eubizarr
-pip install --no-cache-dir 'eubi-bridge[all]==0.1.0c3'
+pip install --no-cache-dir 'eubi-bridge[all]==0.1.0c4'
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
 ```
@@ -64,7 +64,7 @@ then try the following:
 ```bash
 # In the `eubizarr` environment
 mamba install cmake zlib boost # preinstall dependencies that can help build from source
-pip install --no-cache-dir "eubi-bridge[all]==0.1.0c3" # try installing again with the dependencies available
+pip install --no-cache-dir "eubi-bridge[all]==0.1.0c4" # try installing again with the dependencies available
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
 ````
