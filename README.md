@@ -36,7 +36,7 @@ If your default Python is different from version 3.11 or 3.12, create a conda en
 Python versions:
 
 ```bash
-mamba create -n eubizarr python=3.12
+mamba create -n eubizarr openjdk=11.* maven python=3.12
 ```
 
 Then install EuBI-Bridge via pip in the conda environment:

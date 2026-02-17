@@ -395,7 +395,12 @@ def validate_sharding_metadata(output_path: Union[str, Path],
 def validate_compression(output_path: Union[str, Path],
                         expected_compressor: str,
                         resolution: str = '0') -> bool:
-    """Validate compression codec for both Zarr v2 and v3."""
+    """Validate compression codec for both Zarr v2 and v3.
+    
+    Note: Zarr v2 and v3 support different compressors:
+    - Zarr v2: blosc, bz2, gzip, lzma, lz4, pcodec, zfpy, zlib, zstd
+    - Zarr v3: blosc, gzip, zstd (limited set with different codec names)
+    """
     actual_path = get_actual_zarr_path(output_path)
     gr = zarr.open_group(actual_path, mode='r')
     array = gr[resolution]
@@ -417,7 +422,7 @@ def validate_compression(output_path: Union[str, Path],
             # Filter out BytesCodec and other non-compressor codecs
             for codec in array.compressors:
                 codec_name = type(codec).__name__.lower()
-                if codec_name not in ('bytescodec', 'crc32ccodec', 'transposecoder'):
+                if codec_name not in ('bytescodec', 'crc32ccodec', 'transposecoder', 'shardingcodec'):
                     compressor_name = codec_name
                     break
             else:
@@ -426,27 +431,42 @@ def validate_compression(output_path: Union[str, Path],
             compressor_name = 'none'
     
     # Normalize comparison - handle both codec class names and string names
+    # For Zarr v3, codec class names have "codec" suffix (e.g., "bloscodec" instead of "blosc")
     expected_lower = expected_compressor.lower()
-    if expected_lower == 'blosc':
-        # For Zarr v3, BloscCodec is the class name
-        if not (expected_lower in compressor_name or 'bloscodec' in compressor_name):
-            raise AssertionError(
-                f"Expected compressor {expected_compressor}, got {compressor_name}"
-            )
-    elif expected_lower == 'zstd':
-        if not (expected_lower in compressor_name or 'zstdcodec' in compressor_name):
-            raise AssertionError(
-                f"Expected compressor {expected_compressor}, got {compressor_name}"
-            )
-    elif expected_lower == 'gzip':
-        if not (expected_lower in compressor_name or 'gzipcodec' in compressor_name):
-            raise AssertionError(
-                f"Expected compressor {expected_compressor}, got {compressor_name}"
-            )
-    elif expected_lower == 'none':
+    
+    def matches_compressor(actual_name: str, expected: str, zarr_fmt: int) -> bool:
+        """Check if actual compressor matches expected, accounting for version-specific naming."""
+        actual_lower = actual_name.lower()
+        expected_lower = expected.lower()
+        
+        # Direct match
+        if actual_lower == expected_lower:
+            return True
+        
+        # For Zarr v3, codec class names have "codec" suffix
+        if zarr_fmt == 3:
+            if expected_lower == 'blosc' and actual_lower == 'bloscodec':
+                return True
+            if expected_lower == 'zstd' and actual_lower == 'zstdcodec':
+                return True
+            if expected_lower == 'gzip' and actual_lower == 'gzipcodec':
+                return True
+        
+        # For Zarr v2, class names from numcodecs
+        if zarr_fmt == 2:
+            # numcodecs class names don't have specific suffixes, but match the codec name
+            return expected_lower in actual_lower or actual_lower in expected_lower
+        
+        return False
+    
+    if expected_lower == 'none':
         if compressor_name != 'none':
             raise AssertionError(
                 f"Expected no compression, got {compressor_name}"
+            )
+    elif not matches_compressor(compressor_name, expected_compressor, zarr_format):
+        raise AssertionError(
+            f"Expected compressor {expected_compressor} (zarr v{zarr_format}), got {compressor_name}"
             )
     else:
         # Generic comparison

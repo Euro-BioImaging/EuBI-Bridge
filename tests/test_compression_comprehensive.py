@@ -2,10 +2,21 @@
 Comprehensive compression codec tests for Zarr v2 and v3.
 
 Tests various compression codecs with different parameters:
-- Zarr v2: blosc, zstd, gzip, lz4, bz2, none
-- Zarr v3: blosc, zstd, gzip, none
-- Blosc shuffle modes: noshuffle, shuffle, bitshuffle
-- Variable compression levels for each codec
+- Zarr v2: blosc (with cname: lz4, lz4hc, blosclz, snappy, zlib, zstd), zstd, gzip, lz4, bz2, lzma, none
+  * Blosc shuffle modes: 0=noshuffle, 1=shuffle, 2=bitshuffle
+  * GZip levels: 0-9 (default 9)
+  * Zstd levels: -131072 to 22 (default 0)
+  
+- Zarr v3: blosc (with cname: lz4, lz4hc, blosclz, zlib, zstd, snappy), zstd, gzip, none
+  * Blosc shuffle modes: enum (noshuffle, shuffle, bitshuffle)
+  * GZip level: 0-9 (default 5, different from v2!)
+  * Zstd level: -131072 to 22 (default 0)
+
+Key Differences:
+- V2-only: lz4 (direct), bz2, lzma
+- V3-only: TransposeCodec, ShardingCodec, Crc32cCodec
+- Shared: blosc, gzip, zstd (but with parameter/type differences)
+- Blosc in v3: Uses enums for cname and shuffle instead of strings/ints
 """
 
 import subprocess
@@ -169,7 +180,10 @@ class TestCompressionZarrV2:
     
     @pytest.mark.parametrize("cname", ['lz4', 'zstd', 'zlib', 'snappy', 'blosclz'])
     def test_v2_blosc_inner_codecs(self, imagej_tiff_czyx, tmp_path, cname):
-        """Test Zarr v2 Blosc with different inner compression libraries."""
+        """Test Zarr v2 Blosc with different inner compression libraries.
+        
+        Note: 'snappy' is v2-specific (not supported in v3 BloscCodec)
+        """
         output = tmp_path / f"output_v2_blosc_{cname}.zarr"
         
         run_eubi_command([
@@ -291,6 +305,41 @@ class TestCompressionZarrV2:
         
         assert validate_zarr_exists(output)
         assert validate_zarr_format(output) == 2
+    
+    def test_v2_lzma(self, imagej_tiff_czyx, tmp_path):
+        """Test Zarr v2 with LZMA compression (v2-only, not in v3)."""
+        output = tmp_path / "output_v2_lzma.zarr"
+        
+        run_eubi_command([
+            str(imagej_tiff_czyx),
+            str(output),
+            '--zarr_format', '2',
+            '--compressor', 'lzma'
+        ])
+        
+        assert validate_zarr_exists(output)
+        assert validate_zarr_format(output) == 2
+        validate_compression(output, 'lzma')
+    
+    def test_v2_blosc_snappy(self, imagej_tiff_czyx, tmp_path):
+        """Test Zarr v2 Blosc with snappy inner codec (v2-only, not guaranteed in v3).
+        
+        Note: 'snappy' is supported in numcodecs Blosc for v2, but v3 support is uncertain.
+        This test documents v2 snappy availability.
+        """
+        output = tmp_path / "output_v2_blosc_snappy.zarr"
+        
+        run_eubi_command([
+            str(imagej_tiff_czyx),
+            str(output),
+            '--zarr_format', '2',
+            '--compressor', 'blosc',
+            '--compressor_params', '{cname:snappy}'
+        ])
+        
+        assert validate_zarr_exists(output)
+        assert validate_zarr_format(output) == 2
+        validate_compression(output, 'blosc')
 
 
 class TestCompressionZarrV3:
@@ -358,9 +407,13 @@ class TestCompressionZarrV3:
         assert validate_zarr_format(output) == 3
         validate_compression(output, 'blosc')
     
-    @pytest.mark.parametrize("cname", ['lz4', 'zstd', 'zlib', 'snappy', 'blosclz'])
+    @pytest.mark.parametrize("cname", ['lz4', 'lz4hc', 'zstd', 'zlib', 'blosclz'])
     def test_v3_blosc_inner_codecs(self, imagej_tiff_czyx, tmp_path, cname):
-        """Test Zarr v3 Blosc with different inner compression libraries."""
+        """Test Zarr v3 Blosc with different inner compression libraries.
+        
+        Zarr v3 BloscCodec supports: lz4, lz4hc, zstd, zlib, blosclz, snappy
+        (lz4hc tests codec variant support; snappy can be tested separately if needed)
+        """
         output = tmp_path / f"output_v3_blosc_{cname}.zarr"
         
         run_eubi_command([
