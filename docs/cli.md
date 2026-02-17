@@ -85,7 +85,7 @@ These must be provided directly via the CLI:
 | `output_path`          | `str` or `Path` (mandatory) | Path to output folder           |
 | `--includes`           | `str`                       | Include filter for filenames    |
 | `--excludes`           | `str`                       | Exclude filter for filenames    |
-| `--series`             | `int`                       | BioFormats series index         |
+| `--scene_index`        | `int` or `tuple`            | Scene(s) to be extracted        |
 | `--time_tag`           | `str` or `tuple`            | Time dimension tag              |
 | `--channel_tag`        | `str` or `tuple`            | Channel dimension tag           |
 | `--z_tag`              | `str` or `tuple`            | Z-dimension tag                 |
@@ -128,14 +128,16 @@ These are stored in the configuration file but can also be supplied directly to 
 
 | Argument               | Type     | Description                                  |
 |------------------------|----------|----------------------------------------------|
-| `--memory_limit`       | `str`    | Maximum memory per Dask worker               |
-| `--n_jobs`             | `int`    | Number of Dask workers                       |
-| `--no_distributed`     | `bool`   | Disable distributed computation              |
-| `--no_worker_restart`  | `bool`   | Prevent automatic worker restarts on failure |
+| `--max_concurrency`       | `str`    | Maximum concurrent writes **per OME-Zarr group** |
+| `--max_retries`             | `int`    | Number of retries attempted for certain types of errors    |
+| `--max_workers`     | `int`   | Maximum number of processors for **input collection** |
+| `--memory_per_worker`  | `int`   | Memory allocated per worker |
+| `--on_local_cluster`           | `bool`   | Use local dask cluster for parallelisation |
 | `--on_slurm`           | `bool`   | Enable SLURM-based execution                 |
-| `--temp_dir`           | `str`    | Temporary directory for Dask                 |
-| `--threads_per_worker` | `int`    | Threads per worker                           |
-| `--verbose`            | `bool`   | Enable verbose logging                       |
+| `--queue_size`           | `int`   | Queue size for the concurrent writes |
+| `--region_size_mb`           | `int`   | Megabytes to calculate unit write-region |
+| `--tensorstore_data_copy_concurrency`  | `int`   | Tensorstore context parameter |
+| `--use_threading`           | `bool`   | Use multi-threading rather than multi-processing |
 
 
 #### Readers Parameters
@@ -177,7 +179,6 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--dimension_order`    | `bool` | Dimension order of the output dataset                    |
 | `--squeeze`            | `bool` | Drop the singlet dimensions from the output array        |
 | `--overwrite`          | `bool` | Overwrite existing Zarr data                             |
-| `--rechunk_method`     | `str`  | Rechunking method (`tasks`, `p2p`)                       |
 | `--trim_memory`        | `bool` | Reduce memory usage                                      |
 | `--use_tensorstore`    | `bool` | Use TensorStore backend for writing                      |
 | `--use_gpu`            | `bool` | Run on GPU by using cupy arrays                          |
@@ -362,4 +363,3 @@ eubi configure_downscale --scale_factor 1,1,2,2,2
     </tr>
   </tbody>
 </table>
-

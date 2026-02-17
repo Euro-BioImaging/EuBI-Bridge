@@ -108,54 +108,54 @@ class Codecs:
     
     def to_v3_config(self):
         """
-        Generate codec pipeline for Zarr v3.
+        Generate codec pipeline for Zarr v3 using proper zarr.codecs API.
         
         Returns:
-            List of codec configurations
+            List of codec configurations (from .to_dict() calls)
         """
-        codecs = [
-            {'name': 'bytes', 'configuration': {'endian': 'little'}}
+        from zarr import codecs
+        
+        codecs_list = [
+            codecs.BytesCodec(endian=codecs.Endian.little).to_dict()
         ]
         
         if self.compressor == 'blosc':
-            # Convert shuffle integer to string for TensorStore
-            shuffle_map = {0: 'noshuffle', 1: 'shuffle', 2: 'bitshuffle'}
-            shuffle_str = shuffle_map.get(self.shuffle, 'shuffle')
+            # Use BloscCodec with proper BloscShuffle enum
+            shuffle_map = {0: codecs.BloscShuffle.noshuffle, 
+                          1: codecs.BloscShuffle.shuffle, 
+                          2: codecs.BloscShuffle.bitshuffle}
+            shuffle_enum = shuffle_map.get(self.shuffle, codecs.BloscShuffle.shuffle)
             
-            codecs.append({
-                'name': 'blosc',
-                'configuration': {
-                    'cname': self.cname,
-                    'clevel': self.clevel,
-                    'shuffle': shuffle_str
-                }
-            })
+            blosc_codec = codecs.BloscCodec(
+                cname=self.cname,
+                clevel=self.clevel,
+                shuffle=shuffle_enum
+            )
+            codecs_list.append(blosc_codec.to_dict())
+            
         elif self.compressor == 'zstd':
-            codecs.append({
-                'name': 'zstd',
-                'configuration': {'level': self.clevel}
-            })
+            zstd_codec = codecs.ZstdCodec(level=self.clevel)
+            codecs_list.append(zstd_codec.to_dict())
+            
         elif self.compressor == 'gzip':
-            codecs.append({
-                'name': 'gzip',
-                'configuration': {'level': self.clevel}
-            })
+            gzip_codec = codecs.GzipCodec(level=self.clevel)
+            codecs_list.append(gzip_codec.to_dict())
+            
         elif self.compressor == 'lz4':
-            codecs.append({
-                'name': 'lz4',
-                'configuration': {}
-            })
+            # LZ4 is not directly available in zarr.codecs v3, would need blosc
+            raise ValueError("LZ4 is not available in Zarr v3. Use Blosc with cname='lz4' instead.")
+            
         elif self.compressor == 'bz2':
-            codecs.append({
-                'name': 'bz2',
-                'configuration': {'level': self.clevel}
-            })
+            # BZ2 is not directly available in zarr.codecs v3
+            raise ValueError("BZ2 is not available in Zarr v3. Use Zstd or Gzip instead.")
+            
         elif self.compressor is None or self.compressor == 'none':
-            pass  # No compression codec
+            pass  # No compression codec, only bytes codec
+            
         else:
             raise ValueError(f"Unsupported compressor: {self.compressor}")
         
-        return codecs
+        return codecs_list
     
     @classmethod
     def from_numcodecs(cls, compressor):

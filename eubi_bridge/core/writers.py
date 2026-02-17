@@ -159,6 +159,16 @@ def get_compressor(name,
         return None
     
     name = name.lower()
+    
+    # Reject unsupported codecs due to tensorstore backend limitations
+    if name in ('lz4', 'lzma'):
+        raise ValueError(
+            f"⚠️ Codec '{name.upper()}' is not supported! "
+            f"The tensorstore backend (used for writing zarr files) does not support this codec. "
+            f"Supported codecs: blosc, zstd, gzip, bz2 (Zarr v2 only), none. "
+            f"For compression similar to LZ4, use 'blosc' with cname='lz4' instead."
+        )
+    
     assert zarr_format in (ZARR_V2, ZARR_V3)
     compression_dict2 = {
         "blosc": "Blosc",
@@ -190,8 +200,15 @@ def get_compressor(name,
             raise ValueError(f"Unsupported compressor '{name}' for Zarr v3. Supported: {list(compression_dict3.keys())}")
         compressor_name = compression_dict3[name]
         compressor_instance = getattr(codecs, compressor_name)
+        
+        # For Zarr v3 BloscCodec, convert integer shuffle to string enum value
+        if name == 'blosc' and 'shuffle' in params:
+            if isinstance(params['shuffle'], int):
+                shuffle_map = {0: 'noshuffle', 1: 'shuffle', 2: 'bitshuffle'}
+                params['shuffle'] = shuffle_map.get(params['shuffle'], str(params['shuffle']))
     else:
         raise Exception("Unsupported Zarr format")
+    
     compressor = compressor_instance(**params)
     return compressor
 

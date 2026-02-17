@@ -443,9 +443,9 @@ def validate_compression(output_path: Union[str, Path],
         if actual_lower == expected_lower:
             return True
         
-        # For Zarr v3, codec class names have "codec" suffix
+        # For Zarr v3, codec class names have "Codec" suffix (e.g., BloscCodec -> blosccodec)
         if zarr_fmt == 3:
-            if expected_lower == 'blosc' and actual_lower == 'bloscodec':
+            if expected_lower == 'blosc' and actual_lower == 'blosccodec':
                 return True
             if expected_lower == 'zstd' and actual_lower == 'zstdcodec':
                 return True
@@ -523,6 +523,35 @@ def compare_pixel_data(output_path: Union[str, Path],
     
     if not np.allclose(actual_data, expected_data, rtol=rtol, atol=atol):
         raise AssertionError("Pixel data mismatch")
+    
+    return True
+
+
+def compare_zarr_v2_vs_v3(output_v2_path: Union[str, Path],
+                          output_v3_path: Union[str, Path],
+                          resolution: str = '0',
+                          rtol: float = 1e-5,
+                          atol: float = 1e-8) -> bool:
+    """Compare pixel data between Zarr v2 and v3 outputs."""
+    v2_path = get_actual_zarr_path(output_v2_path)
+    v3_path = get_actual_zarr_path(output_v3_path)
+    
+    gr_v2 = zarr.open_group(v2_path, mode='r')
+    gr_v3 = zarr.open_group(v3_path, mode='r')
+    
+    array_v2 = gr_v2[resolution]
+    array_v3 = gr_v3[resolution]
+    
+    data_v2 = np.array(array_v2[:])
+    data_v3 = np.array(array_v3[:])
+    
+    if data_v2.shape != data_v3.shape:
+        raise AssertionError(
+            f"Shape mismatch: v2 {data_v2.shape} vs v3 {data_v3.shape}"
+        )
+    
+    if not np.allclose(data_v2, data_v3, rtol=rtol, atol=atol):
+        raise AssertionError("Pixel data mismatch between v2 and v3")
     
     return True
 

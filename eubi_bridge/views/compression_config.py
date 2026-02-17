@@ -43,8 +43,8 @@ def render_compression_config(key_prefix="", zarr_format=2):
                 compressor_options = ['blosc', 'zstd', 'gzip', 'none']
                 help_text = "Choose compression algorithm. Zarr v3 supports: blosc, zstd, gzip. 'blosc' is fastest, 'zstd' offers best compression, 'none' disables compression."
             else:
-                # Zarr v2 supports all compression algorithms
-                compressor_options = ['blosc', 'zstd', 'gzip', 'lz4', 'bz2', 'none']
+                # Zarr v2 supports: blosc, zstd, gzip, bz2, none (LZ4 and LZMA not supported by tensorstore backend)
+                compressor_options = ['blosc', 'zstd', 'gzip', 'bz2', 'none']
                 help_text = "Choose compression algorithm. 'blosc' is fastest, 'zstd' offers best compression, 'none' disables compression."
             
             compressor = st.selectbox(
@@ -149,15 +149,9 @@ def render_compression_config(key_prefix="", zarr_format=2):
             with col2:
                 st.info("💡 GZip is widely compatible but slower than modern codecs")
         
-        elif compressor == 'lz4':
-            st.markdown("**LZ4 Parameters:**")
-            st.error("⚠️ LZ4 is not available for Zarr v3! Use Blosc with cname='lz4' instead.")
-            # LZ4 has no parameters in our implementation
-            compressor_params = {}
-        
         elif compressor == 'bz2':
             st.markdown("**BZ2 Parameters:**")
-            st.error("⚠️ BZ2 is not available for Zarr v3! Use Zstd or Gzip instead.")
+            st.warning("⚠️ BZ2 is v2-only (not supported in Zarr v3). Use Zstd or Gzip for v3.")
             col1, col2 = st.columns([2, 2])
             
             with col1:
