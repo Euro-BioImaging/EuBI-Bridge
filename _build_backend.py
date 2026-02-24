@@ -86,13 +86,27 @@ def download_and_extract_jdk():
             extracted_contents = list(Path(tmpdir).iterdir())
             
             if len(extracted_contents) == 1 and extracted_contents[0].name == 'jdk':
-                # Tar has 'jdk/' as top-level, extract its contents directly
+                # Tar has 'jdk/' as top-level
                 jdk_root = extracted_contents[0]
-                for item in jdk_root.iterdir():
-                    dest = jdk_platform_path / item.name
-                    if dest.exists():
-                        shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
-                    shutil.move(str(item), str(dest))
+                
+                # Check if jdk/ contains a platform-specific folder
+                platform_folders = [item for item in jdk_root.iterdir() if item.name == platform_id]
+                
+                if platform_folders:
+                    # Extract from jdk/<platform>/ directly to jdk_platform_path
+                    platform_folder = platform_folders[0]
+                    for item in platform_folder.iterdir():
+                        dest = jdk_platform_path / item.name
+                        if dest.exists():
+                            shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
+                        shutil.move(str(item), str(dest))
+                else:
+                    # Tar has 'jdk/' with contents at root level
+                    for item in jdk_root.iterdir():
+                        dest = jdk_platform_path / item.name
+                        if dest.exists():
+                            shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
+                        shutil.move(str(item), str(dest))
             else:
                 # Tar contents go directly to jdk_platform_path
                 for item in extracted_contents:

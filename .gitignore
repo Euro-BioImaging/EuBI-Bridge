@@ -48,6 +48,7 @@ htmlcov/
 .nox/
 .pytest_cache/
 pytest_debug.log
+react_gui/
 
 *.prof
 *.lprof

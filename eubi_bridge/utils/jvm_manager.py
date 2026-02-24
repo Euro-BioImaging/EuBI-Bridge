@@ -65,7 +65,11 @@ def find_libjvm() -> str:
         jdk_arch_paths.append(jdk_root_base / platform_dir / arch_dir)
     jdk_arch_paths.append(jdk_root_base / platform_dir)
     for jdk_path in jdk_arch_paths:
-        candidates.append(jdk_path / "lib" / "server" / libjvm_name)
+        # Windows JDK stores jvm.dll in bin/server, not lib/server
+        if sys.platform == "win32":
+            candidates.append(jdk_path / "bin" / "server" / libjvm_name)
+        else:
+            candidates.append(jdk_path / "lib" / "server" / libjvm_name)
         # macOS JDKs often live under Contents/Home
         candidates.append(jdk_path / "Contents" / "Home" / "lib" / "server" / libjvm_name)
 
@@ -75,7 +79,11 @@ def find_libjvm() -> str:
         jdk_arch_paths.append(jdk_pkg_base / platform_dir / arch_dir)
     jdk_arch_paths.append(jdk_pkg_base / platform_dir)
     for jdk_path in jdk_arch_paths:
-        candidates.append(jdk_path / "lib" / "server" / libjvm_name)
+        # Windows JDK stores jvm.dll in bin/server, not lib/server
+        if sys.platform == "win32":
+            candidates.append(jdk_path / "bin" / "server" / libjvm_name)
+        else:
+            candidates.append(jdk_path / "lib" / "server" / libjvm_name)
         # macOS JDKs often live under Contents/Home
         candidates.append(jdk_path / "Contents" / "Home" / "lib" / "server" / libjvm_name)
 

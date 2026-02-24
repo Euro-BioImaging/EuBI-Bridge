@@ -469,9 +469,10 @@ async def _load_input_manager(input_path: Union[str, ArrayManager],
     # Load tiles if specified
     mosaic_tile_index = kwargs.get('mosaic_tile_index')
     # Parse comma-separated string indices like "0,1" from CSV to list [0, 1]
-    if isinstance(mosaic_tile_index, str) and ',' in mosaic_tile_index:
+    # Handle 'all' string just like scene_index does
+    if isinstance(mosaic_tile_index, str) and mosaic_tile_index != 'all' and ',' in mosaic_tile_index:
         mosaic_tile_index = [int(x.strip()) for x in mosaic_tile_index.split(',')]
-    elif isinstance(mosaic_tile_index, str):
+    elif isinstance(mosaic_tile_index, str) and mosaic_tile_index != 'all':
         try:
             mosaic_tile_index = int(mosaic_tile_index)
         except ValueError:
