@@ -169,7 +169,7 @@ class EuBIBridge:
                 x_range=None,
                 dimension_order='tczyx',
                 compressor='blosc',
-                compressor_params={},
+                compressor_params={'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0},
                 overwrite=False,
                 override_channel_names = False,
                 channel_intensity_limits = 'from_dtype',
@@ -196,8 +196,15 @@ class EuBIBridge:
         self._dask_temp_dir = None
 
     def _get_json_path(self):
-        """Get path to JSON config file."""
-        return Path(self._configpath) / '.eubi_config.json'
+        """Get path to JSON config file.
+
+        If *configpath* already points to a ``.json`` file that path is used
+        directly; otherwise ``.eubi_config.json`` is appended to the directory.
+        """
+        p = Path(self._configpath)
+        if p.suffix.lower() == '.json':
+            return p
+        return p / '.eubi_config.json'
 
     def _load_config_from_json(self):
         """Load config from JSON file (the single source of truth)."""
@@ -236,7 +243,14 @@ class EuBIBridge:
             for key in self.root_defaults.keys():
                 config[key] = dict(self.root_defaults[key])
             self._save_config_to_json(config)
-        
+        else:
+            # Sanitize: if compressor_params['shuffle'] was saved as a string, fix it
+            _shuffle_str_to_int = {'noshuffle': 0, 'shuffle': 1, 'bitshuffle': 2, 'autoshuffle': -1}
+            cp = config.get('conversion', {}).get('compressor_params', {})
+            if isinstance(cp.get('shuffle'), str):
+                cp['shuffle'] = _shuffle_str_to_int.get(cp['shuffle'].lower(), 1)
+                self._save_config_to_json(config)
+
         self._config = config
 
     @property
@@ -331,7 +345,8 @@ class EuBIBridge:
         """
         Resets the cluster, conversion and downscale parameters to the installation defaults.
         """
-        self.config = dict(self.root_defaults)
+        import copy
+        self.config = copy.deepcopy(self.root_defaults)
 
     def _print_config_unified(self, title: str, config_sections: dict):
         """Print all config sections in a single table with section headers as rows."""

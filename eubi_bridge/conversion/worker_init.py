@@ -204,9 +204,12 @@ def safe_worker_wrapper(func):
             return func(*args, **kwargs)
 
         except Exception as e:
-            # Capture full exception details
+            # Capture full exception details before any str() call that might fail
             exc_type = type(e).__name__
-            exc_msg = str(e)
+            try:
+                exc_msg = str(e)
+            except Exception:
+                exc_msg = repr(type(e))
             exc_tb = traceback.format_exc()
 
             # Create a simple, picklable RuntimeError
@@ -218,6 +221,11 @@ def safe_worker_wrapper(func):
             )
 
             logger.error(f"[Worker Error] {error_msg}")
-            raise RuntimeError(error_msg) from None
+            # Clear __context__ so multiprocessing doesn't try to pickle the
+            # original (possibly un-picklable) Java exception when sending this
+            # RuntimeError back to the main process.
+            new_exc = RuntimeError(error_msg)
+            new_exc.__context__ = None
+            raise new_exc
 
     return wrapper

@@ -3,6 +3,7 @@ import concurrent.futures
 import itertools
 import os
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,30 @@ from eubi_bridge.utils.path_utils import is_zarr_group
 # import logging, warnings
 
 logger = get_logger(__name__)
+
+# Per-array locks to serialize reads on non-thread-safe backends (e.g. BioFormats Java readers).
+# Keyed by id(arr); cleaned up automatically when new arrays are registered.
+_array_read_locks: dict = {}
+_array_read_locks_registry_lock = threading.Lock()
+
+
+def _get_read_lock(arr) -> threading.Lock:
+    """Return a per-array Lock, creating one on first access."""
+    arr_id = id(arr)
+    with _array_read_locks_registry_lock:
+        if arr_id not in _array_read_locks:
+            _array_read_locks[arr_id] = threading.Lock()
+        return _array_read_locks[arr_id]
+
+
+def _is_resource_backed(arr) -> bool:
+    """Return True when *arr* is a resource-backed dask array (BioFormats-backed)."""
+    try:
+        from resource_backed_dask_array import ResourceBackedDaskArray
+        return isinstance(arr, ResourceBackedDaskArray)
+    except ImportError:
+        return False
+
 
 # logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
 
@@ -211,6 +236,7 @@ def get_compressor(name,
     
     compressor = compressor_instance(**params)
     return compressor
+
 
 def get_default_fill_value(dtype):
     try:
@@ -795,9 +821,16 @@ def _read_region(arr, region_slice):
             # Zero-copy direct read (optimal for zarr/tensorstore backends)
             return arr._read_direct(region_slice)
         elif hasattr(arr, 'compute') and hasattr(arr, '__dask_graph__'):
-            # Dask array: slice then compute
-            sliced = arr[region_slice]
-            return sliced.compute()
+            # Dask array: slice then compute.
+            # BioFormats-backed arrays share a single Java reader which is NOT
+            # thread-safe, so serialise concurrent reads through a per-array lock.
+            if _is_resource_backed(arr):
+                with _get_read_lock(arr):
+                    sliced = arr[region_slice]
+                    return sliced.compute()
+            else:
+                sliced = arr[region_slice]
+                return sliced.compute()
         else:
             # Direct array (zarr.Array, np.ndarray, etc.)
             return np.asarray(arr[region_slice])

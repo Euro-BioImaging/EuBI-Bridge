@@ -5,7 +5,7 @@ backend-path = ["."]
 
 [project]
 name = "eubi_bridge"
-version = "0.1.0c4"
+version = "0.1.0c5"
 description = "A package for converting datasets to OME-Zarr format."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -69,6 +69,7 @@ classifiers = [
 eubi = "eubi_bridge.cli:main"
 eubi-gui = "eubi_bridge.app:main"
 eubi-gui-qt6 = "eubi_bridge.gui.main:main"
+eubi-gui-react = "eubi_bridge.gui_react:main"
 
 [project.optional-dependencies]
 gui = ["streamlit>=1.52.1", "matplotlib"]
