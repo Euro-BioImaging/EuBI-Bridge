@@ -4,5 +4,5 @@ recursive-include eubi_bridge/bioformats *.jar
 recursive-include eubi_bridge/bioformats *.xml
 recursive-include eubi_bridge/bioformats *.txt
 recursive-include eubi_bridge/external *.py
-global-exclude eubi_bridge/bioformats/jdk
-global-exclude eubi_bridge/bioformats/libjvm
+prune eubi_bridge/bioformats/jdk
+prune eubi_bridge/bioformats/libjvm
