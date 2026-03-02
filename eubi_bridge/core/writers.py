@@ -184,6 +184,12 @@ def get_compressor(name,
         return None
     
     name = name.lower()
+
+    # Apply Blosc-specific defaults (with integer shuffle) when no params provided.
+    # This is the only place Blosc defaults are set, so non-Blosc compressors
+    # never receive Blosc-specific keys (cname, shuffle, blocksize).
+    if name == 'blosc' and not params:
+        params = {'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
     
     # Reject unsupported codecs due to tensorstore backend limitations
     if name in ('lz4', 'lzma'):

@@ -169,7 +169,7 @@ class EuBIBridge:
                 x_range=None,
                 dimension_order='tczyx',
                 compressor='blosc',
-                compressor_params={'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0},
+                compressor_params={},
                 overwrite=False,
                 override_channel_names = False,
                 channel_intensity_limits = 'from_dtype',
