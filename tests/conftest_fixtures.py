@@ -7,6 +7,8 @@ import numpy as np
 import tifffile
 from pathlib import Path
 import pytest
+import shutil
+import uuid
 
 # === Monkey patch for bioio-ome-tiff-fork-by-bugra ===
 # The fork package has a different dist name, but OmeTiffWriter hard-codes 'bioio_ome_tiff'
@@ -29,9 +31,22 @@ importlib.metadata.version = _patched_version
 
 
 @pytest.fixture
-def tmp_test_data(tmp_path):
-    """Fixture that provides a temporary directory for test data."""
-    return tmp_path
+def tmp_test_data():
+    """Fixture that provides a temporary directory for test input data.
+
+    Deliberately avoids the OS temp dir (e.g. macOS /private/var/folders/XX/{random_hash}/T/)
+    because the random alphanumeric hash can contain patterns like 't1' or 'z3' that
+    falsely match dimension tags (t\\d+, z\\d+) during aggregative conversion, causing
+    intermittent test failures that depend on the runner's temp folder name.
+
+    UUID hex uses only [0-9a-f], which contains neither 't' nor 'z', so the path
+    constructed here is guaranteed to be free of false tag matches.
+    """
+    base = Path(__file__).parent / "_tmp"
+    safe_dir = base / uuid.uuid4().hex
+    safe_dir.mkdir(parents=True, exist_ok=True)
+    yield safe_dir
+    shutil.rmtree(safe_dir, ignore_errors=True)
 
 
 def create_synthetic_image_zyx(shape=(8, 128, 128), dtype=np.uint8, seed=42):
