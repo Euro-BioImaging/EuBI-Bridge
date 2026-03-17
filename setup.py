@@ -22,7 +22,7 @@ def readme():
 
 setup(
     name='eubi_bridge',
-    version='0.1.0c5',
+    version='0.1.0rc5',
     author='Bugra Özdemir',
     author_email='bugraa.ozdemir@gmail.com',
     description='A package for converting datasets to OME-Zarr format.',
@@ -41,7 +41,8 @@ setup(
     entry_points={
         'console_scripts': [
             "eubi = eubi_bridge.cli:main",
-            "eubi-gui = eubi_bridge.app:main"
+            "eubi-gui = eubi_bridge.app:main",
+            "eubi-gui-react = eubi_bridge.gui_react:main"
         ]
     },
 )

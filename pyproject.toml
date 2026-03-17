@@ -68,7 +68,6 @@ classifiers = [
 [project.scripts]
 eubi = "eubi_bridge.cli:main"
 eubi-gui = "eubi_bridge.app:main"
-eubi-gui-qt6 = "eubi_bridge.gui.main:main"
 eubi-gui-react = "eubi_bridge.gui_react:main"
 
 [project.optional-dependencies]

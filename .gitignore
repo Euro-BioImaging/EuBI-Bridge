@@ -48,6 +48,7 @@ htmlcov/
 .nox/
 .pytest_cache/
 pytest_debug.log
+tests/_tmp/
 react_gui/
 
 *.prof
@@ -56,3 +57,15 @@ react_gui/
 
 todo.md
 CODE_REVIEW.md
+
+# MkDocs build output
+site/
+
+# Unpacked sdist directories
+eubi_bridge-*/
+
+# Build log
+build_log.txt
+
+# Quarantine
+quarantine/
