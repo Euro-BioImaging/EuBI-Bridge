@@ -58,6 +58,10 @@ react_gui/
 todo.md
 CODE_REVIEW.md
 
+# Local helper scripts not for distribution
+convert_to_zipstore.py
+labid_to_eubi_csv.py
+
 # MkDocs build output
 site/
 
