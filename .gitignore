@@ -42,6 +42,9 @@ bioformats/jdk/win32/
 bioformats/jdk_archives/
 # Package-level JDK (downloaded during pip install)
 eubi_bridge/bioformats/jdk/
+
+# eubi_gui npm dependencies
+eubi_bridge/eubi_gui/node_modules/
 htmlcov/
 .coverage
 .tox/

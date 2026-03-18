@@ -90,10 +90,9 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 2. Locate the eubi_gui directory
     # ------------------------------------------------------------------
-    # This file lives at  <project_root>/eubi_bridge/gui_react.py
-    # eubi_gui is at      <project_root>/eubi_gui/
-    project_root = Path(__file__).resolve().parent.parent
-    gui_dir = project_root / "eubi_gui"
+    # This file lives at  <package>/eubi_bridge/gui_react.py
+    # eubi_gui is at      <package>/eubi_bridge/eubi_gui/
+    gui_dir = Path(__file__).resolve().parent / "eubi_gui"
 
     if not gui_dir.exists():
         print(
@@ -101,6 +100,19 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # 2b. Ensure npm dependencies are installed
+    # ------------------------------------------------------------------
+    if not (gui_dir / "node_modules").exists():
+        print("[eubi-gui-react] node_modules not found — running npm install …")
+        use_shell = sys.platform == "win32"
+        result = subprocess.run(
+            ["npm", "install"], cwd=str(gui_dir), shell=use_shell
+        )
+        if result.returncode != 0:
+            print("[eubi-gui-react] ERROR: npm install failed", file=sys.stderr)
+            sys.exit(result.returncode)
 
     # ------------------------------------------------------------------
     # 3. Launch npm run dev

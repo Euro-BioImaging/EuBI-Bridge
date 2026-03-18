@@ -65,6 +65,13 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 
+[tool.setuptools.package-data]
+eubi_bridge = [
+    "bioformats/**",
+    "eubi_gui/**/*",
+    "!eubi_gui/node_modules/**",
+]
+
 [project.scripts]
 eubi = "eubi_bridge.cli:main"
 eubi-gui = "eubi_bridge.app:main"
