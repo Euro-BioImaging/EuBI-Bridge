@@ -8,6 +8,8 @@ venv/
 
 build/
 dist/
+# pre-built GUI bundle is committed so pip install works without npm
+!eubi_bridge/eubi_gui/dist/
 *.egg-info/
 *.egg
 pip-wheel-metadata/
@@ -43,8 +45,9 @@ bioformats/jdk_archives/
 # Package-level JDK (downloaded during pip install)
 eubi_bridge/bioformats/jdk/
 
-# eubi_gui npm dependencies
+# eubi_gui npm dependencies and platform-specific lock
 eubi_bridge/eubi_gui/node_modules/
+eubi_bridge/eubi_gui/package-lock.json
 htmlcov/
 .coverage
 .tox/

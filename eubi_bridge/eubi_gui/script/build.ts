@@ -54,6 +54,13 @@ async function buildAll() {
     outfile: "dist/index.cjs",
     define: {
       "process.env.NODE_ENV": '"production"',
+      // Shim import.meta.url so fileURLToPath() works in the CJS bundle.
+      // __importMetaUrl is declared in the banner below.
+      "import.meta.url": "__importMetaUrl",
+    },
+    // esbuild injects __filename in CJS output; use it to reconstruct the URL.
+    banner: {
+      js: "var __importMetaUrl = require('url').pathToFileURL(__filename).href;",
     },
     minify: true,
     external: externals,

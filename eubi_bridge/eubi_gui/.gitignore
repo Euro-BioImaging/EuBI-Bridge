@@ -1,5 +1,5 @@
 node_modules
-dist
+# dist/ is committed — it contains the pre-built production bundle
 .DS_Store
 server/public
 vite.config.ts.*

@@ -1,19 +1,19 @@
 """
 Entry point for the EuBI-Bridge React GUI server.
 
-Behaviour
----------
-1. Kill any process currently listening on the GUI ports (5000, 5555).
-2. Change into the *eubi_gui* directory (sibling of the project root).
-3. Launch ``npm run dev`` — the Express + Vite development server.
+The front-end and Express server are pre-built (``npm run build``) and shipped
+as ``eubi_bridge/eubi_gui/dist/``.  At runtime only Node.js >= 20 is required —
+no npm, no node_modules installation, no writing to the user's home directory.
+This makes ``eubi-gui-react`` safe for shared / multi-user HPC environments.
 
-Usage (after ``pip install -e .``)::
+Usage (after ``pip install``)::
 
     eubi-gui-react
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import subprocess
 from pathlib import Path
@@ -79,6 +79,11 @@ def _kill_port_fallback(port: int) -> None:
             print(f"[eubi-gui-react] Killed PID {pid} on port {port} (fallback)")
 
 
+def _get_working_gui_dir() -> Path:
+    # kept for backwards compatibility — no longer used in main()
+    return Path(__file__).resolve().parent / "eubi_gui"
+
+
 def main() -> None:
     # ------------------------------------------------------------------
     # 1. Kill existing server processes
@@ -88,47 +93,60 @@ def main() -> None:
         _kill_port(port)
 
     # ------------------------------------------------------------------
-    # 2. Locate the eubi_gui directory
+    # 2. Locate the pre-built GUI bundle
     # ------------------------------------------------------------------
-    # This file lives at  <package>/eubi_bridge/gui_react.py
-    # eubi_gui is at      <package>/eubi_bridge/eubi_gui/
     gui_dir = Path(__file__).resolve().parent / "eubi_gui"
+    dist_index = gui_dir / "dist" / "index.cjs"
 
-    if not gui_dir.exists():
+    if not dist_index.exists():
         print(
-            f"[eubi-gui-react] ERROR: eubi_gui directory not found at {gui_dir}",
+            f"[eubi-gui-react] ERROR: pre-built GUI not found at {dist_index}.\n"
+            "This is a packaging error — the dist/ directory was not included when\n"
+            "the package was built.  Please file a bug report.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # 2b. Ensure npm dependencies are installed
+    # 2b. Check Node.js version (>= 20 required)
     # ------------------------------------------------------------------
-    if not (gui_dir / "node_modules").exists():
-        print("[eubi-gui-react] node_modules not found — running npm install …")
-        use_shell = sys.platform == "win32"
-        result = subprocess.run(
-            ["npm", "install"], cwd=str(gui_dir), shell=use_shell
-        )
-        if result.returncode != 0:
-            print("[eubi-gui-react] ERROR: npm install failed", file=sys.stderr)
-            sys.exit(result.returncode)
-
-    # ------------------------------------------------------------------
-    # 3. Launch npm run dev
-    # ------------------------------------------------------------------
-    print(f"[eubi-gui-react] Starting server from {gui_dir} …")
-
-    # On Windows, npm is a .cmd script and needs shell=True (or explicit .cmd).
-    use_shell = sys.platform == "win32"
-    cmd = ["npm", "run", "dev"]
-
     try:
-        subprocess.run(cmd, cwd=str(gui_dir), check=True, shell=use_shell)
+        node_version_output = subprocess.run(
+            ["node", "--version"], capture_output=True, text=True
+        ).stdout.strip()  # e.g. "v20.11.0"
+        major = int(node_version_output.lstrip("v").split(".")[0])
+        if major < 20:
+            print(
+                f"[eubi-gui-react] ERROR: Node.js {node_version_output} is too old. "
+                "Node.js >= 20.19.0 is required.\n"
+                "Install it from https://nodejs.org or via your system package manager "
+                "(e.g. 'conda install -c conda-forge nodejs>=20' or 'nvm install 20').",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    except FileNotFoundError:
+        print(
+            "[eubi-gui-react] ERROR: 'node' not found. "
+            "Install Node.js >= 20.19.0 from https://nodejs.org",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # 3. Launch the pre-built Express server
+    # ------------------------------------------------------------------
+    # Tell the bundled server where the Python worker scripts live.
+    # Without this env var the server would look in dist/ (its own directory).
+    env = os.environ.copy()
+    env["EUBI_SCRIPTS_DIR"] = str(gui_dir / "server")
+
+    print(f"[eubi-gui-react] Starting server ({dist_index}) …")
+    try:
+        subprocess.run(["node", str(dist_index)], env=env, check=True)
     except KeyboardInterrupt:
         print("\n[eubi-gui-react] Interrupted — shutting down.")
     except subprocess.CalledProcessError as exc:
-        print(f"[eubi-gui-react] npm exited with code {exc.returncode}", file=sys.stderr)
+        print(f"[eubi-gui-react] node exited with code {exc.returncode}", file=sys.stderr)
         sys.exit(exc.returncode)
 
 

@@ -13,6 +13,11 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// In production (node dist/index.cjs) __dirname is dist/.
+// gui_react.py sets EUBI_SCRIPTS_DIR to <package>/eubi_bridge/eubi_gui/server/
+// so Python worker scripts are found correctly in both dev and production.
+const SCRIPTS_DIR: string = process.env.EUBI_SCRIPTS_DIR ?? __dirname;
+
 /**
  * Resolve the Python executable to use for subprocesses.
  * Priority:
@@ -44,7 +49,7 @@ let planeServerReady = false;
 function startPlaneServer() {
   if (planeServerProcess) return;
 
-  const scriptPath = path.join(__dirname, "zarr_plane_server.py");
+  const scriptPath = path.join(SCRIPTS_DIR, "zarr_plane_server.py");
   const proc = spawn(PYTHON_EXECUTABLE, [scriptPath, String(PLANE_SERVER_PORT)], {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env },
@@ -253,7 +258,7 @@ export async function registerRoutes(
   });
 
   // ── Config management ──────────────────────────────────────────────────────
-  const CONFIG_SCRIPT = path.join(__dirname, "config_manager.py");
+  const CONFIG_SCRIPT = path.join(SCRIPTS_DIR, "config_manager.py");
 
   /** Run config_manager.py synchronously.
    *  All input (action, path, payload) is sent as a single JSON object via stdin,
@@ -638,7 +643,7 @@ function runConversion(
   config: Record<string, any>,
   broadcast: (jobId: string, msg: Record<string, any>) => void,
 ) {
-  const scriptPath = path.join(__dirname, "run_conversion.py");
+  const scriptPath = path.join(SCRIPTS_DIR, "run_conversion.py");
   const configJson = JSON.stringify(config);
 
   const proc = spawn(PYTHON_EXECUTABLE, [scriptPath, configJson], {
