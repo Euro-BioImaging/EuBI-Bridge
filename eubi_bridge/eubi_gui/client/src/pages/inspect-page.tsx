@@ -586,13 +586,13 @@ export default function InspectPage() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="grid gap-2 text-sm">
-                    <div className="flex justify-between gap-1">
-                      <span className="text-muted-foreground">Name</span>
-                      <span className="font-mono text-xs" data-testid="text-zarr-name">{zarrMetadata.name}</span>
+                    <div className="flex justify-between gap-2 min-w-0">
+                      <span className="text-muted-foreground shrink-0">Name</span>
+                      <span className="font-mono text-xs truncate text-right" data-testid="text-zarr-name">{zarrMetadata.name}</span>
                     </div>
                     <Separator />
-                    <div className="flex justify-between gap-1">
-                      <span className="text-muted-foreground">NGFF Version</span>
+                    <div className="flex justify-between gap-2 min-w-0">
+                      <span className="text-muted-foreground shrink-0">NGFF Version</span>
                       <span className="font-mono text-xs">{zarrMetadata.ngffVersion}</span>
                     </div>
                     <Separator />
@@ -606,9 +606,9 @@ export default function InspectPage() {
                       <Badge variant="secondary" className="font-mono">{zarrMetadata.dataType}</Badge>
                     </div>
                     <Separator />
-                    <div className="flex justify-between gap-1">
-                      <span className="text-muted-foreground">Compression</span>
-                      <span className="font-mono text-xs">{zarrMetadata.compression}</span>
+                    <div className="flex justify-between gap-2 min-w-0">
+                      <span className="text-muted-foreground shrink-0">Compression</span>
+                      <span className="font-mono text-xs truncate text-right">{zarrMetadata.compression}</span>
                     </div>
                   </div>
                 </CardContent>

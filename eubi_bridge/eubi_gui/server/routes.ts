@@ -415,115 +415,189 @@ export async function registerRoutes(
   });
 
   app.get("/api/zarr/metadata", async (req, res) => {
+    const queryString = new URLSearchParams(req.query as Record<string, string>).toString();
+    await proxyToPlaneServer(`/metadata?${queryString}`, res);
+  });
+
+  app.get("/api/zarr/metadata_unused", async (req, res) => {
     const zarrPath = req.query.path as string;
     if (!zarrPath) {
       return res.status(400).json({ message: "Path is required" });
     }
 
-    const resolvedPath = path.resolve(zarrPath);
-    if (!fs.existsSync(resolvedPath)) {
-      return res.status(404).json({ message: "Path not found" });
+    const isRemote = /^https?:\/\/|^s3:\/\/|^gs:\/\//.test(zarrPath);
+
+    // ── helpers ────────────────────────────────────────────────────────
+    /** Fetch a JSON file at a URL; returns null on any error. */
+    async function fetchRemoteJson(url: string): Promise<any | null> {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        return await r.json();
+      } catch { return null; }
     }
 
-    const zattrsPath = path.join(resolvedPath, ".zattrs");
-    const rootZarrJsonPath = path.join(resolvedPath, "zarr.json");
+    /** Join a base URL/path with a relative child (always uses /). */
+    function joinPath(base: string, child: string): string {
+      return `${base.replace(/\/+$/, "")}/${child}`;
+    }
+
+    /** Extract array info (dtype, shape, chunks, compression) from .zarray or zarr.json JSON. */
+    function parseArrayInfo(obj: any, isV3: boolean) {
+      if (isV3) {
+        const codecs = obj.codecs || [];
+        const compCodec = codecs.find((c: any) => c.name && c.name !== "bytes" && c.name !== "transpose");
+        return {
+          dataType: obj.data_type || "unknown",
+          shape: obj.shape || [],
+          chunks: obj.chunk_grid?.configuration?.chunk_shape || [],
+          compression: compCodec?.name || "unknown",
+        };
+      }
+      return {
+        dataType: obj.dtype || "unknown",
+        shape: obj.shape || [],
+        chunks: obj.chunks || [],
+        compression: obj.compressor?.id || obj.compressor?.codec || "unknown",
+      };
+    }
+    // ──────────────────────────────────────────────────────────────────
 
     let multiscales: any = null;
     let omero: any = null;
-
-    if (fs.existsSync(zattrsPath)) {
-      try {
-        const zattrs = JSON.parse(fs.readFileSync(zattrsPath, "utf-8"));
-        multiscales = zattrs.multiscales?.[0] || null;
-        omero = zattrs.omero || null;
-      } catch {}
-    }
-
-    if (!multiscales && fs.existsSync(rootZarrJsonPath)) {
-      try {
-        const rootZarrJson = JSON.parse(fs.readFileSync(rootZarrJsonPath, "utf-8"));
-        const attrs = rootZarrJson.attributes || rootZarrJson;
-        multiscales = attrs.multiscales?.[0] || null;
-        omero = omero || attrs.omero || null;
-      } catch {}
-    }
-
-    if (!multiscales) {
-      const subdirs = fs.readdirSync(resolvedPath, { withFileTypes: true })
-        .filter(d => d.isDirectory() && /^\d+$/.test(d.name))
-        .sort((a, b) => parseInt(a.name) - parseInt(b.name));
-      if (subdirs.length > 0) {
-        multiscales = {
-          datasets: subdirs.map(d => ({ path: d.name })),
-        };
-      }
-    }
-
     let dataType = "unknown";
     let shape: number[] = [];
     let chunks: number[] = [];
     let compression = "unknown";
+    let pyramidLayers: any[] = [];
+    let baseName = "";
 
-    if (multiscales?.datasets?.length > 0) {
-      const firstDataset = multiscales.datasets[0].path || "0";
-      const arrayPath = path.join(resolvedPath, firstDataset);
-
-      const zarrayFile = path.join(arrayPath, ".zarray");
-      const zarrJsonFile = path.join(arrayPath, "zarr.json");
-
-      if (fs.existsSync(zarrayFile)) {
-        try {
-          const zarray = JSON.parse(fs.readFileSync(zarrayFile, "utf-8"));
-          dataType = zarray.dtype || "unknown";
-          shape = zarray.shape || [];
-          chunks = zarray.chunks || [];
-          if (zarray.compressor) {
-            compression = zarray.compressor.id || zarray.compressor.codec || "unknown";
+    if (isRemote) {
+      // ── Remote store: delegate to the plane server's /info endpoint ──
+      // Pyramid (Python) handles zarr v2/v3 and all remote protocols correctly.
+      baseName = zarrPath.replace(/\/+$/, "").split("/").pop() || zarrPath;
+      try {
+        const infoUrl = `http://127.0.0.1:${PLANE_SERVER_PORT}/info?path=${encodeURIComponent(zarrPath)}`;
+        const infoRes = await fetch(infoUrl);
+        if (infoRes.ok) {
+          const info = await infoRes.json() as any;
+          // info shape: { axes, shape, resolutionPaths, levelsInfo, channels, dimSizes, dtype }
+          const axisNames: string[] = (info.axes || "").split("").filter(Boolean);
+          multiscales = {
+            datasets: (info.resolutionPaths || []).map((p: string) => ({ path: p })),
+          };
+          // Build synthetic axes array compatible with the metadata response
+          const axisTypes: Record<string, string> = { t: "time", c: "channel", z: "space", y: "space", x: "space" };
+          const axisUnits: Record<string, string> = { t: "second", z: "micrometer", y: "micrometer", x: "micrometer" };
+          const axesArray = axisNames.map((n: string) => ({
+            name: n, type: axisTypes[n] || "space", unit: axisUnits[n],
+          }));
+          shape = info.shape || [];
+          dataType = info.dtype || "unknown";
+          if (info.levelsInfo?.length > 0) {
+            chunks = info.levelsInfo[0].chunks || [];
+            pyramidLayers = info.levelsInfo.map((l: any, i: number) => ({
+              level: i, shape: l.shape || [], chunks: l.chunks || [],
+            }));
           }
-        } catch {}
-      } else if (fs.existsSync(zarrJsonFile)) {
-        try {
-          const zarrJson = JSON.parse(fs.readFileSync(zarrJsonFile, "utf-8"));
-          dataType = zarrJson.data_type || "unknown";
-          shape = zarrJson.shape || [];
-          chunks = zarrJson.chunk_grid?.configuration?.chunk_shape || [];
-          const codecs = zarrJson.codecs || [];
-          const compCodec = codecs.find((c: any) => c.name && c.name !== "bytes" && c.name !== "transpose");
-          if (compCodec) {
-            compression = compCodec.name || "unknown";
+          // Build channel list from info
+          const infoChannels = info.channels || [];
+          if (infoChannels.length > 0) {
+            omero = {
+              channels: infoChannels.map((ch: any) => ({
+                label: ch.label,
+                color: ch.color || "FFFFFF",
+                active: ch.visible !== false,
+                window: ch.window || { min: 0, max: 65535, start: 0, end: 65535 },
+              })),
+            };
           }
+          // Patch multiscales with a synthetic axes array so the metadata response uses real axes
+          multiscales.axes = axesArray;
+        }
+      } catch { /* fall through to defaults */ }
+    } else {
+      // ── Local store: use the filesystem ───────────────────────────
+      const resolvedPath = path.resolve(zarrPath);
+      if (!fs.existsSync(resolvedPath)) {
+        return res.status(404).json({ message: "Path not found" });
+      }
+      baseName = path.basename(resolvedPath);
+
+      const zattrsPath = path.join(resolvedPath, ".zattrs");
+      const rootZarrJsonPath = path.join(resolvedPath, "zarr.json");
+
+      if (fs.existsSync(zattrsPath)) {
+        try {
+          const zattrs = JSON.parse(fs.readFileSync(zattrsPath, "utf-8"));
+          multiscales = zattrs.multiscales?.[0] || null;
+          omero = zattrs.omero || null;
         } catch {}
+      }
+
+      if (!multiscales && fs.existsSync(rootZarrJsonPath)) {
+        try {
+          const rootZarrJson = JSON.parse(fs.readFileSync(rootZarrJsonPath, "utf-8"));
+          const attrs = rootZarrJson.attributes || rootZarrJson;
+          multiscales = attrs.multiscales?.[0] || null;
+          omero = omero || attrs.omero || null;
+        } catch {}
+      }
+
+      if (!multiscales) {
+        const subdirs = fs.readdirSync(resolvedPath, { withFileTypes: true })
+          .filter(d => d.isDirectory() && /^\d+$/.test(d.name))
+          .sort((a, b) => parseInt(a.name) - parseInt(b.name));
+        if (subdirs.length > 0) {
+          multiscales = { datasets: subdirs.map(d => ({ path: d.name })) };
+        }
+      }
+
+      if (multiscales?.datasets?.length > 0) {
+        const firstDataset = multiscales.datasets[0].path || "0";
+        const arrayPath = path.join(resolvedPath, firstDataset);
+        const zarrayFile = path.join(arrayPath, ".zarray");
+        const zarrJsonFile = path.join(arrayPath, "zarr.json");
+
+        if (fs.existsSync(zarrayFile)) {
+          try {
+            const zarray = JSON.parse(fs.readFileSync(zarrayFile, "utf-8"));
+            ({ dataType, shape, chunks, compression } = parseArrayInfo(zarray, false));
+          } catch {}
+        } else if (fs.existsSync(zarrJsonFile)) {
+          try {
+            const zarrJson = JSON.parse(fs.readFileSync(zarrJsonFile, "utf-8"));
+            ({ dataType, shape, chunks, compression } = parseArrayInfo(zarrJson, true));
+          } catch {}
+        }
+
+        pyramidLayers = multiscales.datasets.map((ds: any, i: number) => {
+          const dsPath = ds.path || String(i);
+          const layerArrayPath = path.join(resolvedPath, dsPath);
+          let layerShape: number[] = [];
+          let layerChunks: number[] = [];
+          const zarrayFile = path.join(layerArrayPath, ".zarray");
+          const zarrJsonFile = path.join(layerArrayPath, "zarr.json");
+          if (fs.existsSync(zarrayFile)) {
+            try {
+              const zarray = JSON.parse(fs.readFileSync(zarrayFile, "utf-8"));
+              layerShape = zarray.shape || [];
+              layerChunks = zarray.chunks || [];
+            } catch {}
+          } else if (fs.existsSync(zarrJsonFile)) {
+            try {
+              const zarrJson = JSON.parse(fs.readFileSync(zarrJsonFile, "utf-8"));
+              layerShape = zarrJson.shape || [];
+              layerChunks = zarrJson.chunk_grid?.configuration?.chunk_shape || [];
+            } catch {}
+          }
+          return { level: i, shape: layerShape, chunks: layerChunks };
+        });
       }
     }
 
-    const pyramidLayers = multiscales?.datasets?.map((ds: any, i: number) => {
-      const dsPath = ds.path || String(i);
-      const layerArrayPath = path.join(resolvedPath, dsPath);
-      let layerShape: number[] = [];
-      let layerChunks: number[] = [];
-
-      const zarrayFile = path.join(layerArrayPath, ".zarray");
-      const zarrJsonFile = path.join(layerArrayPath, "zarr.json");
-
-      if (fs.existsSync(zarrayFile)) {
-        try {
-          const zarray = JSON.parse(fs.readFileSync(zarrayFile, "utf-8"));
-          layerShape = zarray.shape || [];
-          layerChunks = zarray.chunks || [];
-        } catch {}
-      } else if (fs.existsSync(zarrJsonFile)) {
-        try {
-          const zarrJson = JSON.parse(fs.readFileSync(zarrJsonFile, "utf-8"));
-          layerShape = zarrJson.shape || [];
-          layerChunks = zarrJson.chunk_grid?.configuration?.chunk_shape || [];
-        } catch {}
-      }
-
-      return { level: i, shape: layerShape, chunks: layerChunks };
-    }) || [];
-
     const metadata = {
-      name: path.basename(resolvedPath),
+      name: baseName,
       ngffVersion: multiscales?.version || "0.4",
       resolutionLevels: multiscales?.datasets?.length || pyramidLayers.length || 1,
       dataType,

@@ -224,13 +224,37 @@ class TensorStoreCache:
             if key in self._failed:
                 return None
         try:
-            # Build OS-native path so both Windows and POSIX paths work.
-            from pathlib import Path
-            array_path = str(Path(zarr_path) / level_path)
-            store = ts.open({
-                'driver': 'zarr',
-                'kvstore': {'driver': 'file', 'path': array_path},
-            }).result()
+            # Choose kvstore driver based on whether the path is a remote URL.
+            if zarr_path.startswith(("http://", "https://", "s3://", "gs://")):
+                # Remote store: join with a plain slash (not os.path.join which
+                # would strip the double-slash from https://).
+                base = zarr_path.rstrip("/")
+                array_url = f"{base}/{level_path}"
+                if zarr_path.startswith("gs://"):
+                    kvstore = {'driver': 'gcs', 'bucket': array_url.removeprefix("gs://")}
+                elif zarr_path.startswith("s3://"):
+                    kvstore = {'driver': 's3', 'bucket': array_url.removeprefix("s3://")}
+                else:
+                    # Plain http:// or https:// (including S3-compatible endpoints)
+                    kvstore = {'driver': 'http', 'base_url': array_url}
+            else:
+                from pathlib import Path
+                array_path = str(Path(zarr_path) / level_path)
+                kvstore = {'driver': 'file', 'path': array_path}
+            # Try zarr3 driver first (zarr.json), fall back to zarr v2 (.zarray).
+            store = None
+            last_exc: Exception = RuntimeError("no driver tried")
+            for driver in ('zarr3', 'zarr'):
+                try:
+                    store = ts.open({
+                        'driver': driver,
+                        'kvstore': kvstore,
+                    }).result()
+                    break
+                except Exception as exc:
+                    last_exc = exc
+            if store is None:
+                raise last_exc
             with self._lock:
                 self._cache[key] = store
                 self._cache.move_to_end(key)
@@ -868,10 +892,12 @@ class PlaneHandler(BaseHTTPRequestHandler):
                 for rp in resolution_paths:
                     layer = pyr.layers.get(rp)
                     if layer:
+                        chunks = list(layer.chunks) if hasattr(layer, 'chunks') else []
                         levels_info.append({
                             'path': rp,
                             'shape': list(layer.shape),
                             'dtype': str(layer.dtype),
+                            'chunks': chunks,
                         })
 
                 channels_meta = (
@@ -920,6 +946,117 @@ class PlaneHandler(BaseHTTPRequestHandler):
                 self.send_cors_headers()
                 if not self._end_headers_safe(): return
                 self._write_safe(json.dumps(info).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.send_cors_headers()
+                if not self._end_headers_safe(): return
+                self._write_safe(json.dumps({'error': str(e)}).encode())
+            return
+
+        if parsed.path == '/metadata':
+            zarr_path = get_param('path')
+            if not zarr_path:
+                self.send_error(400, 'Missing path parameter')
+                return
+            try:
+                pyr = pyramid_cache.get(zarr_path)
+                resolution_paths = sorted(
+                    pyr.meta.resolution_paths,
+                    key=lambda x: int(x) if x.isdigit() else 0,
+                )
+
+                # Per-level info: shape, dtype, chunks, compression
+                pyramid_layers = []
+                for i, rp in enumerate(resolution_paths):
+                    layer = pyr.layers.get(rp)
+                    if layer is None:
+                        continue
+                    try:
+                        chunks = list(layer.chunks)
+                    except Exception:
+                        chunks = []
+                    try:
+                        compressor = layer.compressor
+                        if compressor is None:
+                            comp_info = 'none'
+                        elif isinstance(compressor, dict):
+                            comp_info = compressor.get('id', compressor.get('name', 'unknown'))
+                        else:
+                            comp_info = getattr(compressor, 'codec_id', None) or getattr(compressor, 'id', None) or str(compressor)
+                    except Exception:
+                        comp_info = 'unknown'
+                    pyramid_layers.append({
+                        'level': i,
+                        'path': rp,
+                        'shape': list(layer.shape),
+                        'dtype': str(layer.dtype),
+                        'chunks': chunks,
+                        'compression': comp_info,
+                    })
+
+                base_layer = pyr.layers.get(resolution_paths[0]) if resolution_paths else None
+
+                # Axes from metadata
+                axes_meta = pyr.meta.multiscales.get('axes', [])
+                axes_list = [{
+                    'name': ax.get('name', ''),
+                    'type': ax.get('type', ''),
+                    'unit': ax.get('unit', ''),
+                } for ax in axes_meta]
+
+                # Scales for base level: [{axis, value, unit}] matching frontend schema
+                base_scaledict = pyr.meta.get_scaledict(resolution_paths[0]) if resolution_paths else {}
+                unit_dict = pyr.meta.unit_dict
+                scales_list = []
+                for ax in pyr.meta.axis_order:
+                    try:
+                        scales_list.append({
+                            'axis': ax,
+                            'value': float(base_scaledict.get(ax, 1.0)),
+                            'unit': unit_dict.get(ax) or '',
+                        })
+                    except Exception:
+                        pass
+
+                # Channel metadata
+                channels_meta = pyr.meta.channels or []
+                channels_list = []
+                for i, ch in enumerate(channels_meta):
+                    channels_list.append({
+                        'index': i,
+                        'label': ch.get('label', f'Channel {i}'),
+                        'color': '#' + ch.get('color', 'FFFFFF').lstrip('#'),
+                        'visible': ch.get('active', True),
+                        'window': ch.get('window', {'min': 0, 'max': 65535, 'start': 0, 'end': 65535}),
+                    })
+                if not channels_list:
+                    channels_list.append({
+                        'index': 0, 'label': 'Channel 0', 'color': '#FFFFFF',
+                        'visible': True,
+                        'window': {'min': 0, 'max': 65535, 'start': 0, 'end': 65535},
+                    })
+
+                metadata = {
+                    'name': zarr_path.rstrip('/').rstrip('\\').replace('\\', '/').split('/')[-1],
+                    'ngffVersion': pyr.meta.version or '0.4',
+                    'resolutionLevels': len(resolution_paths),
+                    'dataType': str(base_layer.dtype) if base_layer is not None else 'unknown',
+                    'shape': list(base_layer.shape) if base_layer is not None else [],
+                    'chunks': list(base_layer.chunks) if base_layer is not None else [],
+                    'compression': pyramid_layers[0]['compression'] if pyramid_layers else 'unknown',
+                    'axes': axes_list,
+                    'channels': channels_list,
+                    'pyramidLayers': pyramid_layers,
+                    'scales': scales_list,
+                }
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+                self.send_cors_headers()
+                if not self._end_headers_safe(): return
+                self._write_safe(json.dumps(metadata).encode())
             except Exception as e:
                 self.send_response(500)
                 self.send_header('Content-Type', 'application/json')
