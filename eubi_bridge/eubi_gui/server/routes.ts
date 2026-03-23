@@ -445,20 +445,36 @@ export async function registerRoutes(
     /** Extract array info (dtype, shape, chunks, compression) from .zarray or zarr.json JSON. */
     function parseArrayInfo(obj: any, isV3: boolean) {
       if (isV3) {
-        const codecs = obj.codecs || [];
-        const compCodec = codecs.find((c: any) => c.name && c.name !== "bytes" && c.name !== "transpose");
+        const skip = new Set(["bytes", "transpose", "crc32c", "zstd_checksum"]);
+        const findCompressor = (list: any[]): any => {
+          for (const c of list) {
+            if (c.name === "sharding_indexed") {
+              const found = findCompressor(c.configuration?.codecs || []);
+              if (found) return found;
+            } else if (c.name && !skip.has(c.name)) {
+              return c;
+            }
+          }
+          return null;
+        };
+        const compCodec = findCompressor(obj.codecs || []);
         return {
           dataType: obj.data_type || "unknown",
           shape: obj.shape || [],
           chunks: obj.chunk_grid?.configuration?.chunk_shape || [],
-          compression: compCodec?.name || "unknown",
+          compression: { name: compCodec?.name || "unknown", params: compCodec?.configuration || {} },
         };
       }
+      const comp = obj.compressor;
+      const compName: string = comp?.id || comp?.codec || (comp === null ? "none" : "unknown");
+      const compParams: Record<string, unknown> = comp
+        ? Object.fromEntries(Object.entries(comp).filter(([k]) => k !== "id" && k !== "codec"))
+        : {};
       return {
         dataType: obj.dtype || "unknown",
         shape: obj.shape || [],
         chunks: obj.chunks || [],
-        compression: obj.compressor?.id || obj.compressor?.codec || "unknown",
+        compression: { name: compName, params: compParams },
       };
     }
     // ──────────────────────────────────────────────────────────────────
@@ -468,7 +484,7 @@ export async function registerRoutes(
     let dataType = "unknown";
     let shape: number[] = [];
     let chunks: number[] = [];
-    let compression = "unknown";
+    let compression: { name: string; params: Record<string, unknown> } = { name: "unknown", params: {} };
     let pyramidLayers: any[] = [];
     let baseName = "";
 
@@ -496,8 +512,11 @@ export async function registerRoutes(
           dataType = info.dtype || "unknown";
           if (info.levelsInfo?.length > 0) {
             chunks = info.levelsInfo[0].chunks || [];
+            if (info.levelsInfo[0].compression) {
+              compression = info.levelsInfo[0].compression;
+            }
             pyramidLayers = info.levelsInfo.map((l: any, i: number) => ({
-              level: i, shape: l.shape || [], chunks: l.chunks || [],
+              level: i, shape: l.shape || [], chunks: l.chunks || [], scales: [],
             }));
           }
           // Build channel list from info
@@ -591,7 +610,7 @@ export async function registerRoutes(
               layerChunks = zarrJson.chunk_grid?.configuration?.chunk_shape || [];
             } catch {}
           }
-          return { level: i, shape: layerShape, chunks: layerChunks };
+          return { level: i, shape: layerShape, chunks: layerChunks, scales: ds.coordinateTransformations?.[0]?.scale || [] };
         });
       }
     }

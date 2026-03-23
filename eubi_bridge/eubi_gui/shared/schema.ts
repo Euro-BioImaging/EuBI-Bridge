@@ -166,12 +166,16 @@ export const zarrMetadataSchema = z.object({
   })),
   shape: z.array(z.number()),
   chunks: z.array(z.number()),
-  compression: z.string(),
+  compression: z.object({
+    name: z.string(),
+    params: z.record(z.unknown()),
+  }),
   channels: z.array(channelInfoSchema),
   pyramidLayers: z.array(z.object({
     level: z.number(),
     shape: z.array(z.number()),
     chunks: z.array(z.number()),
+    scales: z.array(z.number()).optional(),
   })),
   scales: z.array(z.object({
     axis: z.string(),

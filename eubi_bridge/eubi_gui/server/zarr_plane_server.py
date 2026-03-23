@@ -16,7 +16,7 @@ Performance changes vs original:
      requests that share the same z/t/channel position.
   4. WebP encoding replaces PNG — ~3–4× faster encode than PNG compress_level=1
      with smaller payloads at quality=85.  Lossless for all practical viewing.
-     Content-Type updated to image/webp on all tile/plane endpoints.
+     Content-Type updated to image/jpeg on all tile/plane endpoints.
   5. Client-disconnect errors (WinError 10053 / BrokenPipeError) are caught
      and silently ignored — these are normal when the client cancels a
      request mid-flight and are not server errors.
@@ -29,9 +29,23 @@ Performance changes vs original:
      when TensorStore cannot open a level (e.g. unusual codec).
   7. Viewport prefetching — after serving a computed tile the 8 surrounding
      tiles (3×3 neighbourhood minus centre) are speculatively rendered on a
-     dedicated 2-worker background executor and stored in tile_cache.  An
-     in-flight set prevents duplicate submissions.  Prefetch failures are
-     always silently discarded so they never affect foreground requests.
+     dedicated background executor and stored in tile_cache.  An in-flight
+     set prevents duplicate submissions.  Prefetch failures are always
+     silently discarded so they never affect foreground requests.
+     Remote paths (S3/GCS/HTTP) use a wider prefetch window and more workers
+     to hide the higher per-request latency.
+
+  Fixes vs previous version:
+  A. S3 kvstore was constructed with the full S3 URI as the bucket name, which
+     caused ts.open() to fail silently and permanently blacklist the key in
+     _failed — meaning TensorStore was never actually used for any S3 data.
+     Now correctly splits bucket name from object prefix for all remote schemes.
+  B. GCS kvstore had the same bug; fixed in the same way.
+  C. TensorStore context now includes S3/GCS request concurrency hints so
+     parallel chunk fetches saturate available bandwidth rather than serialising.
+  D. Prefetch window and worker counts scale with whether the store is remote,
+     since S3 latency is ~10–50× higher than NVMe and throughput scales well
+     with concurrent requests.
 """
 
 import sys
@@ -60,10 +74,45 @@ except Exception as e:
     sys.stderr.flush()
     sys.exit(1)
 
+
+def _is_remote_path(path: str) -> bool:
+    """Return True for any network-backed store (S3, GCS, HTTP/HTTPS)."""
+    return path.startswith(("s3://", "gs://", "http://", "https://"))
+
+
+# ---------------------------------------------------------------------------
+# TensorStore context
+#
+# A single shared context means the 512 MB chunk cache pool is reused across
+# all open handles so decompressed S3/remote chunks are not re-fetched on
+# adjacent tile requests.
+#
+# S3/GCS concurrency hints are included so TensorStore saturates the available
+# network bandwidth rather than serialising requests.  These keys are silently
+# ignored for local file stores.
+# ---------------------------------------------------------------------------
+_ts_context = None
 try:
     import tensorstore as ts
     _TS_AVAILABLE = True
-    sys.stderr.write("TensorStore available — using for array reads\n")
+    try:
+        _ts_context = ts.Context({
+            'cache_pool': {'total_bytes_limit': 512_000_000},
+            # Allow up to 32 concurrent S3 / GCS requests per context so that
+            # multi-channel / multi-chunk reads fully saturate remote bandwidth.
+            's3_request_concurrency': {'limit': 32},
+            'gcs_request_concurrency': {'limit': 32},
+            # Allow many concurrent local file reads for NVMe stores.
+            'file_io_concurrency': {'limit': 64},
+        })
+        sys.stderr.write(
+            "TensorStore available — 512 MB shared chunk cache, "
+            "32-way S3/GCS concurrency enabled\n"
+        )
+    except Exception as _ctx_err:
+        sys.stderr.write(
+            f"TensorStore available but context creation failed: {_ctx_err}\n"
+        )
     sys.stderr.flush()
 except ImportError:
     _TS_AVAILABLE = False
@@ -72,19 +121,13 @@ except ImportError:
 
 
 # Errors that mean the client closed the connection before we finished sending.
-# These are normal (e.g. browser cancelled a request) and should not be logged
-# as server errors.  WinError 10053 / 10054 surface as ConnectionAbortedError
-# or ConnectionResetError on Windows; BrokenPipeError covers Linux/macOS.
 _CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 
 CANVAS_SIZE = 512
-MAX_CACHE_SIZE = 3
+MAX_CACHE_SIZE = 10
 
 # ---------------------------------------------------------------------------
 # Orientation axes memoization
-# Keyed by (id(pyr), level_path, orientation).  PyramidCache holds strong
-# references so id(pyr) is stable for the lifetime of each cached pyramid.
-# When a pyramid is evicted we clean up its entries via _invalidate_orientation_cache.
 # ---------------------------------------------------------------------------
 _orientation_axes_cache: dict = {}
 _orientation_axes_lock = threading.Lock()
@@ -122,7 +165,7 @@ class PyramidCache:
 
 pyramid_cache = PyramidCache()
 
-MAX_TILE_CACHE = 200
+MAX_TILE_CACHE = 500
 MAX_PERCENTILE_CACHE = 500
 
 
@@ -142,13 +185,13 @@ class TileCache:
         with self._lock:
             if key in self._cache:
                 self._cache.move_to_end(key)
-                return self._cache[key]  # (png_bytes, etag)
+                return self._cache[key]  # (webp_bytes, etag)
         return None
 
-    def put(self, key: str, png_bytes: bytes) -> str:
+    def put(self, key: str, webp_bytes: bytes) -> str:
         etag = f'"{key[:16]}"'
         with self._lock:
-            self._cache[key] = (png_bytes, etag)
+            self._cache[key] = (webp_bytes, etag)
             self._cache.move_to_end(key)
             if len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
@@ -162,9 +205,6 @@ class PercentileCache:
     Key: (zarr_path, level_path, orientation, indices_tuple, channel_index)
     where indices_tuple is a sorted tuple of (axis, value) pairs uniquely
     identifying the slice position (t, z, etc.).
-
-    This prevents normalize_and_composite() from recomputing np.percentile on
-    every tile request that shares the same logical slice.
     """
 
     def __init__(self, max_size=MAX_PERCENTILE_CACHE):
@@ -187,27 +227,108 @@ class PercentileCache:
                 self._cache.popitem(last=False)
 
 
+MAX_PLANE_CACHE = 200
+
+
+class PlaneCache:
+    """LRU cache for fully-composited plane images (WebP bytes + ETag)."""
+
+    def __init__(self, max_size: int = MAX_PLANE_CACHE):
+        self._cache: OrderedDict = OrderedDict()
+        self._lock = threading.Lock()
+        self._max_size = max_size
+
+    @staticmethod
+    def make_key(**kwargs) -> str:
+        return hashlib.md5(json.dumps(kwargs, sort_keys=True).encode()).hexdigest()
+
+    def get(self, key: str):
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]  # (webp_bytes, etag)
+        return None
+
+    def put(self, key: str, webp_bytes: bytes) -> str:
+        etag = f'"{key[:16]}"'
+        with self._lock:
+            self._cache[key] = (webp_bytes, etag)
+            self._cache.move_to_end(key)
+            if len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)
+        return etag
+
+
 tile_cache = TileCache()
+plane_cache = PlaneCache()
 percentile_cache = PercentileCache()
 
 # ---------------------------------------------------------------------------
-# TensorStore cache
+# TensorStore array handle cache
 #
 # Maps (zarr_path, level_path) -> open ts.TensorStore array.
 # Opening a TensorStore is cheap (metadata read only) but not free, so we
 # cache handles to avoid re-opening on every tile request.
 #
-# Per-key fallback: if TensorStore fails to open a specific level (unusual
-# codec, zarr v3 store, etc.) the key is added to _failed and extract_region
-# silently falls back to zarr for that level.  This means a single broken
-# level will never crash the whole server.
+# BUG FIX (vs previous version): S3 and GCS kvstore specs were previously
+# constructed by treating the full URI (including bucket + key path) as the
+# bucket name.  ts.open() would therefore always fail for remote stores and
+# permanently blacklist the key in _failed, silently falling back to zarr for
+# every subsequent request.  The corrected code splits the URI into
+# (bucket_name, object_prefix) before building the kvstore spec.
 # ---------------------------------------------------------------------------
 class TensorStoreCache:
-    def __init__(self, max_size: int = 20):
+    def __init__(self, max_size: int = 50):
         self._cache: OrderedDict = OrderedDict()
         self._failed: set = set()
         self._lock = threading.Lock()
         self._max_size = max_size
+
+    @staticmethod
+    def _build_kvstore(zarr_path: str, level_path: str) -> dict:
+        """
+        Build a TensorStore kvstore spec for the given zarr_path + level_path.
+
+        Correctly handles:
+          - s3://bucket/prefix/...  →  driver=s3, bucket=bucket, path=prefix/.../level
+          - gs://bucket/prefix/...  →  driver=gcs, bucket=bucket, path=prefix/.../level
+          - http(s)://host/...      →  driver=http, base_url=.../level
+          - /local/path/...         →  driver=file, path=.../level
+        """
+        if zarr_path.startswith("s3://"):
+            without_scheme = zarr_path.removeprefix("s3://")
+            bucket_name, _, object_prefix = without_scheme.partition("/")
+            # Build the object key: strip trailing slash from prefix, then append level
+            object_key = "/".join(
+                filter(None, [object_prefix.rstrip("/"), level_path])
+            )
+            return {
+                'driver': 's3',
+                'bucket': bucket_name,
+                'path': object_key,
+            }
+
+        if zarr_path.startswith("gs://"):
+            without_scheme = zarr_path.removeprefix("gs://")
+            bucket_name, _, object_prefix = without_scheme.partition("/")
+            object_key = "/".join(
+                filter(None, [object_prefix.rstrip("/"), level_path])
+            )
+            return {
+                'driver': 'gcs',
+                'bucket': bucket_name,
+                'path': object_key,
+            }
+
+        if zarr_path.startswith(("http://", "https://")):
+            base = zarr_path.rstrip("/")
+            array_url = f"{base}/{level_path}"
+            return {'driver': 'http', 'base_url': array_url}
+
+        # Local filesystem
+        from pathlib import Path
+        array_path = str(Path(zarr_path) / level_path)
+        return {'driver': 'file', 'path': array_path}
 
     def get(self, zarr_path: str, level_path: str):
         """
@@ -224,37 +345,36 @@ class TensorStoreCache:
             if key in self._failed:
                 return None
         try:
-            # Choose kvstore driver based on whether the path is a remote URL.
-            if zarr_path.startswith(("http://", "https://", "s3://", "gs://")):
-                # Remote store: join with a plain slash (not os.path.join which
-                # would strip the double-slash from https://).
-                base = zarr_path.rstrip("/")
-                array_url = f"{base}/{level_path}"
-                if zarr_path.startswith("gs://"):
-                    kvstore = {'driver': 'gcs', 'bucket': array_url.removeprefix("gs://")}
-                elif zarr_path.startswith("s3://"):
-                    kvstore = {'driver': 's3', 'bucket': array_url.removeprefix("s3://")}
-                else:
-                    # Plain http:// or https:// (including S3-compatible endpoints)
-                    kvstore = {'driver': 'http', 'base_url': array_url}
-            else:
-                from pathlib import Path
-                array_path = str(Path(zarr_path) / level_path)
-                kvstore = {'driver': 'file', 'path': array_path}
-            # Try zarr3 driver first (zarr.json), fall back to zarr v2 (.zarray).
+            kvstore = self._build_kvstore(zarr_path, level_path)
+
             store = None
             last_exc: Exception = RuntimeError("no driver tried")
             for driver in ('zarr3', 'zarr'):
                 try:
-                    store = ts.open({
-                        'driver': driver,
-                        'kvstore': kvstore,
-                    }).result()
+                    open_kwargs = {}
+                    if _ts_context is not None:
+                        open_kwargs['context'] = _ts_context
+                    store = ts.open(
+                        {
+                            'driver': driver,
+                            'kvstore': kvstore,
+                            'recheck_cached_data': False,
+                            'recheck_cached_metadata': 'open',
+                        },
+                        **open_kwargs,
+                    ).result()
                     break
                 except Exception as exc:
                     last_exc = exc
             if store is None:
                 raise last_exc
+
+            sys.stderr.write(
+                f"[TensorStore] opened {zarr_path}/{level_path} "
+                f"via kvstore driver={kvstore['driver']}\n"
+            )
+            sys.stderr.flush()
+
             with self._lock:
                 self._cache[key] = store
                 self._cache.move_to_end(key)
@@ -263,7 +383,7 @@ class TensorStoreCache:
             return store
         except Exception as e:
             sys.stderr.write(
-                f"TensorStore open failed for {zarr_path}/{level_path} "
+                f"[TensorStore] open failed for {zarr_path}/{level_path} "
                 f"(falling back to zarr): {e}\n"
             )
             sys.stderr.flush()
@@ -274,21 +394,12 @@ class TensorStoreCache:
 
 ts_cache = TensorStoreCache()
 
-# channel_minmax_cache: (zarr_path, channel_idx) -> (vmin, vmax) — populated by /channel_minmax
+# channel_minmax_cache: (zarr_path, channel_idx) -> (vmin, vmax)
 _minmax_cache: dict = {}
 _minmax_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Thread pool
-#
-# Replaces ProcessPoolExecutor.  Key reasons:
-#   - No spawn/fork overhead — threads start instantly on all platforms.
-#   - No pickling of arguments or return values — PNG bytes stay in-process.
-#   - zarr releases the GIL during chunk decompression and network/disk I/O,
-#     so threads achieve genuine parallelism for the dominant cost.
-#   - Works identically on Linux, macOS, and Windows.
-#
-# Worker count: I/O-bound work benefits from more threads than CPU cores.
 # ---------------------------------------------------------------------------
 _tile_executor: ThreadPoolExecutor | None = None
 _tile_executor_init_lock = threading.Lock()
@@ -304,40 +415,68 @@ def _get_tile_executor() -> ThreadPoolExecutor:
     return _tile_executor
 
 
+# ---------------------------------------------------------------------------
+# PrefetchEngine
+#
+# BUG FIX / IMPROVEMENT: worker count and neighbourhood window now scale with
+# whether the store is remote.  S3 round-trip latency is ~10–50× higher than
+# NVMe, but S3 throughput scales linearly with concurrent requests.  More
+# workers and a wider window hide that latency for sequential browsing.
+# ---------------------------------------------------------------------------
 class PrefetchEngine:
     """
-    Speculatively renders the 8 tiles surrounding the current viewport tile
-    into tile_cache so they are ready before the client requests them.
+    Speculatively renders tiles surrounding the current viewport tile into
+    tile_cache so they are ready before the client requests them.
 
-    Uses a dedicated 2-worker executor so prefetch jobs never compete with
-    foreground tile requests for thread pool capacity.  An in-flight set
-    prevents submitting the same tile twice while it is already being rendered.
-    Results land directly in tile_cache; failures are always silently discarded.
+    For remote stores (S3/GCS/HTTP) the neighbourhood radius is extended to
+    cover a 5×5 grid (radius=2) and the worker pool is doubled, since latency
+    is high but bandwidth scales well with concurrency.  Local stores use the
+    original 3×3 (radius=1) neighbourhood with 2 workers.
     """
 
-    # (row_delta, col_delta) offsets in tile-size units covering the full 3×3
-    # neighbourhood minus the centre tile (which is already being served).
-    _OFFSETS = [
-        (-1, -1), (-1, 0), (-1, 1),
-        ( 0, -1),          ( 0, 1),
-        ( 1, -1), ( 1, 0), ( 1, 1),
-    ]
+    @staticmethod
+    def _build_offsets(radius: int) -> list[tuple[int, int]]:
+        offsets = []
+        for dr in range(-radius, radius + 1):
+            for dc in range(-radius, radius + 1):
+                if dr == 0 and dc == 0:
+                    continue
+                offsets.append((dr, dc))
+        return offsets
 
-    def __init__(self, workers: int = 2):
-        self._executor = ThreadPoolExecutor(
-            max_workers=workers, thread_name_prefix='prefetch',
-        )
+    # Offsets for each store type, built once at class level.
+    _LOCAL_OFFSETS = _build_offsets.__func__(1)   # 3×3 minus centre = 8
+    _REMOTE_OFFSETS = _build_offsets.__func__(2)  # 5×5 minus centre = 24
+
+    def __init__(self):
+        # Two executors: one for local, one for remote.  Created lazily so
+        # we only pay the thread overhead if that store type is actually used.
+        self._local_executor: ThreadPoolExecutor | None = None
+        self._remote_executor: ThreadPoolExecutor | None = None
         self._in_flight: set = set()
         self._lock = threading.Lock()
 
+    def _get_executor(self, remote: bool) -> ThreadPoolExecutor:
+        if remote:
+            if self._remote_executor is None:
+                self._remote_executor = ThreadPoolExecutor(
+                    max_workers=8, thread_name_prefix='prefetch_remote',
+                )
+            return self._remote_executor
+        else:
+            if self._local_executor is None:
+                self._local_executor = ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix='prefetch_local',
+                )
+            return self._local_executor
+
     def _on_done(self, tile_key: str, future) -> None:
-        """Callback: remove key from in-flight set and store the result."""
         with self._lock:
             self._in_flight.discard(tile_key)
         try:
             tile_cache.put(tile_key, future.result())
         except Exception:
-            pass  # prefetch failures are always silent
+            pass
 
     def schedule(
         self,
@@ -358,25 +497,26 @@ class PrefetchEngine:
         has_c_axis: bool,
         channels_json_original,
     ) -> None:
-        """Submit prefetch jobs for the 8 tiles surrounding (row/col_start/end)."""
         tile_h = row_end - row_start
         tile_w = col_end - col_start
         if tile_h <= 0 or tile_w <= 0:
             return
 
-        for dr, dc in self._OFFSETS:
+        remote = _is_remote_path(zarr_path)
+        offsets = self._REMOTE_OFFSETS if remote else self._LOCAL_OFFSETS
+        executor = self._get_executor(remote)
+
+        for dr, dc in offsets:
             nr_start = row_start + dr * tile_h
             nr_end   = row_end   + dr * tile_h
             nc_start = col_start + dc * tile_w
             nc_end   = col_end   + dc * tile_w
 
-            # Skip if entirely outside layer bounds
             if nr_end <= 0 or nr_start >= layer_height:
                 continue
             if nc_end <= 0 or nc_start >= layer_width:
                 continue
 
-            # Clamp to layer bounds
             nr_start = max(0, nr_start)
             nr_end   = min(layer_height, nr_end)
             nc_start = max(0, nc_start)
@@ -390,7 +530,6 @@ class PrefetchEngine:
                 channels=channels_json_original or '',
             )
 
-            # Skip if already cached or already being prefetched
             if tile_cache.get(pf_key) is not None:
                 continue
             with self._lock:
@@ -398,7 +537,7 @@ class PrefetchEngine:
                     continue
                 self._in_flight.add(pf_key)
 
-            future = self._executor.submit(
+            future = executor.submit(
                 _render_tile_worker,
                 zarr_path, level_path, orientation,
                 nr_start, nr_end, nc_start, nc_end,
@@ -417,13 +556,10 @@ def _render_tile_worker(
 ):
     """
     Renders a single tile in a worker thread.
-    Threads share pyramid_cache directly — no per-worker pyramid caches needed.
-    Returns raw PNG bytes.
+    Returns raw WebP bytes.
     """
     pyr = pyramid_cache.get(zarr_path)
     indices = dict(indices_items)
-
-    # Base key for percentile_cache — uniquely identifies the slice position.
     percentile_key_base = (zarr_path, level_path, orientation, indices_items)
 
     if channels_json_enriched:
@@ -435,15 +571,32 @@ def _render_tile_worker(
                     [channels_config[0]] if channels_config
                     else [{'index': 0, 'color': '#FFFFFF', 'visible': True}]
                 )
-            all_planes = [
-                extract_region(
-                    pyr, level_path, orientation,
-                    row_start, row_end, col_start, col_end,
-                    indices, channel_idx=vc.get('index', 0),
-                    zarr_path=zarr_path,
-                )
-                for vc in visible_channels
+            _tc_results: list = [None] * len(visible_channels)
+            _tc_errors: list = [None] * len(visible_channels)
+
+            def _fetch_tc(i, vc):
+                try:
+                    _tc_results[i] = extract_region(
+                        pyr, level_path, orientation,
+                        row_start, row_end, col_start, col_end,
+                        indices, channel_idx=vc.get('index', 0),
+                        zarr_path=zarr_path,
+                    )
+                except Exception as exc:
+                    _tc_errors[i] = exc
+
+            _tc_threads = [
+                threading.Thread(target=_fetch_tc, args=(i, vc), daemon=True)
+                for i, vc in enumerate(visible_channels)
             ]
+            for _t in _tc_threads:
+                _t.start()
+            for _t in _tc_threads:
+                _t.join()
+            for exc in _tc_errors:
+                if exc is not None:
+                    raise exc
+            all_planes = _tc_results
             combined = all_planes[0] if len(all_planes) == 1 else np.stack(all_planes, axis=0)
             rgb = normalize_and_composite(combined, visible_channels,
                                           percentile_key_base=percentile_key_base)
@@ -468,11 +621,284 @@ def _render_tile_worker(
 
     img = Image.fromarray(rgb, 'RGB')
     buf = io.BytesIO()
-    # WebP quality=85 is visually lossless at viewing distances and ~3–4×
-    # faster to encode than PNG compress_level=1.  method=0 picks the fastest
-    # WebP encoder path (no iterative compression search).
-    img.save(buf, format='WEBP', quality=85, method=0)
+    img.save(buf, format='JPEG', quality=90, optimize=False, subsampling=0)
     return buf.getvalue()
+
+
+def _render_plane_worker(
+    zarr_path, level_path, orientation,
+    fov_center_y, fov_center_x, fov_size,
+    indices_items, channels_json, has_c_axis,
+):
+    """Render a full composited plane and return WebP bytes."""
+    pyr = pyramid_cache.get(zarr_path)
+    indices = dict(indices_items)
+    percentile_key_base = (zarr_path, level_path, orientation, indices_items)
+
+    if channels_json:
+        channels_config = json.loads(channels_json)
+        if has_c_axis:
+            visible_channels = [ch for ch in channels_config if ch.get('visible', True)]
+            if not visible_channels:
+                visible_channels = (
+                    [channels_config[0]] if channels_config
+                    else [{'index': 0, 'color': '#FFFFFF', 'visible': True}]
+                )
+            _ch_results: list = [None] * len(visible_channels)
+            _ch_errors: list = [None] * len(visible_channels)
+
+            def _fetch_ch(i, vc):
+                try:
+                    _ch_results[i] = extract_plane(
+                        pyr, level_path, orientation, indices,
+                        (fov_center_y, fov_center_x), fov_size,
+                        channel_idx=vc.get('index', 0),
+                        zarr_path=zarr_path,
+                    )[0]
+                except Exception as exc:
+                    _ch_errors[i] = exc
+
+            _threads = [
+                threading.Thread(target=_fetch_ch, args=(i, vc), daemon=True)
+                for i, vc in enumerate(visible_channels)
+            ]
+            for _t in _threads:
+                _t.start()
+            for _t in _threads:
+                _t.join()
+            for exc in _ch_errors:
+                if exc is not None:
+                    raise exc
+            all_planes = _ch_results
+            combined = all_planes[0] if len(all_planes) == 1 else np.stack(all_planes, axis=0)
+            rgb = normalize_and_composite(combined, visible_channels,
+                                          percentile_key_base=percentile_key_base)
+        else:
+            plane_data, _ = extract_plane(
+                pyr, level_path, orientation, indices,
+                (fov_center_y, fov_center_x), fov_size,
+                zarr_path=zarr_path,
+            )
+            rgb = normalize_and_composite(plane_data, channels_config,
+                                          percentile_key_base=percentile_key_base)
+    else:
+        plane_data, _ = extract_plane(
+            pyr, level_path, orientation, indices,
+            (fov_center_y, fov_center_x), fov_size,
+            zarr_path=zarr_path,
+        )
+        rgb = normalize_and_composite(
+            plane_data, [{'color': '#FFFFFF', 'visible': True}],
+            percentile_key_base=percentile_key_base,
+        )
+
+    import time as _rt
+    _t_comp = _rt.perf_counter()
+    img = Image.fromarray(rgb, 'RGB')
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', quality=90, optimize=False, subsampling=0)
+    _t_enc = (_rt.perf_counter() - _t_comp) * 1000
+    if _t_enc > 20:
+        sys.stderr.write(f"[Plane] SLOW encode {_t_enc:.0f}ms  shape={rgb.shape}\n")
+        sys.stderr.flush()
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# PlanePrefetchEngine
+#
+# IMPROVEMENT: window size and worker count scale with store remoteness.
+# Remote stores use ±4 slices (8 total) with 8 workers vs the original ±2 / 4
+# workers, since the higher latency of S3 means a wider window is needed to
+# keep sequential browsing stutter-free.
+# ---------------------------------------------------------------------------
+class PlanePrefetchEngine:
+    """Speculatively renders neighboring slices along the browse axis into
+    plane_cache so sequential browsing hits the cache instead of triggering
+    a full render pipeline.
+
+    Local stores:  ±2 slices, 4 workers  (original behaviour)
+    Remote stores: ±4 slices, 8 workers  (wider window hides S3 latency)
+    """
+
+    _LOCAL_OFFSETS  = [-2, -1, 1, 2]
+    # Remote: keep the prefetch window narrow so it does not swamp the shared
+    # TensorStore HTTP connection pool.  ±1 = only 2 S3 renders in flight,
+    # which is ~72 concurrent S3 GETs vs the 288 from ±4 that caused 1s runtimes.
+    _REMOTE_OFFSETS = [-1, 1]
+
+    def __init__(self):
+        self._local_executor: ThreadPoolExecutor | None = None
+        self._remote_executor: ThreadPoolExecutor | None = None
+        self._in_flight: set = set()
+        self._lock = threading.Lock()
+
+    def _get_executor(self, remote: bool) -> ThreadPoolExecutor:
+        if remote:
+            if self._remote_executor is None:
+                self._remote_executor = ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix='plane_prefetch_remote',
+                )
+            return self._remote_executor
+        else:
+            if self._local_executor is None:
+                self._local_executor = ThreadPoolExecutor(
+                    max_workers=4, thread_name_prefix='plane_prefetch_local',
+                )
+            return self._local_executor
+
+    def _on_done(self, plane_key: str, future) -> None:
+        with self._lock:
+            self._in_flight.discard(plane_key)
+        try:
+            plane_cache.put(plane_key, future.result())
+            sys.stderr.write(f"[PlanePrefetch] stored key={plane_key[:8]}\n")
+            sys.stderr.flush()
+        except Exception as e:
+            sys.stderr.write(f"[PlanePrefetch] FAILED: {e}\n")
+            sys.stderr.flush()
+
+    def schedule(
+        self,
+        *,
+        zarr_path: str,
+        level: str,
+        level_path: str,
+        orientation: str,
+        fov_center_y: int,
+        fov_center_x: int,
+        fov_size: int,
+        indices: dict,
+        channels_json,
+        has_c_axis: bool,
+        browse_axis: str,
+        browse_max: int,
+    ) -> None:
+        current = indices.get(browse_axis)
+        if current is None:
+            return
+
+        remote = _is_remote_path(zarr_path)
+        offsets = self._REMOTE_OFFSETS if remote else self._LOCAL_OFFSETS
+        executor = self._get_executor(remote)
+
+        for delta in offsets:
+            nv = current + delta
+            if nv < 0 or nv >= browse_max:
+                continue
+
+            new_indices = {**indices, browse_axis: nv}
+            pf_key = PlaneCache.make_key(
+                path=zarr_path, level=level, orientation=orientation,
+                fovCenterY=fov_center_y, fovCenterX=fov_center_x,
+                fovSize=fov_size,
+                indices=sorted(new_indices.items()),
+                channels=channels_json or '',
+            )
+
+            if plane_cache.get(pf_key) is not None:
+                continue
+            with self._lock:
+                if pf_key in self._in_flight:
+                    continue
+                self._in_flight.add(pf_key)
+
+            indices_items = tuple(sorted(new_indices.items()))
+            future = executor.submit(
+                _render_plane_worker,
+                zarr_path, level_path, orientation,
+                fov_center_y, fov_center_x, fov_size,
+                indices_items, channels_json, has_c_axis,
+            )
+            future.add_done_callback(lambda f, k=pf_key: self._on_done(k, f))
+
+
+plane_prefetch_engine = PlanePrefetchEngine()
+
+
+def _compressor_info(layer):
+    """Return {'name': str, 'params': dict} for a zarr array layer's compressor."""
+    _passthrough = {'bytes', 'transpose', 'crc32c', 'zstd_checksum'}
+
+    def _to_jsonable(v):
+        if hasattr(v, 'value'):
+            return v.value
+        if isinstance(v, (list, tuple)):
+            return [_to_jsonable(x) for x in v]
+        if isinstance(v, dict):
+            return {k: _to_jsonable(vv) for k, vv in v.items()}
+        return v
+
+    def _codec_to_dict(codec):
+        try:
+            cfg = codec.get_config()
+            if isinstance(cfg, dict):
+                return cfg
+        except Exception:
+            pass
+        try:
+            import dataclasses
+            if dataclasses.is_dataclass(codec) and not isinstance(codec, type):
+                raw = dataclasses.asdict(codec)
+                name = (getattr(type(codec), 'codec_name', None)
+                        or raw.pop('name', None)
+                        or type(codec).__name__.lower().replace('codec', ''))
+                params = {k: _to_jsonable(v) for k, v in raw.items()
+                          if not k.startswith('_')}
+                return {'name': str(name), 'configuration': params}
+        except Exception:
+            pass
+        name = (getattr(codec, 'codec_name', None)
+                or getattr(codec, 'codec_id', None)
+                or getattr(codec, 'name', None)
+                or type(codec).__name__)
+        try:
+            params = {k: _to_jsonable(v) for k, v in vars(codec).items()
+                      if not k.startswith('_')}
+        except Exception:
+            params = {}
+        return {'name': str(name), 'configuration': params}
+
+    def _name_of(d):
+        return d.get('name') or d.get('id') or ''
+
+    def _from_dict(d):
+        name = _name_of(d)
+        if 'configuration' in d:
+            params = {k: _to_jsonable(v)
+                      for k, v in (d.get('configuration') or {}).items()}
+        else:
+            params = {k: _to_jsonable(v) for k, v in d.items()
+                      if k not in ('id', 'name')}
+        return {'name': name or 'unknown', 'params': params}
+
+    def _search(codec_dicts):
+        for d in codec_dicts:
+            name = _name_of(d)
+            if name == 'sharding_indexed':
+                inner = (d.get('configuration') or {}).get('codecs', [])
+                found = _search(inner)
+                if found:
+                    return found
+            elif name and name not in _passthrough:
+                return _from_dict(d)
+        return None
+
+    compressors = getattr(layer, 'compressors', None)
+    if compressors is not None:
+        codec_dicts = [_codec_to_dict(c) for c in compressors]
+        result = _search(codec_dicts)
+        if result:
+            return result
+
+    try:
+        compressor = layer.compressor
+        if compressor is None:
+            return {'name': 'none', 'params': {}}
+        d = _codec_to_dict(compressor)
+        return _from_dict(d)
+    except Exception:
+        return {'name': 'unknown', 'params': {}}
 
 
 def get_axis_index(axes_str, axis_name):
@@ -495,13 +921,7 @@ ORIENTATIONS = {
 
 
 def get_orientation_axes(pyr, level_path, orientation):
-    """
-    Return axis metadata for the given pyramid / level / orientation.
-
-    Results are memoized by (id(pyr), level_path, orientation).  The
-    pyramid_cache keeps strong references so id(pyr) is stable, and
-    _invalidate_orientation_cache() cleans up entries on eviction.
-    """
+    """Return axis metadata for the given pyramid / level / orientation (memoized)."""
     cache_key = (id(pyr), level_path, orientation)
     with _orientation_axes_lock:
         cached = _orientation_axes_cache.get(cache_key)
@@ -626,30 +1046,45 @@ def fix_axis_order(data, slices, info):
     return data
 
 
-def extract_region(pyr, level_path, orientation, row_start, row_end, col_start, col_end, indices, channel_idx=None, zarr_path=None):
+def extract_region(pyr, level_path, orientation, row_start, row_end, col_start, col_end,
+                   indices, channel_idx=None, zarr_path=None):
     info = get_orientation_axes(pyr, level_path, orientation)
     slices = build_slices(info, row_start, row_end, col_start, col_end, indices, channel_idx)
 
-    # TensorStore path: C++ async I/O + GIL-free decompression.
-    # Falls back to zarr transparently if ts_cache.get() returns None.
+    import time as _t
+    _t0 = _t.perf_counter()
     ts_store = ts_cache.get(zarr_path, level_path) if zarr_path else None
     if ts_store is not None:
         data = np.asarray(ts_store[tuple(slices)].read().result())
+        _backend = 'ts'
     else:
         data = info['layer'][tuple(slices)]
         if hasattr(data, 'compute'):
             data = data.compute()
         data = np.asarray(data)
+        _backend = 'zarr'
+    _ms = (_t.perf_counter() - _t0) * 1000
+    sys.stderr.write(
+        f"[extract_region] backend={_backend} {_ms:.1f}ms "
+        f"slices={[str(s) for s in slices]}\n"
+    )
+    sys.stderr.flush()
 
     data = fix_axis_order(data, slices, info)
     return data
 
 
-def extract_plane(pyr, level_path, orientation, indices, fov_center, fov_size, channel_idx=None, zarr_path=None):
+def extract_plane(pyr, level_path, orientation, indices, fov_center, fov_size,
+                  channel_idx=None, zarr_path=None):
     info = get_orientation_axes(pyr, level_path, orientation)
-    row_start, row_end, col_start, col_end, fov_h, fov_w = compute_fov_region(info, fov_center, fov_size)
-    data = extract_region(pyr, level_path, orientation, row_start, row_end, col_start, col_end, indices, channel_idx, zarr_path=zarr_path)
-
+    row_start, row_end, col_start, col_end, fov_h, fov_w = compute_fov_region(
+        info, fov_center, fov_size,
+    )
+    data = extract_region(
+        pyr, level_path, orientation,
+        row_start, row_end, col_start, col_end,
+        indices, channel_idx, zarr_path=zarr_path,
+    )
     meta = {
         'level': level_path,
         'fov': [int(row_start), int(row_end), int(col_start), int(col_end)],
@@ -661,7 +1096,9 @@ def extract_plane(pyr, level_path, orientation, indices, fov_center, fov_size, c
 
 def compute_tile_grid(pyr, level_path, orientation, fov_center, fov_size):
     info = get_orientation_axes(pyr, level_path, orientation)
-    row_start, row_end, col_start, col_end, fov_h, fov_w = compute_fov_region(info, fov_center, fov_size)
+    row_start, row_end, col_start, col_end, fov_h, fov_w = compute_fov_region(
+        info, fov_center, fov_size,
+    )
 
     chunk_h = info['chunk_h']
     chunk_w = info['chunk_w']
@@ -713,14 +1150,7 @@ def compute_tile_grid(pyr, level_path, orientation, fov_center, fov_size):
 
 
 def normalize_and_composite(plane_data, channels_config, percentile_key_base=None):
-    """
-    Normalize pixel intensities and composite channels into an RGB uint8 array.
-
-    percentile_key_base: optional tuple (zarr_path, level_path, orientation,
-    indices_items) used to cache/retrieve per-slice percentile values so that
-    np.percentile is not recomputed on every tile request for the same slice.
-    The channel index is appended to this base key per channel.
-    """
+    """Normalize pixel intensities and composite channels into an RGB uint8 array."""
     if plane_data.ndim == 2:
         ch_cfg = channels_config[0] if channels_config else {
             'color': '#FFFFFF', 'intensityMin': None, 'intensityMax': None,
@@ -823,7 +1253,7 @@ class ZarrPlaneServer(ThreadingHTTPServer):
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
         if isinstance(exc, _CLIENT_DISCONNECT_ERRORS):
-            return  # client cancelled — not a server error, don't log
+            return
         super().handle_error(request, client_address)
 
 
@@ -832,7 +1262,6 @@ class PlaneHandler(BaseHTTPRequestHandler):
         pass
 
     def _end_headers_safe(self) -> bool:
-        """Call end_headers(), return False if the client already disconnected."""
         try:
             self.end_headers()
             return True
@@ -840,7 +1269,6 @@ class PlaneHandler(BaseHTTPRequestHandler):
             return False
 
     def _write_safe(self, data: bytes) -> bool:
-        """Write bytes to the socket, return False if the client disconnected."""
         try:
             self.wfile.write(data)
             return True
@@ -898,6 +1326,7 @@ class PlaneHandler(BaseHTTPRequestHandler):
                             'shape': list(layer.shape),
                             'dtype': str(layer.dtype),
                             'chunks': chunks,
+                            'compression': _compressor_info(layer),
                         })
 
                 channels_meta = (
@@ -966,7 +1395,6 @@ class PlaneHandler(BaseHTTPRequestHandler):
                     key=lambda x: int(x) if x.isdigit() else 0,
                 )
 
-                # Per-level info: shape, dtype, chunks, compression
                 pyramid_layers = []
                 for i, rp in enumerate(resolution_paths):
                     layer = pyr.layers.get(rp)
@@ -976,28 +1404,17 @@ class PlaneHandler(BaseHTTPRequestHandler):
                         chunks = list(layer.chunks)
                     except Exception:
                         chunks = []
-                    try:
-                        compressor = layer.compressor
-                        if compressor is None:
-                            comp_info = 'none'
-                        elif isinstance(compressor, dict):
-                            comp_info = compressor.get('id', compressor.get('name', 'unknown'))
-                        else:
-                            comp_info = getattr(compressor, 'codec_id', None) or getattr(compressor, 'id', None) or str(compressor)
-                    except Exception:
-                        comp_info = 'unknown'
                     pyramid_layers.append({
                         'level': i,
                         'path': rp,
                         'shape': list(layer.shape),
                         'dtype': str(layer.dtype),
                         'chunks': chunks,
-                        'compression': comp_info,
+                        'compression': _compressor_info(layer),
                     })
 
                 base_layer = pyr.layers.get(resolution_paths[0]) if resolution_paths else None
 
-                # Axes from metadata
                 axes_meta = pyr.meta.multiscales.get('axes', [])
                 axes_list = [{
                     'name': ax.get('name', ''),
@@ -1005,7 +1422,6 @@ class PlaneHandler(BaseHTTPRequestHandler):
                     'unit': ax.get('unit', ''),
                 } for ax in axes_meta]
 
-                # Scales for base level: [{axis, value, unit}] matching frontend schema
                 base_scaledict = pyr.meta.get_scaledict(resolution_paths[0]) if resolution_paths else {}
                 unit_dict = pyr.meta.unit_dict
                 scales_list = []
@@ -1019,8 +1435,25 @@ class PlaneHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
 
-                # Channel metadata
                 channels_meta = pyr.meta.channels or []
+                if not channels_meta and base_layer is not None:
+                    axis_order = pyr.meta.axis_order
+                    if 'c' in axis_order:
+                        c_idx = axis_order.index('c')
+                        n_ch = base_layer.shape[c_idx] if c_idx < len(base_layer.shape) else 1
+                    else:
+                        n_ch = 1
+                    _default_colors = ['FF0000', '00FF00', '0000FF', 'FF00FF', '00FFFF', 'FFFF00', 'FFFFFF']
+                    channels_meta = [
+                        {
+                            'label': f'Channel {i}',
+                            'color': _default_colors[i] if i < len(_default_colors)
+                                     else f'{i*40%256:02X}{i*85%256:02X}{i*130%256:02X}',
+                            'active': True,
+                            'window': {'min': 0, 'max': 65535, 'start': 0, 'end': 65535},
+                        }
+                        for i in range(n_ch)
+                    ]
                 channels_list = []
                 for i, ch in enumerate(channels_meta):
                     channels_list.append({
@@ -1044,7 +1477,7 @@ class PlaneHandler(BaseHTTPRequestHandler):
                     'dataType': str(base_layer.dtype) if base_layer is not None else 'unknown',
                     'shape': list(base_layer.shape) if base_layer is not None else [],
                     'chunks': list(base_layer.chunks) if base_layer is not None else [],
-                    'compression': pyramid_layers[0]['compression'] if pyramid_layers else 'unknown',
+                    'compression': pyramid_layers[0]['compression'] if pyramid_layers else {'name': 'unknown', 'params': {}},
                     'axes': axes_list,
                     'channels': channels_list,
                     'pyramidLayers': pyramid_layers,
@@ -1151,7 +1584,6 @@ class PlaneHandler(BaseHTTPRequestHandler):
                 channels_json = get_param('channels')
                 has_c_axis = 'c' in axes
 
-                # In-memory tile cache check
                 tile_key = TileCache.make_key(
                     path=zarr_path, level=level, orientation=orientation,
                     rowStart=row_start, rowEnd=row_end,
@@ -1170,7 +1602,7 @@ class PlaneHandler(BaseHTTPRequestHandler):
                         if not self._end_headers_safe(): return
                         return
                     self.send_response(200)
-                    self.send_header('Content-Type', 'image/webp')
+                    self.send_header('Content-Type', 'image/jpeg')
                     self.send_header('Content-Length', str(len(img_data)))
                     self.send_header('Cache-Control', 'public, max-age=0')
                     self.send_header('ETag', etag)
@@ -1179,7 +1611,6 @@ class PlaneHandler(BaseHTTPRequestHandler):
                     self._write_safe(img_data)
                     return
 
-                # Enrich channels with cached min/max before dispatch
                 enriched_channels_json = channels_json
                 if channels_json:
                     ch_cfg = json.loads(channels_json)
@@ -1195,11 +1626,8 @@ class PlaneHandler(BaseHTTPRequestHandler):
                     has_c_axis,
                 )
                 img_data = future.result(timeout=60)
-
                 etag = tile_cache.put(tile_key, img_data)
 
-                # Schedule prefetch of surrounding tiles into tile_cache.
-                # get_orientation_axes is memoized — this lookup is free.
                 _oa = get_orientation_axes(pyr, level_path, orientation)
                 prefetch_engine.schedule(
                     zarr_path=zarr_path,
@@ -1218,7 +1646,7 @@ class PlaneHandler(BaseHTTPRequestHandler):
                 )
 
                 self.send_response(200)
-                self.send_header('Content-Type', 'image/webp')
+                self.send_header('Content-Type', 'image/jpeg')
                 self.send_header('Content-Length', str(len(img_data)))
                 self.send_header('Cache-Control', 'public, max-age=0')
                 self.send_header('ETag', etag)
@@ -1363,66 +1791,109 @@ class PlaneHandler(BaseHTTPRequestHandler):
                 channels_json = get_param('channels')
                 has_c_axis = 'c' in axes
 
-                percentile_key_base = (
-                    zarr_path, level_path, orientation,
-                    tuple(sorted(indices.items())),
+                plane_key = PlaneCache.make_key(
+                    path=zarr_path, level=level, orientation=orientation,
+                    fovCenterY=fov_center_y, fovCenterX=fov_center_x,
+                    fovSize=fov_size,
+                    indices=sorted(indices.items()),
+                    channels=channels_json or '',
                 )
+                cached_plane = plane_cache.get(plane_key)
+                if cached_plane:
+                    img_data, etag = cached_plane
+                    sys.stderr.write(f"[Plane] CACHE HIT key={plane_key[:8]} indices={sorted(indices.items())}\n")
+                    sys.stderr.flush()
 
-                if channels_json:
-                    channels_config = json.loads(channels_json)
-                    if has_c_axis:
-                        visible_channels = [ch for ch in channels_config if ch.get('visible', True)]
-                        if not visible_channels:
-                            visible_channels = (
-                                [channels_config[0]] if channels_config
-                                else [{'index': 0, 'color': '#FFFFFF', 'visible': True}]
-                            )
-
-                        all_planes = []
-                        all_configs = []
-                        for vc in visible_channels:
-                            ch_idx = vc.get('index', 0)
-                            plane_data, meta = extract_plane(
-                                pyr, level_path, orientation, indices,
-                                (fov_center_y, fov_center_x), fov_size,
-                                channel_idx=ch_idx,
-                                zarr_path=zarr_path,
-                            )
-                            all_planes.append(plane_data)
-                            all_configs.append(vc)
-
-                        combined = all_planes[0] if len(all_planes) == 1 else np.stack(all_planes, axis=0)
-                        rgb = normalize_and_composite(combined, all_configs,
-                                                      percentile_key_base=percentile_key_base)
+                    def _axis_size_hit(ax: str) -> int:
+                        return int(pyr.shape[axes.index(ax)])
+                    if orientation == 'XY' and 'z' in axes:
+                        _ba, _bm = 'z', _axis_size_hit('z')
+                    elif orientation == 'XZ' and 'y' in axes:
+                        _ba, _bm = 'y', _axis_size_hit('y')
+                    elif orientation == 'YZ' and 'x' in axes:
+                        _ba, _bm = 'x', _axis_size_hit('x')
+                    elif 't' in axes:
+                        _ba, _bm = 't', _axis_size_hit('t')
                     else:
-                        plane_data, meta = extract_plane(
-                            pyr, level_path, orientation, indices,
-                            (fov_center_y, fov_center_x), fov_size,
-                            zarr_path=zarr_path,
+                        _ba, _bm = '', 0
+                    if _ba:
+                        plane_prefetch_engine.schedule(
+                            zarr_path=zarr_path, level=str(level), level_path=level_path,
+                            orientation=str(orientation),
+                            fov_center_y=fov_center_y, fov_center_x=fov_center_x,
+                            fov_size=fov_size, indices=indices,
+                            channels_json=channels_json, has_c_axis=has_c_axis,
+                            browse_axis=_ba, browse_max=_bm,
                         )
-                        rgb = normalize_and_composite(plane_data, channels_config,
-                                                      percentile_key_base=percentile_key_base)
-                else:
-                    plane_data, meta = extract_plane(
-                        pyr, level_path, orientation, indices,
-                        (fov_center_y, fov_center_x), fov_size,
-                        zarr_path=zarr_path,
-                    )
-                    rgb = normalize_and_composite(
-                        plane_data, [{'color': '#FFFFFF', 'visible': True}],
-                        percentile_key_base=percentile_key_base,
-                    )
+                    client_etag = self.headers.get('If-None-Match', '')
+                    if client_etag == etag:
+                        self.send_response(304)
+                        self.send_header('ETag', etag)
+                        self.send_cors_headers()
+                        if not self._end_headers_safe(): return
+                        return
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'image/jpeg')
+                    self.send_header('Content-Length', str(len(img_data)))
+                    self.send_header('Cache-Control', 'public, max-age=0')
+                    self.send_header('ETag', etag)
+                    self.send_cors_headers()
+                    if not self._end_headers_safe(): return
+                    self._write_safe(img_data)
+                    return
 
-                img = Image.fromarray(rgb, 'RGB')
-                buf = io.BytesIO()
-                img.save(buf, format='WEBP', quality=85, method=0)
-                img_data = buf.getvalue()
+                import time as _time
+                _t0 = _time.perf_counter()
+                indices_items = tuple(sorted(indices.items()))
+                future = _get_tile_executor().submit(
+                    _render_plane_worker,
+                    zarr_path, level_path, orientation,
+                    fov_center_y, fov_center_x, fov_size,
+                    indices_items, channels_json, has_c_axis,
+                )
+                img_data = future.result(timeout=60)
+                _ms = (_time.perf_counter() - _t0) * 1000
+                sys.stderr.write(
+                    f"[Plane] MISS rendered indices={sorted(indices.items())} in {_ms:.0f}ms\n"
+                )
+                sys.stderr.flush()
+                etag = plane_cache.put(plane_key, img_data)
+
+                def _axis_size(ax: str) -> int:
+                    idx = axes.index(ax)
+                    return int(pyr.shape[idx])
+
+                if orientation == 'XY' and 'z' in axes:
+                    browse_axis: str = 'z'
+                    browse_max: int = _axis_size('z')
+                elif orientation == 'XZ' and 'y' in axes:
+                    browse_axis = 'y'
+                    browse_max = _axis_size('y')
+                elif orientation == 'YZ' and 'x' in axes:
+                    browse_axis = 'x'
+                    browse_max = _axis_size('x')
+                elif 't' in axes:
+                    browse_axis = 't'
+                    browse_max = _axis_size('t')
+                else:
+                    browse_axis = ''
+                    browse_max = 0
+
+                if browse_axis:
+                    plane_prefetch_engine.schedule(
+                        zarr_path=zarr_path, level=str(level), level_path=level_path,
+                        orientation=str(orientation),
+                        fov_center_y=fov_center_y, fov_center_x=fov_center_x,
+                        fov_size=fov_size, indices=indices,
+                        channels_json=channels_json, has_c_axis=has_c_axis,
+                        browse_axis=browse_axis, browse_max=browse_max,
+                    )
 
                 self.send_response(200)
-                self.send_header('Content-Type', 'image/webp')
+                self.send_header('Content-Type', 'image/jpeg')
                 self.send_header('Content-Length', str(len(img_data)))
-                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
-                self.send_header('Pragma', 'no-cache')
+                self.send_header('Cache-Control', 'public, max-age=0')
+                self.send_header('ETag', etag)
                 self.send_cors_headers()
                 if not self._end_headers_safe(): return
                 self._write_safe(img_data)

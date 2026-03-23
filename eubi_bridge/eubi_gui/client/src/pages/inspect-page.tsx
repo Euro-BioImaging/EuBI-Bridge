@@ -31,7 +31,9 @@ import {
   Move,
   Maximize2,
   AlertTriangle,
+  ChevronDown,
 } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useConversionStore } from "@/lib/conversion-store";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -39,6 +41,12 @@ import { useToast } from "@/hooks/use-toast";
 import type { ZarrMetadata } from "@shared/schema";
 
 const FOV_SIZE_OPTIONS = [128, 256, 512, 1024];
+
+function formatPixelSize(v: number): string {
+  if (v === 0) return "0";
+  if (Math.abs(v) >= 1000 || (Math.abs(v) < 0.001 && v !== 0)) return v.toExponential(2);
+  return parseFloat(v.toPrecision(4)).toString();
+}
 
 interface ViewerChannel {
   index: number;
@@ -77,27 +85,6 @@ function useDebounce<T>(value: T, delay: number): T {
   return debouncedValue;
 }
 
-/** Simple rolling-window concurrency limiter (no external deps). */
-function createConcurrencyLimiter(maxConcurrent: number) {
-  let running = 0;
-  const queue: Array<() => void> = [];
-  return function limit<T>(fn: () => Promise<T>): Promise<T> {
-    return new Promise((resolve, reject) => {
-      const attempt = () => {
-        if (running >= maxConcurrent) {
-          queue.push(attempt);
-          return;
-        }
-        running++;
-        fn().then(resolve, reject).finally(() => {
-          running--;
-          if (queue.length > 0) queue.shift()!();
-        });
-      };
-      attempt();
-    });
-  };
-}
 
 export default function InspectPage() {
   const { inspectPath, setInspectPath } = useConversionStore();
@@ -120,6 +107,8 @@ export default function InspectPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [minMaxLoading, setMinMaxLoading] = useState<Record<number, boolean>>({});
+  const [openLayers, setOpenLayers] = useState<Set<number>>(new Set([0]));
+  const [openChannels, setOpenChannels] = useState<Set<number>>(new Set());
   const planeServerUrlRef = useRef<string>("");
 
   // Discover the plane server's direct port once on mount for bypass-proxy tile fetches
@@ -131,8 +120,8 @@ export default function InspectPage() {
   }, []);
 
   const debouncedZoom = useDebounce(zoomLevel, 100);
-  const debouncedT = useDebounce(timeSlice, 100);
-  const debouncedZ = useDebounce(zSlice, 100);
+  const debouncedT = useDebounce(timeSlice, 16);
+  const debouncedZ = useDebounce(zSlice, 16);
   const debouncedFovCenterY = useDebounce(fovCenterY, 100);
   const debouncedFovCenterX = useDebounce(fovCenterX, 100);
   const debouncedChannels = useDebounce(viewerChannels, 150);
@@ -201,7 +190,6 @@ export default function InspectPage() {
   }, [zarrInfo]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [tileProgress, setTileProgress] = useState<{ loaded: number; total: number } | null>(null);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number } | null>(null);
 
   const viewParams = useMemo(() => {
@@ -232,7 +220,6 @@ export default function InspectPage() {
 
     setImageLoading(true);
     setImageError(null);
-    setTileProgress(null);
 
     if (abortRef.current) {
       abortRef.current.abort();
@@ -240,88 +227,44 @@ export default function InspectPage() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const gridParams = new URLSearchParams();
-    gridParams.set("path", viewParams.path);
-    gridParams.set("level", viewParams.level);
-    gridParams.set("orientation", viewParams.orientation);
-    gridParams.set("fovSize", viewParams.fovSize);
-    gridParams.set("fovCenterY", viewParams.fovCenterY);
-    gridParams.set("fovCenterX", viewParams.fovCenterX);
-
+    const planeParams = new URLSearchParams(viewParams);
     const directBase = planeServerUrlRef.current;
-    const tileGridUrl = directBase
-      ? `${directBase}/tile_grid?${gridParams.toString()}`
-      : `/api/zarr/tile_grid?${gridParams.toString()}`;
-    const tileBaseUrl = directBase ? `${directBase}/tile` : `/api/zarr/tile`;
+    const planeUrl = directBase
+      ? `${directBase}/plane?${planeParams.toString()}`
+      : `/api/zarr/plane?${planeParams.toString()}`;
 
-    fetch(tileGridUrl, { signal: controller.signal })
+    const t0 = performance.now();
+    console.log(`[Plane] fetch start  via=${directBase ? "direct" : "proxy"}`);
+
+    fetch(planeUrl, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
+        const xCache = res.headers.get("X-Cache") ?? (res.headers.get("ETag") ? "hit?" : "miss");
+        console.log(`[Plane] headers      ${(performance.now()-t0).toFixed(0)}ms  cache=${xCache}  size=${res.headers.get("Content-Length") ?? "?"}B`);
+        return res.blob();
       })
-      .then((grid: { canvasWidth: number; canvasHeight: number; tileCount: number; tiles: Array<{ tileRow: number; tileCol: number; canvasX: number; canvasY: number; width: number; height: number; dataRowStart: number; dataRowEnd: number; dataColStart: number; dataColEnd: number }> }) => {
-        if (controller.signal.aborted) return;
-
+      .then((blob) => {
+        console.log(`[Plane] blob ready   ${(performance.now()-t0).toFixed(0)}ms  blobSize=${blob.size}B`);
+        return createImageBitmap(blob);
+      })
+      .then((bitmap) => {
+        if (controller.signal.aborted) { bitmap.close(); return; }
         const canvas = canvasRef.current;
-        if (!canvas) return;
-        canvas.width = grid.canvasWidth;
-        canvas.height = grid.canvasHeight;
-        setCanvasSize({ width: grid.canvasWidth, height: grid.canvasHeight });
-
+        if (!canvas) { bitmap.close(); return; }
+        console.log(`[Plane] bitmap ready ${(performance.now()-t0).toFixed(0)}ms`);
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        setCanvasSize({ width: bitmap.width, height: bitmap.height });
         const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-        ctx.fillStyle = "#111";
-        ctx.fillRect(0, 0, grid.canvasWidth, grid.canvasHeight);
-
-        if (grid.tileCount === 0) {
-          setImageLoading(false);
-          return;
-        }
-
-        setTileProgress({ loaded: 0, total: grid.tileCount });
-        let loadedCount = 0;
-
-        const limit = createConcurrencyLimiter(8);
-        const tilePromises = grid.tiles.map((tile) => limit(() => {
-          const tileParams = new URLSearchParams();
-          tileParams.set("path", viewParams.path);
-          tileParams.set("level", viewParams.level);
-          tileParams.set("orientation", viewParams.orientation);
-          tileParams.set("rowStart", String(tile.dataRowStart));
-          tileParams.set("rowEnd", String(tile.dataRowEnd));
-          tileParams.set("colStart", String(tile.dataColStart));
-          tileParams.set("colEnd", String(tile.dataColEnd));
-          if (viewParams.t) tileParams.set("t", viewParams.t);
-          if (viewParams.z) tileParams.set("z", viewParams.z);
-          if (viewParams.sliceIdx) tileParams.set("sliceIdx", viewParams.sliceIdx);
-          tileParams.set("channels", viewParams.channels);
-
-          return fetch(`${tileBaseUrl}?${tileParams.toString()}`, { signal: controller.signal })
-            .then((res) => {
-              if (!res.ok) throw new Error(`Tile HTTP ${res.status}`);
-              return res.blob();
-            })
-            .then((blob) => createImageBitmap(blob))
-            .then((bitmap) => {
-              if (controller.signal.aborted) return;
-              ctx.drawImage(bitmap, tile.canvasX, tile.canvasY);
-              bitmap.close();
-              loadedCount++;
-              setTileProgress({ loaded: loadedCount, total: grid.tileCount });
-            });
-        }));
-
-        return Promise.all(tilePromises).then(() => {
-          if (!controller.signal.aborted) {
-            setImageLoading(false);
-            setTileProgress(null);
-          }
-        });
+        if (ctx) ctx.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        console.log(`[Plane] drawn        ${(performance.now()-t0).toFixed(0)}ms  total`);
+        setImageLoading(false);
       })
       .catch((err) => {
         if (err.name === "AbortError") return;
         if (controller.signal.aborted) return;
-        setImageError(err.message || "Failed to load tiles");
+        setImageError(err.message || "Failed to load plane");
         setImageLoading(false);
       });
 
@@ -608,7 +551,16 @@ export default function InspectPage() {
                     <Separator />
                     <div className="flex justify-between gap-2 min-w-0">
                       <span className="text-muted-foreground shrink-0">Compression</span>
-                      <span className="font-mono text-xs truncate text-right">{zarrMetadata.compression}</span>
+                      <div className="flex flex-col items-end gap-0.5 min-w-0">
+                        <Badge variant="secondary" className="font-mono text-[10px]">
+                          {zarrMetadata.compression.name}
+                        </Badge>
+                        {Object.entries(zarrMetadata.compression.params).map(([k, v]) => (
+                          <span key={k} className="font-mono text-[10px] text-muted-foreground">
+                            {k}: {String(v)}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </CardContent>
@@ -618,84 +570,221 @@ export default function InspectPage() {
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm font-medium flex items-center gap-2">
                     <Ruler className="h-4 w-4" />
-                    Axes & Shape
+                    Axes
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap gap-2">
-                      {zarrMetadata.axes.map((axis, i) => (
-                        <Badge key={i} variant="secondary" className="font-mono">
-                          {axis.name} ({axis.type}{axis.unit ? `: ${axis.unit}` : ""})
-                        </Badge>
-                      ))}
-                    </div>
-                    <Separator />
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Shape: </span>
-                      <span className="font-mono text-xs">[{zarrMetadata.shape.join(", ")}]</span>
-                    </div>
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Chunks: </span>
-                      <span className="font-mono text-xs">[{zarrMetadata.chunks.join(", ")}]</span>
-                    </div>
+                  <div className="flex flex-wrap gap-2">
+                    {zarrMetadata.axes.map((axis, i) => (
+                      <Badge key={i} variant="secondary" className="font-mono">
+                        {axis.name} ({axis.type}{axis.unit ? `: ${axis.unit}` : ""})
+                      </Badge>
+                    ))}
                   </div>
                 </CardContent>
               </Card>
+
+              {zarrMetadata.channels.length > 0 && (
+                <Card className="md:col-span-2">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <Palette className="h-4 w-4" />
+                      OME Channels ({zarrMetadata.channels.length})
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-1">
+                    {zarrMetadata.channels.map((ch) => {
+                      const isOpen = openChannels.has(ch.index);
+                      return (
+                        <Collapsible
+                          key={ch.index}
+                          open={isOpen}
+                          onOpenChange={() =>
+                            setOpenChannels((prev) => {
+                              const next = new Set(prev);
+                              next.has(ch.index) ? next.delete(ch.index) : next.add(ch.index);
+                              return next;
+                            })
+                          }
+                        >
+                          <CollapsibleTrigger asChild>
+                            <button
+                              type="button"
+                              className="flex items-center justify-between w-full px-3 py-2 rounded-md text-sm hover:bg-muted/50 transition-colors"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Badge variant="secondary" className="text-[10px] font-mono">
+                                  Ch {ch.index}
+                                </Badge>
+                                <div
+                                  className="h-3 w-3 rounded-full shrink-0 border border-border"
+                                  style={{ backgroundColor: ch.color }}
+                                />
+                                <span className="text-sm">{ch.label}</span>
+                                {!ch.visible && (
+                                  <EyeOff className="h-3 w-3 text-muted-foreground" />
+                                )}
+                              </div>
+                              <ChevronDown
+                                className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-150 ${isOpen ? "rotate-180" : ""}`}
+                              />
+                            </button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <div className="px-3 pb-3 pt-1">
+                              <table className="w-full text-xs border-collapse">
+                                <tbody>
+                                  <tr className="border-b border-border/40">
+                                    <td className="py-1.5 pr-6 text-muted-foreground font-medium w-28">Label</td>
+                                    <td className="py-1.5 font-mono">{ch.label}</td>
+                                  </tr>
+                                  <tr className="border-b border-border/40">
+                                    <td className="py-1.5 pr-6 text-muted-foreground font-medium">Color</td>
+                                    <td className="py-1.5">
+                                      <div className="flex items-center gap-2">
+                                        <div
+                                          className="h-3.5 w-3.5 rounded border border-border shrink-0"
+                                          style={{ backgroundColor: ch.color }}
+                                        />
+                                        <span className="font-mono">{ch.color}</span>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  <tr className="border-b border-border/40">
+                                    <td className="py-1.5 pr-6 text-muted-foreground font-medium">Visible</td>
+                                    <td className="py-1.5 font-mono">{ch.visible ? "true" : "false"}</td>
+                                  </tr>
+                                  <tr className="border-b border-border/40">
+                                    <td className="py-1.5 pr-6 text-muted-foreground font-medium">Data range</td>
+                                    <td className="py-1.5 font-mono">{ch.window.min} – {ch.window.max}</td>
+                                  </tr>
+                                  <tr>
+                                    <td className="py-1.5 pr-6 text-muted-foreground font-medium">Display range</td>
+                                    <td className="py-1.5 font-mono">{ch.window.start} – {ch.window.end}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              )}
 
               {zarrMetadata.pyramidLayers.length > 0 && (
                 <Card className="md:col-span-2">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-sm font-medium flex items-center gap-2">
                       <Layers className="h-4 w-4" />
-                      Pyramid Layers
+                      Pyramid Layers (Click to explore individual layers.)
                     </CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b">
-                            <th className="text-left py-2 text-muted-foreground font-medium">Level</th>
-                            <th className="text-left py-2 text-muted-foreground font-medium">Shape</th>
-                            <th className="text-left py-2 text-muted-foreground font-medium">Chunks</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {zarrMetadata.pyramidLayers.map((layer) => (
-                            <tr key={layer.level} className="border-b last:border-0">
-                              <td className="py-2">
-                                <Badge variant="secondary" className="text-[10px]">{layer.level}</Badge>
-                              </td>
-                              <td className="py-2 font-mono text-xs">[{layer.shape.join(", ")}]</td>
-                              <td className="py-2 font-mono text-xs">[{layer.chunks.join(", ")}]</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+                  <CardContent className="space-y-1">
+                    {zarrMetadata.pyramidLayers.map((layer) => {
+                      const axes = zarrMetadata.axes;
+                      const isOpen = openLayers.has(layer.level);
 
-              {zarrMetadata.scales.length > 0 && (
-                <Card className="md:col-span-2">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm font-medium flex items-center gap-2">
-                      <Ruler className="h-4 w-4" />
-                      Physical Scales
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-                      {zarrMetadata.scales.map((scale, i) => (
-                        <div key={i} className="flex items-center gap-2 text-sm">
-                          <Badge variant="secondary" className="font-mono text-[10px]">{scale.axis}</Badge>
-                          <span className="font-mono text-xs">{scale.value}</span>
-                          <span className="text-muted-foreground text-xs">{scale.unit}</span>
-                        </div>
-                      ))}
-                    </div>
+                      // Per-axis pixel size: use stored scales if present, else derive from level-0 scales
+                      const derivedScales = axes.map((ax, i) => {
+                        if (layer.scales && layer.scales.length > i) return layer.scales[i];
+                        const base = zarrMetadata.scales.find((s) => s.axis === ax.name);
+                        if (base == null) return null;
+                        const baseSize = zarrMetadata.shape[i] ?? 1;
+                        const layerSize = layer.shape[i] ?? 1;
+                        return layerSize > 0 ? base.value * (baseSize / layerSize) : base.value;
+                      });
+
+                      return (
+                        <Collapsible
+                          key={layer.level}
+                          open={isOpen}
+                          onOpenChange={() =>
+                            setOpenLayers((prev) => {
+                              const next = new Set(prev);
+                              next.has(layer.level) ? next.delete(layer.level) : next.add(layer.level);
+                              return next;
+                            })
+                          }
+                        >
+                          <CollapsibleTrigger asChild>
+                            <button
+                              type="button"
+                              className="flex items-center justify-between w-full px-3 py-2 rounded-md text-sm hover:bg-muted/50 transition-colors"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Badge variant="secondary" className="text-[10px] font-mono">
+                                  Level {layer.level}
+                                </Badge>
+                                <span className="font-mono text-xs text-muted-foreground">
+                                  {layer.shape.join(" × ")}
+                                </span>
+                              </div>
+                              <ChevronDown
+                                className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-150 ${isOpen ? "rotate-180" : ""}`}
+                              />
+                            </button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <div className="overflow-x-auto px-3 pb-3 pt-1">
+                              <table className="w-full text-xs border-collapse">
+                                <thead>
+                                  <tr className="border-b border-border">
+                                    <th className="text-left py-1.5 pr-6 text-muted-foreground font-medium w-24" />
+                                    {axes.map((ax) => (
+                                      <th
+                                        key={ax.name}
+                                        className="text-center py-1.5 px-3 font-semibold uppercase tracking-wide"
+                                      >
+                                        {ax.name}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <tr className="border-b border-border/40">
+                                    <td className="py-1.5 pr-6 text-muted-foreground font-medium">Shape</td>
+                                    {axes.map((ax, i) => (
+                                      <td key={ax.name} className="text-center py-1.5 px-3 font-mono">
+                                        {layer.shape[i] ?? "—"}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                  <tr className="border-b border-border/40">
+                                    <td className="py-1.5 pr-6 text-muted-foreground font-medium">Chunks</td>
+                                    {axes.map((ax, i) => (
+                                      <td key={ax.name} className="text-center py-1.5 px-3 font-mono">
+                                        {layer.chunks[i] ?? "—"}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                  <tr className="border-b border-border/40">
+                                    <td className="py-1.5 pr-6 text-muted-foreground font-medium">Pixel size</td>
+                                    {axes.map((ax, i) => {
+                                      const v = derivedScales[i];
+                                      return (
+                                        <td key={ax.name} className="text-center py-1.5 px-3 font-mono">
+                                          {v != null ? formatPixelSize(v) : "—"}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                  <tr>
+                                    <td className="py-1.5 pr-6 text-muted-foreground font-medium">Unit</td>
+                                    {axes.map((ax) => (
+                                      <td key={ax.name} className="text-center py-1.5 px-3 text-muted-foreground">
+                                        {ax.unit || "—"}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      );
+                    })}
                   </CardContent>
                 </Card>
               )}
@@ -733,11 +822,6 @@ export default function InspectPage() {
                         <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
                           <div className="flex flex-col items-center gap-2">
                             <Loader2 className="h-8 w-8 animate-spin text-white/70" />
-                            {tileProgress && (
-                              <span className="text-white/60 text-xs font-mono">
-                                {tileProgress.loaded}/{tileProgress.total} chunks
-                              </span>
-                            )}
                           </div>
                         </div>
                       )}
