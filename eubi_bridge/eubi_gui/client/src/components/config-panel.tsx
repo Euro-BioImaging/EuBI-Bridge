@@ -29,12 +29,15 @@ import {
   useResetConfig,
   useApplyConfig,
 } from "@/hooks/use-config";
+import { FileBrowser } from "@/components/file-browser";
 
 const DEFAULT_PATH = "~/.eubi_bridge/.eubi_config.json";
+const CONFIG_DIR = "~/.eubi_bridge";
 
 export function ConfigPanel() {
   const [open, setOpen] = useState(false);
   const [customPath, setCustomPath] = useState("");
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [status, setStatus] = useState<{ type: "ok" | "err"; msg: string } | null>(null);
   const [loadingDefault, setLoadingDefault] = useState(false);
   const [loadingCustom, setLoadingCustom] = useState(false);
@@ -148,6 +151,7 @@ export function ConfigPanel() {
     resetConfig.isPending;
 
   return (
+    <>
     <SidebarGroup className="px-0">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger asChild>
@@ -219,12 +223,23 @@ export function ConfigPanel() {
               {/* Custom path */}
               <div className="space-y-1">
                 <Label className="text-[11px] text-muted-foreground">Custom path</Label>
-                <Input
-                  value={customPath}
-                  onChange={(e) => setCustomPath(e.target.value)}
-                  placeholder="/path/to/.eubi_config.json"
-                  className="h-7 text-xs bg-sidebar-accent/50"
-                />
+                <div className="flex gap-1">
+                  <Input
+                    value={customPath}
+                    onChange={(e) => setCustomPath(e.target.value)}
+                    placeholder="/path/to/.eubi_config.json"
+                    className="h-7 text-xs bg-sidebar-accent/50 flex-1 min-w-0"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0"
+                    onClick={() => setBrowserOpen(true)}
+                    title="Browse for config file"
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
                 <div className="flex gap-1">
                   <Button
                     variant="outline"
@@ -277,5 +292,15 @@ export function ConfigPanel() {
         </CollapsibleContent>
       </Collapsible>
     </SidebarGroup>
+
+    <FileBrowser
+      open={browserOpen}
+      onOpenChange={setBrowserOpen}
+      title="Select Config File"
+      selectMode="file"
+      initialPath={CONFIG_DIR}
+      onSelect={(path) => setCustomPath(path)}
+    />
+    </>
   );
 }

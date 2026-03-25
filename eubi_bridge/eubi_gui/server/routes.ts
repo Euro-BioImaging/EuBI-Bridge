@@ -347,7 +347,8 @@ export async function registerRoutes(
 
   app.get("/api/files", async (req, res) => {
     try {
-      const dirPath = (req.query.path as string) || os.homedir();
+      const rawPath = (req.query.path as string) || os.homedir();
+      const dirPath = rawPath.replace(/^~(?=$|\/|\\)/, os.homedir());
       const resolvedPath = path.resolve(dirPath);
 
       if (!fs.existsSync(resolvedPath)) {
@@ -361,7 +362,6 @@ export async function registerRoutes(
 
       const entries = fs.readdirSync(resolvedPath, { withFileTypes: true });
       const items = entries
-        .filter((entry) => !entry.name.startsWith("."))
         .map((entry) => {
           const fullPath = path.join(resolvedPath, entry.name);
           let size: number | undefined;
