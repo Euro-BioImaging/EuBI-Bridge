@@ -32,6 +32,7 @@ import {
   Maximize2,
   AlertTriangle,
   ChevronDown,
+  BarChart2,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useConversionStore } from "@/lib/conversion-store";
@@ -55,7 +56,6 @@ interface ViewerChannel {
   visible: boolean;
   intensityMin: number;
   intensityMax: number;
-  autoMinMax: boolean;
   window: { min: number; max: number; start: number; end: number };
 }
 
@@ -102,11 +102,22 @@ export default function InspectPage() {
   const [imageLoading, setImageLoading] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Client-side decoded-bitmap cache.  Keyed by full plane URL; value is a
+  // GPU-ready ImageBitmap.  Insertion order = eviction order (oldest first).
+  // Drawing from this cache costs < 1 ms vs 15–30 ms for createImageBitmap.
+  const bitmapCacheRef = useRef<Map<string, ImageBitmap>>(new Map());
+  // Computed from system RAM: 25 % of total RAM, capped at 1.5 GB, expressed
+  // as a frame count for the current fovSize.  Starts at a safe default (60)
+  // and is refined once the /api/system/memory response arrives.
+  const bitmapCacheMaxRef = useRef(60);
+  // AbortControllers for background prefetch requests (cancelled on each new main fetch)
+  const prefetchAbortRef = useRef<Set<AbortController>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; startCenterX: number; startCenterY: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [minMaxLoading, setMinMaxLoading] = useState<Record<number, boolean>>({});
+  const [histAdjLoading, setHistAdjLoading] = useState<Record<number, boolean>>({});
+  const [editableScales, setEditableScales] = useState<{ axis: string; value: number; unit: string }[]>([]);
   const [openLayers, setOpenLayers] = useState<Set<number>>(new Set([0]));
   const [openChannels, setOpenChannels] = useState<Set<number>>(new Set());
   const planeServerUrlRef = useRef<string>("");
@@ -118,6 +129,29 @@ export default function InspectPage() {
       .then((d) => { if (d.url) planeServerUrlRef.current = d.url; })
       .catch(() => {});
   }, []);
+
+  // Compute bitmap cache capacity from system RAM and current fovSize.
+  // Budget: 25 % of total RAM, capped at 1.5 GB.
+  // Each ImageBitmap occupies fovSize × fovSize × 4 bytes (RGBA).
+  useEffect(() => {
+    fetch("/api/system/memory")
+      .then((r) => r.json())
+      .then(({ totalMb }: { totalMb: number }) => {
+        const budgetBytes = Math.min(totalMb * 1024 * 1024 * 0.25, 1.5 * 1024 ** 3);
+        const bytesPerBitmap = fovSize * fovSize * 4;
+        const computed = Math.floor(budgetBytes / bytesPerBitmap);
+        bitmapCacheMaxRef.current = Math.max(30, Math.min(computed, 1000));
+      })
+      .catch(() => {});
+  }, [fovSize]);
+
+  // Clear the bitmap cache when the zarr path changes (different dataset = stale bitmaps)
+  useEffect(() => {
+    for (const bm of bitmapCacheRef.current.values()) bm.close();
+    bitmapCacheRef.current.clear();
+    for (const ctrl of prefetchAbortRef.current) ctrl.abort();
+    prefetchAbortRef.current.clear();
+  }, [inspectPath]);
 
   const debouncedZoom = useDebounce(zoomLevel, 100);
   const debouncedT = useDebounce(timeSlice, 16);
@@ -135,6 +169,16 @@ export default function InspectPage() {
     },
     enabled: !!inspectPath && inspectPath.length > 2,
   });
+
+  useEffect(() => {
+    if (!zarrMetadata) return;
+    setEditableScales(
+      zarrMetadata.axes.map((ax: any) => {
+        const existing = zarrMetadata.scales.find((s: any) => s.axis === ax.name);
+        return { axis: ax.name, value: existing?.value ?? 1, unit: existing?.unit ?? ax.unit ?? "" };
+      })
+    );
+  }, [zarrMetadata]);
 
   const { data: zarrInfo } = useQuery<ZarrInfo>({
     queryKey: ["/api/zarr/info", inspectPath],
@@ -155,7 +199,6 @@ export default function InspectPage() {
         visible: ch.visible,
         intensityMin: ch.window.start,
         intensityMax: ch.window.end,
-        autoMinMax: false,
         window: ch.window,
       }));
       setViewerChannels(newChannels);
@@ -215,23 +258,112 @@ export default function InspectPage() {
     return base;
   }, [inspectPath, zarrInfo, debouncedZoom, orientation, fovSize, debouncedFovCenterY, debouncedFovCenterX, debouncedT, debouncedZ, debouncedChannels]);
 
+  const loadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
-    if (!viewParams || isDragging) return;
+    if (!viewParams || isDragging || activeTab !== "viewer") return;
 
-    setImageLoading(true);
-    setImageError(null);
-
-    if (abortRef.current) {
-      abortRef.current.abort();
-    }
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    const planeParams = new URLSearchParams(viewParams);
     const directBase = planeServerUrlRef.current;
+    const planeParams = new URLSearchParams(viewParams);
     const planeUrl = directBase
       ? `${directBase}/plane?${planeParams.toString()}`
       : `/api/zarr/plane?${planeParams.toString()}`;
+
+    // ── Helper: add a decoded bitmap to the LRU cache ──────────────────────
+    const storeBitmap = (url: string, bm: ImageBitmap) => {
+      const cache = bitmapCacheRef.current;
+      if (cache.has(url)) return; // already present
+      cache.set(url, bm);
+      while (cache.size > bitmapCacheMaxRef.current) {
+        const oldest = cache.keys().next().value!;
+        cache.get(oldest)!.close();
+        cache.delete(oldest);
+      }
+    };
+
+    // ── Helper: draw a bitmap to the canvas ────────────────────────────────
+    const drawBitmap = (bm: ImageBitmap) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      if (canvas.width !== bm.width || canvas.height !== bm.height) {
+        canvas.width = bm.width;
+        canvas.height = bm.height;
+      }
+      // Always call setCanvasSize so display:block is applied even when dimensions are unchanged
+      setCanvasSize(prev =>
+        prev?.width === bm.width && prev?.height === bm.height
+          ? prev
+          : { width: bm.width, height: bm.height }
+      );
+      const ctx = canvas.getContext("2d");
+      if (ctx) ctx.drawImage(bm, 0, 0);
+    };
+
+    // ── Helper: background prefetch of neighbouring z-slices ───────────────
+    const schedulePrefetch = () => {
+      // Cancel previous prefetch batch — they may be for a different position
+      for (const ctrl of prefetchAbortRef.current) ctrl.abort();
+      prefetchAbortRef.current.clear();
+
+      // Determine which param carries the slice index (z or sliceIdx)
+      const zKey = viewParams.z !== undefined ? "z"
+        : viewParams.sliceIdx !== undefined ? "sliceIdx"
+        : null;
+      if (!zKey) return;
+
+      const currentZ = parseInt(viewParams[zKey], 10);
+      // Use t-axis size as a proxy when z is named 'sliceIdx' (XZ/YZ view)
+      const zMax = zarrInfo
+        ? (zKey === "z" ? (zarrInfo.dimSizes.z ?? 1)
+          : zKey === "sliceIdx" && viewParams.sliceIdx !== undefined
+            ? (zarrInfo.dimSizes.y ?? zarrInfo.dimSizes.x ?? 1)
+            : 1)
+        : 1;
+
+      // Prefetch ±1, ±2, ±3 slices; skip if already in bitmap cache
+      for (const delta of [-1, 1, -2, 2, -3, 3]) {
+        const nz = currentZ + delta;
+        if (nz < 0 || nz >= zMax) continue;
+        const neighborParams = new URLSearchParams({ ...viewParams, [zKey]: String(nz) });
+        const neighborUrl = directBase
+          ? `${directBase}/plane?${neighborParams.toString()}`
+          : `/api/zarr/plane?${neighborParams.toString()}`;
+        if (bitmapCacheRef.current.has(neighborUrl)) continue;
+
+        const ctrl = new AbortController();
+        prefetchAbortRef.current.add(ctrl);
+        fetch(neighborUrl, { signal: ctrl.signal })
+          .then((r) => (r.ok ? r.blob() : Promise.reject()))
+          .then((blob) => createImageBitmap(blob))
+          .then((bm) => {
+            if (ctrl.signal.aborted) { bm.close(); return; }
+            storeBitmap(neighborUrl, bm);
+          })
+          .catch(() => {})
+          .finally(() => prefetchAbortRef.current.delete(ctrl));
+      }
+    };
+
+    // ── Fast path: bitmap already decoded in local cache ───────────────────
+    const cachedBitmap = bitmapCacheRef.current.get(planeUrl);
+    if (cachedBitmap) {
+      if (loadingTimerRef.current) { clearTimeout(loadingTimerRef.current); loadingTimerRef.current = null; }
+      drawBitmap(cachedBitmap);
+      setImageLoading(false);
+      setImageError(null);
+      schedulePrefetch();
+      return;
+    }
+
+    // ── Slow path: fetch from plane server ─────────────────────────────────
+    // Show spinner only after 300 ms so fast responses don't blank the canvas
+    if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
+    loadingTimerRef.current = setTimeout(() => setImageLoading(true), 300);
+
+    setImageError(null);
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     const t0 = performance.now();
     console.log(`[Plane] fetch start  via=${directBase ? "direct" : "proxy"}`);
@@ -249,29 +381,27 @@ export default function InspectPage() {
       })
       .then((bitmap) => {
         if (controller.signal.aborted) { bitmap.close(); return; }
-        const canvas = canvasRef.current;
-        if (!canvas) { bitmap.close(); return; }
+        if (!canvasRef.current) { bitmap.close(); return; }
         console.log(`[Plane] bitmap ready ${(performance.now()-t0).toFixed(0)}ms`);
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-        setCanvasSize({ width: bitmap.width, height: bitmap.height });
-        const ctx = canvas.getContext("2d");
-        if (ctx) ctx.drawImage(bitmap, 0, 0);
-        bitmap.close();
+        storeBitmap(planeUrl, bitmap);
+        drawBitmap(bitmap);
         console.log(`[Plane] drawn        ${(performance.now()-t0).toFixed(0)}ms  total`);
+        if (loadingTimerRef.current) { clearTimeout(loadingTimerRef.current); loadingTimerRef.current = null; }
         setImageLoading(false);
+        schedulePrefetch();
       })
       .catch((err) => {
-        if (err.name === "AbortError") return;
-        if (controller.signal.aborted) return;
+        if (loadingTimerRef.current) { clearTimeout(loadingTimerRef.current); loadingTimerRef.current = null; }
+        if (err.name === "AbortError" || controller.signal.aborted) return;
         setImageError(err.message || "Failed to load plane");
         setImageLoading(false);
       });
 
     return () => {
       controller.abort();
+      if (loadingTimerRef.current) { clearTimeout(loadingTimerRef.current); loadingTimerRef.current = null; }
     };
-  }, [viewParams, isDragging]);
+  }, [viewParams, isDragging, zarrInfo, activeTab]);
 
   const updateMetadataMutation = useMutation({
     mutationFn: async (data: { path: string; scales: { axis: string; value: number; unit: string }[] }) => {
@@ -314,39 +444,57 @@ export default function InspectPage() {
     );
   }, []);
 
-  const toggleAutoMinMax = useCallback((channelIndex: number, enabled: boolean) => {
-    if (!enabled) {
-      const originalCh = zarrInfo?.channels?.find((c: any) => c.index === channelIndex);
-      updateViewerChannel(channelIndex, {
-        autoMinMax: false,
-        intensityMin: originalCh?.window?.start ?? 0,
-        intensityMax: originalCh?.window?.end ?? 255,
+  const resetHistogram = useCallback((channelIndex: number) => {
+    const originalCh = zarrInfo?.channels?.find((c: any) => c.index === channelIndex);
+    if (!originalCh) return;
+    setViewerChannels((prev) =>
+      prev.map((ch) =>
+        ch.index === channelIndex
+          ? {
+              ...ch,
+              window: {
+                min: originalCh.window?.min ?? 0,
+                max: originalCh.window?.max ?? 255,
+                start: originalCh.window?.start ?? 0,
+                end: originalCh.window?.end ?? 255,
+              },
+              intensityMin: originalCh.window?.start ?? 0,
+              intensityMax: originalCh.window?.end ?? 255,
+            }
+          : ch
+      )
+    );
+  }, [zarrInfo]);
+
+  const adjustHistogram = useCallback((channelIndex: number) => {
+    if (!inspectPath) return;
+    setHistAdjLoading((prev) => ({ ...prev, [channelIndex]: true }));
+    fetch(`/api/zarr/channel_minmax?path=${encodeURIComponent(inspectPath)}&channel=${channelIndex}`, { cache: 'no-store' })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data: { channel: number; min: number; max: number }) => {
+        setViewerChannels((prev) =>
+          prev.map((ch) =>
+            ch.index === channelIndex
+              ? {
+                  ...ch,
+                  window: { ...ch.window, min: data.min, max: data.max },
+                  intensityMin: data.min,
+                  intensityMax: data.max,
+                }
+              : ch
+          )
+        );
+      })
+      .catch((err) => {
+        console.error(`Failed to adjust histogram for channel ${channelIndex}:`, err);
+      })
+      .finally(() => {
+        setHistAdjLoading((prev) => ({ ...prev, [channelIndex]: false }));
       });
-      return;
-    }
-    updateViewerChannel(channelIndex, { autoMinMax: enabled });
-    if (inspectPath) {
-      setMinMaxLoading((prev) => ({ ...prev, [channelIndex]: true }));
-      fetch(`/api/zarr/channel_minmax?path=${encodeURIComponent(inspectPath)}&channel=${channelIndex}`, { cache: 'no-store' })
-        .then((res) => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.json();
-        })
-        .then((data: { channel: number; min: number; max: number }) => {
-          updateViewerChannel(channelIndex, {
-            intensityMin: Math.floor(data.min),
-            intensityMax: Math.ceil(data.max),
-          });
-        })
-        .catch((err) => {
-          console.error(`Failed to compute min/max for channel ${channelIndex}:`, err);
-          updateViewerChannel(channelIndex, { autoMinMax: false });
-        })
-        .finally(() => {
-          setMinMaxLoading((prev) => ({ ...prev, [channelIndex]: false }));
-        });
-    }
-  }, [inspectPath, zarrInfo, updateViewerChannel]);
+  }, [inspectPath]);
 
   const handleFitToView = useCallback(() => {
     if (!zarrInfo) return;
@@ -566,20 +714,92 @@ export default function InspectPage() {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card className="md:col-span-2">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm font-medium flex items-center gap-2">
                     <Ruler className="h-4 w-4" />
-                    Axes
+                    Axes &amp; Pixel Sizes
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="space-y-3">
                   <div className="flex flex-wrap gap-2">
-                    {zarrMetadata.axes.map((axis, i) => (
+                    {zarrMetadata.axes.map((axis: any, i: number) => (
                       <Badge key={i} variant="secondary" className="font-mono">
-                        {axis.name} ({axis.type}{axis.unit ? `: ${axis.unit}` : ""})
+                        {axis.name} ({axis.type})
                       </Badge>
                     ))}
+                  </div>
+                  <table className="w-full text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="text-left py-1.5 pr-3 text-muted-foreground font-medium w-12">Axis</th>
+                        <th className="text-left py-1.5 pr-3 text-muted-foreground font-medium w-20">Type</th>
+                        <th className="text-left py-1.5 pr-3 text-muted-foreground font-medium">Pixel size</th>
+                        <th className="text-left py-1.5 text-muted-foreground font-medium w-44">Unit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editableScales.map((row, i) => {
+                        const axMeta = zarrMetadata.axes[i] as any;
+                        const isTime = axMeta?.type === "time";
+                        const spaceUnits = ["picometer","nanometer","micrometer","millimeter","centimeter","decimeter","meter","decameter","hectometer","kilometer"];
+                        const timeUnits  = ["nanosecond","microsecond","millisecond","second","minute","hour"];
+                        const units = isTime ? timeUnits : spaceUnits;
+                        const noScale = axMeta?.type === "channel" || axMeta?.type === "other";
+                        return (
+                          <tr key={row.axis} className="border-b border-border/40">
+                            <td className="py-1.5 pr-3 font-mono font-semibold">{row.axis}</td>
+                            <td className="py-1.5 pr-3 text-muted-foreground">{axMeta?.type ?? "—"}</td>
+                            <td className="py-1.5 pr-3">
+                              {noScale ? <span className="text-muted-foreground">—</span> : (
+                                <input
+                                  type="number"
+                                  step="any"
+                                  title={`Pixel size for ${row.axis} axis`}
+                                  value={row.value}
+                                  onChange={(e) => setEditableScales(prev => prev.map((r, j) => j === i ? { ...r, value: parseFloat(e.target.value) || 0 } : r))}
+                                  className="w-28 h-6 px-1.5 rounded border border-input bg-background text-xs font-mono"
+                                />
+                              )}
+                            </td>
+                            <td className="py-1.5">
+                              {noScale ? <span className="text-muted-foreground">—</span> : (
+                                <Select
+                                  value={row.unit}
+                                  onValueChange={(v) => setEditableScales(prev => prev.map((r, j) => j === i ? { ...r, unit: v } : r))}
+                                >
+                                  <SelectTrigger className="h-6 text-xs w-40">
+                                    <SelectValue placeholder="select unit" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {units.map(u => (
+                                      <SelectItem key={u} value={u} className="text-xs">{u}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div className="flex justify-end pt-1">
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={updateMetadataMutation.isPending}
+                      onClick={() => inspectPath && updateMetadataMutation.mutate({
+                        path: inspectPath,
+                        scales: editableScales.filter((_, i) => {
+                          const axMeta = zarrMetadata.axes[i] as any;
+                          return axMeta?.type !== "channel" && axMeta?.type !== "other";
+                        }),
+                      })}
+                    >
+                      <Save className="h-3 w-3 mr-1.5" />
+                      {updateMetadataMutation.isPending ? "Saving…" : "Save pixel sizes"}
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -688,7 +908,10 @@ export default function InspectPage() {
 
                       // Per-axis pixel size: use stored scales if present, else derive from level-0 scales
                       const derivedScales = axes.map((ax, i) => {
-                        if (layer.scales && layer.scales.length > i) return layer.scales[i];
+                        if (layer.scales && layer.scales.length > i) {
+                          const s = layer.scales[i] as any;
+                          return typeof s === "object" && s !== null ? s.value : s;
+                        }
                         const base = zarrMetadata.scales.find((s) => s.axis === ax.name);
                         if (base == null) return null;
                         const baseSize = zarrMetadata.shape[i] ?? 1;
@@ -792,7 +1015,7 @@ export default function InspectPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="viewer" className="space-y-4 mt-4">
+        <TabsContent value="viewer" forceMount className="space-y-4 mt-4 data-[state=inactive]:hidden">
           {!zarrInfo && (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
@@ -1102,23 +1325,28 @@ export default function InspectPage() {
                               </div>
                               {ch.visible && (
                                 <div className="pl-5 space-y-1.5">
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-1.5">
-                                      <Checkbox
-                                        id={`auto-minmax-${ch.index}`}
-                                        data-testid={`checkbox-auto-minmax-${ch.index}`}
-                                        checked={ch.autoMinMax}
-                                        disabled={minMaxLoading[ch.index]}
-                                        onCheckedChange={(checked) => toggleAutoMinMax(ch.index, !!checked)}
-                                        className="h-3 w-3"
-                                      />
-                                      <label
-                                        htmlFor={`auto-minmax-${ch.index}`}
-                                        className="text-[10px] text-muted-foreground cursor-pointer select-none"
-                                      >
-                                        {minMaxLoading[ch.index] ? "Computing..." : "Auto"}
-                                      </label>
-                                    </div>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      title="Set slider range to actual data min/max"
+                                      disabled={histAdjLoading[ch.index]}
+                                      onClick={() => adjustHistogram(ch.index)}
+                                      className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+                                    >
+                                      {histAdjLoading[ch.index]
+                                        ? <Loader2 className="h-3 w-3 animate-spin" />
+                                        : <BarChart2 className="h-3 w-3" />}
+                                      <span>Adjust range</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      title="Reset slider range to full dtype range"
+                                      onClick={() => resetHistogram(ch.index)}
+                                      className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                                    >
+                                      <RotateCcw className="h-3 w-3" />
+                                      <span>Reset range</span>
+                                    </button>
                                   </div>
                                   <div className="flex items-center gap-1.5">
                                     <input
@@ -1127,9 +1355,9 @@ export default function InspectPage() {
                                       value={ch.intensityMin}
                                       min={ch.window.min}
                                       max={ch.intensityMax}
-                                      disabled={ch.autoMinMax}
+                                      step={(ch.window.max - ch.window.min) / 1000 || 1}
                                       onChange={(e) => {
-                                        const v = parseInt(e.target.value);
+                                        const v = parseFloat(e.target.value);
                                         if (!isNaN(v)) updateViewerChannel(ch.index, { intensityMin: Math.max(ch.window.min, Math.min(v, ch.intensityMax)) });
                                       }}
                                       className="h-5 w-12 text-[10px] font-mono text-center px-0.5 rounded border border-border bg-background text-foreground disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -1138,9 +1366,8 @@ export default function InspectPage() {
                                       data-testid={`slider-viewer-intensity-${ch.index}`}
                                       min={ch.window.min}
                                       max={ch.window.max}
-                                      step={Math.max(1, Math.floor((ch.window.max - ch.window.min) / 1000))}
+                                      step={(ch.window.max - ch.window.min) / 1000 || 1}
                                       value={[ch.intensityMin, ch.intensityMax]}
-                                      disabled={ch.autoMinMax}
                                       onValueChange={([min, max]) =>
                                         updateViewerChannel(ch.index, { intensityMin: min, intensityMax: max })
                                       }
@@ -1152,9 +1379,9 @@ export default function InspectPage() {
                                       value={ch.intensityMax}
                                       min={ch.intensityMin}
                                       max={ch.window.max}
-                                      disabled={ch.autoMinMax}
+                                      step={(ch.window.max - ch.window.min) / 1000 || 1}
                                       onChange={(e) => {
-                                        const v = parseInt(e.target.value);
+                                        const v = parseFloat(e.target.value);
                                         if (!isNaN(v)) updateViewerChannel(ch.index, { intensityMax: Math.max(ch.intensityMin, Math.min(v, ch.window.max)) });
                                       }}
                                       className="h-5 w-12 text-[10px] font-mono text-center px-0.5 rounded border border-border bg-background text-foreground disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -1255,7 +1482,6 @@ export default function InspectPage() {
                                 visible: ch.visible !== false,
                                 intensityMin: ch.window?.start ?? 0,
                                 intensityMax: ch.window?.end ?? 255,
-                                autoMinMax: false,
                                 window: { min: ch.window?.min ?? 0, max: ch.window?.max ?? 255, start: ch.window?.start ?? 0, end: ch.window?.end ?? 255 },
                               })));
                             }

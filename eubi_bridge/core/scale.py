@@ -105,12 +105,14 @@ def median_downscale(arr: da.Array,
     return downscaled_arr
 
 async def ts_downscale(arr: Union[zarr.Array, str],
-                          scale_factor: Union[tuple, list, np.ndarray] = None
+                          scale_factor: Union[tuple, list, np.ndarray] = None,
+                          downscale_method: str = 'stride'
                           ):
-    # Method 1: Try using tensorstore's virtual downsampling if available
+    # 'simple' is the dask-path alias for stride-based subsampling
+    ts_method = 'stride' if downscale_method == 'simple' else downscale_method
     return ts.downsample(arr,
                          [int(np.round(factor)) for factor in scale_factor],
-                         method='stride')
+                         method=ts_method)  # type: ignore[arg-type]
 
 @dataclasses.dataclass
 class DownscaleManager:
@@ -140,11 +142,11 @@ class DownscaleManager:
 
     @property
     def scale_factors(self):
-        return np.true_divide(self.output_shapes[0], self.output_shapes)
+        return self._theoretical_scale_factors
 
     @property
     def scales(self):
-        return np.multiply(self.scale, self.scale_factors)
+        return np.multiply(self.scale, self._theoretical_scale_factors)
 
 
 
@@ -185,7 +187,6 @@ class Downscaler:
             store_path = self.array
             kvstore = make_kvstore(store_path)
             self.base_array_root = os.path.abspath(self.array)
-            self.downscale_method = 'ts'
             ts_context = self.get_tensorstore_context()
             self.array = ts.open(
                 {
@@ -214,7 +215,6 @@ class Downscaler:
             kvstore = make_kvstore(self.base_array_root)
             logger.info(f"[Downscaler] kvstore={kvstore}")
 
-            self.downscale_method = 'ts'
             # Use appropriate driver based on zarr format
             # zarr v2 uses "zarr2" driver, zarr v3 uses "zarr3" driver
             zarr_format = self.array.metadata.zarr_format
@@ -268,7 +268,7 @@ class Downscaler:
             else:
                 factor = tuple(int(np.round(x)) for x in scale_factor)
                 res1 = asyncio.create_task(
-                    self.method(self.array, scale_factor = factor),
+                    self.method(self.array, scale_factor=factor, downscale_method=self.downscale_method),
                     name = f"downscale_{idx}"
                 )
                 downscaled[idx] = res1

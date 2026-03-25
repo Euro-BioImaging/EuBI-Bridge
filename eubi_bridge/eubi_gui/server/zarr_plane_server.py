@@ -237,6 +237,8 @@ class PlaneCache:
         self._cache: OrderedDict = OrderedDict()
         self._lock = threading.Lock()
         self._max_size = max_size
+        # side index: zarr_path -> set of cache keys (to allow targeted eviction)
+        self._path_keys: dict = {}
 
     @staticmethod
     def make_key(**kwargs) -> str:
@@ -249,14 +251,26 @@ class PlaneCache:
                 return self._cache[key]  # (webp_bytes, etag)
         return None
 
-    def put(self, key: str, webp_bytes: bytes) -> str:
+    def put(self, key: str, webp_bytes: bytes, zarr_path: str = '') -> str:
         etag = f'"{key[:16]}"'
         with self._lock:
             self._cache[key] = (webp_bytes, etag)
             self._cache.move_to_end(key)
+            if zarr_path:
+                self._path_keys.setdefault(zarr_path, set()).add(key)
             if len(self._cache) > self._max_size:
-                self._cache.popitem(last=False)
+                old_key, _ = self._cache.popitem(last=False)
+                # clean up side index
+                for keys in self._path_keys.values():
+                    keys.discard(old_key)
         return etag
+
+    def clear_path(self, zarr_path: str):
+        """Evict all cached planes for the given zarr_path."""
+        with self._lock:
+            keys_to_remove = self._path_keys.pop(zarr_path, set())
+            for k in keys_to_remove:
+                self._cache.pop(k, None)
 
 
 tile_cache = TileCache()
@@ -747,11 +761,11 @@ class PlanePrefetchEngine:
                 )
             return self._local_executor
 
-    def _on_done(self, plane_key: str, future) -> None:
+    def _on_done(self, plane_key: str, zarr_path: str, future) -> None:
         with self._lock:
             self._in_flight.discard(plane_key)
         try:
-            plane_cache.put(plane_key, future.result())
+            plane_cache.put(plane_key, future.result(), zarr_path=zarr_path)
             sys.stderr.write(f"[PlanePrefetch] stored key={plane_key[:8]}\n")
             sys.stderr.flush()
         except Exception as e:
@@ -810,7 +824,7 @@ class PlanePrefetchEngine:
                 fov_center_y, fov_center_x, fov_size,
                 indices_items, channels_json, has_c_axis,
             )
-            future.add_done_callback(lambda f, k=pf_key: self._on_done(k, f))
+            future.add_done_callback(lambda f, k=pf_key, zp=zarr_path: self._on_done(k, zp, f))
 
 
 plane_prefetch_engine = PlanePrefetchEngine()
@@ -1404,6 +1418,20 @@ class PlaneHandler(BaseHTTPRequestHandler):
                         chunks = list(layer.chunks)
                     except Exception:
                         chunks = []
+                    # Read per-level pixel sizes from zarr metadata
+                    try:
+                        level_scaledict = pyr.meta.get_scaledict(rp)
+                        level_unit_dict = pyr.meta.unit_dict
+                        level_scales = [
+                            {
+                                'axis': ax,
+                                'value': float(level_scaledict.get(ax, 1.0)),
+                                'unit': level_unit_dict.get(ax) or '',
+                            }
+                            for ax in pyr.meta.axis_order
+                        ]
+                    except Exception:
+                        level_scales = []
                     pyramid_layers.append({
                         'level': i,
                         'path': rp,
@@ -1411,6 +1439,7 @@ class PlaneHandler(BaseHTTPRequestHandler):
                         'dtype': str(layer.dtype),
                         'chunks': chunks,
                         'compression': _compressor_info(layer),
+                        'scales': level_scales,
                     })
 
                 base_layer = pyr.layers.get(resolution_paths[0]) if resolution_paths else None
@@ -1857,7 +1886,7 @@ class PlaneHandler(BaseHTTPRequestHandler):
                     f"[Plane] MISS rendered indices={sorted(indices.items())} in {_ms:.0f}ms\n"
                 )
                 sys.stderr.flush()
-                etag = plane_cache.put(plane_key, img_data)
+                etag = plane_cache.put(plane_key, img_data, zarr_path=zarr_path)
 
                 def _axis_size(ax: str) -> int:
                     idx = axes.index(ax)
@@ -1908,6 +1937,71 @@ class PlaneHandler(BaseHTTPRequestHandler):
                 self._write_safe(json.dumps({'error': str(e)}).encode())
             return
 
+        self.send_error(404, 'Not found')
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path == '/invalidate':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+                zarr_path = body.get('path', '')
+                if zarr_path:
+                    with pyramid_cache._lock:
+                        if zarr_path in pyramid_cache._cache:
+                            del pyramid_cache._cache[zarr_path]
+                    plane_cache.clear_path(zarr_path)
+                    sys.stderr.write(f"[Cache] Invalidated caches for {zarr_path}\n")
+                    sys.stderr.flush()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_cors_headers()
+                if not self._end_headers_safe(): return
+                self._write_safe(json.dumps({'ok': True}).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.send_cors_headers()
+                if not self._end_headers_safe(): return
+                self._write_safe(json.dumps({'error': str(e)}).encode())
+            return
+        if parsed.path == '/update_scales':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+                zarr_path = body.get('path', '')
+                scales = body.get('scales', [])  # [{axis, value, unit}, ...]
+                if not zarr_path or not scales:
+                    raise ValueError("path and scales are required")
+
+                from eubi_bridge.ngff.multiscales import Pyramid
+                pyr = Pyramid(gr=zarr_path)
+                scale_kwargs = {s['axis']: s['value'] for s in scales}
+                unit_kwargs  = {s['axis']: s['unit']  for s in scales}
+                pyr.update_scales(**scale_kwargs)
+                pyr.update_units(**unit_kwargs)
+                pyr.meta.save_changes()
+
+                # Invalidate caches so the next read reflects new values
+                with pyramid_cache._lock:
+                    if zarr_path in pyramid_cache._cache:
+                        del pyramid_cache._cache[zarr_path]
+                plane_cache.clear_path(zarr_path)
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_cors_headers()
+                if not self._end_headers_safe(): return
+                self._write_safe(json.dumps({'ok': True}).encode())
+            except Exception as e:
+                import traceback
+                sys.stderr.write(traceback.format_exc())
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.send_cors_headers()
+                if not self._end_headers_safe(): return
+                self._write_safe(json.dumps({'error': str(e)}).encode())
+            return
         self.send_error(404, 'Not found')
 
 

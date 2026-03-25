@@ -54,6 +54,7 @@ function SummaryRow({ icon: Icon, label, value, testId }: { icon: any; label: st
 export default function ConvertPage() {
   const {
     inputPath,
+    selectedInputPaths,
     outputPath,
     includePattern,
     excludePattern,
@@ -73,22 +74,26 @@ export default function ConvertPage() {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  const config = {
-    inputPath,
-    outputPath,
-    includePattern,
-    excludePattern,
-    concatenation,
-    cluster,
-    reader,
-    conversion,
-    downscaling,
-    metadata,
-  };
+  // When specific files are selected, pass them as inputPaths list (ignores include/exclude).
+  // Otherwise fall back to single inputPath + filters for directory/glob mode.
+  const config = selectedInputPaths.length > 0
+    ? {
+        inputPaths: selectedInputPaths,
+        outputPath,
+        concatenation, cluster, reader, conversion, downscaling, metadata,
+      }
+    : {
+        inputPath,
+        outputPath,
+        includePattern,
+        excludePattern,
+        concatenation, cluster, reader, conversion, downscaling, metadata,
+      };
 
   const handleStartConversion = async () => {
-    if (!inputPath) {
-      toast({ title: "Missing input path", description: "Please specify an input directory in the sidebar.", variant: "destructive" });
+    const hasInput = selectedInputPaths.length > 0 || !!inputPath;
+    if (!hasInput) {
+      toast({ title: "Missing input", description: "Select files or specify an input path in the sidebar.", variant: "destructive" });
       return;
     }
     if (!outputPath) {
@@ -381,7 +386,7 @@ export default function ConvertPage() {
                       <Button
                         data-testid="button-start-conversion"
                         onClick={handleStartConversion}
-                        disabled={!inputPath || !outputPath}
+                        disabled={(!inputPath && selectedInputPaths.length === 0) || !outputPath}
                         size="lg"
                       >
                         <Play className="h-4 w-4 mr-2" />

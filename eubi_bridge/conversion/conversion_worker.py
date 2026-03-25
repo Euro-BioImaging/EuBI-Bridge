@@ -386,7 +386,8 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             memory_limit_per_batch=kwargs.get('memory_limit_per_batch', 1024),
             verbose=kwargs.get('verbose', False),
             compressor=kwargs.get('compressor', 'blosc'),
-            compressor_params=kwargs.get('compressor_params', {})
+            compressor_params=kwargs.get('compressor_params', {}),
+            downscale_method=kwargs.get('downscale_method', 'simple'),
         )
 
         # Update channel metadata if needed

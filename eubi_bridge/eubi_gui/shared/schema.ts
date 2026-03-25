@@ -97,6 +97,7 @@ export const downscalingSettingsSchema = z.object({
   autoDetectLayers: z.boolean().default(true),
   numLayers: z.number().min(1).max(10).default(4),
   minDimSize: z.number().min(1).default(64),
+  downscaleMethod: z.enum(["simple", "mean", "median", "min", "max", "mode"]).default("simple"),
   scaleTime: z.number().min(1).default(1),
   scaleChannel: z.number().min(1).default(1),
   scaleZ: z.number().min(1).default(1),

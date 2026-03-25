@@ -81,7 +81,9 @@ def main():
 
         bridge = EuBIBridge()
 
-        input_path = config.get("inputPath", "")
+        # inputPaths (list) takes priority over single inputPath string
+        input_paths_list = config.get("inputPaths", [])
+        input_path = input_paths_list if input_paths_list else config.get("inputPath", "")
         output_path = config.get("outputPath", "")
         include_pattern = config.get("includePattern", "")
         exclude_pattern = config.get("excludePattern", "")
@@ -191,6 +193,7 @@ def main():
             "dtype": conv_config.get("dataType", "auto") if conv_config.get("dataType", "auto") != "auto" else "auto",
             "n_layers": None if downscale_config.get("autoDetectLayers", True) else downscale_config.get("numLayers", 4),
             "min_dimension_size": downscale_config.get("minDimSize", 64),
+            "downscale_method": downscale_config.get("downscaleMethod", "simple"),
             "time_scale_factor": downscale_config.get("scaleTime", 1),
             "channel_scale_factor": downscale_config.get("scaleChannel", 1),
             "z_scale_factor": downscale_config.get("scaleZ", 1),
@@ -259,7 +262,12 @@ def main():
         includes = glob_to_substring(include_pattern)
         excludes = glob_to_substring(exclude_pattern)
 
-        emit_json("log", message=f"Input: {input_path}")
+        if isinstance(input_path, list):
+            emit_json("log", message=f"Input: {len(input_path)} explicitly selected files")
+            for p in input_path:
+                emit_json("log", message=f"  {p}")
+        else:
+            emit_json("log", message=f"Input: {input_path}")
         emit_json("log", message=f"Output: {output_path}")
         if includes:
             emit_json("log", message=f"Include filter: {includes}")

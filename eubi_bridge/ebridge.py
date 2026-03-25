@@ -753,7 +753,8 @@ class EuBIBridge:
         
         # Pass merged_params to run_conversions
         # Stage 2 triage will happen in converter: CSV > merged_params
-        results = run_conversions(os.path.abspath(input_path),
+        _input_for_runner = input_path if isinstance(input_path, (list, tuple)) else os.path.abspath(input_path)
+        results = run_conversions(_input_for_runner,
                                   output_path,
                                   includes=includes,
                                   excludes=excludes,

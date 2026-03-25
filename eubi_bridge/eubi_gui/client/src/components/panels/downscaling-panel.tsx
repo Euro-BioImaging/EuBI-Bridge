@@ -3,6 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Layers } from "lucide-react";
 import { useConversionStore } from "@/lib/conversion-store";
 
@@ -20,6 +21,33 @@ export function DownscalingPanel() {
           Configure multi-resolution pyramid generation for efficient viewing.
         </p>
       </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium">Downscaling Method</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Algorithm used to compute each lower-resolution pyramid level.
+          </p>
+          <Select
+            value={downscaling.downscaleMethod}
+            onValueChange={(v) => setDownscaling({ downscaleMethod: v as typeof downscaling.downscaleMethod })}
+          >
+            <SelectTrigger data-testid="select-downscale-method">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="simple">Simple (stride / nearest)</SelectItem>
+              <SelectItem value="mean">Mean</SelectItem>
+              <SelectItem value="median">Median</SelectItem>
+              <SelectItem value="min">Min</SelectItem>
+              <SelectItem value="max">Max</SelectItem>
+              <SelectItem value="mode">Mode</SelectItem>
+            </SelectContent>
+          </Select>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card>

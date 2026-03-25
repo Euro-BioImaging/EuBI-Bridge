@@ -21,6 +21,9 @@ interface ConversionStore {
 
   inputPath: string;
   setInputPath: (path: string) => void;
+  selectedInputPaths: string[];
+  setSelectedInputPaths: (paths: string[]) => void;
+  toggleSelectedInputPath: (path: string) => void;
   outputPath: string;
   setOutputPath: (path: string) => void;
   includePattern: string;
@@ -69,6 +72,14 @@ export const useConversionStore = create<ConversionStore>((set) => ({
 
   inputPath: "",
   setInputPath: (inputPath) => set({ inputPath }),
+  selectedInputPaths: [],
+  setSelectedInputPaths: (selectedInputPaths) => set({ selectedInputPaths }),
+  toggleSelectedInputPath: (path) =>
+    set((s) => ({
+      selectedInputPaths: s.selectedInputPaths.includes(path)
+        ? s.selectedInputPaths.filter((p) => p !== path)
+        : [...s.selectedInputPaths, path],
+    })),
   outputPath: "",
   setOutputPath: (outputPath) => set({ outputPath }),
   includePattern: "",
@@ -158,6 +169,7 @@ export const useConversionStore = create<ConversionStore>((set) => ({
     autoDetectLayers: true,
     numLayers: 4,
     minDimSize: 64,
+    downscaleMethod: "simple" as const,
     scaleTime: 1,
     scaleChannel: 1,
     scaleZ: 1,

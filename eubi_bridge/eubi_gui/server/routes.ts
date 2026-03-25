@@ -98,6 +98,17 @@ function stopPlaneServer() {
   }
 }
 
+async function invalidatePlaneServerCache(zarrPath: string) {
+  if (!planeServerReady) return;
+  try {
+    await fetch(`http://127.0.0.1:${PLANE_SERVER_PORT}/invalidate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: zarrPath }),
+    });
+  } catch { /* best-effort */ }
+}
+
 async function proxyToPlaneServer(reqPath: string, res: any) {
   if (!planeServerReady) {
     return res.status(503).json({ error: "Plane server not ready" });
@@ -169,7 +180,8 @@ export async function registerRoutes(
   }
 
   const startConversionSchema = z.object({
-    inputPath: z.string().min(1),
+    inputPath: z.string().optional(),
+    inputPaths: z.array(z.string()).optional(),
     outputPath: z.string().min(1),
     includePattern: z.string().optional(),
     excludePattern: z.string().optional(),
@@ -361,10 +373,27 @@ export async function registerRoutes(
           } catch {
             modified = undefined;
           }
+          let isOmeZarr = false;
+          if (entry.isDirectory()) {
+            try {
+              const zattrsFile = path.join(fullPath, ".zattrs");
+              const zarrJsonFile = path.join(fullPath, "zarr.json");
+              if (fs.existsSync(zattrsFile)) {
+                const z = JSON.parse(fs.readFileSync(zattrsFile, "utf-8"));
+                isOmeZarr = Array.isArray(z?.multiscales) && z.multiscales.length > 0;
+              } else if (fs.existsSync(zarrJsonFile)) {
+                const z = JSON.parse(fs.readFileSync(zarrJsonFile, "utf-8"));
+                isOmeZarr =
+                  (Array.isArray(z?.attributes?.multiscales) && z.attributes.multiscales.length > 0) ||
+                  (Array.isArray(z?.attributes?.ome?.multiscales) && z.attributes.ome.multiscales.length > 0);
+              }
+            } catch { /* not an OME-Zarr */ }
+          }
           return {
             name: entry.name,
             path: fullPath,
             isDirectory: entry.isDirectory(),
+            isOmeZarr,
             size,
             modified,
           };
@@ -383,6 +412,143 @@ export async function registerRoutes(
     } catch (err: any) {
       res.status(500).json({ message: err.message || "Failed to list files" });
     }
+  });
+
+  // ── S3 / HTTP object-store listing ─────────────────────────────────────────
+  // Parses a ListObjectsV2 XML response and returns prefixes + file entries.
+  function parseS3Xml(xml: string): { prefixes: string[]; contents: { key: string; size: number }[] } {
+    const prefixes: string[] = [];
+    for (const m of xml.matchAll(/<CommonPrefixes>\s*<Prefix>([^<]+)<\/Prefix>/gs))
+      prefixes.push(m[1]);
+    const contents: { key: string; size: number }[] = [];
+    for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+      const key = m[1].match(/<Key>([^<]+)<\/Key>/)?.[1];
+      const size = parseInt(m[1].match(/<Size>(\d+)<\/Size>/)?.[1] ?? "0", 10);
+      if (key && !key.endsWith("/")) contents.push({ key, size });
+    }
+    return { prefixes, contents };
+  }
+
+  app.get("/api/s3/list", async (req, res) => {
+    const rawUrl = (req.query.url as string) || "";
+    if (!rawUrl) return res.status(400).json({ message: "url parameter required" });
+    try {
+      const parsed = new URL(rawUrl);
+      const endpoint = parsed.origin; // e.g. https://s3.embl.de
+      const pathParts = parsed.pathname.replace(/^\//, "").split("/").filter(Boolean);
+      if (pathParts.length === 0)
+        return res.status(400).json({ message: "URL must include at least a bucket name" });
+
+      const bucket = pathParts[0];
+      const prefixParts = pathParts.slice(1);
+      const prefix = prefixParts.length > 0 ? prefixParts.join("/") + "/" : "";
+
+      const listUrl = new URL(`${endpoint}/${bucket}`);
+      listUrl.searchParams.set("list-type", "2");
+      listUrl.searchParams.set("delimiter", "/");
+      if (prefix) listUrl.searchParams.set("prefix", prefix);
+
+      const listRes = await fetch(listUrl.toString(), { signal: AbortSignal.timeout(15000) });
+      if (!listRes.ok)
+        return res.status(listRes.status).json({ message: `S3 error: ${listRes.status} ${listRes.statusText}` });
+
+      const xml = await listRes.text();
+      const { prefixes: subPrefixes, contents } = parseS3Xml(xml);
+
+      const currentPath = `${endpoint}/${bucket}/${prefix}`;
+      const prefixTrimmed = prefix.replace(/\/$/, "");
+      const parentPrefix = prefixTrimmed.includes("/")
+        ? prefixTrimmed.split("/").slice(0, -1).join("/") + "/"
+        : "";
+      const parentPath = prefixTrimmed
+        ? `${endpoint}/${bucket}/${parentPrefix}`
+        : currentPath;
+
+      // ── OME-Zarr detection ─────────────────────────────────────────────────
+      // 1. Name heuristic (free): ends with .zarr / .ome.zarr
+      // 2. Metadata probe (network): fetch .zattrs or zarr.json and check for
+      //    a "multiscales" key — handles arbitrarily named zarr stores.
+      //    Probes run with a concurrency cap of 3 so they don't saturate the
+      //    S3 connection pool while the viewer is also fetching chunks.
+      const probeOmeZarr = async (itemPath: string): Promise<boolean> => {
+        // itemPath ends with "/"; try .zattrs and zarr.json at that level
+        for (const fname of [".zattrs", "zarr.json"]) {
+          try {
+            const r = await fetch(`${itemPath}${fname}`, {
+              signal: AbortSignal.timeout(2000),
+            });
+            if (!r.ok) continue;
+            const j = await r.json().catch(() => null);
+            if (!j) continue;
+            // zarr v2 (.zattrs):          { multiscales: [...] }
+            // zarr v3 early draft:         { attributes: { multiscales: [...] } }
+            // OME-NGFF 0.5 / zarr v3:     { attributes: { ome: { multiscales: [...] } } }
+            if (Array.isArray(j?.multiscales) && j.multiscales.length > 0) return true;
+            if (Array.isArray(j?.attributes?.multiscales) && j.attributes.multiscales.length > 0) return true;
+            if (Array.isArray(j?.attributes?.ome?.multiscales) && j.attributes.ome.multiscales.length > 0) return true;
+          } catch { /* timeout or network error */ }
+        }
+        return false;
+      }
+
+      // Worker-pool concurrency limiter (no external deps)
+      const mapWithLimit = async <T, R>(
+        items: T[],
+        fn: (item: T) => Promise<R>,
+        limit: number,
+      ): Promise<R[]> => {
+        const results: R[] = new Array(items.length);
+        let idx = 0;
+        const worker = async () => {
+          while (idx < items.length) {
+            const i = idx++;
+            results[i] = await fn(items[i]);
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+        return results;
+      };
+
+      const candidates = subPrefixes
+        .filter((p) => p !== prefix)
+        .map((p) => ({
+          name: p.slice(prefix.length).replace(/\/$/, ""),
+          path: `${endpoint}/${bucket}/${p}`,
+        }));
+
+      // Probe every folder — name convention alone is unreliable.
+      const dirItems = await mapWithLimit(
+        candidates,
+        async ({ name, path: itemPath }) => ({
+          name,
+          path: itemPath,
+          isDirectory: true,
+          isOmeZarr: await probeOmeZarr(itemPath),
+        }),
+        3, // max 3 concurrent S3 metadata probes
+      );
+
+      const fileItems = contents.map(({ key, size }) => ({
+        name: key.split("/").pop() || key,
+        path: `${endpoint}/${bucket}/${key}`,
+        isDirectory: false,
+        isOmeZarr: false,
+        size,
+      }));
+
+      const items = [
+        ...dirItems.sort((a, b) => a.name.localeCompare(b.name)),
+        ...fileItems.sort((a, b) => a.name.localeCompare(b.name)),
+      ];
+
+      res.json({ currentPath, parentPath, items });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to list S3 path" });
+    }
+  });
+
+  app.get("/api/system/memory", (_req, res) => {
+    res.json({ totalMb: Math.round(os.totalmem() / (1024 * 1024)) });
   });
 
   app.get("/api/zarr/port", (_req, res) => {
@@ -659,10 +825,23 @@ export async function registerRoutes(
 
   app.post("/api/zarr/metadata/update", async (req, res) => {
     const { path: zarrPath, scales } = req.body;
-    if (!zarrPath || !scales) {
-      return res.status(400).json({ message: "Path and scales are required" });
+    if (!zarrPath || !scales || !Array.isArray(scales)) {
+      return res.status(400).json({ message: "Path and scales array are required" });
     }
-    res.json({ success: true, message: "Metadata updated successfully" });
+    try {
+      const response = await fetch(`http://127.0.0.1:${PLANE_SERVER_PORT}/update_scales`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: zarrPath, scales }),
+      });
+      const result = await response.json() as any;
+      if (!response.ok) {
+        return res.status(500).json({ message: result.error || "Failed to update metadata" });
+      }
+      res.json({ success: true, message: "Metadata updated successfully" });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to update metadata" });
+    }
   });
 
   app.post("/api/zarr/channels/update", async (req, res) => {
@@ -722,6 +901,7 @@ export async function registerRoutes(
         fs.writeFileSync(zattrsPath, JSON.stringify(zattrs, null, 2));
       }
 
+      await invalidatePlaneServerCache(zarrPath);
       res.json({ success: true, message: "Channel metadata updated" });
     } catch (err: any) {
       res.status(500).json({ message: err.message || "Failed to update channel metadata" });

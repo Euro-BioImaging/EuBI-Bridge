@@ -1106,8 +1106,10 @@ class Pyramid:
 
     @property
     def scale_factor_dict(self):
-        shapes = [self.layers[key].shape for key in self.meta.resolution_paths]
-        scale_factors = np.divide(shapes[0], shapes)
+        existing = [self.meta.get_scale(pth) for pth in self.meta.resolution_paths]
+        base = np.array(existing[0], dtype=float)
+        safe_base = np.where(base != 0, base, 1.0)
+        scale_factors = np.array([np.divide(np.array(s, dtype=float), safe_base) for s in existing])
         scale_factor_list = scale_factors.tolist()
         scale_factor_list = [dict(zip(self.meta.axis_order, scale))
                              for scale in scale_factor_list]
@@ -1200,8 +1202,10 @@ class Pyramid:
                 new_scaledict[ax] = kwargs.get(ax)
         new_scale = [new_scaledict[ax] for ax in self.meta.axis_order]
         ###
-        shapes = [self.layers[key].shape for key in self.meta.resolution_paths]
-        scale_factors = np.divide(shapes[0], shapes)
+        existing = [self.meta.get_scale(pth) for pth in self.meta.resolution_paths]
+        base = np.array(existing[0], dtype=float)
+        safe_base = np.where(base != 0, base, 1.0)
+        scale_factors = np.array([np.divide(np.array(s, dtype=float), safe_base) for s in existing])
         scale_factordict = {pth: scale
                             for pth, scale in
                             zip(self.meta.resolution_paths, scale_factors.tolist())}

@@ -13,7 +13,6 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
   ArrowRightLeft,
@@ -24,26 +23,26 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { useConversionStore } from "@/lib/conversion-store";
-import { FileBrowser } from "@/components/file-browser";
 import { ConfigPanel } from "@/components/config-panel";
+import { ZarrSidebarBrowser } from "@/components/zarr-sidebar-browser";
+import { ConversionSidebarBrowser } from "@/components/conversion-sidebar-browser";
 
 export function AppSidebar() {
   const [location] = useLocation();
   const {
     mode, setMode,
     inputPath, setInputPath,
+    selectedInputPaths, setSelectedInputPaths, toggleSelectedInputPath,
     outputPath, setOutputPath,
     includePattern, setIncludePattern,
     excludePattern, setExcludePattern,
-    inspectPath, setInspectPath,
   } = useConversionStore();
 
-  const [inputBrowseOpen, setInputBrowseOpen] = useState(false);
-  const [outputBrowseOpen, setOutputBrowseOpen] = useState(false);
-  const [inspectBrowseOpen, setInspectBrowseOpen] = useState(false);
+  type BrowsePanel = "input" | "output" | null;
+  const [browsePanel, setBrowsePanel] = useState<BrowsePanel>(null);
 
-  const isConvert = mode === "convert" || location === "/";
-  const isInspect = mode === "inspect" || location === "/inspect";
+  const isConvert = mode === "convert";
+  const isInspect = mode === "inspect";
 
   return (
     <Sidebar>
@@ -92,92 +91,119 @@ export function AppSidebar() {
         </SidebarGroup>
 
         {isConvert && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Input / Output</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <div className="space-y-3 px-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs flex items-center gap-1.5 text-sidebar-foreground/70">
-                    <FolderInput className="h-3 w-3" />
-                    Input Path
-                  </Label>
-                  <div className="flex gap-1">
+          <>
+            {/* ── Input section ──────────────────────────────────────────── */}
+            <SidebarGroup className={browsePanel === "input" ? "flex-1 min-h-0 overflow-hidden" : ""}>
+              <SidebarGroupLabel>
+                <span className="flex items-center gap-1.5 flex-1">
+                  <FolderInput className="h-3 w-3" />
+                  Input Path
+                </span>
+                <Button
+                  variant="ghost" size="icon"
+                  className={`h-5 w-5 ${browsePanel === "input" ? "text-primary" : ""}`}
+                  onClick={() => setBrowsePanel(browsePanel === "input" ? null : "input")}
+                  data-testid="button-browse-input"
+                  title={browsePanel === "input" ? "Close browser" : "Browse"}
+                >
+                  <FolderOpen className="h-3 w-3" />
+                </Button>
+              </SidebarGroupLabel>
+              <SidebarGroupContent className={browsePanel === "input" ? "h-[calc(100svh-320px)]" : ""}>
+                <div className="px-2">
+                  {selectedInputPaths.length > 0 ? (
+                    <div className="flex items-center gap-1 h-7 px-2 rounded-md bg-primary/10 border border-primary/20 text-xs">
+                      <span className="text-primary flex-1 font-medium">
+                        {selectedInputPaths.length} file{selectedInputPaths.length !== 1 ? "s" : ""} selected
+                      </span>
+                      <button
+                        type="button"
+                        className="text-primary/60 hover:text-primary transition-colors"
+                        onClick={() => setSelectedInputPaths([])}
+                        title="Clear selection"
+                      >✕</button>
+                    </div>
+                  ) : (
                     <Input
                       data-testid="input-input-path"
                       value={inputPath}
                       onChange={(e) => setInputPath(e.target.value)}
-                      placeholder="/path/to/input"
-                      className="h-8 text-xs bg-sidebar-accent/50"
+                      placeholder="/path/to/input or directory"
+                      className="h-7 text-xs bg-sidebar-accent/50"
                     />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0"
-                      onClick={() => setInputBrowseOpen(true)}
-                      data-testid="button-browse-input"
-                    >
-                      <FolderOpen className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
+                  )}
                 </div>
+                {browsePanel === "input" && (
+                  <div className="mt-1.5 h-full">
+                    <ConversionSidebarBrowser
+                      initialPath={inputPath || undefined}
+                      onSelect={(p) => { setInputPath(p); setSelectedInputPaths([]); setBrowsePanel(null); }}
+                      onSelectMultiple={(paths) => { setSelectedInputPaths(paths); setBrowsePanel(null); }}
+                      selectedPaths={selectedInputPaths}
+                      onTogglePath={toggleSelectedInputPath}
+                      showFilters={true}
+                      includePattern={includePattern}
+                      excludePattern={excludePattern}
+                      onIncludePatternChange={setIncludePattern}
+                      onExcludePatternChange={setExcludePattern}
+                    />
+                  </div>
+                )}
+              </SidebarGroupContent>
+            </SidebarGroup>
 
-                <div className="space-y-1.5">
-                  <Label className="text-xs flex items-center gap-1.5 text-sidebar-foreground/70">
+            {/* ── Output section ─────────────────────────────────────────── */}
+            {browsePanel !== "input" && (
+              <SidebarGroup className={browsePanel === "output" ? "flex-1 min-h-0 overflow-hidden" : ""}>
+                <SidebarGroupLabel>
+                  <span className="flex items-center gap-1.5 flex-1">
                     <FolderOutput className="h-3 w-3" />
                     Output Path
-                  </Label>
-                  <div className="flex gap-1">
+                  </span>
+                  <Button
+                    variant="ghost" size="icon"
+                    className={`h-5 w-5 ${browsePanel === "output" ? "text-primary" : ""}`}
+                    onClick={() => setBrowsePanel(browsePanel === "output" ? null : "output")}
+                    data-testid="button-browse-output"
+                    title={browsePanel === "output" ? "Close browser" : "Browse"}
+                  >
+                    <FolderOpen className="h-3 w-3" />
+                  </Button>
+                </SidebarGroupLabel>
+                <SidebarGroupContent className={browsePanel === "output" ? "h-[calc(100svh-280px)]" : ""}>
+                  <div className="px-2">
                     <Input
                       data-testid="input-output-path"
                       value={outputPath}
                       onChange={(e) => setOutputPath(e.target.value)}
                       placeholder="/path/to/output"
-                      className="h-8 text-xs bg-sidebar-accent/50"
+                      className="h-7 text-xs bg-sidebar-accent/50"
                     />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0"
-                      onClick={() => setOutputBrowseOpen(true)}
-                      data-testid="button-browse-output"
-                    >
-                      <FolderOpen className="h-3.5 w-3.5" />
-                    </Button>
                   </div>
-                </div>
-              </div>
-            </SidebarGroupContent>
-          </SidebarGroup>
+                  {browsePanel === "output" && (
+                    <div className="mt-1.5 h-full">
+                      <ConversionSidebarBrowser
+                        initialPath={outputPath || undefined}
+                        onSelect={(p) => { setOutputPath(p); setBrowsePanel(null); }}
+                        selectDirOnly={true}
+                      />
+                    </div>
+                  )}
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
+          </>
         )}
 
         {isInspect && (
-          <SidebarGroup>
-            <SidebarGroupLabel>OME-Zarr Path</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <div className="space-y-1.5 px-2">
-                <div className="flex gap-1">
-                  <Input
-                    data-testid="input-inspect-path"
-                    value={inspectPath}
-                    onChange={(e) => setInspectPath(e.target.value)}
-                    placeholder="/path/to/zarr"
-                    className="h-8 text-xs bg-sidebar-accent/50"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0"
-                    onClick={() => setInspectBrowseOpen(true)}
-                    data-testid="button-browse-inspect"
-                  >
-                    <FolderOpen className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
+          <SidebarGroup className="flex-1 min-h-0 overflow-hidden flex flex-col">
+            <SidebarGroupLabel>Browse Files</SidebarGroupLabel>
+            <SidebarGroupContent className="flex-1 min-h-0 overflow-hidden">
+              <ZarrSidebarBrowser />
             </SidebarGroupContent>
           </SidebarGroup>
         )}
-        <ConfigPanel />
+        {isConvert && browsePanel === null && <ConfigPanel />}
       </SidebarContent>
       <SidebarFooter className="p-4">
         <div className="flex items-center gap-2">
@@ -190,37 +216,6 @@ export function AppSidebar() {
           <span className="text-xs text-muted-foreground">Euro-BioImaging</span>
         </div>
       </SidebarFooter>
-
-      <FileBrowser
-        open={inputBrowseOpen}
-        onOpenChange={setInputBrowseOpen}
-        onSelect={setInputPath}
-        title="Select Input Directory"
-        selectMode="directory"
-        initialPath={inputPath || undefined}
-        showFilters={true}
-        includePattern={includePattern}
-        excludePattern={excludePattern}
-        onIncludePatternChange={setIncludePattern}
-        onExcludePatternChange={setExcludePattern}
-      />
-      <FileBrowser
-        open={outputBrowseOpen}
-        onOpenChange={setOutputBrowseOpen}
-        onSelect={setOutputPath}
-        title="Select Output Directory"
-        selectMode="directory"
-        allowCreate={true}
-        initialPath={outputPath || undefined}
-      />
-      <FileBrowser
-        open={inspectBrowseOpen}
-        onOpenChange={setInspectBrowseOpen}
-        onSelect={setInspectPath}
-        title="Select OME-Zarr Directory"
-        selectMode="directory"
-        initialPath={inspectPath || undefined}
-      />
     </Sidebar>
   );
 }

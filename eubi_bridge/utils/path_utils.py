@@ -276,27 +276,48 @@ def take_filepaths_from_path(
 
 
 def take_filepaths(
-    input_path: Union[str, os.PathLike],
+    input_path: Union[str, os.PathLike, list, tuple],
     **global_kwargs,
 ) -> pd.DataFrame:
-    """Load file paths into a DataFrame, from directory, files, or CSV/Excel table.
-    
+    """Load file paths into a DataFrame, from directory, files, CSV/Excel table,
+    or an explicit list of paths (e.g. from GUI multi-select).
+
     Handles multiple input types:
+    - List/tuple of paths: Used directly, no globbing or filtering applied
     - Directory path: Finds all files
     - File glob pattern: Matches files
     - CSV/XLSX table: Reads table with 'input_path' column
-    
+
     Args:
-        input_path: Directory, file, glob pattern, or table path
+        input_path: Directory, file, glob pattern, table path,
+                    or list/tuple of explicit file paths
         **global_kwargs: Include/exclude filters, column defaults
-    
+
     Returns:
         DataFrame with 'input_path' column and any additional columns from kwargs
-    
+
     Raises:
         ValueError: If input is invalid or no paths found
         Exception: If conflicting parameters provided
     """
+    # ── Explicit list of paths (GUI multi-select or programmatic use) ──────────
+    if isinstance(input_path, (list, tuple)):
+        fps = [str(p) for p in input_path if p]
+        if not fps:
+            raise ValueError("Empty list of input paths provided.")
+        df = pd.DataFrame({'input_path': fps})
+        output_path = global_kwargs.get('output_path', None)
+        if output_path is not None:
+            df['output_path'] = str(output_path)
+        # Propagate any extra kwargs as DataFrame columns (mirrors table-input behaviour)
+        for k, v in global_kwargs.items():
+            if k not in ('output_path', 'includes', 'excludes') and k not in df.columns:
+                if hasattr(v, '__len__') and not isinstance(v, str):
+                    df[k] = [v for _ in range(len(df))]
+                else:
+                    df[k] = v
+        return df
+
     # Normalize include/exclude parameters
     if 'includes' in global_kwargs:
         if global_kwargs['includes'] is None:
