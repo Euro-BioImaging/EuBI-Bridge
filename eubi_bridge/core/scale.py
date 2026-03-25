@@ -1,7 +1,10 @@
 import asyncio
 import dataclasses
+import itertools
 import os.path
-from typing import Union, Optional, Dict, Any
+from fractions import Fraction
+from math import gcd, lcm
+from typing import Union, Optional, Dict, Any, List
 
 import dask.array as da
 import numpy as np
@@ -114,12 +117,100 @@ async def ts_downscale(arr: Union[zarr.Array, str],
                          [int(np.round(factor)) for factor in scale_factor],
                          method=ts_method)  # type: ignore[arg-type]
 
+SPATIAL_AXES = {'z', 'y', 'x'}
+_SMART_DEFAULT_MAX_FACTOR = 16
+_SMART_DEFAULT_TOLERANCE = 0.10
+
+
+def compute_isotropic_scale_factors(
+    pixel_sizes: dict,
+    axes: str,
+    max_factor: int = _SMART_DEFAULT_MAX_FACTOR,
+    tolerance: float = _SMART_DEFAULT_TOLERANCE,
+) -> dict:
+    """Compute integer scale factors that bring spatial axes to near-isotropy.
+
+    Parameters
+    ----------
+    pixel_sizes : dict
+        Physical pixel size per axis, e.g. {'t': 1.0, 'z': 0.5, 'y': 0.1, 'x': 0.1}.
+    axes : str
+        Axis order string, e.g. 'tczyx'.
+    max_factor : int
+        Maximum allowed scale factor per spatial axis (default 16).
+    tolerance : float
+        Acceptable residual anisotropy: max/min - 1 (default 0.10 = 10%).
+
+    Returns
+    -------
+    dict
+        Integer scale factor per axis, e.g. {'t': 1, 'c': 1, 'z': 1, 'y': 5, 'x': 5}.
+        Non-spatial axes always get factor 1.
+    """
+    result = {ax: 1 for ax in axes}
+
+    spatial = [ax for ax in axes if ax in SPATIAL_AXES and ax in pixel_sizes and pixel_sizes[ax] > 0]
+    if len(spatial) < 2:
+        return result  # 0 or 1 spatial axis: already trivially isotropic
+
+    ps = [float(pixel_sizes[ax]) for ax in spatial]
+
+    # Fast path: already isotropic within tolerance
+    if max(ps) / min(ps) - 1 <= tolerance / 10:
+        return result
+
+    # ── Step 1: exact LCM approach via rational arithmetic ─────────────────
+    fracs = [Fraction(p).limit_denominator(1000) for p in ps]
+    num_lcm = fracs[0].numerator
+    den_gcd = fracs[0].denominator
+    for f in fracs[1:]:
+        num_lcm = lcm(num_lcm, f.numerator)
+        den_gcd = gcd(den_gcd, f.denominator)
+    target = num_lcm / den_gcd
+    exact_factors = [max(1, round(target / float(f))) for f in fracs]
+
+    if all(1 <= s <= max_factor for s in exact_factors):
+        result_sizes = [ps[i] * exact_factors[i] for i in range(len(ps))]
+        if max(result_sizes) / min(result_sizes) - 1 <= tolerance:
+            for ax, s in zip(spatial, exact_factors):
+                result[ax] = int(s)
+            logger.info(
+                f"[smart_downscale] LCM approach: factors={dict(zip(spatial, exact_factors))}, "
+                f"result_sizes={dict(zip(spatial, result_sizes))}"
+            )
+            return result
+
+    # ── Step 2: brute-force search over [1..max_factor]^N ─────────────────
+    best_factors = [1] * len(spatial)
+    best_aniso = float('inf')
+
+    for combo in itertools.product(range(1, max_factor + 1), repeat=len(spatial)):
+        result_sizes = [ps[i] * combo[i] for i in range(len(ps))]
+        aniso = max(result_sizes) / min(result_sizes) - 1
+        if aniso < best_aniso:
+            best_aniso = aniso
+            best_factors = list(combo)
+            if aniso <= tolerance:
+                break  # good enough, stop early
+
+    for ax, s in zip(spatial, best_factors):
+        result[ax] = int(s)
+
+    result_sizes = [ps[i] * best_factors[i] for i in range(len(ps))]
+    logger.info(
+        f"[smart_downscale] brute-force: factors={dict(zip(spatial, best_factors))}, "
+        f"result_sizes={dict(zip(spatial, result_sizes))}, anisotropy={best_aniso:.3f}"
+    )
+    return result
+
+
 @dataclasses.dataclass
 class DownscaleManager:
     base_shape: Union[list, tuple]
     scale_factor: Union[list, tuple]
     n_layers: Union[list, tuple]
     scale: Union[list, tuple] = None
+    smart_scale_factor: Union[list, tuple] = None  # isotropic first-level factors
 
     def __post_init__(self):
         ndim = len(self.base_shape)
@@ -131,7 +222,18 @@ class DownscaleManager:
 
     @property
     def _theoretical_scale_factors(self):
-        return np.power(self.scale_factor, self._scale_ids)
+        if self.smart_scale_factor is None:
+            return np.power(self.scale_factor, self._scale_ids)
+        # Two-phase: level 1 = smart_factor; levels 2+ = smart_factor * user_factor^(k-1)
+        n = self.n_layers
+        ndim = len(self.base_shape)
+        smart = np.array(self.smart_scale_factor, dtype=float)
+        user = np.array(self.scale_factor, dtype=float)
+        result = np.zeros((n, ndim))
+        result[0] = 1.0
+        for k in range(1, n):
+            result[k] = smart * np.power(user, k - 1)
+        return result
 
     @property
     def output_shapes(self): # TODO: parameterize this for floor or ceil
@@ -160,6 +262,7 @@ class Downscaler:
     output_chunks: Union[list, tuple] = None
     backend: str = 'numpy'
     downscale_method: str = 'simple'
+    smart_scale_factor: Union[list, tuple] = None  # isotropic first-level factors
     
     def get_tensorstore_context(self) -> Optional[Dict[str, Any]]:
         """
@@ -233,7 +336,7 @@ class Downscaler:
         else:
             self.base_array_root = None
 
-        self.param_names = ['array', 'scale_factor', 'n_layers', 'scale', 'output_chunks', 'backend', 'downscale_method']
+        self.param_names = ['array', 'scale_factor', 'n_layers', 'scale', 'output_chunks', 'backend', 'downscale_method', 'smart_scale_factor']
         # self.update()
 
     def get_method(self):
@@ -257,7 +360,8 @@ class Downscaler:
         self.dm = DownscaleManager(self.array.shape,
                                    self.scale_factor,
                                    self.n_layers,
-                                   self.scale
+                                   self.scale,
+                                   smart_scale_factor=self.smart_scale_factor,
                                    )
 
         downscaled = {}

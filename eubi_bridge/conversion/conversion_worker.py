@@ -205,6 +205,62 @@ def parse_scale_factors(manager: ArrayManager, **kwargs) -> Tuple:
     return _parse_axis_params(manager, kwargs, 3, DEFAULT_SCALE_FACTORS)
 
 
+def parse_smart_scale_factors(manager: ArrayManager, **kwargs) -> Optional[Tuple]:
+    """Compute smart (isotropic) scale factors for the first pyramid level.
+
+    Returns None when smart downscaling is disabled. Otherwise auto-computes
+    per-axis scale factors from the image's physical pixel sizes, then applies
+    any per-axis overrides supplied via kwargs
+    (``z_smart_scale_factor``, ``y_smart_scale_factor``, ``x_smart_scale_factor``,
+    ``time_smart_scale_factor``).
+
+    Parameters
+    ----------
+    manager : ArrayManager
+    **kwargs :
+        Must contain ``apply_smart_downscaling`` (bool). Optionally contains
+        per-axis override keys.
+
+    Returns
+    -------
+    tuple or None
+        Integer scale factors in ``manager.axes`` order, or None.
+    """
+    if not kwargs.get('apply_smart_downscaling', False):
+        return None
+
+    from eubi_bridge.core.scale import compute_isotropic_scale_factors
+
+    actual_scales = parse_scales(manager, **kwargs)
+    axes = manager.axes
+    scaledict = dict(zip(axes, actual_scales))
+
+    auto_factors = compute_isotropic_scale_factors(
+        pixel_sizes=scaledict,
+        axes=axes,
+    )
+
+    # Per-axis override map (kwarg name → axis)
+    override_map = {
+        'time_smart_scale_factor': 't',
+        'channel_smart_scale_factor': 'c',
+        'z_smart_scale_factor': 'z',
+        'y_smart_scale_factor': 'y',
+        'x_smart_scale_factor': 'x',
+    }
+    for kwarg_name, axis in override_map.items():
+        val = kwargs.get(kwarg_name)
+        if val is not None:
+            try:
+                auto_factors[axis] = max(1, int(val))
+            except (ValueError, TypeError):
+                pass
+
+    result = tuple(auto_factors.get(ax, 1) for ax in axes)
+    logger.info(f"[smart_downscale] axes={axes}, smart_scale_factor={result}")
+    return result
+
+
 def parse_units(manager: ArrayManager, **kwargs) -> Tuple:
     """Parse unit values for each axis (excluding channel).
     
@@ -353,6 +409,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         await _prepare_manager(manager, kwargs)
 
         scale_factors = parse_scale_factors(manager, **kwargs)
+        smart_scale_factor = parse_smart_scale_factors(manager, **kwargs)
 
         # Store multiscale data
         channel_meta = parse_channels(
@@ -379,6 +436,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             n_layers=kwargs.get('n_layers', 3),
             min_dimension_size=kwargs.get('min_dimension_size', 64),
             scale_factors=parse_scale_factors(manager, **kwargs),
+            smart_scale_factor=smart_scale_factor,
             max_concurrency=kwargs.get('max_concurrency', 4),
             region_size_mb=kwargs.get('region_size_mb', 128),
             compute_batch_size=kwargs.get('compute_batch_size', 4),

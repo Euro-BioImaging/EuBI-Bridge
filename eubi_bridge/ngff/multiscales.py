@@ -1202,13 +1202,21 @@ class Pyramid:
                 new_scaledict[ax] = kwargs.get(ax)
         new_scale = [new_scaledict[ax] for ax in self.meta.axis_order]
         ###
-        existing = [self.meta.get_scale(pth) for pth in self.meta.resolution_paths]
-        base = np.array(existing[0], dtype=float)
-        safe_base = np.where(base != 0, base, 1.0)
-        scale_factors = np.array([np.divide(np.array(s, dtype=float), safe_base) for s in existing])
-        scale_factordict = {pth: scale
-                            for pth, scale in
-                            zip(self.meta.resolution_paths, scale_factors.tolist())}
+        try:
+            existing = [self.meta.get_scale(pth) for pth in self.meta.resolution_paths]
+            base = np.array(existing[0], dtype=float)
+            safe_base = np.where(base != 0, base, 1.0)
+            scale_factors = np.array([np.divide(np.array(s, dtype=float), safe_base) for s in existing])
+            scale_factordict = {pth: scale
+                                for pth, scale in
+                                zip(self.meta.resolution_paths, scale_factors.tolist())}
+        except Exception:
+            # Fallback when stored metadata is incomplete or missing (e.g. pre-conversion input)
+            shapes = [self.layers[key].shape for key in self.meta.resolution_paths]
+            raw_factors = np.divide(shapes[0], shapes)
+            scale_factordict = {pth: scale
+                                for pth, scale in
+                                zip(self.meta.resolution_paths, raw_factors.tolist())}
         self.meta.update_scales(reference_scale=new_scale,
                                 scale_factors=scale_factordict,
                                 )
@@ -1290,6 +1298,7 @@ class Pyramid:
                           n_layers=1,
                           downscale_method='simple',
                           backend='numpy',
+                          smart_scale_factor=None,
                           **kwargs
                           ):
         min_dimension_size = kwargs.get('min_dimension_size', 64)
@@ -1307,7 +1316,8 @@ class Pyramid:
                                      n_layers=n_layers,
                                      scale=scale,
                                      downscale_method=downscale_method,
-                                     backend=backend
+                                     backend=backend,
+                                     smart_scale_factor=smart_scale_factor,
                                      )
         await self.downscaler.update()
         return self

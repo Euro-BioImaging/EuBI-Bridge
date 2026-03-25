@@ -103,6 +103,11 @@ export const downscalingSettingsSchema = z.object({
   scaleZ: z.number().min(1).default(1),
   scaleY: z.number().min(1).default(2),
   scaleX: z.number().min(1).default(2),
+  applySmartDownscaling: z.boolean().default(false),
+  smartScaleZ: z.number().min(1).nullable().default(null),
+  smartScaleY: z.number().min(1).nullable().default(null),
+  smartScaleX: z.number().min(1).nullable().default(null),
+  smartScaleTime: z.number().min(1).nullable().default(null),
 });
 
 export const metadataSettingsSchema = z.object({

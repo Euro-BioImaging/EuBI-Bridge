@@ -199,6 +199,11 @@ def main():
             "z_scale_factor": downscale_config.get("scaleZ", 1),
             "y_scale_factor": downscale_config.get("scaleY", 2),
             "x_scale_factor": downscale_config.get("scaleX", 2),
+            "apply_smart_downscaling": downscale_config.get("applySmartDownscaling", False),
+            "z_smart_scale_factor": downscale_config.get("smartScaleZ") or None,
+            "y_smart_scale_factor": downscale_config.get("smartScaleY") or None,
+            "x_smart_scale_factor": downscale_config.get("smartScaleX") or None,
+            "time_smart_scale_factor": downscale_config.get("smartScaleTime") or None,
             "compressor": compressor,
             "compressor_params": compressor_params,
         }

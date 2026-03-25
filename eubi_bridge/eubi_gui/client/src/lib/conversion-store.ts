@@ -175,6 +175,11 @@ export const useConversionStore = create<ConversionStore>((set) => ({
     scaleZ: 1,
     scaleY: 2,
     scaleX: 2,
+    applySmartDownscaling: false,
+    smartScaleZ: null as number | null,
+    smartScaleY: null as number | null,
+    smartScaleX: null as number | null,
+    smartScaleTime: null as number | null,
   },
   setDownscaling: (settings) =>
     set((state) => ({ downscaling: { ...state.downscaling, ...settings } })),

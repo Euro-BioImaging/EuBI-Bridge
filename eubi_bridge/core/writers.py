@@ -642,6 +642,7 @@ async def downscale_with_tensorstore_async(
         n_layers,
         downscale_method='simple',
         min_dimension_size = None,
+        smart_scale_factor = None,
         **kwargs
     ):
     try:
@@ -666,11 +667,12 @@ async def downscale_with_tensorstore_async(
     # min_dimension_size = kwargs.get('min_dimension_size', None)
     # scale_factor = [scale_factor_dict[ax] for ax in pyr.meta.axis_order]
     
-    logger.info(f"Updating downscaler with scale_factor={scale_factor}, n_layers={n_layers}")
+    logger.info(f"Updating downscaler with scale_factor={scale_factor}, n_layers={n_layers}, smart_scale_factor={smart_scale_factor}")
     await pyr.update_downscaler(scale_factor=scale_factor,
                           n_layers=n_layers,
                           downscale_method=downscale_method,
                           min_dimension_size=min_dimension_size,
+                          smart_scale_factor=smart_scale_factor,
                           use_tensorstore=True
                           )
     
@@ -1390,6 +1392,7 @@ async def store_multiscale_async(
     n_layers = None,
     min_dimension_size = None,
     downscale_method='simple',
+    smart_scale_factor: Optional[Tuple[int, ...]] = None,
     ### queue-based writer params
     num_readers: Optional[int] = None,      # Number of reader threads (default: 2 * max_concurrency)
     max_concurrency: Optional[int] = None,      # Number of writer threads (default: 4)
@@ -1526,6 +1529,7 @@ async def store_multiscale_async(
                 n_layers=n_layers,
                 min_dimension_size=min_dimension_size,
                 downscale_method=downscale_method,
+                smart_scale_factor=smart_scale_factor,
                 chunks=chunks,
                 shards=shards,
                 max_concurrency=max_concurrency,
