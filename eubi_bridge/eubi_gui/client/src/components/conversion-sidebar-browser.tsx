@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,10 +12,13 @@ import {
   Loader2,
   AlertCircle,
   ChevronRight,
+  ChevronLeft,
   Check,
   ListChecks,
   X,
 } from "lucide-react";
+
+const PAGE_SIZE = 50;
 
 interface FileEntry {
   name: string;
@@ -71,6 +74,7 @@ export function ConversionSidebarBrowser({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState("");
+  const [page, setPage] = useState(0);
   const inputEditingRef = useRef(false);
 
   const multiSelectEnabled = !!onSelectMultiple && !!onTogglePath && !selectDirOnly;
@@ -91,6 +95,7 @@ export function ConversionSidebarBrowser({
       }
       const result: BrowserData = await res.json();
       setData(result);
+      setPage(0);
       if (!inputEditingRef.current) setInputValue(result.currentPath);
     } catch (e: any) {
       setError(e.message || "Failed to load");
@@ -124,6 +129,13 @@ export function ConversionSidebarBrowser({
 
   const dirs = data?.items.filter((i) => i.isDirectory) ?? [];
   const files = selectDirOnly ? [] : (data?.items.filter((i) => !i.isDirectory) ?? []);
+
+  const allItems = useMemo(() => [...dirs, ...files], [dirs, files]);
+  const totalPages = Math.max(1, Math.ceil(allItems.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageItems = allItems.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+  const pageDirs = pageItems.filter((i) => i.isDirectory);
+  const pageFiles = pageItems.filter((i) => !i.isDirectory);
 
   const selectedInCurrentDir = files.filter((f) => selectedPaths.includes(f.path));
 
@@ -256,7 +268,7 @@ export function ConversionSidebarBrowser({
               Retry
             </Button>
           </div>
-        ) : dirs.length === 0 && files.length === 0 && !loading ? (
+        ) : allItems.length === 0 && !loading ? (
           <div className="flex flex-col items-center py-10 text-xs text-muted-foreground gap-1">
             <Folder className="h-4 w-4 opacity-30" />
             <span>Empty folder</span>
@@ -264,7 +276,7 @@ export function ConversionSidebarBrowser({
         ) : (
           <div className="space-y-0.5 pb-2">
             {/* Directories */}
-            {dirs.map((item) => (
+            {pageDirs.map((item) => (
               <div key={item.path}
                 className="flex items-center gap-1 px-1.5 py-1 rounded-md text-xs group hover:bg-accent/60 transition-colors">
                 <button
@@ -274,7 +286,6 @@ export function ConversionSidebarBrowser({
                   <Folder className="h-3.5 w-3.5 text-primary/70 shrink-0" />
                   <span className="truncate leading-tight">{item.name}</span>
                 </button>
-                {/* Select this folder as input */}
                 <button
                   className="opacity-0 group-hover:opacity-70 hover:!opacity-100 transition-opacity shrink-0 p-0.5 rounded hover:bg-primary/20"
                   onClick={(e) => { e.stopPropagation(); onSelect(item.path); }}
@@ -286,18 +297,15 @@ export function ConversionSidebarBrowser({
             ))}
 
             {/* Files */}
-            {files.map((item) => {
+            {pageFiles.map((item) => {
               const isChecked = selectedPaths.includes(item.path);
               return (
                 <div key={item.path}
                   className={`flex items-center gap-1.5 px-1.5 py-1 rounded-md text-xs transition-colors cursor-pointer
                     ${isChecked ? "bg-primary/10 hover:bg-primary/15" : "hover:bg-accent/60"}`}
                   onClick={() => {
-                    if (multiSelectEnabled) {
-                      onTogglePath!(item.path);
-                    } else {
-                      onSelect(item.path);
-                    }
+                    if (multiSelectEnabled) onTogglePath!(item.path);
+                    else onSelect(item.path);
                   }}
                   title={multiSelectEnabled ? (isChecked ? `Deselect ${item.name}` : `Select ${item.name}`) : `Select ${item.name}`}
                 >
@@ -314,19 +322,27 @@ export function ConversionSidebarBrowser({
                   <span className={`truncate leading-tight flex-1 ${isChecked ? "text-primary font-medium" : ""}`}>
                     {item.name}
                   </span>
-                  {item.size !== undefined && (
-                    <span className="text-[10px] text-muted-foreground shrink-0">
-                      {item.size < 1024 ? `${item.size}B`
-                        : item.size < 1024 * 1024 ? `${(item.size / 1024).toFixed(0)}K`
-                        : `${(item.size / (1024 * 1024)).toFixed(1)}M`}
-                    </span>
-                  )}
                 </div>
               );
             })}
           </div>
         )}
       </ScrollArea>
+
+      {/* ── Pagination ──────────────────────────────────────────────────── */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between px-2 py-1 border-t text-[10px] text-muted-foreground shrink-0">
+          <Button type="button" variant="ghost" size="icon" className="h-5 w-5"
+            disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>
+            <ChevronLeft className="h-3 w-3" />
+          </Button>
+          <span>{safePage + 1} / {totalPages} <span className="opacity-60">({allItems.length} items)</span></span>
+          <Button type="button" variant="ghost" size="icon" className="h-5 w-5"
+            disabled={safePage >= totalPages - 1} onClick={() => setPage(safePage + 1)}>
+            <ChevronRight className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -604,6 +604,33 @@ export default function InspectPage() {
     return null;
   }, [currentLevelShape, fovSize]);
 
+  // Physical aspect ratio (height/width) for the current view plane and pyramid level.
+  // Derived from the coordinateTransformations scale stored in each pyramid level.
+  // Orientation XY → row=y / col=x; XZ → row=z / col=x; YZ → row=z / col=y.
+  const pixelAspectRatio = useMemo(() => {
+    if (!zarrMetadata || !zarrInfo) return 1;
+    const axisNames = (zarrMetadata.axes as any[]).map((a) => a.name as string);
+    const numLevels = zarrInfo.numLevels;
+    const invertedIdx = Math.max(0, Math.min(numLevels - 1 - zoomLevel, numLevels - 1));
+    const rawScales = (zarrMetadata.pyramidLayers[invertedIdx]?.scales ?? []) as any[];
+    if (rawScales.length === 0) return 1;
+
+    const getPixelSize = (axisName: string): number => {
+      const idx = axisNames.indexOf(axisName);
+      if (idx < 0 || idx >= rawScales.length) return 1;
+      const v = rawScales[idx];
+      const num = typeof v === "object" && v !== null ? v.value : v;
+      return typeof num === "number" && num > 0 ? num : 1;
+    };
+
+    const [rowAxis, colAxis] =
+      orientation === "XY" ? ["y", "x"] :
+      orientation === "XZ" ? ["z", "x"] :
+                             ["z", "y"];
+    const ratio = getPixelSize(rowAxis) / getPixelSize(colAxis);
+    return isFinite(ratio) && ratio > 0 ? ratio : 1;
+  }, [zarrMetadata, zarrInfo, zoomLevel, orientation]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -1068,6 +1095,11 @@ export default function InspectPage() {
                           display: canvasSize ? "block" : "none",
                           transform: isDragging ? `translate(${dragOffset.x}px, ${dragOffset.y}px)` : "none",
                           transition: isDragging ? "none" : "transform 0.1s ease-out",
+                          aspectRatio: `1 / ${pixelAspectRatio}`,
+                          maxWidth: "100%",
+                          maxHeight: "70vh",
+                          width: "auto",
+                          height: "auto",
                         }}
                       />
                     </div>
@@ -1085,6 +1117,11 @@ export default function InspectPage() {
                       <span>
                         {hasZ && <span>Z={zSlice} · </span>}
                         Center ({fovCenterY}, {fovCenterX})
+                        {pixelAspectRatio !== 1 && (
+                          <span className="ml-2 text-yellow-400/80" title="Canvas stretched to account for pixel anisotropy">
+                            · AR {pixelAspectRatio.toFixed(2)}
+                          </span>
+                        )}
                         {hasZ && <span className="ml-1 opacity-50">⎍scroll for Z</span>}
                       </span>
                     </div>

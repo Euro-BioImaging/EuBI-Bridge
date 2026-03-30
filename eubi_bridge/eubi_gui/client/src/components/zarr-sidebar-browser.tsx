@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,9 +11,13 @@ import {
   Loader2,
   AlertCircle,
   ChevronRight,
+  ChevronLeft,
   Eye,
 } from "lucide-react";
+
 import { useConversionStore } from "@/lib/conversion-store";
+
+const PAGE_SIZE = 50;
 
 interface FileEntry {
   name: string;
@@ -39,8 +43,11 @@ export function ZarrSidebarBrowser() {
 
   const [homedir, setHomedir] = useState("");
   const [data, setData] = useState<BrowserData | null>(null);
+  // S3: total directory count returned by server (enables page nav without fetching all)
+  const [s3Total, setS3Total] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
 
   // The path input always reflects the current location;
   // while the user is editing we don't overwrite it with navigation updates.
@@ -48,22 +55,25 @@ export function ZarrSidebarBrowser() {
   const inputEditingRef = useRef(false);
 
   // ── load a path (local or S3/HTTP) ────────────────────────────────────────
-  const loadPath = async (rawPath: string) => {
+  // For S3: pageOverride lets page-nav refetch the same path with a new page.
+  const loadPath = async (rawPath: string, pageOverride = 0) => {
     const p = rawPath.trim();
     if (!p) return;
     setLoading(true);
     setError(null);
     try {
       const apiUrl = isRemotePath(p)
-        ? `/api/s3/list?url=${encodeURIComponent(p)}`
+        ? `/api/s3/list?url=${encodeURIComponent(p)}&page=${pageOverride}&pageSize=${PAGE_SIZE}`
         : `/api/files?path=${encodeURIComponent(p)}`;
       const res = await fetch(apiUrl);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ message: "Request failed" }));
         throw new Error(err.message || `HTTP ${res.status}`);
       }
-      const result: BrowserData = await res.json();
+      const result = await res.json() as BrowserData & { total?: number };
       setData(result);
+      setPage(pageOverride);
+      setS3Total(result.total ?? null);
       // Sync input unless user is mid-edit
       if (!inputEditingRef.current) setInputValue(result.currentPath);
     } catch (e: any) {
@@ -110,11 +120,20 @@ export function ZarrSidebarBrowser() {
   const atRoot =
     !data?.parentPath ||
     data.parentPath === data.currentPath ||
-    // S3 bucket root (no prefix left to go up to)
-    (isRemotePath(data.currentPath) && data.parentPath === data.currentPath);
+    (isRemotePath(data.currentPath ?? "") && data.parentPath === data.currentPath);
 
-  const dirs = data?.items.filter((i) => i.isDirectory) ?? [];
-  const fileCount = data?.items.filter((i) => !i.isDirectory).length ?? 0;
+  const currentIsRemote = isRemotePath(data?.currentPath ?? "");
+
+  // For S3: server already returns only PAGE_SIZE dirs for the current page.
+  // For local: all dirs are returned at once; paginate client-side.
+  const allDirs = useMemo(() => data?.items.filter((i) => i.isDirectory) ?? [], [data]);
+  const fileCount = useMemo(() => data?.items.filter((i) => !i.isDirectory).length ?? 0, [data]);
+
+  const totalDirs   = currentIsRemote ? (s3Total ?? allDirs.length) : allDirs.length;
+  const totalPages  = Math.max(1, Math.ceil(totalDirs / PAGE_SIZE));
+  const dirs        = currentIsRemote
+    ? allDirs                                                          // server already paged
+    : allDirs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);        // client-side slice
 
   return (
     <div className="flex flex-col gap-1.5 h-full">
@@ -284,6 +303,44 @@ export function ZarrSidebarBrowser() {
           </div>
         )}
       </ScrollArea>
+
+      {/* ── Pagination ────────────────────────────────────────────────────── */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between px-2 py-1 border-t text-[10px] text-muted-foreground shrink-0">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-5 w-5"
+            disabled={page === 0 || loading}
+            onClick={() =>
+              currentIsRemote
+                ? loadPath(data!.currentPath, page - 1)
+                : setPage(page - 1)
+            }
+          >
+            <ChevronLeft className="h-3 w-3" />
+          </Button>
+          <span>
+            {page + 1} / {totalPages}{" "}
+            <span className="opacity-60">({totalDirs} folders)</span>
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-5 w-5"
+            disabled={page >= totalPages - 1 || loading}
+            onClick={() =>
+              currentIsRemote
+                ? loadPath(data!.currentPath, page + 1)
+                : setPage(page + 1)
+            }
+          >
+            <ChevronRight className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

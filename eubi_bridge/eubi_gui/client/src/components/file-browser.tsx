@@ -11,11 +11,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import {
   Folder,
   File,
   ChevronRight,
+  ChevronLeft,
   ArrowUp,
   Home,
   Loader2,
@@ -56,13 +56,6 @@ interface FileBrowserProps {
   onExcludePatternChange?: (pattern: string) => void;
 }
 
-function formatSize(bytes?: number): string {
-  if (bytes === undefined) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
 
 function matchGlobPattern(filename: string, pattern: string): boolean {
   if (!pattern.trim()) return true;
@@ -107,6 +100,8 @@ export function FileBrowser({
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [newFolderError, setNewFolderError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
 
   useEffect(() => {
     setLocalInclude(includePattern);
@@ -127,6 +122,7 @@ export function FileBrowser({
       setData(result);
       setCurrentPath(result.currentPath);
       setPathInput(result.currentPath);
+      setPage(0);
     } catch (err: any) {
       setError(err.message || "Failed to load directory");
     } finally {
@@ -157,6 +153,10 @@ export function FileBrowser({
       return true;
     });
   }, [data?.items, localInclude, localExclude, showFilters]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pagedItems = filteredItems.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
 
   const fileStats = useMemo(() => {
     if (!data?.items || !showFilters) return null;
@@ -440,7 +440,7 @@ export function FileBrowser({
             </div>
           ) : (
             <div className="divide-y">
-              {filteredItems.map((item) => (
+              {pagedItems.map((item) => (
                 <button
                   key={item.path}
                   className={`w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-accent/50 transition-colors ${
@@ -448,9 +448,7 @@ export function FileBrowser({
                   }`}
                   onClick={() => handleItemClick(item)}
                   onDoubleClick={() => {
-                    if (item.isDirectory) {
-                      handleNavigate(item.path);
-                    }
+                    if (item.isDirectory) handleNavigate(item.path);
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -467,11 +465,6 @@ export function FileBrowser({
                   {item.isDirectory && (
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   )}
-                  {!item.isDirectory && item.size !== undefined && (
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {formatSize(item.size)}
-                    </span>
-                  )}
                 </button>
               ))}
             </div>
@@ -482,6 +475,19 @@ export function FileBrowser({
           <Badge variant="secondary" className="text-[10px]">
             {filteredItems.length} items
           </Badge>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1 ml-auto">
+              <Button type="button" variant="ghost" size="icon" className="h-5 w-5"
+                disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>
+                <ChevronLeft className="h-3 w-3" />
+              </Button>
+              <span className="text-[10px]">{safePage + 1}/{totalPages}</span>
+              <Button type="button" variant="ghost" size="icon" className="h-5 w-5"
+                disabled={safePage >= totalPages - 1} onClick={() => setPage(safePage + 1)}>
+                <ChevronRight className="h-3 w-3" />
+              </Button>
+            </div>
+          )}
           {selectedPath && (
             <span className="truncate font-mono">Selected: {selectedPath}</span>
           )}

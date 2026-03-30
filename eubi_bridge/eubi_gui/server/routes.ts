@@ -361,41 +361,24 @@ export async function registerRoutes(
       }
 
       const entries = fs.readdirSync(resolvedPath, { withFileTypes: true });
+      // Avoid per-entry statSync calls — Dirent.isDirectory() / isFile() are free.
+      // OME-Zarr detection uses a single existsSync per directory (no JSON parsing).
       const items = entries
         .map((entry) => {
           const fullPath = path.join(resolvedPath, entry.name);
-          let size: number | undefined;
-          let modified: string | undefined;
-          try {
-            const s = fs.statSync(fullPath);
-            size = entry.isFile() ? s.size : undefined;
-            modified = s.mtime.toISOString();
-          } catch {
-            modified = undefined;
-          }
           let isOmeZarr = false;
           if (entry.isDirectory()) {
             try {
-              const zattrsFile = path.join(fullPath, ".zattrs");
-              const zarrJsonFile = path.join(fullPath, "zarr.json");
-              if (fs.existsSync(zattrsFile)) {
-                const z = JSON.parse(fs.readFileSync(zattrsFile, "utf-8"));
-                isOmeZarr = Array.isArray(z?.multiscales) && z.multiscales.length > 0;
-              } else if (fs.existsSync(zarrJsonFile)) {
-                const z = JSON.parse(fs.readFileSync(zarrJsonFile, "utf-8"));
-                isOmeZarr =
-                  (Array.isArray(z?.attributes?.multiscales) && z.attributes.multiscales.length > 0) ||
-                  (Array.isArray(z?.attributes?.ome?.multiscales) && z.attributes.ome.multiscales.length > 0);
-              }
-            } catch { /* not an OME-Zarr */ }
+              isOmeZarr =
+                fs.existsSync(path.join(fullPath, ".zattrs")) ||
+                fs.existsSync(path.join(fullPath, "zarr.json"));
+            } catch { /* ignore */ }
           }
           return {
             name: entry.name,
             path: fullPath,
             isDirectory: entry.isDirectory(),
             isOmeZarr,
-            size,
-            modified,
           };
         })
         .sort((a, b) => {
@@ -432,6 +415,8 @@ export async function registerRoutes(
   app.get("/api/s3/list", async (req, res) => {
     const rawUrl = (req.query.url as string) || "";
     if (!rawUrl) return res.status(400).json({ message: "url parameter required" });
+    const pageSize = Math.max(1, parseInt((req.query.pageSize as string) || "50", 10));
+    const page     = Math.max(0, parseInt((req.query.page     as string) || "0",  10));
     try {
       const parsed = new URL(rawUrl);
       const endpoint = parsed.origin; // e.g. https://s3.embl.de
@@ -509,16 +494,21 @@ export async function registerRoutes(
         return results;
       };
 
-      const candidates = subPrefixes
+      const allCandidates = subPrefixes
         .filter((p) => p !== prefix)
         .map((p) => ({
           name: p.slice(prefix.length).replace(/\/$/, ""),
           path: `${endpoint}/${bucket}/${p}`,
-        }));
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
 
-      // Probe every folder — name convention alone is unreliable.
+      const total = allCandidates.length;
+      const pageStart = page * pageSize;
+      const pageCandidates = allCandidates.slice(pageStart, pageStart + pageSize);
+
+      // Only probe the current page — avoids N*2 network round-trips upfront.
       const dirItems = await mapWithLimit(
-        candidates,
+        pageCandidates,
         async ({ name, path: itemPath }) => ({
           name,
           path: itemPath,
@@ -534,14 +524,11 @@ export async function registerRoutes(
         isDirectory: false,
         isOmeZarr: false,
         size,
-      }));
+      })).sort((a, b) => a.name.localeCompare(b.name));
 
-      const items = [
-        ...dirItems.sort((a, b) => a.name.localeCompare(b.name)),
-        ...fileItems.sort((a, b) => a.name.localeCompare(b.name)),
-      ];
+      const items = [...dirItems, ...fileItems];
 
-      res.json({ currentPath, parentPath, items });
+      res.json({ currentPath, parentPath, items, total, page, pageSize });
     } catch (err: any) {
       res.status(500).json({ message: err.message || "Failed to list S3 path" });
     }
