@@ -31,3 +31,13 @@ def setup_mp_logging(log_queue):
 
     from eubi_bridge.utils.logging_config import setup_logging
     setup_logging()
+
+
+def setup_mp_logging_with_worker_init(log_queue, tensorstore_data_copy_concurrency=1):
+    """Combined initializer for subprocess workers: tensorstore+JVM init, then queue logging.
+
+    Must be a module-level function so it is picklable by the spawn process context.
+    """
+    from eubi_bridge.conversion.worker_init import initialize_worker_process
+    initialize_worker_process(tensorstore_data_copy_concurrency)
+    setup_mp_logging(log_queue)

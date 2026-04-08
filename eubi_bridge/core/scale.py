@@ -224,11 +224,15 @@ class DownscaleManager:
     def _theoretical_scale_factors(self):
         if self.smart_scale_factor is None:
             return np.power(self.scale_factor, self._scale_ids)
+        smart = np.array(self.smart_scale_factor, dtype=float)
+        user = np.array(self.scale_factor, dtype=float)
+        # If smart factors are all 1 (data already isotropic, e.g. 2D),
+        # no anisotropy correction is needed → fall back to regular downscaling.
+        if np.all(smart == 1.0):
+            return np.power(self.scale_factor, self._scale_ids)
         # Two-phase: level 1 = smart_factor; levels 2+ = smart_factor * user_factor^(k-1)
         n = self.n_layers
         ndim = len(self.base_shape)
-        smart = np.array(self.smart_scale_factor, dtype=float)
-        user = np.array(self.scale_factor, dtype=float)
         result = np.zeros((n, ndim))
         result[0] = 1.0
         for k in range(1, n):
