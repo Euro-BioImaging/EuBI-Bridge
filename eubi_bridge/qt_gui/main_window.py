@@ -22,8 +22,8 @@ from eubi_bridge.qt_gui.pages.convert_page import ConvertPage
 from eubi_bridge.qt_gui.pages.inspect_page import InspectPage
 from eubi_bridge.qt_gui.settings_dialog import SettingsDialog, apply_settings, current_font_size, current_theme
 
-# Logo located at the repo root next to the package directory
-_LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "eurobioimaging-logo.webp")
+# Logo bundled inside the qt_gui package directory
+_LOGO_PATH = os.path.join(os.path.dirname(__file__), "eurobioimaging-logo.webp")
 
 
 class MainWindow(QMainWindow):
