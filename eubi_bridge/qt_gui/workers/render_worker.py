@@ -15,7 +15,7 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 # ── Import rendering functions from zarr_plane_server ────────────────────────
-_SERVER_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "eubi_gui", "server")
+_SERVER_DIR = os.path.join(os.path.dirname(__file__), "..", "server")
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 

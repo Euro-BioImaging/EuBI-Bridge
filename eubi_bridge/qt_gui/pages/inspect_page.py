@@ -45,7 +45,7 @@ from eubi_bridge.qt_gui.widgets.sidebar_browser import SidebarBrowser
 from eubi_bridge.qt_gui.workers.minmax_worker import MinMaxWorker
 from eubi_bridge.qt_gui.workers.render_worker import RenderWorker
 
-_SERVER_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "eubi_gui", "server")
+_SERVER_DIR = os.path.join(os.path.dirname(__file__), "..", "server")
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 

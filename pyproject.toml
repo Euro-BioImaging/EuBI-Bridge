@@ -5,7 +5,7 @@ backend-path = ["."]
 
 [project]
 name = "eubi_bridge"
-version = "0.1.0rc5"
+version = "0.1.0rc6"
 description = "A package for converting datasets to OME-Zarr format."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -36,11 +36,16 @@ dependencies = [
     "imageio-ffmpeg==0.6.0",
     "install-jdk",
     "lz4>=4.4.4",
+    "matplotlib",
     "natsort>=0.0.0",
     "nd2>=0.0.0",
     "numpy>=1.24",
     "pydantic>=2.11.7",
     "pylibczirw>=0.0.0",
+    "PyQt6>=6.6.0",
+    "PyQt6-sip>=13.6.0",
+    "pytest>=7.0",
+    "pytest-cov>=4.0"
     "readlif==0.6.5",
     "s3fs>=0.0.0",
     "scipy>=1.8",
@@ -68,27 +73,12 @@ classifiers = [
 [tool.setuptools.package-data]
 eubi_bridge = [
     "bioformats/**",
-    "eubi_gui/**/*",
-    "!eubi_gui/node_modules/**",
+    "qt_gui/server/**",
 ]
 
 [project.scripts]
 eubi = "eubi_bridge.cli:main"
-eubi-gui = "eubi_bridge.app:main"
-eubi-gui-react = "eubi_bridge.gui_react:main"
-
-[project.optional-dependencies]
-gui = ["streamlit>=1.52.1", "matplotlib"]
-gui-qt6 = ["PyQt6>=6.6.0", "PyQt6-sip>=13.6.0", "matplotlib"]
-test = ["pytest>=7.0", "pytest-cov>=4.0"]
-all = [
-    "streamlit>=1.52.1",
-    "matplotlib",
-    "PyQt6>=6.6.0",
-    "PyQt6-sip>=13.6.0",
-    "pytest>=7.0",
-    "pytest-cov>=4.0"
-]
+eubi-gui = "eubi_bridge.qt_gui.app:main"
 
 [project.urls]
 Homepage = "https://github.com/Euro-BioImaging/EuBI-Bridge"
