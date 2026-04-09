@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -202,6 +203,7 @@ class InspectPage(QWidget):
         ps_layout.setContentsMargins(6, 22, 6, 6)
         self._ps_table = QTableWidget(0, 4)
         self._ps_table.setHorizontalHeaderLabels(["Axis", "Type", "Size", "Unit"])
+        self._ps_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self._ps_table.horizontalHeader().setStretchLastSection(True)
         self._ps_table.setMaximumHeight(180)
         self._ps_table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
@@ -228,8 +230,9 @@ class InspectPage(QWidget):
         pyr_layout.setContentsMargins(6, 22, 6, 6)
         self._pyr_tree = QTreeWidget()
         self._pyr_tree.setHeaderLabels(["Property", "Value"])
-        self._pyr_tree.setColumnWidth(0, 120)
+        self._pyr_tree.header().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self._pyr_tree.header().setStretchLastSection(True)
+        self._pyr_tree.setColumnWidth(0, 120)
         self._pyr_tree.setAlternatingRowColors(True)
         self._pyr_tree.setMinimumHeight(300)
         self._pyr_tree.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -307,7 +310,8 @@ class InspectPage(QWidget):
 
         # T slider
         t_row = QHBoxLayout()
-        t_row.addWidget(QLabel("T:"))
+        self._t_axis_label = QLabel("T:")
+        t_row.addWidget(self._t_axis_label)
         self._t_label = QLabel("0")
         self._t_label.setFixedWidth(35)
         t_row.addWidget(self._t_label)
@@ -433,8 +437,11 @@ class InspectPage(QWidget):
         t_max = max(0, self._dim("t") - 1)
         self._t_slider.blockSignals(True)
         self._t_slider.setMaximum(t_max)
-        self._t_slider.setValue(t_max // 2)
+        self._t_slider.setValue(0)
         self._t_slider.blockSignals(False)
+        self._t_label.setText("0")
+        self._t_axis_label.setVisible(t_max > 0)
+        self._t_label.setVisible(t_max > 0)
         self._t_slider.setVisible(t_max > 0)
 
         # Depth slider: always the through-plane axis for the current orientation (Z for XY)
@@ -444,6 +451,9 @@ class InspectPage(QWidget):
         self._z_slider.setMaximum(depth_max)
         self._z_slider.setValue(depth_max // 2)
         self._z_slider.blockSignals(False)
+        self._z_label.setText(str(depth_max // 2))
+        self._z_axis_label.setVisible(depth_max > 0)
+        self._z_label.setVisible(depth_max > 0)
         self._z_slider.setVisible(depth_max > 0)
 
         self._fov_center_y = self._dim(v_ax) // 2   # height-axis centre

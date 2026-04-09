@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QDoubleSpinBox,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -367,9 +368,11 @@ class ConvertPage(QWidget):
         self._auto_chunk.setChecked(True)
         chunk_layout.addWidget(self._auto_chunk)
 
-        self._target_chunk_mb = QSpinBox()
-        self._target_chunk_mb.setRange(1, 2048)
-        self._target_chunk_mb.setValue(1)
+        self._target_chunk_mb = QDoubleSpinBox()
+        self._target_chunk_mb.setRange(0.1, 2048.0)
+        self._target_chunk_mb.setDecimals(2)
+        self._target_chunk_mb.setSingleStep(0.1)
+        self._target_chunk_mb.setValue(1.0)
         chunk_layout.addLayout(_form_row("Target Chunk MB:", self._target_chunk_mb))
 
         self._manual_chunk_widget = QWidget()
@@ -432,6 +435,20 @@ class ConvertPage(QWidget):
             self._range_edits[dim.lower()] = edit
             range_layout.addLayout(_form_row(f"{dim} range:", edit))
         lay.addWidget(range_group)
+
+        # Concatenation
+        concat_group = QGroupBox("Concatenation")
+        concat_layout = QVBoxLayout(concat_group)
+        self._concat_edits: dict[str, QLineEdit] = {}
+        for ax in ("Time", "Channel", "Z", "Y", "X"):
+            edit = QLineEdit()
+            edit.setPlaceholderText(f"e.g. _t for time tag")
+            self._concat_edits[ax.lower()] = edit
+            concat_layout.addLayout(_form_row(f"{ax} tag:", edit))
+        self._concat_axes = QLineEdit()
+        self._concat_axes.setPlaceholderText("e.g. t,c")
+        concat_layout.addLayout(_form_row("Concat axes:", self._concat_axes))
+        lay.addWidget(concat_group)
 
         lay.addStretch()
 
@@ -507,21 +524,6 @@ class ConvertPage(QWidget):
             lambda c: self._smart_widget.setVisible(c)
         )
 
-        # Concatenation
-        concat_group = QGroupBox("Concatenation")
-        concat_layout = QVBoxLayout(concat_group)
-        self._concat_edits: dict[str, QLineEdit] = {}
-        for ax in ("Time", "Channel", "Z", "Y", "X"):
-            edit = QLineEdit()
-            edit.setPlaceholderText(f"e.g. _t for time tag")
-            self._concat_edits[ax.lower()] = edit
-            concat_layout.addLayout(_form_row(f"{ax} tag:", edit))
-
-        self._concat_axes = QLineEdit()
-        self._concat_axes.setPlaceholderText("e.g. t,c")
-        concat_layout.addLayout(_form_row("Concat axes:", self._concat_axes))
-
-        lay.addWidget(concat_group)
         lay.addStretch()
 
     def _build_metadata_tab(self):
@@ -673,7 +675,7 @@ class ConvertPage(QWidget):
         self._override_channel_names.setChecked(conv.get("overrideChannelNames", False))
         self._skip_dask.setChecked(conv.get("skipDask", False))
         self._auto_chunk.setChecked(conv.get("autoChunk", True))
-        self._target_chunk_mb.setValue(conv.get("targetChunkSizeMb", 1))
+        self._target_chunk_mb.setValue(float(conv.get("targetChunkSizeMb", 1.0)))
         for dim, key in [("t", "chunkTime"), ("c", "chunkChannel"), ("z", "chunkZ"), ("y", "chunkY"), ("x", "chunkX")]:
             self._chunk_spins[dim].setValue(conv.get(key, 96 if dim in ("z","y","x") else 1))
         for dim, key in [("t", "shardTime"), ("c", "shardChannel"), ("z", "shardZ"), ("y", "shardY"), ("x", "shardX")]:

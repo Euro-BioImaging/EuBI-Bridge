@@ -65,9 +65,9 @@ class _ChannelRow(QWidget):
         header.setSpacing(4)
 
         self._expand_btn = QPushButton("▶")
-        self._expand_btn.setFixedSize(18, 18)
+        self._expand_btn.setFixedSize(24, 24)
         self._expand_btn.setStyleSheet(
-            "QPushButton { border: none; background: transparent; font-size: 9px; color: #aaa; }"
+            "QPushButton { border: none; background: transparent; font-size: 14px; color: #ccc; }"
             "QPushButton:hover { color: #fff; }"
         )
         self._expand_btn.setToolTip("Expand / collapse")

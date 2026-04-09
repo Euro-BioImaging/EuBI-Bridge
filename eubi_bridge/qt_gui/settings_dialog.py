@@ -26,25 +26,27 @@ from PyQt6.QtWidgets import (
 
 # ── Palette definitions ────────────────────────────────────────────────────────
 
-def _make_dark_palette(accent_hex: str = "#4287f5") -> QPalette:
-    """Original dark palette (default)."""
+def _make_dark_palette(accent_hex: str = "#3ca0ff") -> QPalette:
+    """Bright dark palette — the default EuBI-Bridge theme."""
     p = QPalette()
     accent = QColor(accent_hex)
-    p.setColor(QPalette.ColorRole.Window,          QColor(30,  30,  30))
-    p.setColor(QPalette.ColorRole.WindowText,      QColor(210, 210, 210))
-    p.setColor(QPalette.ColorRole.Base,            QColor(45,  45,  45))
-    p.setColor(QPalette.ColorRole.AlternateBase,   QColor(38,  38,  38))
-    p.setColor(QPalette.ColorRole.ToolTipBase,     QColor(30,  30,  30))
-    p.setColor(QPalette.ColorRole.ToolTipText,     QColor(210, 210, 210))
-    p.setColor(QPalette.ColorRole.Text,            QColor(210, 210, 210))
-    p.setColor(QPalette.ColorRole.Button,          QColor(60,  60,  60))
-    p.setColor(QPalette.ColorRole.ButtonText,      QColor(210, 210, 210))
+    p.setColor(QPalette.ColorRole.Window,          QColor(40,  40,  42))
+    p.setColor(QPalette.ColorRole.WindowText,      QColor(235, 235, 235))
+    p.setColor(QPalette.ColorRole.Base,            QColor(55,  55,  58))
+    p.setColor(QPalette.ColorRole.AlternateBase,   QColor(50,  50,  53))
+    p.setColor(QPalette.ColorRole.ToolTipBase,     QColor(50,  50,  53))
+    p.setColor(QPalette.ColorRole.ToolTipText,     QColor(235, 235, 235))
+    p.setColor(QPalette.ColorRole.Text,            QColor(235, 235, 235))
+    p.setColor(QPalette.ColorRole.Button,          QColor(72,  72,  76))
+    p.setColor(QPalette.ColorRole.ButtonText,      QColor(235, 235, 235))
     p.setColor(QPalette.ColorRole.BrightText,      QColor(255, 255, 255))
     p.setColor(QPalette.ColorRole.Highlight,       accent)
     p.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     p.setColor(QPalette.ColorRole.Link,            accent)
-    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text,       QColor(120, 120, 120))
-    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(120, 120, 120))
+    p.setColor(QPalette.ColorRole.Mid,             QColor(80,  80,  84))
+    p.setColor(QPalette.ColorRole.Shadow,          QColor(20,  20,  20))
+    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text,       QColor(130, 130, 130))
+    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(130, 130, 130))
     return p
 
 
@@ -98,6 +100,35 @@ PALETTES: dict[str, QPalette] = {
     "Light":           _make_light_palette(),
 }
 
+_DARK_STYLESHEET = (
+    "QToolTip { color: #ebebeb; background: #383838; border: 1px solid #60a0ff; }"
+    "QGroupBox { border: 1px solid #666; border-radius: 4px; margin-top: 6px; font-weight: bold; }"
+    "QGroupBox::title { subcontrol-origin: margin; left: 8px; color: #b0d0ff; }"
+    "QTabWidget::pane { border: 1px solid #666; }"
+    "QTabBar::tab { background: #484848; color: #ddd; padding: 4px 10px; border: 1px solid #666; border-bottom: none; }"
+    "QTabBar::tab:selected { background: #383a3e; color: #fff; border-bottom: 2px solid #3ca0ff; }"
+    "QTabBar::tab:hover:!selected { background: #525256; }"
+    "QPushButton { background: #505054; color: #ebebeb; border: 1px solid #686870; border-radius: 3px; padding: 3px 8px; }"
+    "QPushButton:hover { background: #5a5a60; border-color: #3ca0ff; }"
+    "QPushButton:pressed { background: #404044; }"
+    "QPushButton:disabled { color: #888; border-color: #555; }"
+    "QComboBox { background: #505054; color: #ebebeb; border: 1px solid #686870; border-radius: 3px; padding: 2px 6px; }"
+    "QComboBox:hover { border-color: #3ca0ff; }"
+    "QComboBox QAbstractItemView { background: #484848; color: #ebebeb; selection-background-color: #3ca0ff; }"
+    "QLineEdit, QSpinBox, QDoubleSpinBox { background: #505054; color: #ebebeb; border: 1px solid #686870; border-radius: 3px; padding: 2px 4px; }"
+    "QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #3ca0ff; }"
+    "QScrollArea { border: none; }"
+    "QSlider::groove:horizontal { background: #555; height: 4px; border-radius: 2px; }"
+    "QSlider::handle:horizontal { background: #3ca0ff; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }"
+    "QSlider::sub-page:horizontal { background: #3ca0ff; border-radius: 2px; }"
+    "QCheckBox { color: #ebebeb; }"
+    "QCheckBox::indicator:unchecked { background: #505054; border: 1px solid #686870; border-radius: 2px; }"
+    "QLabel { color: #ebebeb; }"
+    "QScrollBar:vertical { background: #484848; width: 10px; }"
+    "QScrollBar::handle:vertical { background: #686870; border-radius: 5px; min-height: 20px; }"
+    "QScrollBar::handle:vertical:hover { background: #3ca0ff; }"
+)
+
 _BASE_STYLESHEET = (
     "QToolTip { color: #ddd; background: #333; border: 1px solid #555; }"
     "QGroupBox { border: 1px solid #555; border-radius: 3px; margin-top: 6px; }"
@@ -115,7 +146,7 @@ _LIGHT_STYLESHEET = (
 )
 
 STYLESHEETS: dict[str, str] = {
-    "Dark (default)": _BASE_STYLESHEET,
+    "Dark (default)": _DARK_STYLESHEET,
     "Dark Blue":      _BASE_STYLESHEET,
     "Light":          _LIGHT_STYLESHEET,
 }

@@ -42,6 +42,18 @@ _ICON_FILE    = "\U0001F4C4"   # 📄
 _ICON_HOME    = "\U0001F3E0"   # 🏠
 
 
+def _pat_match(name: str, pat: str) -> bool:
+    """Match *name* against *pat*.
+
+    If *pat* contains a wildcard character (``*``, ``?``, or ``[``), use
+    :func:`fnmatch.fnmatch`; otherwise do a case-insensitive substring check so
+    that plain strings like ``tif`` match any file whose name contains ``tif``.
+    """
+    if any(c in pat for c in "*?["):
+        return fnmatch.fnmatch(name, pat)
+    return pat.lower() in name.lower()
+
+
 class SidebarBrowser(QWidget):
     """Persistent sidebar file browser.
 
@@ -130,10 +142,14 @@ class SidebarBrowser(QWidget):
             sel_bar.setSpacing(4)
             self._select_all_btn = QPushButton("Select All")
             self._select_all_btn.setFixedHeight(22)
-            self._select_all_btn.setCheckable(True)
-            self._select_all_btn.setToolTip("Select / deselect all visible items")
-            self._select_all_btn.toggled.connect(self._on_select_all_toggled)
+            self._select_all_btn.setToolTip("Select all items matching the current filter")
+            self._select_all_btn.clicked.connect(self._on_select_all)
             sel_bar.addWidget(self._select_all_btn)
+            self._deselect_all_btn = QPushButton("Deselect All")
+            self._deselect_all_btn.setFixedHeight(22)
+            self._deselect_all_btn.setToolTip("Clear the entire selection (all folders)")
+            self._deselect_all_btn.clicked.connect(self._on_deselect_all)
+            sel_bar.addWidget(self._deselect_all_btn)
             self._filter_info_label = QLabel("")
             self._filter_info_label.setStyleSheet("font-size: 9px; color: #aaa;")
             sel_bar.addWidget(self._filter_info_label, 1)
@@ -206,11 +222,11 @@ class SidebarBrowser(QWidget):
                 if self._include_filter or self._exclude_filter:
                     name = entry["name"]
                     if self._include_filter and not any(
-                        fnmatch.fnmatch(name, pat) for pat in self._include_filter
+                        _pat_match(name, pat) for pat in self._include_filter
                     ):
                         continue
                     if self._exclude_filter and any(
-                        fnmatch.fnmatch(name, pat) for pat in self._exclude_filter
+                        _pat_match(name, pat) for pat in self._exclude_filter
                     ):
                         continue
 
@@ -238,30 +254,37 @@ class SidebarBrowser(QWidget):
 
             self._list.addItem(item)
 
-        # Update Select All button state
+        # Update info label
         if self._mode == "conversion" and hasattr(self, "_select_all_btn"):
             total_visible = self._list.count()
+            n_total_selected = len(self._checked_paths)  # always the global selection count
+
             if self._recursive_mode:
-                n_total = len(self._recursive_entries)
-                n_checked = sum(1 for e in self._recursive_entries if e["path"] in self._checked_paths)
-                all_selected = n_total > 0 and n_checked == n_total
+                n_found = len(self._recursive_entries)
+                n_found_selected = sum(1 for e in self._recursive_entries if e["path"] in self._checked_paths)
                 self._filter_info_label.setText(
-                    f"{n_total} file(s) found — {n_checked} selected"
+                    f"{n_found} found — {n_total_selected} selected total"
                 )
             else:
-                checked_visible = sum(
-                    1 for i in range(total_visible)
-                    if self._list.item(i).checkState() == Qt.CheckState.Checked
-                )
-                all_selected = total_visible > 0 and checked_visible == total_visible
-                if self._include_filter or self._exclude_filter:
-                    self._filter_info_label.setText(f"filter active — {total_visible} shown")
+                if (self._include_filter or self._exclude_filter) and not self._s3_mode:
+                    all_entries = list_local(self._current_path)
+                    matched = [
+                        e for e in all_entries
+                        if (
+                            not self._include_filter
+                            or any(_pat_match(e["name"], p) for p in self._include_filter)
+                        ) and (
+                            not self._exclude_filter
+                            or not any(_pat_match(e["name"], p) for p in self._exclude_filter)
+                        )
+                    ]
+                    n_found = len(matched)
+                    self._filter_info_label.setText(
+                        f"{n_found} found — {n_total_selected} selected total"
+                    )
                 else:
-                    self._filter_info_label.setText("")
-            self._select_all_btn.blockSignals(True)
-            self._select_all_btn.setChecked(all_selected)
-            self._select_all_btn.setText("Deselect All" if all_selected else "Select All")
-            self._select_all_btn.blockSignals(False)
+                    label = f"{n_total_selected} selected" if n_total_selected else ""
+                    self._filter_info_label.setText(label)
 
         self._list.blockSignals(False)
 
@@ -327,36 +350,43 @@ class SidebarBrowser(QWidget):
         if entry["isDirectory"] and not self._recursive_mode:
             self._navigate(entry["path"])
 
-    def _on_select_all_toggled(self, checked: bool):
-        """Check or uncheck items.
-
-        In recursive mode selects *all* matching entries across all pages.
-        In normal mode selects only the currently visible page.
-        """
-        if self._recursive_mode and checked:
-            # Select every entry in the full recursive results, not just the current page
+    def _on_select_all(self):
+        """Select all items matching the current filter in the current directory."""
+        if self._recursive_mode:
             for entry in self._recursive_entries:
                 self._checked_paths.add(entry["path"])
-        elif self._recursive_mode and not checked:
-            for entry in self._recursive_entries:
-                self._checked_paths.discard(entry["path"])
+        elif not self._s3_mode:
+            all_entries = list_local(self._current_path)
+            for entry in all_entries:
+                if self._include_filter or self._exclude_filter:
+                    name = entry["name"]
+                    if self._include_filter and not any(
+                        _pat_match(name, pat) for pat in self._include_filter
+                    ):
+                        continue
+                    if self._exclude_filter and any(
+                        _pat_match(name, pat) for pat in self._exclude_filter
+                    ):
+                        continue
+                self._checked_paths.add(entry["path"])
         else:
             self._list.blockSignals(True)
             for i in range(self._list.count()):
                 item = self._list.item(i)
                 if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
-                    item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+                    item.setCheckState(Qt.CheckState.Checked)
                     entry: FileEntry = item.data(Qt.ItemDataRole.UserRole)
                     if entry:
-                        if checked:
-                            self._checked_paths.add(entry["path"])
-                        else:
-                            self._checked_paths.discard(entry["path"])
+                        self._checked_paths.add(entry["path"])
             self._list.blockSignals(False)
-        self._select_all_btn.setText("Deselect All" if checked else "Select All")
-        # Re-render current page to reflect new check state
         self._refresh_list()
         self.selection_changed.emit(list(self._checked_paths))
+
+    def _on_deselect_all(self):
+        """Clear the entire selection regardless of current folder or filter."""
+        self._checked_paths.clear()
+        self._refresh_list()
+        self.selection_changed.emit([])
 
     def _on_new_folder(self):
         """Prompt user for a folder name and create it under the current path."""
@@ -411,7 +441,11 @@ class SidebarBrowser(QWidget):
         self._include_filter = [p.strip() for p in include.split(",") if p.strip()]
         self._exclude_filter = [p.strip() for p in exclude.split(",") if p.strip()]
 
-        use_recursive = bool(self._include_filter) and not self._s3_mode and self._mode == "conversion"
+        # Only go recursive when at least one include pattern contains a glob wildcard.
+        # Plain strings (e.g. "tif") stay non-recursive and match via substring in the
+        # current folder view.
+        has_wildcard = any(any(c in pat for c in "*?[") for pat in self._include_filter)
+        use_recursive = bool(self._include_filter) and has_wildcard and not self._s3_mode and self._mode == "conversion"
         if use_recursive:
             self._recursive_mode = True
             self._recursive_entries = list_local_recursive(

@@ -46,7 +46,7 @@ def do_render(params: dict, executor: ThreadPoolExecutor) -> np.ndarray:
     if has_c and len(channels_config) > 1:
         visible = [ch for ch in channels_config if ch.get("visible", True)]
         if not visible:
-            visible = [channels_config[0]]
+            return np.zeros((1, 1, 3), dtype=np.uint8)
         results: list = [None] * len(visible)
 
         def fetch(i, vc):
@@ -130,13 +130,15 @@ class RenderWorker(QThread):
                     rgb = do_render(params, executor)
                     elapsed = (time.perf_counter() - t0) * 1000
                     # If the caller requested a coarse-level preview, upsample
-                    # back to the full fov_size via pixel replication so the
-                    # displayed frame always fills the same canvas area.
+                    # back to target_fov_size via nearest-neighbour index mapping
+                    # so the displayed frame always fills the same canvas area.
                     target = params.get("target_fov_size", 0)
-                    if target and target > params.get("fov_size", target):
-                        scale = target // params["fov_size"]
-                        if scale > 1:
-                            rgb = np.repeat(np.repeat(rgb, scale, axis=0), scale, axis=1)
+                    if target:
+                        h, w = rgb.shape[:2]
+                        if h != target or w != target:
+                            row_idx = np.round(np.linspace(0, h - 1, target)).astype(np.intp)
+                            col_idx = np.round(np.linspace(0, w - 1, target)).astype(np.intp)
+                            rgb = rgb[np.ix_(row_idx, col_idx)]
                     self.frame_ready.emit(rgb, elapsed, gen)
                 except Exception as exc:
                     self.render_error.emit(str(exc))

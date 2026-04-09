@@ -93,11 +93,6 @@ class ImageWidget(QWidget):
         x, y, dw, dh = self._display_rect()
         painter.drawPixmap(x, y, dw, dh, self._pixmap)
 
-        # Timing overlay (top-left inside image)
-        painter.setPen(QColor(255, 200, 50))
-        painter.setFont(QFont("monospace", 9))
-        painter.drawText(x + 6, y + 16, f"{self._elapsed:.0f} ms")
-
         if abs(self._aspect - 1.0) > 0.01:
             painter.setPen(QColor(100, 200, 255))
             painter.drawText(x + 6, y + 32, f"AR {self._aspect:.3f}")
