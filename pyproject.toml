@@ -45,7 +45,7 @@ dependencies = [
     "PyQt6>=6.6.0",
     "PyQt6-sip>=13.6.0",
     "pytest>=7.0",
-    "pytest-cov>=4.0"
+    "pytest-cov>=4.0",
     "readlif==0.6.5",
     "s3fs>=0.0.0",
     "scipy>=1.8",
