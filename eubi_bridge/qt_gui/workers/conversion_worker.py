@@ -266,8 +266,13 @@ class ConversionWorker(QThread):
         from eubi_bridge.mp_logging_setup import setup_mp_logging_with_worker_init
         import eubi_bridge.conversion.converter as _conv_module
 
-        _mp_manager = multiprocessing.Manager()
-        _log_queue = _mp_manager.Queue()
+        # Use a spawn-context Queue instead of Manager().Queue().
+        # Manager() forks the Qt process on Linux (the default start method),
+        # and fork inside a Qt application deadlocks because forked children
+        # inherit Qt's locked internal mutexes without the threads that hold them.
+        # A spawn-context Queue uses only OS pipes/semaphores and is fully
+        # picklable for passing as initargs to spawn ProcessPoolExecutor workers.
+        _log_queue = multiprocessing.get_context("spawn").Queue()
 
         _stop_drain = threading.Event()
         _log_q_ref = _log_queue
@@ -370,7 +375,7 @@ class ConversionWorker(QThread):
             _stop_drain.set()
             _drain_thread.join(timeout=5.0)
             try:
-                _mp_manager.shutdown()
+                _log_queue.close()
             except Exception:
                 pass
             # Emit finished/failed AFTER the drain thread has joined so that all
