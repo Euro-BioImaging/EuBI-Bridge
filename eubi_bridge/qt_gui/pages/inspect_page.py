@@ -977,12 +977,35 @@ class InspectPage(QWidget):
                     # Escalate one level coarser than the current preview level
                     # (or selected level if no preview yet).
                     current = self._pan_coarse_idx if self._pan_coarse_idx is not None else sel
-                    if current < max_lvl:
-                        self._pan_coarse_idx = current + 1
-                        self._pan_cache[key] = self._pan_coarse_idx
-                        # Re-render immediately at the new coarser level.
-                        if not self._pan_render_timer.isActive():
-                            self._pan_render_timer.start(0)
+                    proposed = current + 1
+                    if proposed <= max_lvl and self._pyr:
+                        # Guard: only escalate when the proposed coarse level is still
+                        # useful for panning.  If the entire layer at the proposed level
+                        # fits within the coarse FOV on either axis, compute_fov_region
+                        # will always clamp to slice(0, layer_size) regardless of the
+                        # pan position → all renders return identical frames → display
+                        # appears frozen and the preview no longer represents the current
+                        # view area (effectively showing a full-dataset thumbnail).
+                        should_escalate = True
+                        try:
+                            from zarr_plane_server import get_orientation_axes
+                            sel_info = get_orientation_axes(
+                                self._pyr, self._level_paths[sel], self._orientation)
+                            prop_info = get_orientation_axes(
+                                self._pyr, self._level_paths[proposed], self._orientation)
+                            ratio = sel_info['v_scale'] / prop_info['v_scale']
+                            coarse_fov = max(64, int(self._fov_size * ratio))
+                            if (prop_info['layer_height'] <= coarse_fov
+                                    or prop_info['layer_width'] <= coarse_fov):
+                                should_escalate = False
+                        except Exception:
+                            pass  # on error keep should_escalate = True
+                        if should_escalate:
+                            self._pan_coarse_idx = proposed
+                            self._pan_cache[key] = proposed
+                            # Re-render immediately at the new coarser level.
+                            if not self._pan_render_timer.isActive():
+                                self._pan_render_timer.start(0)
             else:
                 self._pan_slow_streak = 0
 
