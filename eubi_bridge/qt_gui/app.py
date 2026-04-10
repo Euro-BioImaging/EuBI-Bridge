@@ -13,6 +13,12 @@ from eubi_bridge.qt_gui.main_window import MainWindow
 
 
 def main():
+    # QT_SCALE_FACTOR must be set before QApplication is constructed.
+    # Read it from the persisted settings so the scale survives restarts.
+    from eubi_bridge.qt_gui.settings_dialog import current_ui_scale
+    import os
+    os.environ.setdefault("QT_SCALE_FACTOR", str(current_ui_scale()))
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 

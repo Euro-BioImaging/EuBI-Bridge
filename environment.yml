@@ -3,23 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - python=3.12
-  - numpy<2.0
-  - scipy
-  - h5py
-  - imagecodecs
-  - numcodecs
-  - pip
-  - numexpr
-  - pandas
-  - cython
-  - pyarrow
-  - dask
-  - xarray
-  - zarr
-  - tifffile
-  - imageio
-  - tensorstore
-  - ndindex
+  - pyqt6
   - pip:
-    - "git+https://github.com/Euro-BioImaging/EuBI-Bridge.git@bf_bundled#egg=eubi_bridge[all]"
-prefix: null  # Allow users to specify via -p flag or CONDA_PREFIX
+    - "git+https://github.com/Euro-BioImaging/EuBI-Bridge.git"
+prefix: null  # Users to specify via -p flag or CONDA_PREFIX

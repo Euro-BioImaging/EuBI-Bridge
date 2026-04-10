@@ -1,12 +1,18 @@
 """
-Settings dialog — font size + colour palette.
+Settings dialog — font size, colour palette, and UI scale.
 
 Usage:
     dlg = SettingsDialog(parent=window)
     dlg.exec()          # apply() is called automatically on Accept
+
+UI scale note:
+    QT_SCALE_FACTOR must be set before QApplication is constructed, so a scale
+    change is written to disk and takes effect on the next launch.
 """
 from __future__ import annotations
 
+import json
+import os
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QPalette
 from PyQt6.QtWidgets import (
@@ -155,6 +161,45 @@ STYLESHEETS: dict[str, str] = {
 
 _current_theme = "Dark (default)"
 _current_font_size = 9   # pt
+_current_ui_scale = 1.0  # stored; applied via QT_SCALE_FACTOR at next launch
+
+_UI_SCALE_OPTIONS = ["100%", "125%", "150%", "175%", "200%"]
+_UI_SCALE_VALUES  = [1.0,    1.25,   1.5,    1.75,   2.0]
+
+# ── Persistence ───────────────────────────────────────────────────────────────
+
+def _settings_path() -> str:
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    folder = os.path.join(base, "EuBI-Bridge")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, "settings.json")
+
+
+def _load_settings() -> None:
+    global _current_theme, _current_font_size, _current_ui_scale
+    try:
+        with open(_settings_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        _current_theme     = data.get("theme",     _current_theme)
+        _current_font_size = int(data.get("font_size", _current_font_size))
+        _current_ui_scale  = float(data.get("ui_scale",  _current_ui_scale))
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        pass
+
+
+def _save_settings() -> None:
+    try:
+        with open(_settings_path(), "w", encoding="utf-8") as fh:
+            json.dump({
+                "theme":     _current_theme,
+                "font_size": _current_font_size,
+                "ui_scale":  _current_ui_scale,
+            }, fh, indent=2)
+    except OSError:
+        pass
+
+
+_load_settings()  # populate globals from disk at import time
 
 
 def current_theme() -> str:
@@ -165,11 +210,19 @@ def current_font_size() -> int:
     return _current_font_size
 
 
-def apply_settings(theme: str, font_size: int) -> None:
-    """Apply *theme* and *font_size* to the running QApplication."""
-    global _current_theme, _current_font_size
+def current_ui_scale() -> float:
+    return _current_ui_scale
+
+
+def apply_settings(theme: str, font_size: int, ui_scale: float | None = None) -> None:
+    """Apply *theme* and *font_size* to the running QApplication.
+    *ui_scale* is persisted but takes effect only on the next launch."""
+    global _current_theme, _current_font_size, _current_ui_scale
     _current_theme = theme
     _current_font_size = font_size
+    if ui_scale is not None:
+        _current_ui_scale = ui_scale
+    _save_settings()
 
     app = QApplication.instance()
     if not isinstance(app, QApplication):
@@ -225,6 +278,20 @@ class SettingsDialog(QDialog):
         font_row_widget = self._make_font_row()
         ap_layout.addRow("Font size:", font_row_widget)
 
+        # UI scale dropdown
+        self._scale_combo = QComboBox()
+        for label in _UI_SCALE_OPTIONS:
+            self._scale_combo.addItem(label)
+        # Select the option closest to the current scale
+        closest = min(range(len(_UI_SCALE_VALUES)),
+                      key=lambda i: abs(_UI_SCALE_VALUES[i] - _current_ui_scale))
+        self._scale_combo.setCurrentIndex(closest)
+        ap_layout.addRow("UI scale:", self._scale_combo)
+
+        scale_note = QLabel("\u26a0\ufe0f Scale change takes effect after restart.")
+        scale_note.setStyleSheet("font-size: 9px; color: #aaa;")
+        ap_layout.addRow("", scale_note)
+
         outer.addWidget(ap_group)
 
         # ── Buttons ───────────────────────────────────────────────────────────
@@ -250,6 +317,7 @@ class SettingsDialog(QDialog):
         # Snapshot of state at dialog open — used to revert on Cancel
         self._snapshot_theme = _current_theme
         self._snapshot_font  = _current_font_size
+        self._snapshot_scale = _current_ui_scale
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -275,14 +343,19 @@ class SettingsDialog(QDialog):
         lay.addWidget(self._font_label)
         return w
 
+    def _selected_scale(self) -> float:
+        return _UI_SCALE_VALUES[self._scale_combo.currentIndex()]
+
     def _on_preview(self):
-        apply_settings(self._theme_combo.currentText(), self._font_slider.value())
+        apply_settings(self._theme_combo.currentText(), self._font_slider.value(),
+                       self._selected_scale())
 
     def _on_accept(self):
-        apply_settings(self._theme_combo.currentText(), self._font_slider.value())
+        apply_settings(self._theme_combo.currentText(), self._font_slider.value(),
+                       self._selected_scale())
         self.accept()
 
     def _on_reject(self):
         # Revert to the state before the dialog was opened
-        apply_settings(self._snapshot_theme, self._snapshot_font)
+        apply_settings(self._snapshot_theme, self._snapshot_font, self._snapshot_scale)
         self.reject()

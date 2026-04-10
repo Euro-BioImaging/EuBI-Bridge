@@ -19,8 +19,14 @@ _ANSI_ESC = _re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-9;]*[ -/]*[@-~])')
 
 # ── Logging bridge ────────────────────────────────────────────────────────────
 
+_SEP = "\x01"  # field separator for structured log lines sent to LogWidget
+
 class _QtLogHandler(logging.Handler):
-    """Forwards log records to a Qt signal callback."""
+    """Forwards log records to a Qt signal callback as structured lines.
+
+    Format: ``HH:MM:SS\x01LEVELNAME\x01module.py:lineno\x01message``
+    LogWidget recognises the separator and renders each segment in its own colour.
+    """
 
     def __init__(self, emit_fn):
         super().__init__()
@@ -28,8 +34,12 @@ class _QtLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord):
         try:
-            msg = self.format(record)
-            self._emit_fn(msg)
+            import time as _time
+            ts = _time.strftime("%H:%M:%S", _time.localtime(record.created))
+            module = f"{record.filename}:{record.lineno}"
+            msg = record.getMessage()
+            structured = f"{ts}{_SEP}{record.levelname}{_SEP}{module}{_SEP}{msg}"
+            self._emit_fn(structured)
         except Exception:
             pass
 
@@ -240,11 +250,6 @@ class ConversionWorker(QThread):
         # Set up logging capture
         handler = _QtLogHandler(emit_log)
         handler.setLevel(logging.DEBUG)
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%H:%M:%S",
-        )
-        handler.setFormatter(formatter)
 
         root_logger = logging.getLogger()
         original_handlers = root_logger.handlers[:]
@@ -287,14 +292,16 @@ class ConversionWorker(QThread):
 
         class _LoggingPPE(_orig_ppe):
             def __init__(self, max_workers=None, **kw):
-                tsc = kw.get('initargs', (1,))[0] if 'initargs' in kw else 1
+                raw = kw.get('initargs', (1,))[0] if 'initargs' in kw else 1
+                tsc = raw if isinstance(raw, int) else 1
                 kw['initializer'] = setup_mp_logging_with_worker_init
                 kw['initargs'] = (_log_q_ref, tsc)
                 super().__init__(max_workers, **kw)
 
         class _LoggingTPE(_orig_tpe):
             def __init__(self, max_workers=None, **kw):
-                tsc = kw.get('initargs', (1,))[0] if 'initargs' in kw else 1
+                raw = kw.get('initargs', (1,))[0] if 'initargs' in kw else 1
+                tsc = raw if isinstance(raw, int) else 1
                 kw['initializer'] = setup_mp_logging_with_worker_init
                 kw['initargs'] = (_log_q_ref, tsc)
                 super().__init__(max_workers, **kw)
@@ -302,6 +309,9 @@ class ConversionWorker(QThread):
         _conv_module.ProcessPoolExecutor = _LoggingPPE
         _conv_module.ThreadPoolExecutor = _LoggingTPE
         # --- end subprocess log setup ---
+
+        _success = False
+        _failure_tb = None
 
         try:
             emit_log("Initializing EuBI-Bridge...")
@@ -344,13 +354,10 @@ class ConversionWorker(QThread):
                 **kwargs,
             )
 
-            if not self._cancelled:
-                self.finished.emit()
+            _success = not self._cancelled
 
         except Exception:
-            tb = traceback.format_exc()
-            if not self._cancelled:
-                self.failed.emit(tb)
+            _failure_tb = traceback.format_exc()
         finally:
             sys.stdout = orig_stdout
             sys.stderr = orig_stderr
@@ -366,3 +373,10 @@ class ConversionWorker(QThread):
                 _mp_manager.shutdown()
             except Exception:
                 pass
+            # Emit finished/failed AFTER the drain thread has joined so that all
+            # log_line signals are already queued before the main thread processes
+            # the completion signal (which sets _worker=None and breaks connections).
+            if _failure_tb is not None and not self._cancelled:
+                self.failed.emit(_failure_tb)
+            elif _success:
+                self.finished.emit()

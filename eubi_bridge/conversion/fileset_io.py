@@ -241,11 +241,18 @@ def reduce_paths_flexible(paths: Iterable[str],
         return paths[0]
 
     if isinstance(dimension_tag, str):
-        # Numeric case: Match like 'T0001', 'Channel2', etc.
-        pattern = re.compile(rf'({re.escape(dimension_tag)})(\d+)')
+        # Normalize: strip any trailing path separator so "frames" and "frames\" are identical.
+        tag_stripped = dimension_tag.rstrip('/\\')
+
+        # Match the normalised tag, optionally followed by a path separator, then digits.
+        # This covers both inline patterns (T0001) and directory-component patterns (frames\000).
+        # group(1) captures only the stripped tag; the optional separator is consumed but not
+        # captured, so the replacement never re-introduces a dangling separator before replace_with.
+        pattern = re.compile(rf'({re.escape(tag_stripped)})[/\\]?(\d+)')
+
         def replace_tag(path):
             return pattern.sub(lambda m: m.group(1) + replace_with, path)
-        
+
         replaced_paths = [replace_tag(p) for p in paths]
         return replaced_paths[0]
 
@@ -418,7 +425,7 @@ class FileSet:
             ['0001', '0002']
         """
         filepaths = list(self.group.values())[0]
-        matches = get_matches(rf'{dimension_tag}\d+', filepaths)
+        matches = get_matches(dimension_tag + r'[/\\]?\d+', filepaths)
         spans = [match.string[match.start():match.end()] for match in matches]
         numerics = [get_numerics(span)[0] for span in spans]
         # TODO: add an incrementality validator
@@ -482,7 +489,7 @@ class FileSet:
             else:
                 numeric_dict = {}
                 for key, filepaths in group.items():
-                    matches = get_matches(rf'{dim}\d+', filepaths)
+                    matches = get_matches(dim + r'[/\\]?\d+', filepaths)
                     spans = [match.string[match.start():match.end()] for match in matches]
                     spans = [span.replace(dim, '') for span in spans]  ### remove search term from the spans
                     numerics = [get_numerics(span)[0] for span in spans]
@@ -964,6 +971,9 @@ class BatchFile:
 
         for key, updated_key in arraypaths.items():
             new_key = os.path.relpath(updated_key, root_path)
+            # Strip leading ".." segments that arise when the dimension tag was a directory
+            # component (e.g. frames\000.tif) and the replacement moved the path up one level.
+            new_key = os.sep.join(p for p in new_key.split(os.sep) if p != '..')
             new_key = os.path.splitext(new_key)[0]
             new_key = new_key.replace(os.sep, path_separator)
             sample_paths[new_key] = key
@@ -1052,6 +1062,9 @@ class BatchFile:
         for key, vals in arrays_.items():
             (updated_key, arr, ) = vals
             new_key = os.path.relpath(updated_key, root_path)
+            # Strip leading ".." segments that arise when the dimension tag was a directory
+            # component (e.g. frames\000.tif) and the replacement moved the path up one level.
+            new_key = os.sep.join(p for p in new_key.split(os.sep) if p != '..')
             new_key = new_key.replace(os.sep, path_separator)
             arrays[new_key] = arrays_[key][1]
             sample_paths[new_key] = key

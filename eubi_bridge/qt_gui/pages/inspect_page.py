@@ -136,15 +136,19 @@ class InspectPage(QWidget):
         self._pan_render_timer.setInterval(0)
         self._pan_render_timer.timeout.connect(self._trigger_render)
 
-        # Panning preview state — when renders are slow, step to coarser pyramid
-        # levels during drag and restore full quality on mouse release.
-        # _pan_preview_offset: how many levels coarser than _level_idx to use
-        # during preview.  Starts at 1, increases while preview frames still
-        # exceed 8 ms, and is locked in once a fast enough level is found.
-        # Reset when the user changes level, FOV size, or loads a new dataset.
-        self._is_panning          = False
-        self._last_render_ms      = 0.0   # elapsed of most recent full-res render
-        self._pan_preview_offset  = 1     # levels coarser than _level_idx for preview
+        self._is_panning = False
+
+        # Pan preview cache — persists across all drags for the loaded dataset.
+        # Key: (level_idx, fov_size, orientation)  →  coarse_level_idx to use
+        # during panning.  Absent = not yet profiled; first drag probes at full
+        # resolution and writes an entry once slow frames are observed.
+        # Cleared only when a different dataset is loaded or the user presses
+        # the Reload button.
+        self._pan_cache: dict[tuple, int] = {}
+        # Per-drag working state (reset on every drag start).
+        self._pan_coarse_idx: int | None = None   # active preview level this drag
+        self._pan_slow_streak: int = 0             # consecutive slow frames
+        self._pan_start_gen:   int = -1            # generation barrier vs stale settle-render
 
         # Active minmax workers (channel_idx -> worker)
         self._minmax_workers: dict[int, MinMaxWorker] = {}
@@ -308,6 +312,14 @@ class InspectPage(QWidget):
         fit_btn.clicked.connect(self._on_fit)
         nav_layout.addWidget(fit_btn)
 
+        # Reload — clears the pan-preview cache so the viewer re-profiles
+        # render performance from scratch for the current dataset.
+        self._reload_btn = QPushButton("Reload")
+        self._reload_btn.setToolTip("Reload dataset and reset pan-preview cache")
+        self._reload_btn.setEnabled(False)
+        self._reload_btn.clicked.connect(self._on_reload)
+        nav_layout.addWidget(self._reload_btn)
+
         # T slider
         t_row = QHBoxLayout()
         self._t_axis_label = QLabel("T:")
@@ -406,13 +418,16 @@ class InspectPage(QWidget):
         self._pixel_sizes = self._read_pixel_sizes(path)
         self._channels    = self._read_channels(path, pyr)
 
+        # New dataset — clear the pan-preview cache so the viewer re-profiles
+        # performance for this dataset's chunk layout, channel count, etc.
+        self._pan_cache.clear()
+
         self._init_sliders()
         self._populate_metadata_tab()
         self._channel_panel.set_channels(self._channels)
 
         self.status_changed.emit(path)
-        self._pan_preview_offset = 1   # re-profile for the new dataset
-        self._last_render_ms = 0.0
+        self._reload_btn.setEnabled(True)
         self._schedule_render()
 
     def _dim(self, ax: str) -> int:
@@ -425,6 +440,8 @@ class InspectPage(QWidget):
         for o in ("XY", "XZ", "YZ"):
             getattr(self, f"_ori_btn_{o}").setChecked(o == "XY")
         self._z_axis_label.setText("Z:")
+        v_ax, h_ax, through_ax, _ = _ORI["XY"]
+        self._image_widget.set_axes(h_ax, v_ax, through_ax)
 
         n_levels = len(self._level_paths)
         self._zoom_slider.blockSignals(True)
@@ -745,14 +762,10 @@ class InspectPage(QWidget):
         self._level_idx = value
         n = len(self._level_paths)
         self._zoom_label.setText(f"{value} / {max(0, n - 1)}")
-        self._pan_preview_offset = 1   # re-profile at the new level
-        self._last_render_ms = 0.0
         self._schedule_render()
 
     def _on_fov_changed(self, _idx: int):
         self._fov_size = self._fov_combo.currentData()
-        self._pan_preview_offset = 1   # re-profile at the new FOV size
-        self._last_render_ms = 0.0
         self._schedule_render()
 
     def _on_orientation(self, ori: str):
@@ -762,6 +775,7 @@ class InspectPage(QWidget):
 
         v_ax, h_ax, through_ax, through_lbl = _ORI[ori]
         self._z_axis_label.setText(f"{through_lbl}:")
+        self._image_widget.set_axes(h_ax, v_ax, through_ax)
 
         # Reconfigure the through-plane slider for the new axis
         ax_max = max(0, self._dim(through_ax) - 1)
@@ -783,6 +797,12 @@ class InspectPage(QWidget):
         self._fov_center_y = self._dim(v_ax) // 2
         self._fov_center_x = self._dim(h_ax) // 2
         self._schedule_render()
+
+    def _on_reload(self):
+        """Clear the pan-preview cache and reload the current dataset."""
+        if self._path:
+            self._pan_cache.clear()
+            self._load_zarr(self._path)
 
     def _on_t_changed(self, value: int):
         self._t = value
@@ -816,6 +836,16 @@ class InspectPage(QWidget):
         self._minmax_workers.pop(channel_idx, None)
 
     def _on_pan(self, delta_row: float, delta_col: float):
+        if not self._is_panning:
+            # Drag start: capture a generation barrier so any in-flight
+            # settle-render from the previous pan-release is discarded.
+            self._pan_start_gen  = self._render_gen
+            self._pan_slow_streak = 0
+            # Seed from cache: if we've already profiled this combination of
+            # (level, fov, orientation) we can start at the coarse level
+            # immediately without any wasted full-res probe frames.
+            key = (self._level_idx, self._fov_size, self._orientation)
+            self._pan_coarse_idx = self._pan_cache.get(key, None)
         self._is_panning = True
         v_ax, h_ax, _, _ = _ORI[self._orientation]
         v_scale, h_scale = self._current_level_scales()
@@ -882,27 +912,29 @@ class InspectPage(QWidget):
 
         level_idx = max(0, min(self._level_idx, len(self._level_paths) - 1))
         fov_size  = self._fov_size
+        target_fov_size = 0  # 0 = no upsampling needed
 
-        # Coarse-level preview during drag: use _pan_preview_offset levels coarser
-        # than the selected level.  The offset is raised by _on_frame_ready while
-        # preview frames are still slower than 8 ms, then locked in once fast enough.
-        target_fov_size = 0   # 0 means no upsampling needed
-        if self._is_panning and self._last_render_ms > 8.0:
-            candidate = min(level_idx + self._pan_preview_offset,
-                            len(self._level_paths) - 1)
-            if candidate > level_idx:
-                try:
-                    from zarr_plane_server import get_orientation_axes
-                    cur_info = get_orientation_axes(
-                        self._pyr, self._level_paths[level_idx], self._orientation)
-                    prv_info = get_orientation_axes(
-                        self._pyr, self._level_paths[candidate], self._orientation)
-                    ratio = cur_info['v_scale'] / prv_info['v_scale']
-                    target_fov_size = fov_size
-                    fov_size  = max(64, int(self._fov_size * ratio))
-                    level_idx = candidate
-                except Exception:
-                    target_fov_size = 0  # fall back to full-res on any error
+        # Coarse-level preview during drag.  _pan_coarse_idx is seeded from
+        # _pan_cache at drag start (immediate coarse rendering for known-slow
+        # combinations) or set mid-drag once slow frames are observed.
+        # fov_center is in world-space so compute_fov_region handles level
+        # conversion; build_slices handles the through-axis automatically.
+        # Only fov_size needs rescaling so the coarse render covers the same
+        # world area and can be upsampled back to canvas size.
+        if self._is_panning and self._pan_coarse_idx is not None:
+            coarse = self._pan_coarse_idx
+            try:
+                from zarr_plane_server import get_orientation_axes
+                cur = get_orientation_axes(
+                    self._pyr, self._level_paths[level_idx], self._orientation)
+                prv = get_orientation_axes(
+                    self._pyr, self._level_paths[coarse], self._orientation)
+                ratio = cur['v_scale'] / prv['v_scale']
+                target_fov_size = fov_size
+                fov_size = max(64, int(fov_size * ratio))
+                level_idx = coarse
+            except Exception:
+                target_fov_size = 0  # fall back to full-res on error
 
         v_ax, h_ax, _, _ = _ORI[self._orientation]
         v_scale, h_scale = self._current_level_scales()
@@ -924,23 +956,36 @@ class InspectPage(QWidget):
         self._render_gen = self._render_worker._generation
 
     def _on_frame_ready(self, rgb: np.ndarray, elapsed_ms: float, generation: int):
-        # Discard stale frames from superseded render requests.
+        # Discard frames superseded by a later request.
         if generation < self._render_gen:
             return
-        if not self._is_panning:
-            # Full-res render completed — update the threshold used to decide
-            # whether a preview is needed on the next drag.
-            self._last_render_ms = elapsed_ms
-        elif elapsed_ms > 8.0:
-            # Preview frame was still too slow: step one level coarser and
-            # immediately fire another render so the user sees the convergence
-            # within the current drag rather than waiting for the next one.
-            max_offset = len(self._level_paths) - 1 - self._level_idx
-            if self._pan_preview_offset < max_offset:
-                self._pan_preview_offset += 1
-                if not self._pan_render_timer.isActive():
-                    self._pan_render_timer.start(0)
-        # else: preview was fast enough — offset is already correct, keep it.
+        # Discard any in-flight settle-render that was queued before this drag
+        # started — its elapsed_ms reflects the previous position / channel
+        # state and must not influence the preview decision or corrupt display.
+        if self._is_panning and generation <= self._pan_start_gen:
+            return
+
+        if self._is_panning:
+            key = (self._level_idx, self._fov_size, self._orientation)
+            max_lvl = len(self._level_paths) - 1
+            sel = max(0, min(self._level_idx, max_lvl))
+
+            if elapsed_ms > 8.0:
+                self._pan_slow_streak += 1
+                if self._pan_slow_streak >= 2:
+                    self._pan_slow_streak = 0
+                    # Escalate one level coarser than the current preview level
+                    # (or selected level if no preview yet).
+                    current = self._pan_coarse_idx if self._pan_coarse_idx is not None else sel
+                    if current < max_lvl:
+                        self._pan_coarse_idx = current + 1
+                        self._pan_cache[key] = self._pan_coarse_idx
+                        # Re-render immediately at the new coarser level.
+                        if not self._pan_render_timer.isActive():
+                            self._pan_render_timer.start(0)
+            else:
+                self._pan_slow_streak = 0
+
         aspect = self._compute_pixel_aspect()
         self._image_widget.set_frame(rgb, aspect, elapsed_ms)
         self._update_status_bar(elapsed_ms)

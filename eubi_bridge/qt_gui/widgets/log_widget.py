@@ -1,5 +1,8 @@
 """
-Scrollable log output widget with color-coded severity lines.
+Scrollable log output widget styled to match the Rich CLI output.
+
+Structured lines arrive as:  ``HH:MM:SS\x01LEVELNAME\x01module.py:line\x01message``
+Plain lines (subprocess output, banner lines) fall back to whole-line colouring.
 """
 from __future__ import annotations
 
@@ -12,27 +15,53 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+_SEP = "\x01"
 
-_COLORS = {
-    "ERROR":   "#ff6b6b",
-    "WARN":    "#ffd93d",
-    "WARNING": "#ffd93d",
-    "INFO":    "#c8c8c8",
-    "DEBUG":   "#888888",
+# Colours for each severity level — foreground
+_LEVEL_FG: dict[str, str] = {
+    "DEBUG":    "#7c7c7c",
+    "INFO":     "#4ec994",   # Rich green
+    "WARNING":  "#ffd93d",
+    "WARN":     "#ffd93d",
+    "ERROR":    "#ff6b6b",
+    "CRITICAL": "#ff3333",
 }
-_DEFAULT_COLOR = "#c8c8c8"
+# Background tint for the level badge
+_LEVEL_BG: dict[str, str] = {
+    "DEBUG":    "#2a2a2a",
+    "INFO":     "#1a3328",
+    "WARNING":  "#332d10",
+    "WARN":     "#332d10",
+    "ERROR":    "#3a1a1a",
+    "CRITICAL": "#4a0000",
+}
+
+_COLOR_TIME    = "#5c6370"   # dim grey  (like Rich's dimmed timestamp)
+_COLOR_MODULE  = "#5c8fa8"   # muted blue-cyan (like Rich's path)
+_COLOR_MESSAGE = "#d4d4d4"   # near-white
+_COLOR_PLAIN   = "#c8c8c8"   # fallback for unstructured lines
 
 
-def _severity(line: str) -> str:
+def _plain_severity(line: str) -> str:
     upper = line.upper()
-    for key in _COLORS:
+    for key in _LEVEL_FG:
         if key in upper:
             return key
     return ""
 
 
+def _fmt(color: str, bg: str | None = None, bold: bool = False) -> QTextCharFormat:
+    f = QTextCharFormat()
+    f.setForeground(QColor(color))
+    if bg:
+        f.setBackground(QColor(bg))
+    if bold:
+        f.setFontWeight(700)
+    return f
+
+
 class LogWidget(QWidget):
-    """Read-only monospace log viewer with per-line colorization."""
+    """Read-only monospace log viewer, Rich-style per-segment colorisation."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -41,7 +70,7 @@ class LogWidget(QWidget):
         self._text.setFont(QFont("Courier New", 9))
         self._text.setMaximumBlockCount(5000)
         self._text.setStyleSheet(
-            "QPlainTextEdit { background: #1e1e1e; color: #c8c8c8; border: none; }"
+            "QPlainTextEdit { background: #1e1e1e; color: #d4d4d4; border: none; }"
         )
 
         clear_btn = QPushButton("Clear")
@@ -58,22 +87,53 @@ class LogWidget(QWidget):
         layout.addWidget(self._text)
         layout.addLayout(btn_row)
 
+    # ------------------------------------------------------------------
     def append_line(self, msg: str):
-        """Append *msg* with appropriate color and auto-scroll to bottom."""
-        sev = _severity(msg)
-        hex_color = _COLORS.get(sev, _DEFAULT_COLOR)
-
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(hex_color))
-
+        """Append *msg* and auto-scroll to bottom."""
         cursor = self._text.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        if not self._text.toPlainText() == "":
+        if self._text.toPlainText():
             cursor.insertBlock()
-        cursor.insertText(msg, fmt)
+
+        if _SEP in msg:
+            self._insert_structured(cursor, msg)
+        else:
+            self._insert_plain(cursor, msg)
+
         self._text.setTextCursor(cursor)
         self._text.ensureCursorVisible()
 
+    # ------------------------------------------------------------------
+    def _insert_structured(self, cursor: QTextCursor, msg: str):
+        """Render a ``ts\x01LEVEL\x01module:line\x01message`` line."""
+        parts = msg.split(_SEP, 3)
+        if len(parts) != 4:
+            self._insert_plain(cursor, msg)
+            return
+
+        ts, level, module, message = parts
+        level_key = level.upper()
+        fg = _LEVEL_FG.get(level_key, _COLOR_MESSAGE)
+        bg = _LEVEL_BG.get(level_key, "#1e1e1e")
+
+        # [HH:MM:SS]
+        cursor.insertText(f"[{ts}] ", _fmt(_COLOR_TIME))
+        # LEVELNAME badge
+        cursor.insertText(f"{level:<8}", _fmt(fg, bg, bold=True))
+        cursor.insertText(" ", _fmt(_COLOR_MESSAGE))
+        # message
+        cursor.insertText(message, _fmt(_COLOR_MESSAGE))
+        # right-hand module:line — padded with spaces
+        padding = max(1, 60 - len(message))
+        cursor.insertText(" " * padding, _fmt(_COLOR_MESSAGE))
+        cursor.insertText(module, _fmt(_COLOR_MODULE))
+
+    def _insert_plain(self, cursor: QTextCursor, msg: str):
+        sev = _plain_severity(msg)
+        color = _LEVEL_FG.get(sev, _COLOR_PLAIN)
+        cursor.insertText(msg, _fmt(color))
+
+    # ------------------------------------------------------------------
     def clear(self):
         self._text.clear()
 

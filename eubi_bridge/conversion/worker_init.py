@@ -18,55 +18,59 @@ _tensorstore_context = None
 
 
 
-def build_tensorstore_context(data_copy_concurrency: int = 1):
+def build_tensorstore_context(data_copy_concurrency=None):
     """
     Build a tensorstore Context with data_copy_concurrency limit.
-    
+
     Parameters
     ----------
-    data_copy_concurrency : int, optional
+    data_copy_concurrency : int or None or 'default', optional
         Number of CPU cores to use for concurrent data copying/encoding/decoding
-        in tensorstore operations. Default: 1 (serialized, safest for high-concurrency
-        scenarios). Higher values allow more parallelism but increase thread contention.
-    
+        in tensorstore operations.  Pass None or 'default' to let TensorStore
+        manage its own thread pool (recommended for most workloads).
+        Explicit integer values throttle the pool; useful when many worker
+        processes would otherwise oversubscribe the CPU.
+
     Returns
     -------
     tensorstore.Context or None
-        Tensorstore Context object with data_copy_concurrency settings.
-        Returns None if input is invalid (falls back to tensorstore default).
+        Tensorstore Context object with data_copy_concurrency settings, or
+        None to use TensorStore defaults.
     """
+    # Explicit sentinel values → let TensorStore manage its own pool
+    if data_copy_concurrency is None or data_copy_concurrency == 'default':
+        logger.debug("Tensorstore context: using TensorStore defaults (no limit set)")
+        return None
+
     try:
         import tensorstore as ts
-        
-        # Validate input
-        if data_copy_concurrency is None:
-            data_copy_concurrency = 1
-        
-        # Convert to int if needed
-        data_copy_concurrency = int(data_copy_concurrency)
-        
-        # Ensure positive value
-        if data_copy_concurrency < 1:
+
+        # Guard against accidentally receiving a non-scalar (e.g. a Queue proxy
+        # object passed in the wrong position via initargs).
+        if not isinstance(data_copy_concurrency, (int, float, str, bytes)):
             logger.warning(
-                f"Invalid tensorstore_data_copy_concurrency value: {data_copy_concurrency}. "
-                f"Must be >= 1. Using default: 1"
+                f"build_tensorstore_context received unexpected type "
+                f"{type(data_copy_concurrency).__name__} for data_copy_concurrency; "
+                f"using TensorStore defaults."
             )
-            data_copy_concurrency = 1
-        
-        # Create tensorstore Context object with data_copy_concurrency limit
-        context = ts.Context({
-            "data_copy_concurrency": {"limit": data_copy_concurrency}
-        })
-        
-        logger.debug(
-            f"Built tensorstore context with data_copy_concurrency limit: {data_copy_concurrency}"
-        )
+            return None
+
+        limit = int(data_copy_concurrency)
+        if limit < 1:
+            logger.warning(
+                f"Invalid tensorstore_data_copy_concurrency value: {limit}. "
+                f"Must be >= 1; using TensorStore defaults."
+            )
+            return None
+
+        context = ts.Context({"data_copy_concurrency": {"limit": limit}})
+        logger.debug(f"Built tensorstore context with data_copy_concurrency limit: {limit}")
         return context
-        
+
     except (TypeError, ValueError, Exception) as e:
         logger.error(
             f"Error building tensorstore context: {e}. "
-            f"Continuing without custom context (tensorstore will use defaults)."
+            f"Using TensorStore defaults."
         )
         return None
 
@@ -105,7 +109,7 @@ def _patch_xsdata_for_cython():
         pass
 
 
-def initialize_worker_process(tensorstore_data_copy_concurrency=1):
+def initialize_worker_process(tensorstore_data_copy_concurrency='default'):
     """
     Initialize worker process with JVM and proper scyjava configuration.
 
@@ -128,8 +132,10 @@ def initialize_worker_process(tensorstore_data_copy_concurrency=1):
         # For ProcessPoolExecutor with spawn context, use initargs value
         # For ThreadPoolExecutor, also check environment variable set by parent
         data_copy_concurrency = tensorstore_data_copy_concurrency
-        if tensorstore_data_copy_concurrency == 1 and 'EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY' in os.environ:
-            # If default value from parameter but env var is set, use env var (threading mode)
+        if (data_copy_concurrency in (1, 'default', None)
+                and 'EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY' in os.environ):
+            # Env-var override (used by ThreadPoolExecutor workers where initargs
+            # cannot easily carry the value).
             data_copy_concurrency = int(os.environ['EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY'])
         _tensorstore_context = build_tensorstore_context(data_copy_concurrency)
         logger.info(

@@ -33,7 +33,7 @@ def setup_mp_logging(log_queue):
     setup_logging()
 
 
-def setup_mp_logging_with_worker_init(log_queue, tensorstore_data_copy_concurrency=1):
+def setup_mp_logging_with_worker_init(log_queue, tensorstore_data_copy_concurrency='default'):
     """Combined initializer for subprocess workers: tensorstore+JVM init, then queue logging.
 
     Must be a module-level function so it is picklable by the spawn process context.
