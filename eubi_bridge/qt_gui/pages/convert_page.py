@@ -255,6 +255,9 @@ class ConvertPage(QWidget):
         _, self._max_concurrency = _labeled_spin("Max Concurrency:", 1, 128, 4)
         lay.addLayout(_row(QLabel("Max Concurrency:"), self._max_concurrency))
 
+        _, self._max_concurrent_scenes = _labeled_spin("Max Concurrent Scenes:", 1, 64, 4)
+        lay.addLayout(_row(QLabel("Max Concurrent Scenes:"), self._max_concurrent_scenes))
+
         _, self._region_size_mb = _labeled_spin("Region Size MB:", 1, 4096, 256)
         lay.addLayout(_row(QLabel("Region Size MB:"), self._region_size_mb))
 
@@ -266,6 +269,33 @@ class ConvertPage(QWidget):
 
         self._use_slurm = QCheckBox("Use SLURM")
         lay.addWidget(self._use_slurm)
+
+        # SLURM-specific fields — wrapped in containers so setVisible hides label too
+        def _slurm_row(label: str, widget: QWidget) -> QWidget:
+            container = QWidget()
+            container.setLayout(_form_row(label, widget))
+            lay.addWidget(container)
+            return container
+
+        self._slurm_partition = QLineEdit()
+        self._slurm_partition.setPlaceholderText("e.g. gpu, cpu (leave blank for default)")
+        _slurm_row_partition = _slurm_row("SLURM Partition:", self._slurm_partition)
+
+        self._slurm_account = QLineEdit()
+        self._slurm_account.setPlaceholderText("e.g. myproject (leave blank for default)")
+        _slurm_row_account = _slurm_row("SLURM Account:", self._slurm_account)
+
+        self._slurm_time = QLineEdit("24:00:00")
+        self._slurm_time.setPlaceholderText("HH:MM:SS")
+        _slurm_row_time = _slurm_row("SLURM Time Limit:", self._slurm_time)
+
+        self._slurm_rows = (_slurm_row_partition, _slurm_row_account, _slurm_row_time)
+
+        def _toggle_slurm(checked: bool):
+            for w in self._slurm_rows:
+                w.setVisible(checked)
+        self._use_slurm.toggled.connect(_toggle_slurm)
+        _toggle_slurm(False)
 
         lay.addStretch()
 
@@ -650,10 +680,14 @@ class ConvertPage(QWidget):
         self._max_workers.setValue(c.get("maxWorkers", 4))
         self._queue_size.setValue(c.get("queueSize", 4))
         self._max_concurrency.setValue(c.get("maxConcurrency", 4))
+        self._max_concurrent_scenes.setValue(c.get("maxConcurrentScenes", 4))
         self._region_size_mb.setValue(c.get("regionSizeMb", 256))
         self._memory_per_worker.setText(str(c.get("memoryPerWorker", "1GB")))
         self._use_local_dask.setChecked(c.get("useLocalDask", False))
         self._use_slurm.setChecked(c.get("useSlurm", False))
+        self._slurm_partition.setText(c.get("slurmPartition", ""))
+        self._slurm_account.setText(c.get("slurmAccount", ""))
+        self._slurm_time.setText(c.get("slurmTime", "24:00:00"))
 
         r = cfg.get("reader", {})
         self._read_all_scenes.setChecked(r.get("readAllScenes", True))
@@ -748,11 +782,15 @@ class ConvertPage(QWidget):
             "cluster": {
                 "maxWorkers":      self._max_workers.value(),
                 "queueSize":       self._queue_size.value(),
-                "maxConcurrency":  self._max_concurrency.value(),
+                "maxConcurrency":       self._max_concurrency.value(),
+                "maxConcurrentScenes":  self._max_concurrent_scenes.value(),
                 "regionSizeMb":    self._region_size_mb.value(),
                 "memoryPerWorker": self._memory_per_worker.text().strip(),
                 "useLocalDask":    self._use_local_dask.isChecked(),
                 "useSlurm":        self._use_slurm.isChecked(),
+                "slurmPartition":  self._slurm_partition.text().strip(),
+                "slurmAccount":    self._slurm_account.text().strip(),
+                "slurmTime":       self._slurm_time.text().strip() or "24:00:00",
             },
             "reader": {
                 "readAllScenes":     self._read_all_scenes.isChecked(),

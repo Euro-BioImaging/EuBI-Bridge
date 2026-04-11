@@ -484,21 +484,27 @@ async def run_aggregative_with_slurm(
     cluster = SLURMCluster(**cluster_kwargs)
     cluster.scale(1)  # one job — the entire aggregative conversion
 
-    with Client(cluster) as client:
-        logger.info(f"Cluster dashboard: {client.dashboard_link}")
-        # Wait until the SLURM worker has connected before submitting anything.
-        client.wait_for_workers(1)
-        client.run(_slurm_worker_init, tsc)
-        future = client.submit(
-            _aggregative_slurm_task,
-            input_path,
-            output_path,
-            dict(kwargs),
-            pure=False,
-            retries=0,  # don't retry on worker crash — surface the error immediately
-        )
-        logger.info("Aggregative SLURM job submitted; waiting for completion...")
-        result = client.gather(future)
+    _worker_timeout = int(kwargs.get('slurm_worker_timeout', 300))
+
+    try:
+        with Client(cluster) as client:
+            logger.info(f"Cluster dashboard: {client.dashboard_link}")
+            # Wait until the SLURM worker has connected before submitting anything.
+            client.wait_for_workers(1, timeout=_worker_timeout)
+            client.run(_slurm_worker_init, tsc)
+            future = client.submit(
+                _aggregative_slurm_task,
+                input_path,
+                output_path,
+                dict(kwargs),
+                pure=False,
+                retries=0,  # don't retry on worker crash — surface the error immediately
+            )
+            logger.info("Aggregative SLURM job submitted; waiting for completion...")
+            result = client.gather(future)
+    finally:
+        cluster.close()
+        logger.info("SLURM cluster shut down.")
 
     return result
 
@@ -521,7 +527,6 @@ async def run_conversions_from_filepaths_with_slurm(
                 slurm_account    - SLURM account string
                 slurm_partition  - SLURM partition/queue name
                 slurm_time       - wall-clock time limit, e.g. '02:00:00'
-                slurm_cores      - CPU cores per SLURM job (default: 1)
                 memory_per_worker - memory per SLURM job, e.g. '8GB'
                 max_workers      - number of SLURM jobs to launch (default: 4)
     """
@@ -559,7 +564,7 @@ async def run_conversions_from_filepaths_with_slurm(
     logger.info(f"Starting SLURM cluster with up to {max_workers} workers...")
 
     cluster_kwargs = dict(
-        cores=1,          # 1 core per job — each job converts one file
+        cores=max_workers,
         memory=slurm_mem,
         walltime=slurm_time,
         job_extra_directives=[
@@ -588,21 +593,27 @@ async def run_conversions_from_filepaths_with_slurm(
         merged.pop('output_path', None)
         job_params.append((inp, out, merged))
 
-    with Client(cluster) as client:
-        logger.info(f"Cluster dashboard: {client.dashboard_link}")
+    _worker_timeout = int(global_kwargs.get('slurm_worker_timeout', 300))
 
-        # Wait until all requested SLURM workers have connected, then initialise.
-        client.wait_for_workers(max_workers)
-        # Run the worker initializer once on every worker before submitting tasks
-        client.run(_slurm_worker_init, tsc)
+    try:
+        with Client(cluster) as client:
+            logger.info(f"Cluster dashboard: {client.dashboard_link}")
 
-        futures = [
-            client.submit(unary_worker_sync, inp, out, kw, pure=False)
-            for inp, out, kw in job_params
-        ]
-        logger.info(f"Submitted {len(futures)} jobs to SLURM cluster.")
+            # Wait until all requested SLURM workers have connected, then initialise.
+            client.wait_for_workers(max_workers, timeout=_worker_timeout)
+            # Run the worker initializer once on every worker before submitting tasks
+            client.run(_slurm_worker_init, tsc)
 
-        results = client.gather(futures)
+            futures = [
+                client.submit(unary_worker_sync, inp, out, kw, pure=False)
+                for inp, out, kw in job_params
+            ]
+            logger.info(f"Submitted {len(futures)} jobs to SLURM cluster.")
+
+            results = client.gather(futures)
+    finally:
+        cluster.close()
+        logger.info("SLURM cluster shut down.")
 
     # Report failures
     failed_tasks = []

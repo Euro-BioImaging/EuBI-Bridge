@@ -567,8 +567,14 @@ async def unary_worker(input_path: Union[str, ArrayManager],
     manager = await _load_input_manager(input_path, kwargs)
 
     # Setup concurrency control
+    # max_concurrency controls threads *within* each scene write.
+    # max_concurrent_scenes controls how many scenes write simultaneously.
+    # Keeping these separate prevents all N scenes from calling zarr's sync()
+    # machinery at once, which corrupts zarr's internal state and causes
+    # spurious ContainsArrayError on fresh paths.
     max_concurrency = kwargs.get('max_concurrency', 4)
-    sem = asyncio.Semaphore(max_concurrency)
+    max_concurrent_scenes = kwargs.get('max_concurrent_scenes', 4)
+    sem = asyncio.Semaphore(max_concurrent_scenes)
 
     # Determine if suffixes needed
     add_scene = manager.img.n_scenes > 1
