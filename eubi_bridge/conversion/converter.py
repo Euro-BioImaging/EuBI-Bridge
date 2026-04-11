@@ -415,28 +415,29 @@ def _aggregative_slurm_task(input_path, output_path, kwargs_dict):
     Dask distributed workers run with an active event loop, so asyncio.run()
     cannot be called directly from a task function.  We escape by running the
     whole coroutine in a dedicated thread that has no event loop of its own.
-    dask.config scheduler='synchronous' prevents inner dask.compute() calls
-    from dispatching back to the distributed scheduler (which would deadlock
-    with only one worker).
+    dask.config scheduler='synchronous' is set *inside* that thread so it
+    actually takes effect there (dask config is thread-local in Dask >=2022);
+    this prevents inner dask.compute() calls from dispatching back to the
+    distributed scheduler, which would deadlock with only one worker.
     """
     import asyncio
     import concurrent.futures
-    import dask
 
     def _run_in_fresh_thread():
+        import dask
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(
-                run_conversions_with_concatenation(input_path, output_path, **kwargs_dict)
-            )
+            with dask.config.set(scheduler='synchronous'):
+                return loop.run_until_complete(
+                    run_conversions_with_concatenation(input_path, output_path, **kwargs_dict)
+                )
         finally:
             loop.close()
             asyncio.set_event_loop(None)
 
-    with dask.config.set(scheduler='synchronous'):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(_run_in_fresh_thread).result()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(_run_in_fresh_thread).result()
 
 
 async def run_aggregative_with_slurm(
@@ -446,36 +447,28 @@ async def run_aggregative_with_slurm(
 ):
     """Submit the entire aggregative (concatenation) conversion as a single SLURM job.
 
-    Resources are configured via the standard slurm_* kwargs:
-        slurm_cores      - CPU cores for the job (also sets ThreadPoolExecutor max_workers)
-        memory_per_worker - RAM for the job, e.g. '64GB'
-        slurm_time       - wall-clock limit, e.g. '04:00:00'
-        slurm_account    - SLURM account
-        slurm_partition  - SLURM partition/queue
+    max_workers sets the number of CPU cores requested from SLURM and also the
+    number of threads used by the internal ThreadPoolExecutor.
+    memory_per_worker, slurm_time, slurm_account, slurm_partition can be passed
+    as kwargs to override the hardcoded defaults.
     """
     from dask.distributed import Client
     from dask_jobqueue import SLURMCluster
 
-    slurm_time  = kwargs.get('slurm_time', '01:00:00')
-    slurm_mem   = kwargs.get('memory_per_worker', '4GB')
-    slurm_cores = int(kwargs.get('slurm_cores', 1))
+    max_workers     = int(kwargs.get('max_workers', 4))
+    slurm_time      = kwargs.get('slurm_time', '24:00:00')
+    slurm_mem       = kwargs.get('memory_per_worker', '8GB')
     slurm_account   = kwargs.get('slurm_account', None)
     slurm_partition = kwargs.get('slurm_partition', None)
     tsc = kwargs.get('tensorstore_data_copy_concurrency', 'default')
 
-    # Forward slurm_cores as max_workers so the in-job ThreadPoolExecutor
-    # uses all allocated CPUs.
-    if 'max_workers' not in kwargs:
-        kwargs = dict(kwargs)
-        kwargs['max_workers'] = slurm_cores
-
     logger.info(
         f"Submitting aggregative conversion as a single SLURM job "
-        f"({slurm_cores} cores, {slurm_mem}, {slurm_time})..."
+        f"({max_workers} cores, {slurm_mem}, {slurm_time})..."
     )
 
     cluster_kwargs = dict(
-        cores=slurm_cores,
+        cores=max_workers,
         memory=slurm_mem,
         walltime=slurm_time,
         job_extra_directives=[
@@ -502,6 +495,7 @@ async def run_aggregative_with_slurm(
             output_path,
             dict(kwargs),
             pure=False,
+            retries=0,  # don't retry on worker crash — surface the error immediately
         )
         logger.info("Aggregative SLURM job submitted; waiting for completion...")
         result = client.gather(future)
@@ -554,19 +548,18 @@ async def run_conversions_from_filepaths_with_slurm(
             os.makedirs(odir, exist_ok=True)
 
     # --- Cluster configuration ---
-    max_workers  = int(global_kwargs.get('max_workers', 4))
-    slurm_time   = global_kwargs.get('slurm_time', '01:00:00')
-    slurm_mem    = global_kwargs.get('memory_per_worker', '4GB')
-    slurm_cores  = int(global_kwargs.get('slurm_cores', 1))
-    slurm_account    = global_kwargs.get('slurm_account', None)
-    slurm_partition  = global_kwargs.get('slurm_partition', None)
-    verbose      = global_kwargs.get('verbose', False)
-    tsc          = global_kwargs.get('tensorstore_data_copy_concurrency', 'default')
+    max_workers     = int(global_kwargs.get('max_workers', 4))
+    slurm_time      = global_kwargs.get('slurm_time', '24:00:00')
+    slurm_mem       = global_kwargs.get('memory_per_worker', '8GB')
+    slurm_account   = global_kwargs.get('slurm_account', None)
+    slurm_partition = global_kwargs.get('slurm_partition', None)
+    verbose         = global_kwargs.get('verbose', False)
+    tsc             = global_kwargs.get('tensorstore_data_copy_concurrency', 'default')
 
     logger.info(f"Starting SLURM cluster with up to {max_workers} workers...")
 
     cluster_kwargs = dict(
-        cores=slurm_cores,
+        cores=1,          # 1 core per job — each job converts one file
         memory=slurm_mem,
         walltime=slurm_time,
         job_extra_directives=[
