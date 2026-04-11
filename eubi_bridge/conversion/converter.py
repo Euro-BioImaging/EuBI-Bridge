@@ -410,9 +410,18 @@ def _slurm_worker_init(tensorstore_data_copy_concurrency='default'):
 
 def _aggregative_slurm_task(input_path, output_path, kwargs_dict):
     """Module-level sync wrapper so the entire aggregative conversion can be
-    submitted as a single Dask/SLURM task (picklable)."""
+    submitted as a single Dask/SLURM task (picklable).
+
+    Forces dask to use its synchronous scheduler so that any dask delayed
+    operations created inside run_conversions_with_concatenation (e.g.
+    read_single_image_delayed) are computed locally on this worker rather
+    than being dispatched back to the distributed scheduler — which would
+    deadlock when only one worker is available.
+    """
     import asyncio
-    return asyncio.run(run_conversions_with_concatenation(input_path, output_path, **kwargs_dict))
+    import dask
+    with dask.config.set(scheduler='synchronous'):
+        return asyncio.run(run_conversions_with_concatenation(input_path, output_path, **kwargs_dict))
 
 
 async def run_aggregative_with_slurm(
@@ -469,6 +478,8 @@ async def run_aggregative_with_slurm(
 
     with Client(cluster) as client:
         logger.info(f"Cluster dashboard: {client.dashboard_link}")
+        # Wait until the SLURM worker has connected before submitting anything.
+        client.wait_for_workers(1)
         client.run(_slurm_worker_init, tsc)
         future = client.submit(
             _aggregative_slurm_task,
@@ -572,6 +583,8 @@ async def run_conversions_from_filepaths_with_slurm(
     with Client(cluster) as client:
         logger.info(f"Cluster dashboard: {client.dashboard_link}")
 
+        # Wait until all requested SLURM workers have connected, then initialise.
+        client.wait_for_workers(max_workers)
         # Run the worker initializer once on every worker before submitting tasks
         client.run(_slurm_worker_init, tsc)
 
