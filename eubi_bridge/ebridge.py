@@ -702,6 +702,8 @@ class EuBIBridge:
                 max_retries: int = None,
                 tensorstore_data_copy_concurrency: int = None,
                 use_threading: bool = None,
+                on_slurm: bool = None,
+                on_local_cluster: bool = None,
                 **kwargs # metadata kwargs such as pixel sizes and channel info
                 ):
         """Synchronous wrapper for the async to_zarr_async method."""
@@ -728,7 +730,11 @@ class EuBIBridge:
             cli_kwargs['tensorstore_data_copy_concurrency'] = tensorstore_data_copy_concurrency
         if use_threading is not None:
             cli_kwargs['use_threading'] = use_threading
-        
+        if on_slurm is not None:
+            cli_kwargs['on_slurm'] = on_slurm
+        if on_local_cluster is not None:
+            cli_kwargs['on_local_cluster'] = on_local_cluster
+
         # Add additional kwargs that are CLI parameters (from **kwargs)
         cli_kwargs.update({k: v for k, v in kwargs.items() if k not in []})
         

@@ -408,6 +408,81 @@ def _slurm_worker_init(tensorstore_data_copy_concurrency='default'):
     initialize_worker_process(tensorstore_data_copy_concurrency)
 
 
+def _aggregative_slurm_task(input_path, output_path, kwargs_dict):
+    """Module-level sync wrapper so the entire aggregative conversion can be
+    submitted as a single Dask/SLURM task (picklable)."""
+    import asyncio
+    return asyncio.run(run_conversions_with_concatenation(input_path, output_path, **kwargs_dict))
+
+
+async def run_aggregative_with_slurm(
+        input_path,
+        output_path,
+        **kwargs
+):
+    """Submit the entire aggregative (concatenation) conversion as a single SLURM job.
+
+    Resources are configured via the standard slurm_* kwargs:
+        slurm_cores      - CPU cores for the job (also sets ThreadPoolExecutor max_workers)
+        memory_per_worker - RAM for the job, e.g. '64GB'
+        slurm_time       - wall-clock limit, e.g. '04:00:00'
+        slurm_account    - SLURM account
+        slurm_partition  - SLURM partition/queue
+    """
+    from dask.distributed import Client
+    from dask_jobqueue import SLURMCluster
+
+    slurm_time  = kwargs.get('slurm_time', '01:00:00')
+    slurm_mem   = kwargs.get('memory_per_worker', '4GB')
+    slurm_cores = int(kwargs.get('slurm_cores', 1))
+    slurm_account   = kwargs.get('slurm_account', None)
+    slurm_partition = kwargs.get('slurm_partition', None)
+    tsc = kwargs.get('tensorstore_data_copy_concurrency', 'default')
+
+    # Forward slurm_cores as max_workers so the in-job ThreadPoolExecutor
+    # uses all allocated CPUs.
+    if 'max_workers' not in kwargs:
+        kwargs = dict(kwargs)
+        kwargs['max_workers'] = slurm_cores
+
+    logger.info(
+        f"Submitting aggregative conversion as a single SLURM job "
+        f"({slurm_cores} cores, {slurm_mem}, {slurm_time})..."
+    )
+
+    cluster_kwargs = dict(
+        cores=slurm_cores,
+        memory=slurm_mem,
+        walltime=slurm_time,
+        job_extra_directives=[
+            '--job-name=eubi_aggregative',
+            '--output=slurm-%j.out',
+        ],
+    )
+    if slurm_account:
+        cluster_kwargs['account'] = slurm_account
+    if slurm_partition:
+        cluster_kwargs['queue'] = slurm_partition
+
+    cluster = SLURMCluster(**cluster_kwargs)
+    cluster.scale(1)  # one job — the entire aggregative conversion
+
+    with Client(cluster) as client:
+        logger.info(f"Cluster dashboard: {client.dashboard_link}")
+        client.run(_slurm_worker_init, tsc)
+        future = client.submit(
+            _aggregative_slurm_task,
+            input_path,
+            output_path,
+            dict(kwargs),
+            pure=False,
+        )
+        logger.info("Aggregative SLURM job submitted; waiting for completion...")
+        result = client.gather(future)
+
+    return result
+
+
 async def run_conversions_from_filepaths_with_slurm(
         input_path,
         output_path=None,
@@ -765,20 +840,24 @@ def run_conversions(
 
     if axes_of_concatenation is None:
         if on_slurm:
-            import shutil
-            slurm_available = (shutil.which("sinfo") is not None or
-                               shutil.which("squeue") is not None)
-            if slurm_available:
-                runner = run_conversions_from_filepaths_with_slurm
-            else:
-                logger.warn(f"Slurm is not available. Falling back to local-cluster mode.")
-                runner = run_conversions_from_filepaths_with_local_cluster
+            runner = run_conversions_from_filepaths_with_slurm
         elif on_local_cluster:
             runner = run_conversions_from_filepaths_with_local_cluster
         else:
             runner = run_conversions_from_filepaths
     else:
-        runner = run_conversions_with_concatenation
+        if on_slurm:
+            runner = run_aggregative_with_slurm
+        elif on_local_cluster:
+            raise ValueError(
+                "--on_local_cluster is not compatible with --concatenation_axes. "
+                "Aggregative (concatenation) conversion runs as a single task and "
+                "cannot be split across a LocalCluster. "
+                "Remove --on_local_cluster to run aggregative conversion locally, "
+                "or use --on_slurm to submit it as a single SLURM job."
+            )
+        else:
+            runner = run_conversions_with_concatenation
     return asyncio.run(runner(filepaths,
                               output_path = output_path,
                               **kwargs
