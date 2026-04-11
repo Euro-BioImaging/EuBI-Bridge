@@ -52,6 +52,7 @@ nav:
   - CLI Usage: cli.md
   - Conversion Tutorial: conversion_tutorial.md
   - Conversion Examples: conversion_examples.md
+  - Tutorial for GUI (in progress): gui_tutorial.md
 
 plugins:
   - search

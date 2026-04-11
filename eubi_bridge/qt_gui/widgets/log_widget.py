@@ -6,6 +6,7 @@ Plain lines (subprocess output, banner lines) fall back to whole-line colouring.
 """
 from __future__ import annotations
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -63,6 +64,9 @@ def _fmt(color: str, bg: str | None = None, bold: bool = False) -> QTextCharForm
 class LogWidget(QWidget):
     """Read-only monospace log viewer, Rich-style per-segment colorisation."""
 
+    _FLUSH_INTERVAL_MS = 100   # batch flush period
+    _MAX_BATCH = 200           # max lines rendered per flush to stay responsive
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._text = QPlainTextEdit()
@@ -72,6 +76,12 @@ class LogWidget(QWidget):
         self._text.setStyleSheet(
             "QPlainTextEdit { background: #1e1e1e; color: #d4d4d4; border: none; }"
         )
+
+        self._pending: list[str] = []
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(self._FLUSH_INTERVAL_MS)
+        self._flush_timer.timeout.connect(self._flush)
+        self._flush_timer.start()
 
         clear_btn = QPushButton("Clear")
         clear_btn.setFixedHeight(22)
@@ -89,16 +99,26 @@ class LogWidget(QWidget):
 
     # ------------------------------------------------------------------
     def append_line(self, msg: str):
-        """Append *msg* and auto-scroll to bottom."""
+        """Buffer *msg*; the flush timer renders it in batches."""
+        self._pending.append(msg)
+
+    def _flush(self):
+        """Render up to _MAX_BATCH buffered lines in one pass."""
+        if not self._pending:
+            return
+        batch, self._pending = self._pending[:self._MAX_BATCH], self._pending[self._MAX_BATCH:]
+
         cursor = self._text.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        if self._text.toPlainText():
-            cursor.insertBlock()
+        has_content = self._text.document().blockCount() > 1 or self._text.document().firstBlock().text()
 
-        if _SEP in msg:
-            self._insert_structured(cursor, msg)
-        else:
-            self._insert_plain(cursor, msg)
+        for i, msg in enumerate(batch):
+            if has_content or i > 0:
+                cursor.insertBlock()
+            if _SEP in msg:
+                self._insert_structured(cursor, msg)
+            else:
+                self._insert_plain(cursor, msg)
 
         self._text.setTextCursor(cursor)
         self._text.ensureCursorVisible()
@@ -135,6 +155,7 @@ class LogWidget(QWidget):
 
     # ------------------------------------------------------------------
     def clear(self):
+        self._pending.clear()
         self._text.clear()
 
     def text(self) -> str:

@@ -236,9 +236,22 @@ class ConversionWorker(QThread):
         super().__init__(parent)
         self._config = config
         self._cancelled = False
+        self._executors: list = []  # tracked ProcessPoolExecutor instances
 
     def cancel(self):
         self._cancelled = True
+        # Kill all spawned worker processes immediately so they don't keep running
+        # after the QThread is terminated.
+        for executor in list(self._executors):
+            try:
+                for proc in getattr(executor, '_processes', {}).values():
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
 
     def run(self):
         config = self._config
@@ -294,6 +307,7 @@ class ConversionWorker(QThread):
         # Patch converter's executor classes so subprocess workers use queue logging
         _orig_ppe = _conv_module.ProcessPoolExecutor
         _orig_tpe = _conv_module.ThreadPoolExecutor
+        _self_executors = self._executors  # captured for closure
 
         class _LoggingPPE(_orig_ppe):
             def __init__(self, max_workers=None, **kw):
@@ -302,6 +316,7 @@ class ConversionWorker(QThread):
                 kw['initializer'] = setup_mp_logging_with_worker_init
                 kw['initargs'] = (_log_q_ref, tsc)
                 super().__init__(max_workers, **kw)
+                _self_executors.append(self)  # track so cancel() can kill workers
 
         class _LoggingTPE(_orig_tpe):
             def __init__(self, max_workers=None, **kw):
@@ -372,6 +387,7 @@ class ConversionWorker(QThread):
             # Restore patched executors and stop drainer
             _conv_module.ProcessPoolExecutor = _orig_ppe
             _conv_module.ThreadPoolExecutor = _orig_tpe
+            self._executors.clear()
             _stop_drain.set()
             _drain_thread.join(timeout=5.0)
             try:

@@ -132,6 +132,10 @@
                 <li class="toctree-l1"><a class="reference internal" href="../conversion_examples/">Conversion Examples</a>
                 </li>
               </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../gui_tutorial/">Tutorial for GUI (in progress)</a>
+                </li>
+              </ul>
       </div>
     </div>
     </nav>
@@ -227,9 +231,9 @@ It supports both <strong>unary</strong> and <strong>aggregative</strong> convers
 <td>Exclude filter for filenames</td>
 </tr>
 <tr>
-<td><code>--series</code></td>
-<td><code>int</code></td>
-<td>BioFormats series index</td>
+<td><code>--scene_index</code></td>
+<td><code>int</code> or <code>tuple</code></td>
+<td>Scene(s) to be extracted</td>
 </tr>
 <tr>
 <td><code>--time_tag</code></td>
@@ -327,24 +331,29 @@ It supports both <strong>unary</strong> and <strong>aggregative</strong> convers
 </thead>
 <tbody>
 <tr>
-<td><code>--memory_limit</code></td>
+<td><code>--max_concurrency</code></td>
 <td><code>str</code></td>
-<td>Maximum memory per Dask worker</td>
+<td>Maximum concurrent writes <strong>per OME-Zarr group</strong></td>
 </tr>
 <tr>
-<td><code>--n_jobs</code></td>
+<td><code>--max_retries</code></td>
 <td><code>int</code></td>
-<td>Number of Dask workers</td>
+<td>Number of retries attempted for certain types of errors</td>
 </tr>
 <tr>
-<td><code>--no_distributed</code></td>
-<td><code>bool</code></td>
-<td>Disable distributed computation</td>
+<td><code>--max_workers</code></td>
+<td><code>int</code></td>
+<td>Maximum number of processors for <strong>input collection</strong></td>
 </tr>
 <tr>
-<td><code>--no_worker_restart</code></td>
+<td><code>--memory_per_worker</code></td>
+<td><code>int</code></td>
+<td>Memory allocated per worker</td>
+</tr>
+<tr>
+<td><code>--on_local_cluster</code></td>
 <td><code>bool</code></td>
-<td>Prevent automatic worker restarts on failure</td>
+<td>Use local dask cluster for parallelisation</td>
 </tr>
 <tr>
 <td><code>--on_slurm</code></td>
@@ -352,19 +361,24 @@ It supports both <strong>unary</strong> and <strong>aggregative</strong> convers
 <td>Enable SLURM-based execution</td>
 </tr>
 <tr>
-<td><code>--temp_dir</code></td>
-<td><code>str</code></td>
-<td>Temporary directory for Dask</td>
-</tr>
-<tr>
-<td><code>--threads_per_worker</code></td>
+<td><code>--queue_size</code></td>
 <td><code>int</code></td>
-<td>Threads per worker</td>
+<td>Queue size for the concurrent writes</td>
 </tr>
 <tr>
-<td><code>--verbose</code></td>
+<td><code>--region_size_mb</code></td>
+<td><code>int</code></td>
+<td>Megabytes to calculate unit write-region</td>
+</tr>
+<tr>
+<td><code>--tensorstore_data_copy_concurrency</code></td>
+<td><code>int</code></td>
+<td>Tensorstore context parameter</td>
+</tr>
+<tr>
+<td><code>--use_threading</code></td>
 <td><code>bool</code></td>
-<td>Enable verbose logging</td>
+<td>Use multi-threading rather than multi-processing</td>
 </tr>
 </tbody>
 </table>
@@ -534,11 +548,6 @@ It supports both <strong>unary</strong> and <strong>aggregative</strong> convers
 <td><code>--overwrite</code></td>
 <td><code>bool</code></td>
 <td>Overwrite existing Zarr data</td>
-</tr>
-<tr>
-<td><code>--rechunk_method</code></td>
-<td><code>str</code></td>
-<td>Rechunking method (<code>tasks</code>, <code>p2p</code>)</td>
 </tr>
 <tr>
 <td><code>--trim_memory</code></td>

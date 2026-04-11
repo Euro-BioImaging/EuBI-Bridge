@@ -45,6 +45,14 @@ from eubi_bridge.qt_gui.widgets.log_widget import LogWidget
 from eubi_bridge.qt_gui.widgets.sidebar_browser import SidebarBrowser
 from eubi_bridge.qt_gui.workers.conversion_worker import ConversionWorker
 
+# Pre-import dask_jobqueue in the main thread so its module-level
+# signal.signal() call (in dask_jobqueue/runner.py) never runs inside a
+# QThread, which would raise "signal only works in main thread".
+try:
+    import dask_jobqueue as _dask_jobqueue  # noqa: F401
+except Exception:
+    pass
+
 
 # ── Small helpers ─────────────────────────────────────────────────────────────
 
