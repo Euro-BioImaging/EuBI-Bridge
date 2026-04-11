@@ -117,7 +117,17 @@ def read_image_sync(path: str, **kwargs) -> ImageReader:
     ImageReader
         Reader instance.
     """
-    return asyncio.run(read_single_image(path, **kwargs))
+    try:
+        asyncio.get_running_loop()
+        # Already inside a running event loop (e.g. Dask distributed worker or
+        # the outer asyncio.run inside _aggregative_slurm_task). Run the
+        # coroutine in a brand-new thread that has no event loop of its own.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, read_single_image(path, **kwargs)).result()
+    except RuntimeError:
+        # No running event loop — safe to call asyncio.run directly.
+        return asyncio.run(read_single_image(path, **kwargs))
 
 
 @delayed

@@ -412,16 +412,31 @@ def _aggregative_slurm_task(input_path, output_path, kwargs_dict):
     """Module-level sync wrapper so the entire aggregative conversion can be
     submitted as a single Dask/SLURM task (picklable).
 
-    Forces dask to use its synchronous scheduler so that any dask delayed
-    operations created inside run_conversions_with_concatenation (e.g.
-    read_single_image_delayed) are computed locally on this worker rather
-    than being dispatched back to the distributed scheduler — which would
-    deadlock when only one worker is available.
+    Dask distributed workers run with an active event loop, so asyncio.run()
+    cannot be called directly from a task function.  We escape by running the
+    whole coroutine in a dedicated thread that has no event loop of its own.
+    dask.config scheduler='synchronous' prevents inner dask.compute() calls
+    from dispatching back to the distributed scheduler (which would deadlock
+    with only one worker).
     """
     import asyncio
+    import concurrent.futures
     import dask
+
+    def _run_in_fresh_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                run_conversions_with_concatenation(input_path, output_path, **kwargs_dict)
+            )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
     with dask.config.set(scheduler='synchronous'):
-        return asyncio.run(run_conversions_with_concatenation(input_path, output_path, **kwargs_dict))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_run_in_fresh_thread).result()
 
 
 async def run_aggregative_with_slurm(
