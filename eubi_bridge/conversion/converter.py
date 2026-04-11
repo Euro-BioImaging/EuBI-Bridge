@@ -318,141 +318,213 @@ async def run_conversions_from_filepaths(
 
 async def run_conversions_from_filepaths_with_local_cluster(
         input_path,
+        output_path=None,
         **global_kwargs
 ):
     """
-    Run parallel conversions where each job's parameters (including input/output dirs)
-    are specified via kwargs or a CSV/XLSX file.
+    Run parallel conversions using a local Dask cluster.
 
     Args:
         input_path:
             - list of file paths, OR
             - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
+        output_path: Output directory (used when input_path is not a CSV).
         **global_kwargs: global defaults for all conversions
     """
-    from distributed import Client, LocalCluster
+    from dask.distributed import Client, LocalCluster
+
+    if output_path is not None:
+        global_kwargs.setdefault('output_path', output_path)
+
     df = take_filepaths(input_path, **global_kwargs)
-    # Optionally create dirs before running
-    for odir in df["output_path"].unique():
-        if odir and not os.path.exists(odir):
+
+    for odir in df['output_path'].dropna().unique():
+        if odir:
             os.makedirs(odir, exist_ok=True)
 
-    # --- Setup concurrency ---
-    max_workers = int(global_kwargs.get("max_workers", 4))
-    memory = global_kwargs.get("memory_per_worker", "10GB")
+    max_workers = int(global_kwargs.get('max_workers', 4))
+    memory = global_kwargs.get('memory_per_worker', '4GB')
+    tsc = global_kwargs.get('tensorstore_data_copy_concurrency', 'default')
     verbose = global_kwargs.get('verbose', False)
-    if verbose:
-        logger.info(f"Parallelization with {max_workers} workers.")
+
+    logger.info(f"Starting local Dask cluster with {max_workers} workers.")
 
     job_params = []
     for _, row in df.iterrows():
         job_kwargs = row.to_dict()
-        input_path = job_kwargs.get('input_path')
-        output_path = job_kwargs.get('output_path')
-        job_kwargs.pop('input_path')
-        job_kwargs.pop('output_path')
-        job_params.append((input_path, output_path, job_kwargs))
+        inp = job_kwargs.pop('input_path', None)
+        out = job_kwargs.pop('output_path', None)
+        job_kwargs = {k: v for k, v in job_kwargs.items() if v is not None}
+        merged = {**global_kwargs, **job_kwargs}
+        merged.pop('input_path', None)
+        merged.pop('output_path', None)
+        job_params.append((inp, out, merged))
 
-    with LocalCluster(n_workers=max_workers,
-                      memory_limit=memory
-                      ) as cluster:
+    with LocalCluster(n_workers=max_workers, memory_limit=memory) as cluster:
         with Client(cluster) as client:
-            futures = [
-                client.submit(unary_worker_sync,
-                                    *paramset)
-                for paramset in job_params
-            ]
-            logger.info("Submitted {} jobs to local dask cluster.".format(len(futures)))
             if verbose:
-                logger.info("Cluster dashboard: %s", client.dashboard_link)
+                logger.info(f"Cluster dashboard: {client.dashboard_link}")
+
+            # Initialise every worker (JVM, tensorstore, xsdata) before tasks run
+            client.run(_slurm_worker_init, tsc)
+
+            futures = [
+                client.submit(unary_worker_sync, inp, out, kw, pure=False)
+                for inp, out, kw in job_params
+            ]
+            logger.info(f"Submitted {len(futures)} jobs to local Dask cluster.")
             results = client.gather(futures)
+
+    # Report failures
+    failed_tasks = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"[LocalCluster] Task {i} failed: {result}")
+            failed_tasks.append((i, str(result)))
+        elif isinstance(result, dict) and result.get('status') == 'error':
+            logger.error(f"[LocalCluster] Task {i} failed: {result.get('error')}")
+            failed_tasks.append((i, result.get('error', 'unknown')))
+        else:
+            logger.info(f"[LocalCluster] Task {i} succeeded.")
+
+    if failed_tasks:
+        summary = "\n".join(f"  Task {i}: {e}" for i, e in failed_tasks)
+        raise RuntimeError(
+            f"Local cluster conversion failed for {len(failed_tasks)}/{len(results)} tasks:\n{summary}"
+        )
 
     return results
 
 
+def _slurm_worker_init(tensorstore_data_copy_concurrency='default'):
+    """Worker initializer for Dask SLURM/LocalCluster workers.
+
+    Mirrors what ProcessPoolExecutor workers do via setup_mp_logging_with_worker_init:
+    calls initialize_worker_process so that the JVM, tensorstore context, and
+    xsdata patch are all set up before any conversion task runs.
+    This function must be module-level (picklable) to work with Dask.
+    """
+    from eubi_bridge.conversion.worker_init import initialize_worker_process
+    initialize_worker_process(tensorstore_data_copy_concurrency)
+
+
 async def run_conversions_from_filepaths_with_slurm(
         input_path,
+        output_path=None,
         **global_kwargs
 ):
     """
-    Run parallel conversions using a SLURM cluster.
-    Each job's parameters (including input/output dirs) are specified via kwargs or a CSV/XLSX file.
+    Run parallel conversions using a SLURM cluster via dask-jobqueue.
 
     Args:
         input_path:
             - list of file paths, OR
-            - path to a CSV/XLSX with at least 'input_path' or 'filepath' column.
-        **global_kwargs: global defaults for all conversions.
-            Common SLURM params include:
-                slurm_account, slurm_partition, slurm_time, slurm_mem, slurm_cores
+            - path to a CSV/XLSX with at least 'input_path'/'filepath' column.
+        output_path: Output directory (used when input_path is not a CSV).
+        **global_kwargs: Global defaults for all conversions.
+            SLURM-specific options (all optional):
+                slurm_account    - SLURM account string
+                slurm_partition  - SLURM partition/queue name
+                slurm_time       - wall-clock time limit, e.g. '02:00:00'
+                slurm_cores      - CPU cores per SLURM job (default: 1)
+                memory_per_worker - memory per SLURM job, e.g. '8GB'
+                max_workers      - number of SLURM jobs to launch (default: 4)
     """
-    import os
-
     from dask.distributed import Client
     from dask_jobqueue import SLURMCluster
 
     from eubi_bridge.conversion.conversion_worker import unary_worker_sync
-    from eubi_bridge.utils.logging_config import get_logger
-    from eubi_bridge.utils.path_utils import take_filepaths
-    logger = get_logger(__name__)
+
+    # Pass output_path into global_kwargs so take_filepaths can build the df
+    if output_path is not None:
+        global_kwargs.setdefault('output_path', output_path)
 
     # --- Prepare file list ---
     df = take_filepaths(input_path, **global_kwargs)
 
-    # Optionally create dirs before running
-    for odir in df["output_path"].unique():
-        if odir and not os.path.exists(odir):
+    if 'output_path' not in df.columns:
+        raise ValueError(
+            "No output_path column in the file table and no output_path argument provided."
+        )
+
+    # Create output directories
+    for odir in df['output_path'].dropna().unique():
+        if odir:
             os.makedirs(odir, exist_ok=True)
 
     # --- Cluster configuration ---
-    max_workers = int(global_kwargs.get("max_workers", 10))
-    # slurm_account = global_kwargs.get("slurm_account", None)
-    # slurm_partition = global_kwargs.get("slurm_partition", "general")
-    slurm_time = global_kwargs.get("slurm_time", "01:00:00")
-    slurm_mem = global_kwargs.get("memory_per_worker", "4GB")
-    slurm_cores = int(global_kwargs.get("slurm_cores", 1))
-    verbose = global_kwargs.get("verbose", False)
+    max_workers  = int(global_kwargs.get('max_workers', 4))
+    slurm_time   = global_kwargs.get('slurm_time', '01:00:00')
+    slurm_mem    = global_kwargs.get('memory_per_worker', '4GB')
+    slurm_cores  = int(global_kwargs.get('slurm_cores', 1))
+    slurm_account    = global_kwargs.get('slurm_account', None)
+    slurm_partition  = global_kwargs.get('slurm_partition', None)
+    verbose      = global_kwargs.get('verbose', False)
+    tsc          = global_kwargs.get('tensorstore_data_copy_concurrency', 'default')
 
-    if verbose:
-        logger.info(f"Starting SLURM cluster with up to {max_workers} workers...")
+    logger.info(f"Starting SLURM cluster with up to {max_workers} workers...")
 
-    cluster = SLURMCluster(
-        # queue=slurm_partition,
-        # account=slurm_account,
-        n_workers=max_workers,
-        cores = slurm_cores,
-        memory = slurm_mem,
-        walltime = slurm_time,
+    cluster_kwargs = dict(
+        cores=slurm_cores,
+        memory=slurm_mem,
+        walltime=slurm_time,
         job_extra_directives=[
-            f"--job-name=conversion",
-            f"--output=slurm-%j.out"
+            '--job-name=eubi_conversion',
+            '--output=slurm-%j.out',
         ],
     )
+    if slurm_account:
+        cluster_kwargs['account'] = slurm_account
+    if slurm_partition:
+        cluster_kwargs['queue'] = slurm_partition
 
+    cluster = SLURMCluster(**cluster_kwargs)
     cluster.scale(max_workers)
 
+    # Build per-job parameter list
+    job_params = []
+    for _, row in df.iterrows():
+        job_kwargs = row.to_dict()
+        inp = job_kwargs.pop('input_path', None)
+        out = job_kwargs.pop('output_path', None)
+        # Remove non-serialisable / Dask-internal keys that may have crept in
+        job_kwargs = {k: v for k, v in job_kwargs.items() if v is not None}
+        merged = {**global_kwargs, **job_kwargs}
+        merged.pop('input_path', None)
+        merged.pop('output_path', None)
+        job_params.append((inp, out, merged))
+
     with Client(cluster) as client:
-        job_params = []
-        for _, row in df.iterrows():
-            job_kwargs = row.to_dict()
-            input_path = job_kwargs.pop('input_path', None)
-            output_path = job_kwargs.pop('output_path', None)
-            job_params.append((input_path, output_path, job_kwargs))
+        logger.info(f"Cluster dashboard: {client.dashboard_link}")
 
-        # Submit jobs
+        # Run the worker initializer once on every worker before submitting tasks
+        client.run(_slurm_worker_init, tsc)
+
         futures = [
-            client.submit(unary_worker_sync, *paramset)
-            for paramset in job_params
+            client.submit(unary_worker_sync, inp, out, kw, pure=False)
+            for inp, out, kw in job_params
         ]
-
         logger.info(f"Submitted {len(futures)} jobs to SLURM cluster.")
-        if verbose:
-            logger.info("Cluster dashboard: %s", client.dashboard_link)
 
         results = client.gather(futures)
 
-    if verbose:
-        logger.info("All SLURM jobs completed successfully.")
+    # Report failures
+    failed_tasks = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"[SLURM] Task {i} failed: {result}")
+            failed_tasks.append((i, str(result)))
+        elif isinstance(result, dict) and result.get('status') == 'error':
+            logger.error(f"[SLURM] Task {i} failed: {result.get('error')}")
+            failed_tasks.append((i, result.get('error', 'unknown')))
+        else:
+            logger.info(f"[SLURM] Task {i} succeeded.")
+
+    if failed_tasks:
+        summary = "\n".join(f"  Task {i}: {e}" for i, e in failed_tasks)
+        raise RuntimeError(
+            f"SLURM conversion failed for {len(failed_tasks)}/{len(results)} tasks:\n{summary}"
+        )
 
     return results
 
