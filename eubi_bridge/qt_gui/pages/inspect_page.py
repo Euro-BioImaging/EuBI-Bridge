@@ -730,6 +730,12 @@ class InspectPage(QWidget):
             return
         try:
             _update_channels_on_disk(self._path, self._channels)
+            # Evict pyramid cache so the next reload reads fresh metadata from disk
+            with pyramid_cache._lock:
+                pyramid_cache._cache.pop(self._path, None)
+            # Commit current values as the new reset baseline so Reset reverts
+            # to what was just saved, not the original load-time values
+            self._channel_panel.commit_reset_baseline()
             self._show_save_status(self._ch_status_lbl, self._ch_confirm_cb, self._save_ch_btn, ok=True)
         except Exception as exc:
             self._show_save_status(self._ch_status_lbl, self._ch_confirm_cb, self._save_ch_btn, ok=False, msg=str(exc))
@@ -793,9 +799,11 @@ class InspectPage(QWidget):
         self._schedule_render()
 
     def _on_reload(self):
-        """Clear the pan-preview cache and reload the current dataset."""
+        """Evict the pyramid cache and reload the current dataset from disk."""
         if self._path:
             self._pan_cache.clear()
+            with pyramid_cache._lock:
+                pyramid_cache._cache.pop(self._path, None)
             self._load_zarr(self._path)
 
     def _on_t_changed(self, value: int):

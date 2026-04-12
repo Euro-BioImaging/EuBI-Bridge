@@ -202,6 +202,15 @@ class _ChannelRow(QWidget):
         self._building = False
         self.changed.emit()
 
+    def commit_reset_baseline(self):
+        """Update the reset baseline to the current spinbox values.
+
+        Call this after a successful save so Reset reverts to the saved
+        values rather than the original load-time values.
+        """
+        self._orig_min = self._ch.get("intensityMin")
+        self._orig_max = self._ch.get("intensityMax")
+
     def channel_data(self) -> dict:
         return dict(self._ch)
 
@@ -263,6 +272,11 @@ class ChannelPanel(QWidget):
             if row._idx == channel_idx:
                 row.set_range(vmin, vmax)
                 break
+
+    def commit_reset_baseline(self):
+        """Commit current values as the new reset baseline for all rows."""
+        for row in self._rows:
+            row.commit_reset_baseline()
 
     def channel_data(self) -> list[dict]:
         return [row.channel_data() for row in self._rows]
