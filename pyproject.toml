@@ -12,7 +12,7 @@ requires-python = ">=3.11,<3.13"
 authors = [
     {name = "Bugra Özdemir", email = "bugraa.ozdemir@gmail.com"}
 ]
-license = {text = "MIT"}
+license = "MIT"
 dependencies = [
     "aicspylibczi>=0.0.0",
     "asciitree>=0.3.3",
@@ -66,7 +66,6 @@ dependencies = [
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "License :: OSI Approved :: MIT License",
 ]
 
 [tool.setuptools.package-data]
