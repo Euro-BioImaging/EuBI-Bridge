@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QProgressBar,
+
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -635,11 +635,6 @@ class ConvertPage(QWidget):
         btn_row.addWidget(refresh_params_btn)
         run_layout.addLayout(btn_row)
 
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setRange(0, 100)
-        self._progress_bar.setValue(0)
-        self._progress_bar.setVisible(False)
-        run_layout.addWidget(self._progress_bar)
 
         # Input summary
         self._input_summary = QLabel("No files selected")
@@ -1064,8 +1059,7 @@ class ConvertPage(QWidget):
 
         self._populate_param_tree(cfg)
         self._log.clear()
-        self._progress_bar.setValue(0)
-        self._progress_bar.setVisible(True)
+
         self._start_btn.setEnabled(False)
         self._stop_btn.setEnabled(True)
         self._run_status.setText("Running...")
@@ -1073,7 +1067,7 @@ class ConvertPage(QWidget):
 
         self._worker = ConversionWorker(cfg, self)
         self._worker.log_line.connect(self._log.append_line)
-        self._worker.progress.connect(self._progress_bar.setValue)
+
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
@@ -1095,7 +1089,6 @@ class ConvertPage(QWidget):
 
     def _on_finished(self):
         self._reset_run_ui("Done", success=True)
-        self._progress_bar.setValue(100)
 
     def _on_failed(self, tb: str):
         self._log.append_line(f"ERROR: {tb}")

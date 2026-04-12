@@ -188,7 +188,6 @@ class ConversionWorker(QThread):
     """
 
     log_line = pyqtSignal(str)
-    progress = pyqtSignal(int)
     finished = pyqtSignal()
     failed   = pyqtSignal(str)
 
@@ -244,7 +243,7 @@ class ConversionWorker(QThread):
             self._conv_proc = ctx.Process(
                 target=_conversion_subprocess,
                 args=(call_args, log_queue, result_queue),
-                daemon=True,
+                daemon=False,   # must be False — daemon processes cannot spawn children
             )
             self._conv_proc.start()
         except Exception:
