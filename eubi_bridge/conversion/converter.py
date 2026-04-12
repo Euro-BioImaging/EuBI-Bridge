@@ -425,6 +425,13 @@ def _aggregative_slurm_task(input_path, output_path, kwargs_dict):
 
     def _run_in_fresh_thread():
         import dask
+        # Re-assert JVM startup in this thread. The JVM is process-global but
+        # bioio_bioformats' _try_get_loci() calls scyjava.start_jvm() directly,
+        # bypassing soft_start_jvm, and races on cjdk's download lock when
+        # multiple workers start concurrently. Calling soft_start_jvm() here
+        # ensures JPype is already running before any Reader instantiation.
+        from eubi_bridge.utils.jvm_manager import soft_start_jvm
+        soft_start_jvm()
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:

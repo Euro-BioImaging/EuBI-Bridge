@@ -138,12 +138,10 @@ class InspectPage(QWidget):
 
         self._is_panning = False
 
-        # Pan preview cache — persists across all drags for the loaded dataset.
-        # Key: (level_idx, fov_size, orientation)  →  coarse_level_idx to use
-        # during panning.  Absent = not yet profiled; first drag probes at full
-        # resolution and writes an entry once slow frames are observed.
-        # Cleared only when a different dataset is loaded or the user presses
-        # the Reload button.
+        # Pan preview cache — persists across drags for the loaded dataset.
+        # Key: (level_idx, fov_size, orientation) → coarse_level_idx to use.
+        # Validated at render time; decays on fast settle-renders so it
+        # self-corrects if conditions improve (more memory, fewer channels, etc.).
         self._pan_cache: dict[tuple, int] = {}
         # Per-drag working state (reset on every drag start).
         self._pan_coarse_idx: int | None = None   # active preview level this drag
@@ -837,15 +835,10 @@ class InspectPage(QWidget):
 
     def _on_pan(self, delta_row: float, delta_col: float):
         if not self._is_panning:
-            # Drag start: capture a generation barrier so any in-flight
-            # settle-render from the previous pan-release is discarded.
-            self._pan_start_gen  = self._render_gen
+            self._pan_start_gen   = self._render_gen
             self._pan_slow_streak = 0
-            # Seed from cache: if we've already profiled this combination of
-            # (level, fov, orientation) we can start at the coarse level
-            # immediately without any wasted full-res probe frames.
             key = (self._level_idx, self._fov_size, self._orientation)
-            self._pan_coarse_idx = self._pan_cache.get(key, None)
+            self._pan_coarse_idx  = self._pan_cache.get(key, None)
         self._is_panning = True
         v_ax, h_ax, _, _ = _ORI[self._orientation]
         v_scale, h_scale = self._current_level_scales()
@@ -914,9 +907,8 @@ class InspectPage(QWidget):
         fov_size  = self._fov_size
         target_fov_size = 0  # 0 = no upsampling needed
 
-        # Coarse-level preview during drag.  _pan_coarse_idx is seeded from
-        # _pan_cache at drag start (immediate coarse rendering for known-slow
-        # combinations) or set mid-drag once slow frames are observed.
+        # Coarse-level preview during drag.  _pan_coarse_idx is set mid-drag
+        # once slow frames are observed, and descended back when frames are fast.
         # fov_center is in world-space so compute_fov_region handles level
         # conversion; build_slices handles the through-axis automatically.
         # Only fov_size needs rescaling so the coarse render covers the same
@@ -930,9 +922,20 @@ class InspectPage(QWidget):
                 prv = get_orientation_axes(
                     self._pyr, self._level_paths[coarse], self._orientation)
                 ratio = cur['v_scale'] / prv['v_scale']
-                target_fov_size = fov_size
-                fov_size = max(64, int(fov_size * ratio))
-                level_idx = coarse
+                coarse_fov = max(64, int(fov_size * ratio))
+                # Safety check: if the coarse FOV would clip to the full layer in
+                # either dimension, compute_fov_region silently ignores the pan
+                # center → display shows a fixed tile regardless of position, which
+                # appears as a jump to a completely different region.
+                # Evict this cache entry and fall back to the selected level.
+                if (coarse_fov >= prv['layer_height'] or coarse_fov >= prv['layer_width']):
+                    key = (self._level_idx, self._fov_size, self._orientation)
+                    self._pan_cache.pop(key, None)
+                    self._pan_coarse_idx = None
+                else:
+                    target_fov_size = fov_size
+                    fov_size = coarse_fov
+                    level_idx = coarse
             except Exception:
                 target_fov_size = 0  # fall back to full-res on error
 
@@ -974,8 +977,6 @@ class InspectPage(QWidget):
                 self._pan_slow_streak += 1
                 if self._pan_slow_streak >= 2:
                     self._pan_slow_streak = 0
-                    # Escalate one level coarser than the current preview level
-                    # (or selected level if no preview yet).
                     current = self._pan_coarse_idx if self._pan_coarse_idx is not None else sel
                     proposed = current + 1
                     if proposed <= max_lvl and self._pyr:
@@ -999,15 +1000,26 @@ class InspectPage(QWidget):
                                     or prop_info['layer_width'] <= coarse_fov):
                                 should_escalate = False
                         except Exception:
-                            pass  # on error keep should_escalate = True
+                            pass
                         if should_escalate:
                             self._pan_coarse_idx = proposed
                             self._pan_cache[key] = proposed
-                            # Re-render immediately at the new coarser level.
                             if not self._pan_render_timer.isActive():
                                 self._pan_render_timer.start(0)
             else:
                 self._pan_slow_streak = 0
+
+        # Settle-render (after pan release): if it completed fast and the cache
+        # holds a coarse level for this combination, step it one level finer.
+        # This lets the cache self-correct over time so a previously-slow session
+        # doesn't permanently degrade future drags on the same dataset.
+        if not self._is_panning and elapsed_ms < 8.0:
+            key = (self._level_idx, self._fov_size, self._orientation)
+            cached = self._pan_cache.get(key)
+            if cached is not None and cached > self._level_idx:
+                self._pan_cache[key] = cached - 1
+                if self._pan_cache[key] <= self._level_idx:
+                    self._pan_cache.pop(key, None)
 
         aspect = self._compute_pixel_aspect()
         self._image_widget.set_frame(rgb, aspect, elapsed_ms)
