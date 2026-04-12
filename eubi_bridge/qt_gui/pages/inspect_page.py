@@ -490,7 +490,12 @@ class InspectPage(QWidget):
         comp_info  = _compressor_info(base_layer) if base_layer is not None else {"name": "none", "params": {}}
         comp_str   = _fmt_compressor(comp_info)
 
+        ngff_ver  = getattr(pyr.meta, "version", "?")
+        zarr_fmt  = getattr(pyr.meta, "zarr_format", "?")
+        fmt_str   = f"OME-NGFF v{ngff_ver}  (zarr v{zarr_fmt})"
+
         self._info_label.setText(
+            f"Format: {fmt_str}\n"
             f"Axes:   {axes}\n"
             f"Shape:  {shape}\n"
             f"Dtype:  {dtype_str}\n"
@@ -560,9 +565,11 @@ class InspectPage(QWidget):
             root = QTreeWidgetItem(self._pyr_tree, [f"Level {i}  ({lp})", ""])
             root.setExpanded(i == 0)
 
-            # ── Axes table: columns = axes, rows = chunk/shape/pixel size/unit ──
-            n_cols  = len(ax_list)
-            row_labels = ["chunk", "shape", "pixel size", "unit"]
+            # ── Axes table: columns = axes, rows = chunk/nchunks_per_shard/shape/pixel size/unit ──
+            shards = getattr(layer, "shards", None)
+
+            n_cols     = len(ax_list)
+            row_labels = ["chunk", "nchunks/shard", "shape", "pixel size", "unit"]
             tbl = QTableWidget(len(row_labels), n_cols)
             tbl.setHorizontalHeaderLabels([ax.upper() for ax in ax_list])
             tbl.setVerticalHeaderLabels(row_labels)
@@ -570,12 +577,14 @@ class InspectPage(QWidget):
             tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
             tbl.horizontalHeader().setDefaultSectionSize(54)
             tbl.verticalHeader().setDefaultSectionSize(20)
-            tbl.verticalHeader().setFixedWidth(72)
-
-            shards = lcomp.get("params", {}).get("shard_shape") or lcomp.get("params", {}).get("shards")
+            tbl.verticalHeader().setFixedWidth(96)
 
             for j, ax in enumerate(ax_list):
                 chunk_val = str(lchunks[j]) if j < len(lchunks) else "—"
+                if shards and j < len(shards) and j < len(lchunks) and lchunks[j]:
+                    ncs_val = str(shards[j] // lchunks[j])
+                else:
+                    ncs_val = "—"
                 shape_val = str(lshape[j])  if j < len(lshape)  else "—"
                 if raw_scales and len(raw_scales) == len(ax_list):
                     ps_val   = f"{raw_scales[j]:.6g}"
@@ -583,7 +592,7 @@ class InspectPage(QWidget):
                 else:
                     ps_val   = "—"
                     unit_val = "—"
-                for row_i, val in enumerate([chunk_val, shape_val, ps_val, unit_val]):
+                for row_i, val in enumerate([chunk_val, ncs_val, shape_val, ps_val, unit_val]):
                     cell = QTableWidgetItem(val)
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     tbl.setItem(row_i, j, cell)
@@ -601,19 +610,13 @@ class InspectPage(QWidget):
             root_idx = self._pyr_tree.indexFromItem(root)
             self._pyr_tree.setFirstColumnSpanned(0, root_idx, True)
 
-            # ── Shards (zarr v3) ──────────────────────────────────────────────
-            if shards:
-                shard_str = "×".join(str(s) for s in shards) if hasattr(shards, "__len__") else str(shards)
-                _tree_row(root, "shards", shard_str)
-
             # ── dtype + compression ───────────────────────────────────────────
             _tree_row(root, "dtype", ldtype)
             _tree_row(root, "compression", _fmt_compressor(lcomp))
             if lcomp.get("params"):
                 comp_node = _tree_row(root, "codec params", "")
                 for k, v in lcomp["params"].items():
-                    if k not in ("shard_shape", "shards"):
-                        QTreeWidgetItem(comp_node, [f"  {k}", str(v)])
+                    QTreeWidgetItem(comp_node, [f"  {k}", str(v)])
 
     # ── Pixel size helpers ────────────────────────────────────────────────────
 
