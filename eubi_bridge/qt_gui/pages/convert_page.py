@@ -516,16 +516,16 @@ class ConvertPage(QWidget):
         self._num_layers.setValue(4)
         lc_layout.addLayout(_form_row("Num Layers:", self._num_layers))
 
-        self._min_dim_size = QSpinBox()
-        self._min_dim_size.setRange(1, 1024)
-        self._min_dim_size.setValue(64)
-        lc_layout.addLayout(_form_row("Min Dim Size:", self._min_dim_size))
-
         lay.addWidget(self._layer_controls)
         self._layer_controls.setVisible(False)
         self._auto_detect_layers.toggled.connect(
             lambda c: self._layer_controls.setVisible(not c)
         )
+
+        self._min_dim_size = QSpinBox()
+        self._min_dim_size.setRange(1, 1024)
+        self._min_dim_size.setValue(64)
+        lay.addLayout(_form_row("Min Dim Size:", self._min_dim_size))
 
         # Scale factors
         scale_group = QGroupBox("Scale Factors per Dimension")
@@ -965,9 +965,38 @@ class ConvertPage(QWidget):
         if cfg.get("excludePattern"):
             QTreeWidgetItem(io, ["exclude", cfg["excludePattern"]])
 
-        for section in ("cluster", "reader", "conversion", "downscaling", "metadata", "concatenation"):
+        for section in ("cluster", "reader", "concatenation"):
             if section in cfg:
                 _add_section(section, cfg[section])
+
+        # Conversion: hide individual chunk/shard sizes when autoChunk is on
+        if "conversion" in cfg:
+            conv = cfg["conversion"]
+            if conv.get("autoChunk"):
+                _CHUNK_KEYS = {
+                    "chunkTime", "chunkChannel", "chunkZ", "chunkY", "chunkX",
+                    "shardTime", "shardChannel", "shardZ", "shardY", "shardX",
+                }
+                conv = {k: v for k, v in conv.items() if k not in _CHUNK_KEYS}
+            _add_section("conversion", conv)
+
+        # Downscaling: hide numLayers when autoDetectLayers is on
+        if "downscaling" in cfg:
+            ds = cfg["downscaling"]
+            if ds.get("autoDetectLayers"):
+                ds = {k: v for k, v in ds.items() if k != "numLayers"}
+            _add_section("downscaling", ds)
+
+        # Metadata: hide scale/unit fields unless overridePhysicalScale is on
+        if "metadata" in cfg:
+            _SCALE_UNIT_KEYS = {
+                "scaleTime", "unitTime", "scaleZ", "unitZ",
+                "scaleY", "unitY", "scaleX", "unitX",
+            }
+            meta = cfg["metadata"]
+            if not meta.get("overridePhysicalScale"):
+                meta = {k: v for k, v in meta.items() if k not in _SCALE_UNIT_KEYS}
+            _add_section("metadata", meta)
 
         self._param_tree.resizeColumnToContents(0)
 

@@ -669,16 +669,10 @@ class InspectPage(QWidget):
             for i in range(n_ch)
         ]
         try:
-            for fname in [".zattrs", "zarr.json"]:
-                fpath = os.path.join(path, fname)
-                if not os.path.exists(fpath):
-                    continue
-                with open(fpath, encoding="utf-8") as f:
-                    data = json.load(f)
-                attrs  = data.get("attributes", data)
-                omero  = attrs.get("omero")
-                if omero is None:
-                    continue
+            # Use pyr.meta.metadata so v2/v3 differences are already normalised
+            # (NGFFMetadataHandler always places omero at metadata['omero']).
+            omero = pyr.meta.metadata.get("omero")
+            if omero:
                 for i, ch in enumerate(omero.get("channels", [])):
                     if i >= len(defaults):
                         break
@@ -691,7 +685,6 @@ class InspectPage(QWidget):
                         "intensityMin": win.get("start"),
                         "intensityMax": win.get("end"),
                     })
-                break
         except Exception:
             pass
         return defaults
@@ -1090,12 +1083,10 @@ def _update_scales_on_disk(zarr_path: str, scales: list[dict]):
 
 
 def _update_channels_on_disk(zarr_path: str, channels: list[dict]):
-    """Write updated channel metadata to .zattrs / zarr.json."""
-    data, fpath = _load_zattrs(zarr_path)
-    is_v3 = fpath.endswith("zarr.json")
-    attrs = data.get("attributes", data) if is_v3 else data
-
-    omero = attrs.get("omero", {})
+    """Write updated channel metadata via Pyramid so v2/v3 format is handled correctly."""
+    from eubi_bridge.ngff.multiscales import Pyramid  # type: ignore
+    pyr = Pyramid(gr=zarr_path)
+    omero = pyr.meta.metadata.get("omero", {})
     existing = omero.get("channels", [])
 
     # Extend existing list if needed
@@ -1115,7 +1106,6 @@ def _update_channels_on_disk(zarr_path: str, channels: list[dict]):
         }
 
     omero["channels"] = existing
-    attrs["omero"] = omero
-    if is_v3:
-        data["attributes"] = attrs
-    _save_zattrs(fpath, data)
+    pyr.meta.metadata["omero"] = omero
+    pyr.meta._pending_changes = True
+    pyr.meta.save_changes()
