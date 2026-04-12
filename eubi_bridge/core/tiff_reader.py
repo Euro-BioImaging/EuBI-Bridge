@@ -135,13 +135,25 @@ class TIFFDynaZarrReader(ImageReader):
         processed_axes, processed_shape = self._preprocess_tiff_axes(tiff_axes, dyna_array.shape)
         #print(f"[set_scene] After preprocess: axes={processed_axes}, shape={processed_shape}")
         
-        # If shape changed (S dimension removed), we need to reshape the array
+        # If shape changed, some axes were dropped — build drop slices generically.
+        # Strategy: walk tiff_axes and processed_axes in parallel; any original
+        # axis whose character (or its remap target) is no longer present in the
+        # remaining processed_axes is considered dropped and sliced with 0.
         if processed_shape != dyna_array.shape:
-            # Remove the spurious 'S' dimension by slicing
-            s_index = tiff_axes.index('S')
-            slices = tuple(0 if i == s_index else slice(None) for i in range(len(tiff_axes)))
-            dyna_array = dyna_array[slices]
-            logger.debug(f"Removed spurious 'S' dimension, new shape: {dyna_array.shape}")
+            remaining = list(processed_axes)
+            slices = []
+            for ax in tiff_axes:
+                remap_target = self._AXIS_REMAP.get(ax, ax) or ax
+                if ax in remaining:
+                    remaining.remove(ax)
+                    slices.append(slice(None))
+                elif remap_target in remaining:
+                    remaining.remove(remap_target)
+                    slices.append(slice(None))
+                else:
+                    slices.append(0)          # this axis was dropped
+            dyna_array = dyna_array[tuple(slices)]
+            logger.debug(f"Dropped axes, new shape: {dyna_array.shape}")
             #print(f"[set_scene] After slicing: shape={dyna_array.shape}")
         
         # Normalize to TCZYX using lazy operations
@@ -171,64 +183,84 @@ class TIFFDynaZarrReader(ImageReader):
         
         self.img = type('MockImg', (), {'dims': MockDims(shape_dict)})()
     
+    # Axes that tifffile may emit which are not part of the TCZYX target set.
+    # Each entry maps the foreign axis letter to the preferred TCZYX replacement,
+    # or None to squeeze it out when size == 1 (and error when size > 1).
+    _AXIS_REMAP = {
+        'S': None,   # handled separately below (S→C or drop)
+        'Q': 'Z',    # tifffile "unknown/sequence" — treat as depth
+        'I': 'Z',    # "sequence index" — treat as depth
+        'H': 'Z',    # "histogram" sometimes used for z
+        'A': 'T',    # "angle" — map to time as best guess
+        'V': 'T',    # "view" — map to time as best guess
+        'R': 'T',    # "rotation" — map to time as best guess
+    }
+
     def _preprocess_tiff_axes(self, tiff_axes: str, array_shape: tuple) -> tuple:
         """
-        Preprocess TIFF axes to handle tifffile's 'S' (sample) dimension.
-        
-        tifffile sometimes labels the channel dimension as 'S' instead of 'C'.
-        This method normalizes the axes string:
-        - If both 'C' and 'S' exist: Remove 'S' dimension (it's spurious)
-        - If only 'S' exists (no 'C'): Replace 'S' with 'C' (it's the channel dimension)
-        
-        Parameters
-        ----------
-        tiff_axes : str
-            Original axis string from TIFF metadata (e.g., 'SCYX', 'SYX', 'CZYX')
-        array_shape : tuple
-            Shape of the array (used to remove spurious dimensions)
-            
-        Returns
-        -------
-        tuple
-            (processed_axes, processed_shape) with 'S' handled appropriately
-            
-        Examples
-        --------
-        'SCYX' with both C and S → 'CZYX' (remove S)
-        'SYX' with only S → 'CYX' (replace S with C)
-        'CZYX' with no S → 'CZYX' (unchanged)
+        Normalise TIFF axes to the TCZYX alphabet.
+
+        Handles:
+        - 'S' (sample): replaced by 'C' when no C present, dropped when C present
+        - Any other unrecognised axis (Q, I, H, A, V, R …): remapped according
+          to ``_AXIS_REMAP``, or squeezed out if size == 1
+        - Multiple unknown axes that would map to the same target are resolved
+          by keeping the first and squeezing the rest (if size == 1)
         """
-        has_c = 'C' in tiff_axes
-        has_s = 'S' in tiff_axes
-        
-        if has_s and has_c:
-            # Both exist: Remove 'S' dimension (it's spurious)
-            logger.debug(f"Found both 'C' and 'S' in axes '{tiff_axes}', removing 'S'")
-            s_index = tiff_axes.index('S')
-            
-            # Remove 'S' from axes
-            processed_axes = tiff_axes.replace('S', '')
-            
-            # Remove corresponding dimension from shape
-            processed_shape = tuple(s for i, s in enumerate(array_shape) if i != s_index)
-            
-            logger.debug(f"Preprocessed axes: '{tiff_axes}' → '{processed_axes}'")
-            logger.debug(f"Preprocessed shape: {array_shape} → {processed_shape}")
-            
-            return processed_axes, processed_shape
-            
-        elif has_s and not has_c:
-            # Only 'S' exists: Replace with 'C' (it's actually the channel dimension)
-            logger.debug(f"Found 'S' but no 'C' in axes '{tiff_axes}', treating 'S' as 'C'")
-            processed_axes = tiff_axes.replace('S', 'C')
-            
-            logger.debug(f"Preprocessed axes: '{tiff_axes}' → '{processed_axes}'")
-            
-            return processed_axes, array_shape
-            
-        else:
-            # No 'S' dimension: Return unchanged
-            return tiff_axes, array_shape
+        _TARGET = set('TCZYX')
+
+        processed_axes  = tiff_axes
+        processed_shape = tuple(array_shape)
+
+        # ── 1. Handle 'S' (sample / interleaved channels) ────────────────────
+        if 'S' in processed_axes:
+            has_c = 'C' in processed_axes
+            s_idx = processed_axes.index('S')
+            if has_c:
+                # Spurious S alongside a real C axis — drop it
+                logger.debug(f"Found both 'C' and 'S' in '{processed_axes}', dropping 'S'")
+                processed_shape = tuple(v for i, v in enumerate(processed_shape) if i != s_idx)
+                processed_axes  = processed_axes.replace('S', '')
+            else:
+                # S is the only channel-like axis — promote to C
+                logger.debug(f"Treating 'S' as 'C' in '{processed_axes}'")
+                processed_axes = processed_axes.replace('S', 'C')
+
+        # ── 2. Remap / squeeze any remaining unrecognised axes ────────────────
+        unknown = [ax for ax in processed_axes if ax not in _TARGET]
+        for ax in unknown:
+            ax_idx    = processed_axes.index(ax)
+            ax_size   = processed_shape[ax_idx]
+            mapped_to = self._AXIS_REMAP.get(ax, 'Z')   # default unknown → Z
+
+            if mapped_to and mapped_to not in processed_axes:
+                # Remap to the target axis
+                logger.debug(
+                    f"Remapping unknown axis '{ax}' (size {ax_size}) "
+                    f"→ '{mapped_to}' in '{processed_axes}'"
+                )
+                processed_axes = processed_axes.replace(ax, mapped_to, 1)
+            elif ax_size == 1:
+                # Squeeze singleton unknown axis
+                logger.debug(
+                    f"Squeezing singleton unknown axis '{ax}' from '{processed_axes}'"
+                )
+                processed_shape = tuple(v for i, v in enumerate(processed_shape) if i != ax_idx)
+                processed_axes  = processed_axes[:ax_idx] + processed_axes[ax_idx + 1:]
+            else:
+                # Non-singleton axis that can't be cleanly mapped — remap to Z
+                # (best-effort; may still be wrong, but avoids a hard crash)
+                logger.warning(
+                    f"Unknown axis '{ax}' (size {ax_size}) has no clean mapping; "
+                    f"treating as 'Z'. Original axes: '{tiff_axes}'"
+                )
+                processed_axes = processed_axes.replace(ax, 'Z', 1)
+
+        logger.debug(
+            f"_preprocess_tiff_axes: '{tiff_axes}' {array_shape} "
+            f"→ '{processed_axes}' {processed_shape}"
+        )
+        return processed_axes, processed_shape
     
     def _normalize_to_tczyx(self, dyna_array: 'DynamicArray', tiff_axes: str) -> 'DynamicArray':
         """

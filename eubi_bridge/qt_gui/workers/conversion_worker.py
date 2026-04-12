@@ -1,69 +1,29 @@
 """
-Conversion worker — runs EuBIBridge.to_zarr() in a QThread.
+Conversion worker — manages a spawned conversion subprocess from a QThread.
 
-Ports run_conversion.py logic; emits Qt signals instead of stdout JSON lines.
+The actual conversion (bridge.to_zarr) runs in a dedicated child process so
+that cancel() can reliably kill the entire process tree — including all
+ProcessPoolExecutor workers spawned by converter.py — without depending on
+cooperation from asyncio.gather or concurrent.futures.
 """
 from __future__ import annotations
 
-import logging
 import multiprocessing
 import re as _re
 import sys
-import threading
 import traceback
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from eubi_bridge.qt_gui.workers._conv_subprocess import (
+    _conversion_subprocess,
+    _kill_process_tree,
+)
+
 _ANSI_ESC = _re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-9;]*[ -/]*[@-~])')
 
 
-# ── Logging bridge ────────────────────────────────────────────────────────────
-
-_SEP = "\x01"  # field separator for structured log lines sent to LogWidget
-
-class _QtLogHandler(logging.Handler):
-    """Forwards log records to a Qt signal callback as structured lines.
-
-    Format: ``HH:MM:SS\x01LEVELNAME\x01module.py:lineno\x01message``
-    LogWidget recognises the separator and renders each segment in its own colour.
-    """
-
-    def __init__(self, emit_fn):
-        super().__init__()
-        self._emit_fn = emit_fn
-
-    def emit(self, record: logging.LogRecord):
-        try:
-            import time as _time
-            ts = _time.strftime("%H:%M:%S", _time.localtime(record.created))
-            module = f"{record.filename}:{record.lineno}"
-            msg = record.getMessage()
-            structured = f"{ts}{_SEP}{record.levelname}{_SEP}{module}{_SEP}{msg}"
-            self._emit_fn(structured)
-        except Exception:
-            pass
-
-
-class _StdoutCapture:
-    """Redirects print() output to a callback."""
-
-    def __init__(self, emit_fn):
-        self._emit_fn = emit_fn
-
-    def write(self, text: str):
-        if text and text.strip():
-            for line in text.strip().splitlines():
-                if line.strip():
-                    self._emit_fn(line.rstrip())
-
-    def flush(self):
-        pass
-
-    def isatty(self):
-        return False
-
-
-# ── Helper: parse range strings ───────────────────────────────────────────────
+# ── Config helpers ────────────────────────────────────────────────────────────
 
 def _parse_range(range_str: str):
     if not range_str:
@@ -102,20 +62,17 @@ def _glob_to_substring(patterns_str: str):
 
 
 def _build_kwargs(config: dict) -> dict:
-    """Build EuBIBridge.to_zarr() kwargs from a camelCase React config dict.
-
-    Mirrors the logic in run_conversion.py.
-    """
-    concat_config   = config.get("concatenation", {})
-    cluster_config  = config.get("cluster", {})
-    reader_config   = config.get("reader", {})
-    conv_config     = config.get("conversion", {})
+    """Build EuBIBridge.to_zarr() kwargs from a camelCase config dict."""
+    concat_config    = config.get("concatenation", {})
+    cluster_config   = config.get("cluster", {})
+    reader_config    = config.get("reader", {})
+    conv_config      = config.get("conversion", {})
     downscale_config = config.get("downscaling", {})
-    meta_config     = config.get("metadata", {})
-    compression     = conv_config.get("compression", {})
+    meta_config      = config.get("metadata", {})
+    compression      = conv_config.get("compression", {})
 
     zarr_format = conv_config.get("zarrFormat", 2)
-    compressor = compression.get("codec", "blosc")
+    compressor  = compression.get("codec", "blosc")
     if compressor == "none":
         compressor = None
         compressor_params: dict = {}
@@ -202,10 +159,9 @@ def _build_kwargs(config: dict) -> dict:
     if conv_config.get("autoChunk", True):
         kwargs["target_chunk_mb"] = conv_config.get("targetChunkSizeMb", 32)
 
-    # Physical scale overrides
     if meta_config.get("overridePhysicalScale", False):
         for ax in ("time", "z", "y", "x"):
-            key = f"scale{ax.capitalize()}"
+            key  = f"scale{ax.capitalize()}"
             ukey = f"unit{ax.capitalize()}"
             if meta_config.get(key, ""):
                 try:
@@ -222,11 +178,11 @@ def _build_kwargs(config: dict) -> dict:
 # ── Worker ────────────────────────────────────────────────────────────────────
 
 class ConversionWorker(QThread):
-    """Runs EuBIBridge.to_zarr() in a background thread.
+    """Manages a spawned conversion subprocess.
 
     Signals:
-        log_line(str)   — each log line from the conversion
-        progress(int)   — 0-100 progress (placeholder; ebridge doesn't emit progress yet)
+        log_line(str)   — structured log line (forwarded from child process)
+        progress(int)   — 0-100 progress placeholder
         finished()      — conversion completed successfully
         failed(str)     — conversion failed; argument is the traceback string
     """
@@ -234,174 +190,101 @@ class ConversionWorker(QThread):
     log_line = pyqtSignal(str)
     progress = pyqtSignal(int)
     finished = pyqtSignal()
-    failed = pyqtSignal(str)
+    failed   = pyqtSignal(str)
 
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
-        self._config = config
-        self._cancelled = False
-        self._executors: list = []  # tracked ProcessPoolExecutor instances
+        self._config     = config
+        self._cancelled  = False
+        self._conv_proc: multiprocessing.Process | None = None
 
     def cancel(self):
+        """Kill the conversion subprocess and its entire process tree."""
         self._cancelled = True
-        # Kill all spawned worker processes immediately so they don't keep running
-        # after the QThread is terminated.
-        for executor in list(self._executors):
-            try:
-                for proc in getattr(executor, '_processes', {}).values():
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                executor.shutdown(wait=False, cancel_futures=True)
-            except Exception:
-                pass
+        proc = self._conv_proc
+        if proc is not None and proc.is_alive():
+            _kill_process_tree(proc.pid)
 
     def run(self):
         config = self._config
+        input_paths_list = config.get("inputPaths", [])
+        input_path  = input_paths_list if input_paths_list else config.get("inputPath", "")
+        output_path = config.get("outputPath", "")
+        concat      = config.get("concatenation", {})
 
-        def emit_log(msg: str):
-            if not self._cancelled:
-                self.log_line.emit(msg)
+        call_args = {
+            "input_path":         input_path,
+            "output_path":        output_path or None,
+            "includes":           _glob_to_substring(config.get("includePattern", "")),
+            "excludes":           _glob_to_substring(config.get("excludePattern", "")),
+            "time_tag":           concat.get("timeTag")           or None,
+            "channel_tag":        concat.get("channelTag")        or None,
+            "z_tag":              concat.get("zTag")              or None,
+            "y_tag":              concat.get("yTag")              or None,
+            "x_tag":              concat.get("xTag")              or None,
+            "concatenation_axes": concat.get("concatenationAxes") or None,
+            "to_zarr_kwargs":     _build_kwargs(config),
+        }
 
-        # Set up logging capture
-        handler = _QtLogHandler(emit_log)
-        handler.setLevel(logging.DEBUG)
+        # Emit startup info before spawning
+        if isinstance(input_path, list):
+            self.log_line.emit(f"Input: {len(input_path)} file(s) selected")
+        else:
+            self.log_line.emit(f"Input: {input_path}")
+        self.log_line.emit(f"Output: {output_path}")
+        self.log_line.emit(f"Zarr Format: v{call_args['to_zarr_kwargs'].get('zarr_format', 2)}")
+        self.log_line.emit(f"Max Workers: {call_args['to_zarr_kwargs'].get('max_workers', 4)}")
+        self.log_line.emit("Starting conversion...")
 
-        root_logger = logging.getLogger()
-        original_handlers = root_logger.handlers[:]
-        root_logger.handlers.clear()
-        root_logger.addHandler(handler)
-        root_logger.setLevel(logging.INFO)
-
-        orig_stdout = sys.stdout
-        orig_stderr = sys.stderr
-        sys.stdout = _StdoutCapture(emit_log)
-        sys.stderr = _StdoutCapture(emit_log)
-
-        # --- subprocess worker log capture via multiprocessing queue ---
-        from eubi_bridge.mp_logging_setup import setup_mp_logging_with_worker_init
-        import eubi_bridge.conversion.converter as _conv_module
-
-        # Use a spawn-context Queue instead of Manager().Queue().
-        # Manager() forks the Qt process on Linux (the default start method),
-        # and fork inside a Qt application deadlocks because forked children
-        # inherit Qt's locked internal mutexes without the threads that hold them.
-        # A spawn-context Queue uses only OS pipes/semaphores and is fully
-        # picklable for passing as initargs to spawn ProcessPoolExecutor workers.
-        _log_queue = multiprocessing.get_context("spawn").Queue()
-
-        _stop_drain = threading.Event()
-        _log_q_ref = _log_queue
-
-        def _drain_worker():
-            while not _stop_drain.is_set() or not _log_q_ref.empty():
-                try:
-                    msg = _log_q_ref.get(timeout=0.1)
-                    if isinstance(msg, str):
-                        clean = _ANSI_ESC.sub('', msg).strip()
-                        if clean:
-                            emit_log(clean)
-                except Exception:
-                    pass
-
-        _drain_thread = threading.Thread(target=_drain_worker, daemon=True)
-        _drain_thread.start()
-
-        # Patch converter's executor classes so subprocess workers use queue logging
-        _orig_ppe = _conv_module.ProcessPoolExecutor
-        _orig_tpe = _conv_module.ThreadPoolExecutor
-        _self_executors = self._executors  # captured for closure
-
-        class _LoggingPPE(_orig_ppe):
-            def __init__(self, max_workers=None, **kw):
-                raw = kw.get('initargs', (1,))[0] if 'initargs' in kw else 1
-                tsc = raw if isinstance(raw, int) else 1
-                kw['initializer'] = setup_mp_logging_with_worker_init
-                kw['initargs'] = (_log_q_ref, tsc)
-                super().__init__(max_workers, **kw)
-                _self_executors.append(self)  # track so cancel() can kill workers
-
-        class _LoggingTPE(_orig_tpe):
-            def __init__(self, max_workers=None, **kw):
-                raw = kw.get('initargs', (1,))[0] if 'initargs' in kw else 1
-                tsc = raw if isinstance(raw, int) else 1
-                kw['initializer'] = setup_mp_logging_with_worker_init
-                kw['initargs'] = (_log_q_ref, tsc)
-                super().__init__(max_workers, **kw)
-
-        _conv_module.ProcessPoolExecutor = _LoggingPPE
-        _conv_module.ThreadPoolExecutor = _LoggingTPE
-        # --- end subprocess log setup ---
-
-        _success = False
-        _failure_tb = None
+        ctx          = multiprocessing.get_context("spawn")
+        log_queue    = ctx.Queue()
+        result_queue = ctx.Queue()
 
         try:
-            emit_log("Initializing EuBI-Bridge...")
-            from eubi_bridge.ebridge import EuBIBridge  # type: ignore
-
-            bridge = EuBIBridge()
-
-            input_paths_list = config.get("inputPaths", [])
-            input_path = input_paths_list if input_paths_list else config.get("inputPath", "")
-            output_path = config.get("outputPath", "")
-            include_pattern = config.get("includePattern", "")
-            exclude_pattern = config.get("excludePattern", "")
-
-            concat = config.get("concatenation", {})
-            kwargs = _build_kwargs(config)
-
-            includes = _glob_to_substring(include_pattern)
-            excludes = _glob_to_substring(exclude_pattern)
-
-            if isinstance(input_path, list):
-                emit_log(f"Input: {len(input_path)} file(s) selected")
-            else:
-                emit_log(f"Input: {input_path}")
-            emit_log(f"Output: {output_path}")
-            emit_log(f"Zarr Format: v{kwargs.get('zarr_format', 2)}")
-            emit_log(f"Max Workers: {kwargs.get('max_workers', 4)}")
-            emit_log("Starting conversion...")
-
-            bridge.to_zarr(
-                input_path=input_path,
-                output_path=output_path or None,
-                includes=includes,
-                excludes=excludes,
-                time_tag=concat.get("timeTag") or None,
-                channel_tag=concat.get("channelTag") or None,
-                z_tag=concat.get("zTag") or None,
-                y_tag=concat.get("yTag") or None,
-                x_tag=concat.get("xTag") or None,
-                concatenation_axes=concat.get("concatenationAxes") or None,
-                **kwargs,
+            self._conv_proc = ctx.Process(
+                target=_conversion_subprocess,
+                args=(call_args, log_queue, result_queue),
+                daemon=True,
             )
-
-            _success = not self._cancelled
-
+            self._conv_proc.start()
         except Exception:
-            _failure_tb = traceback.format_exc()
-        finally:
-            sys.stdout = orig_stdout
-            sys.stderr = orig_stderr
-            root_logger.handlers.clear()
-            for h in original_handlers:
-                root_logger.addHandler(h)
-            # Restore patched executors and stop drainer
-            _conv_module.ProcessPoolExecutor = _orig_ppe
-            _conv_module.ThreadPoolExecutor = _orig_tpe
-            self._executors.clear()
-            _stop_drain.set()
-            _drain_thread.join(timeout=5.0)
+            self.failed.emit(traceback.format_exc())
+            return
+
+        # Drain log queue while the process runs
+        while self._conv_proc.is_alive():
             try:
-                _log_queue.close()
+                msg = log_queue.get(timeout=0.1)
+                if not self._cancelled:
+                    self.log_line.emit(msg)
             except Exception:
                 pass
-            # Emit finished/failed AFTER the drain thread has joined so that all
-            # log_line signals are already queued before the main thread processes
-            # the completion signal (which sets _worker=None and breaks connections).
-            if _failure_tb is not None and not self._cancelled:
-                self.failed.emit(_failure_tb)
-            elif _success:
-                self.finished.emit()
+
+        # Drain any remaining messages after process exits
+        while True:
+            try:
+                msg = log_queue.get_nowait()
+                if not self._cancelled:
+                    self.log_line.emit(msg)
+            except Exception:
+                break
+
+        self._conv_proc.join(timeout=5)
+
+        if self._cancelled:
+            return
+
+        # Read result
+        try:
+            status, data = result_queue.get_nowait()
+        except Exception:
+            self.failed.emit(
+                f"Conversion process exited unexpectedly "
+                f"(exit code {self._conv_proc.exitcode})"
+            )
+            return
+
+        if status == "ok":
+            self.finished.emit()
+        else:
+            self.failed.emit(data or "Conversion failed")
