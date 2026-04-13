@@ -1,6 +1,5 @@
 # EuBI-Bridge Conversion Examples for GUI
-
-### This tutorial is to be followed on the Bioimage Analysis Desktop (BAND)
+**This tutorial is to be followed on the [Bioimage Analysis Desktop (BAND)](https://band.vm.fedcloud.eu/#/desktop-manager)**
 
 **Activate the conda environment:**
 

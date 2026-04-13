@@ -20,7 +20,13 @@ from eubi_bridge.qt_gui.workers._conv_subprocess import (
     _kill_process_tree,
 )
 
-_ANSI_ESC = _re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-9;]*[ -/]*[@-~])')
+_ANSI_ESC = _re.compile(
+    r'\x1B(?:'
+    r'\][^\x07\x1B]*(?:\x07|\x1B\\)'
+    r'|\[[0-9;:<=>?]*[ -/]*[@-~]'
+    r'|[@-Z\\-_]'
+    r')'
+)
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
@@ -98,7 +104,7 @@ def _build_kwargs(config: dict) -> dict:
         "queue_size":               cluster_config.get("queueSize", 10),
         "region_size_mb":           cluster_config.get("regionSizeMb", 64),
         "max_concurrency":          cluster_config.get("maxConcurrency", 4),
-        "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 4),
+        "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 1),
         "memory_per_worker":        cluster_config.get("memoryPerWorker", "4GB"),
         "on_local_cluster":         cluster_config.get("useLocalDask", False),
         "on_slurm":                 cluster_config.get("useSlurm", False),
@@ -250,12 +256,16 @@ class ConversionWorker(QThread):
             self.failed.emit(traceback.format_exc())
             return
 
+        def _clean(msg: str) -> str:
+            """Strip any residual ANSI escape sequences from queue messages."""
+            return _ANSI_ESC.sub("", msg).strip()
+
         # Drain log queue while the process runs
         while self._conv_proc.is_alive():
             try:
                 msg = log_queue.get(timeout=0.1)
                 if not self._cancelled:
-                    self.log_line.emit(msg)
+                    self.log_line.emit(_clean(msg))
             except Exception:
                 pass
 
@@ -264,7 +274,7 @@ class ConversionWorker(QThread):
             try:
                 msg = log_queue.get_nowait()
                 if not self._cancelled:
-                    self.log_line.emit(msg)
+                    self.log_line.emit(_clean(msg))
             except Exception:
                 break
 

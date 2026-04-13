@@ -12,7 +12,14 @@ import re
 import sys
 
 _SEP      = "\x01"
-_ANSI_ESC = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-9;]*[ -/]*[@-~])')
+# Matches CSI sequences, OSC hyperlinks (ESC ] ... BEL|ST), and other Fe escapes.
+_ANSI_ESC = re.compile(
+    r'\x1B(?:'
+    r'\][^\x07\x1B]*(?:\x07|\x1B\\)'   # OSC: ESC ] ... BEL or ESC \
+    r'|\[[0-9;:<=>?]*[ -/]*[@-~]'       # CSI: ESC [ params final
+    r'|[@-Z\\-_]'                        # Fe:  ESC + single char
+    r')'
+)
 
 
 # ── Process-tree kill ─────────────────────────────────────────────────────────
@@ -53,8 +60,21 @@ def _conversion_subprocess(call_args: dict, log_queue, result_queue) -> None:
     """
     import logging as _log
     import traceback as _tb
-    import eubi_bridge.conversion.converter as _conv_module
-    from eubi_bridge.mp_logging_setup import setup_mp_logging_with_worker_init
+
+    # ── Redirect stdout/stderr FIRST so that rich (imported below) creates its
+    #    Console against our capture object, not the real file descriptor. ─────
+    class _QCapture:
+        def write(self, text: str):
+            if text and text.strip():
+                for line in text.strip().splitlines():
+                    clean = _ANSI_ESC.sub("", line).strip()
+                    if clean:
+                        log_queue.put_nowait(clean)
+        def flush(self):  pass
+        def isatty(self): return False
+
+    sys.stdout = _QCapture()
+    sys.stderr = _QCapture()
 
     # ── Route all logging to log_queue ───────────────────────────────────────
     class _QHandler(_log.Handler):
@@ -63,27 +83,19 @@ def _conversion_subprocess(call_args: dict, log_queue, result_queue) -> None:
                 import time as _t
                 ts  = _t.strftime("%H:%M:%S", _t.localtime(record.created))
                 src = f"{record.filename}:{record.lineno}"
-                msg = f"{ts}{_SEP}{record.levelname}{_SEP}{src}{_SEP}{record.getMessage()}"
-                log_queue.put_nowait(msg)
+                msg = _ANSI_ESC.sub("", record.getMessage())
+                log_queue.put_nowait(f"{ts}{_SEP}{record.levelname}{_SEP}{src}{_SEP}{msg}")
             except Exception:
                 pass
-
-    class _QCapture:
-        def write(self, text: str):
-            if text and text.strip():
-                for line in text.strip().splitlines():
-                    clean = _ANSI_ESC.sub("", line).strip()
-                    if clean:
-                        log_queue.put_nowait(clean)
-        def flush(self):    pass
-        def isatty(self):   return False
 
     root = _log.getLogger()
     root.handlers.clear()
     root.addHandler(_QHandler())
     root.setLevel(_log.INFO)
-    sys.stdout = _QCapture()
-    sys.stderr = _QCapture()
+
+    # ── Import eubi_bridge after capture is in place ──────────────────────────
+    import eubi_bridge.conversion.converter as _conv_module
+    from eubi_bridge.mp_logging_setup import setup_mp_logging_with_worker_init
 
     # ── Patch ProcessPoolExecutor so worker sub-processes log to the queue ────
     _orig_ppe = _conv_module.ProcessPoolExecutor

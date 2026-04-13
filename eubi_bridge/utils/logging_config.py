@@ -7,15 +7,21 @@ from rich.logging import RichHandler
 
 def setup_logging(level=logging.INFO):
     """Configure rich-colored logging for eubi_bridge, silence everything else."""
-    
+
     # Import bfio here (not at module level) to avoid slowdown in config-only commands
     try:
         import bfio
     except ImportError:
         pass  # bfio is optional
 
-    # Create a Rich console that *always* emits color
-    console = Console(force_terminal=True, color_system="auto")
+    # Respect the actual terminal state — don't force ANSI into non-terminal outputs
+    # (e.g. subprocess workers write to a queue, not a real TTY).
+    is_tty = getattr(sys.stdout, "isatty", lambda: False)()
+    console = Console(
+        force_terminal=is_tty,
+        color_system="auto" if is_tty else None,
+        highlight=is_tty,
+    )
 
     # Set up RichHandler manually instead of via basicConfig
     rich_handler = RichHandler(

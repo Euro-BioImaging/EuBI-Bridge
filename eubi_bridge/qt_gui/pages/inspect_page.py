@@ -821,12 +821,31 @@ class InspectPage(QWidget):
         self._schedule_render()
 
     def _on_auto_requested(self, channel_idx: int):
-        if not self._path:
+        if not self._path or not self._level_paths:
             return
+        # Build the same view context used by the renderer
+        indices: dict = {}
+        if "t" in self._axes:
+            indices["t"] = self._t
+        if self._orientation == "XY" and "z" in self._axes:
+            indices["z"] = self._z
+        elif self._orientation == "XZ" and "y" in self._axes:
+            indices["y"] = self._z
+        elif self._orientation == "YZ" and "x" in self._axes:
+            indices["x"] = self._z
+        level_idx  = max(0, min(self._level_idx, len(self._level_paths) - 1))
+        level_path = self._level_paths[level_idx]
+        fov_center = (self._fov_center_y, self._fov_center_x)
+
         # Cancel any existing worker for this channel
         if channel_idx in self._minmax_workers:
             self._minmax_workers[channel_idx].quit()
-        worker = MinMaxWorker(self._path, channel_idx, self)
+        worker = MinMaxWorker(
+            self._path, channel_idx,
+            level_path, self._orientation, indices,
+            fov_center, self._fov_size,
+            self,
+        )
         worker.result.connect(self._on_minmax_result)
         worker.failed.connect(lambda idx, msg: self._status_bar.setText(f"Auto ch{idx}: {msg}"))
         self._minmax_workers[channel_idx] = worker

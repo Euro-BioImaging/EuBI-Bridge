@@ -24,7 +24,7 @@ def setup_mp_logging(log_queue):
                 self.original.flush()
 
         def isatty(self):
-            return True
+            return False
 
     sys.stdout = QueueWriter(log_queue, sys.__stdout__)
     sys.stderr = QueueWriter(log_queue, sys.__stderr__, is_stderr=True)

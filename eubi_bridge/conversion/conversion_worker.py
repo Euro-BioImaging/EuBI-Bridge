@@ -573,7 +573,7 @@ async def unary_worker(input_path: Union[str, ArrayManager],
     # machinery at once, which corrupts zarr's internal state and causes
     # spurious ContainsArrayError on fresh paths.
     max_concurrency = kwargs.get('max_concurrency', 4)
-    max_concurrent_scenes = kwargs.get('max_concurrent_scenes', 4)
+    max_concurrent_scenes = kwargs.get('max_concurrent_scenes', 1)
     sem = asyncio.Semaphore(max_concurrent_scenes)
 
     # Determine if suffixes needed

@@ -255,7 +255,7 @@ class ConvertPage(QWidget):
         _, self._max_concurrency = _labeled_spin("Max Concurrency:", 1, 128, 4)
         lay.addLayout(_row(QLabel("Max Concurrency:"), self._max_concurrency))
 
-        _, self._max_concurrent_scenes = _labeled_spin("Max Concurrent Scenes:", 1, 64, 4)
+        _, self._max_concurrent_scenes = _labeled_spin("Max Concurrent Scenes:", 1, 64, 1)
         lay.addLayout(_row(QLabel("Max Concurrent Scenes:"), self._max_concurrent_scenes))
 
         _, self._region_size_mb = _labeled_spin("Region Size MB:", 1, 4096, 256)
@@ -675,7 +675,7 @@ class ConvertPage(QWidget):
         self._max_workers.setValue(c.get("maxWorkers", 4))
         self._queue_size.setValue(c.get("queueSize", 4))
         self._max_concurrency.setValue(c.get("maxConcurrency", 4))
-        self._max_concurrent_scenes.setValue(c.get("maxConcurrentScenes", 4))
+        self._max_concurrent_scenes.setValue(c.get("maxConcurrentScenes", 1))
         self._region_size_mb.setValue(c.get("regionSizeMb", 256))
         self._memory_per_worker.setText(str(c.get("memoryPerWorker", "1GB")))
         self._use_local_dask.setChecked(c.get("useLocalDask", False))
