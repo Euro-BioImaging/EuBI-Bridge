@@ -15,13 +15,18 @@ mamba activate /nfs/scratch/datadays/envs/datadays
 eubi-gui
 ```
 
+**Configure GUI size:**
+
+If the GUI size is too small, click the settings button on the right top and increase the frame size. This requires to close and restart the app to be effective.
+
+
 **Find the example input data for conversion here:**
 
 ```bash
 /scratch/common/data
 ```
 
-**Save the output data for conversion in the home directory:**
+**Save the output data for conversion in your home directory:**
 
 ```bash
 $HOME/datadays_out # Replace $HOME with your home directory path

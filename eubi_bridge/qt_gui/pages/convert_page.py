@@ -355,7 +355,6 @@ class ConvertPage(QWidget):
             ("_overwrite",  "Overwrite"),
             ("_squeeze",    "Squeeze Dimensions"),
             ("_save_omexml", "Save OME-XML"),
-            ("_override_channel_names", "Override Channel Names"),
             ("_skip_dask",  "Skip Dask"),
         ]:
             cb = QCheckBox(label)
@@ -486,6 +485,8 @@ class ConvertPage(QWidget):
         self._concat_axes = QLineEdit()
         self._concat_axes.setPlaceholderText("e.g. t,c")
         concat_layout.addLayout(_form_row("Concat axes:", self._concat_axes))
+        self._override_channel_names = QCheckBox("Override Channel Names")
+        concat_layout.addWidget(self._override_channel_names)
         lay.addWidget(concat_group)
 
         lay.addStretch()
