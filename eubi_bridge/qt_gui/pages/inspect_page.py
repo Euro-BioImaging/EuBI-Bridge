@@ -945,13 +945,18 @@ class InspectPage(QWidget):
                 prv = get_orientation_axes(
                     self._pyr, self._level_paths[coarse], self._orientation)
                 ratio = cur['v_scale'] / prv['v_scale']
-                coarse_fov = max(64, int(fov_size * ratio))
-                # Safety check: if the coarse FOV would clip to the full layer in
-                # either dimension, compute_fov_region silently ignores the pan
-                # center → display shows a fixed tile regardless of position, which
-                # appears as a jump to a completely different region.
-                # Evict this cache entry and fall back to the selected level.
-                if (coarse_fov >= prv['layer_height'] or coarse_fov >= prv['layer_width']):
+                coarse_fov_exact = int(fov_size * ratio)
+                coarse_fov = max(64, coarse_fov_exact)
+                # Safety checks — fall back to the selected level if either fails:
+                # 1. coarse_fov >= layer dimension: compute_fov_region always returns
+                #    row 0 regardless of pan position → frozen tile.
+                # 2. coarse_fov_exact < 64: the max(64,...) floor inflates the
+                #    extracted world area (coarse_fov / coarse_fov_exact times larger
+                #    than the fine FOV).  For deep pyramids this can be 4–16×, making
+                #    the preview appear to show a completely different region of the
+                #    image even though the coordinates are mathematically centred.
+                if (coarse_fov >= prv['layer_height'] or coarse_fov >= prv['layer_width']
+                        or coarse_fov_exact < 64):
                     key = (self._level_idx, self._fov_size, self._orientation)
                     self._pan_cache.pop(key, None)
                     self._pan_coarse_idx = None
@@ -1018,9 +1023,11 @@ class InspectPage(QWidget):
                             prop_info = get_orientation_axes(
                                 self._pyr, self._level_paths[proposed], self._orientation)
                             ratio = sel_info['v_scale'] / prop_info['v_scale']
-                            coarse_fov = max(64, int(self._fov_size * ratio))
+                            coarse_fov_exact = int(self._fov_size * ratio)
+                            coarse_fov = max(64, coarse_fov_exact)
                             if (prop_info['layer_height'] <= coarse_fov
-                                    or prop_info['layer_width'] <= coarse_fov):
+                                    or prop_info['layer_width'] <= coarse_fov
+                                    or coarse_fov_exact < 64):
                                 should_escalate = False
                         except Exception:
                             pass

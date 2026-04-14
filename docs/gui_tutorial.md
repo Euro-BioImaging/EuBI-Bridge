@@ -6,7 +6,7 @@
 ```bash
 source /scratch/miniforge3/etc/profile.d/mamba.sh
 source /scratch/miniforge3/etc/profile.d/conda.sh
-mamba activate /nfs/scratch/datadays/envs/eubi_datadays
+mamba activate /nfs/scratch/datadays/envs/datadays
 ```
 
 **Start the application:**
