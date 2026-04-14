@@ -58,7 +58,6 @@ NotMultiscalesException = Exception('Not applicable as this group is not a singl
 NotImageException = Exception('Not applicable as this group is not an image.')
 AxisNotFoundException = Exception('Axis information not provided in the metadata.')
 
-TempDir = '/tmp/OME-Zarr'
 
 refpath = '0'
 
