@@ -671,12 +671,30 @@ def unary_worker_sync(input_path: Union[str, ArrayManager],
     """
     Synchronous wrapper for unary_worker.
     Safe for multiprocessing with proper exception handling.
+
+    Dask distributed workers run with an active event loop, so asyncio.run()
+    cannot be called directly from a task function.  We escape by running the
+    coroutine in a dedicated thread that has no event loop of its own —
+    the same pattern used by _aggregative_slurm_task.
     """
+    import concurrent.futures
+
     if kwargs.get('verbose', False):
         logger.info(f"[Worker] Processing: {input_path}")
 
-    # Run the async worker
-    asyncio.run(unary_worker(input_path, output_path, **kwargs))
+    def _run_in_fresh_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                unary_worker(input_path, output_path, **kwargs)
+            )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(_run_in_fresh_thread).result()
 
     if kwargs.get('verbose', False):
         logger.info(f"[Worker] Completed: {input_path}")
@@ -692,13 +710,27 @@ def aggregative_worker_sync(manager: ArrayManager,
     Synchronous wrapper for aggregative_worker.
     Safe for multiprocessing with proper exception handling.
     """
+    import concurrent.futures
+
     if kwargs.get('verbose', False):
         logger.info(f"[Worker] Processing aggregative: {output_path}")
 
-    asyncio.run(aggregative_worker(manager, output_path, **kwargs))
+    def _run_in_fresh_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                aggregative_worker(manager, output_path, **kwargs)
+            )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(_run_in_fresh_thread).result()
 
     if kwargs.get('verbose', False):
-        logger.info(f"[Worker] Completed aggregative: {output_path}")  
+        logger.info(f"[Worker] Completed aggregative: {output_path}")
     return {"status": "success", "output": output_path}
 
 

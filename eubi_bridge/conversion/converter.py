@@ -570,8 +570,12 @@ async def run_conversions_from_filepaths_with_slurm(
 
     logger.info(f"Starting SLURM cluster with up to {max_workers} workers...")
 
+    # cores=1, processes=1: one SLURM job = one dask worker = full memory_per_worker.
+    # Using cores=max_workers caused dask-jobqueue to pack multiple workers into
+    # each job, dividing the memory budget and starving every worker of RAM.
     cluster_kwargs = dict(
-        cores=max_workers,
+        cores=1,
+        processes=1,
         memory=slurm_mem,
         walltime=slurm_time,
         job_extra_directives=[
