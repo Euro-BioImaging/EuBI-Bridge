@@ -132,6 +132,7 @@ class EuBIBridge:
                 queue_size = 4,
                 region_size_mb = 256,
                 max_concurrency = 4,  # limit how many writes run at once
+                max_concurrent_scenes = 1,  # limit how many scenes write simultaneously
                 memory_per_worker = '1GB',
                 tensorstore_data_copy_concurrency = 4,  # limit CPU cores for tensorstore data copying in downscaler
                 max_retries = 10,  # maximum attempts per task (1 initial + retries) with exponential backoff
@@ -447,6 +448,7 @@ class EuBIBridge:
                           region_size_mb: int = 'default',
                           memory_per_worker: int = 'default',
                           max_concurrency: int = 'default',
+                          max_concurrent_scenes: int = 'default',
                           on_local_cluster: bool = 'default',
                           on_slurm: bool = 'default',
                           use_threading: bool = 'default',
@@ -486,6 +488,7 @@ class EuBIBridge:
             'region_size_mb': region_size_mb,
             'memory_per_worker': memory_per_worker,
             'max_concurrency': max_concurrency,
+            'max_concurrent_scenes': max_concurrent_scenes,
             'on_local_cluster': on_local_cluster,
             'on_slurm': on_slurm,
             'use_threading': use_threading,
