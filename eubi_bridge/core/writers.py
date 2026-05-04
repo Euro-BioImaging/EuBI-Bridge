@@ -1456,7 +1456,7 @@ async def store_multiscale_async(
     channels = channel_meta
 
     ### Parse shards
-    if output_shards is not None
+    if output_shards is not None:
         shards = output_shards
     elif output_shard_coefficients is not None:
         shardcoefs = output_shard_coefficients
