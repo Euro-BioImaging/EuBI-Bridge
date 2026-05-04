@@ -1425,7 +1425,7 @@ class ArrayManager:  ### Unify the classes above.
                     newscales.append(self.scaledict[ax])
         if isinstance(array, DynamicArray):
             newarray = ops.squeeze(array)
-        else:       
+        else:
             newarray = da.squeeze(array)
         #print(f"newaxes: {newaxes}")
         #print(f"newunits: {newunits}")
