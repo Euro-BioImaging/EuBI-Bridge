@@ -14,7 +14,23 @@ import numcodecs
 import numpy as np
 import s3fs
 import tensorstore as ts
+import inspect
+
 import zarr
+
+# zarr 2.x has no version kwarg in zarr.group(); zarr 3.x renamed it from
+# zarr_version to zarr_format across releases.  Build a helper once at import.
+_group_sig = inspect.signature(zarr.group).parameters
+if "zarr_format" in _group_sig:
+    def _zarr_group(store, overwrite: bool, zarr_format: int):
+        return zarr.group(store, overwrite=overwrite, zarr_format=zarr_format)
+elif "zarr_version" in _group_sig:
+    def _zarr_group(store, overwrite: bool, zarr_format: int):
+        return zarr.group(store, overwrite=overwrite, zarr_version=zarr_format)
+else:
+    def _zarr_group(store, overwrite: bool, zarr_format: int):
+        return zarr.group(store, overwrite=overwrite)
+
 from dask import delayed
 from distributed import get_client
 from zarr import codecs
@@ -1440,7 +1456,7 @@ async def store_multiscale_async(
     channels = channel_meta
 
     ### Parse shards
-    if output_shards is not None:
+    if output_shards is not None
         shards = output_shards
     elif output_shard_coefficients is not None:
         shardcoefs = output_shard_coefficients
@@ -1453,9 +1469,7 @@ async def store_multiscale_async(
     # Make (or overwrite) the top-level group
 
     outpath = wrap_output_path(output_path)
-    gr = zarr.group(outpath,
-               overwrite=overwrite,
-               zarr_version=zarr_format)
+    gr = _zarr_group(outpath, overwrite=overwrite, zarr_format=zarr_format)
 
     ### Make the base path (use outpath which is the wrapped/resolved path)
     base_store_path = os.path.join(outpath, '0')

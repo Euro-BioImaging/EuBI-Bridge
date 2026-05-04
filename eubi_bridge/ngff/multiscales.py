@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import inspect
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -7,6 +8,17 @@ import dask.array as da
 import numpy as np
 import zarr
 from natsort import natsorted
+
+_open_group_sig = inspect.signature(zarr.open_group).parameters
+if "zarr_format" in _open_group_sig:
+    def _zarr_open_group(store, mode: str, zarr_format: int):
+        return zarr.open_group(store, mode=mode, zarr_format=zarr_format)
+elif "zarr_version" in _open_group_sig:
+    def _zarr_open_group(store, mode: str, zarr_format: int):
+        return zarr.open_group(store, mode=mode, zarr_version=zarr_format)
+else:
+    def _zarr_open_group(store, mode: str, zarr_format: int):
+        return zarr.open_group(store, mode=mode)
 
 from eubi_bridge.core.scale import Downscaler
 from eubi_bridge.ngff import defaults
@@ -247,8 +259,8 @@ class NGFFMetadataHandler:
                 self.zarr_group = zarr.open_group(store, mode=mode)
                 # zarr_version = self.zarr_group.info._zarr_format
             else:
-                zarr_version = self.zarr_format if self.zarr_format else 2
-                self.zarr_group = zarr.open_group(store, mode=mode, zarr_version=zarr_version)
+                zarr_format = self.zarr_format if self.zarr_format else 2
+                self.zarr_group = _zarr_open_group(store, mode=mode, zarr_format=zarr_format)
         # Update handler's format to match the created store
         store_format = self.zarr_group.info._zarr_format
         self.zarr_format = store_format
