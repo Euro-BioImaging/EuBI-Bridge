@@ -54,7 +54,7 @@ dependencies = [
     "xarray>=0.0.0",
     "xmlschema>=0.0.0",
     "xmltodict==0.14.2",
-    "zarr>=3.3.0",
+    "zarr>=3.0",
     "zstandard>=0.0.0",
     "blosc2>=3.7.1",
     "aiofiles>=24.1.0",
