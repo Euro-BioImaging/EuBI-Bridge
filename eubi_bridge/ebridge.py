@@ -1551,7 +1551,14 @@ class EuBIBridge:
     @property
     def flow(self) -> "EuBIFlow":
         """Workflow operations — ``eubi flow create / run / select / list_waves``."""
-        from eubi_bridge.workflows.eubiflow import EuBIFlow  # type: ignore[import]
+        try:
+            from eubi_flow.eubiflow import EuBIFlow  # type: ignore[import]
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError(
+                "The 'eubi-flow' package is required for workflow operations but is not installed.\n"
+                "Install it with:  pip install eubi-flow\n"
+                "Or via the core extra:  pip install \"eubi-bridge[flow]\""
+            ) from None
         return EuBIFlow()
 
     # ── resource management ───────────────────────────────────────────────

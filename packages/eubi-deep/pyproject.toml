@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eubi-deep"
+version = "0.1.2b1"
+description = "Deep learning features (DINOv2 embeddings) for EuBI-Bridge annotation."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+authors = [
+    {name = "Bugra Özdemir", email = "bugraa.ozdemir@gmail.com"}
+]
+license = "MIT"
+dependencies = [
+    "eubi-annotate>=0.1.2b1",
+    "torch>=2.0",
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["eubi_deep*"]
+
+[project.urls]
+Homepage = "https://github.com/Euro-BioImaging/EuBI-Bridge"

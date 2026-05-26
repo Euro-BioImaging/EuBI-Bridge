@@ -23,11 +23,26 @@ from eubi_bridge.qt_gui.pages.inspect_page import InspectPage
 from eubi_bridge.qt_gui.settings_dialog import SettingsDialog, apply_settings, current_font_size, current_theme
 
 try:
-    from eubi_bridge.extensions.qt_gui.pages.flow_page import FlowPage
-    from eubi_bridge.extensions.qt_gui.pages.process_page import ProcessPage
-    _EXTENSIONS_AVAILABLE = True
-except ImportError:
-    _EXTENSIONS_AVAILABLE = False
+    from eubi_flow.qt_gui.pages.flow_page import FlowPage
+    _FLOW_AVAILABLE = True
+except ModuleNotFoundError:
+    _FLOW_AVAILABLE = False
+    _FLOW_MISSING_MSG = (
+        "The 'eubi-flow' package is not installed.\n"
+        "To enable the Flow tab:  pip install eubi-flow\n"
+        "Or:  pip install \"eubi-bridge[flow]\""
+    )
+
+try:
+    from eubi_annotate.qt_gui.pages.process_page import ProcessPage
+    _ANNOTATE_AVAILABLE = True
+except ModuleNotFoundError:
+    _ANNOTATE_AVAILABLE = False
+    _ANNOTATE_MISSING_MSG = (
+        "The 'eubi-annotate' package is not installed.\n"
+        "To enable the Process tab:  pip install eubi-annotate\n"
+        "Or:  pip install \"eubi-bridge[annotate]\""
+    )
 
 # Logo bundled inside the qt_gui package directory
 _LOGO_PATH = os.path.join(os.path.dirname(__file__), "eurobioimaging-logo.webp")
@@ -94,13 +109,19 @@ class MainWindow(QMainWindow):
         self.setStatusBar(status_bar)
         self._inspect_page.status_changed.connect(status_bar.showMessage)
 
-        if _EXTENSIONS_AVAILABLE:
+        if _ANNOTATE_AVAILABLE:
             self._process_page = ProcessPage()
-            self._flow_page    = FlowPage()
             self._tabs.addTab(self._process_page, "Process")
-            self._tabs.addTab(self._flow_page,    "Flow")
             self._process_page.status_changed.connect(status_bar.showMessage)
+        else:
+            status_bar.showMessage(_ANNOTATE_MISSING_MSG, 10000)
+
+        if _FLOW_AVAILABLE:
+            self._flow_page = FlowPage()
+            self._tabs.addTab(self._flow_page, "Flow")
             self._flow_page.status_changed.connect(status_bar.showMessage)
+        else:
+            status_bar.showMessage(_FLOW_MISSING_MSG, 10000)
 
         if initial_path:
             self._inspect_page._browser.navigate_to(initial_path)
