@@ -28,6 +28,7 @@ def _config_to_react(cfg: dict) -> dict:
     readers = cfg.get("readers", {})
     conv    = cfg.get("conversion", {})
     down    = cfg.get("downscale", {})
+    concat  = cfg.get("concatenation", {})
 
     # Reconstruct compression dict from compressor + compressor_params
     compressor = conv.get("compressor", "blosc")
@@ -60,12 +61,12 @@ def _config_to_react(cfg: dict) -> dict:
             "queueSize":            cluster.get("queue_size", 4),
             "maxConcurrency":       cluster.get("max_concurrency", 4),
             "maxConcurrentScenes":  cluster.get("max_concurrent_scenes", 1),
-            "regionSizeMb":         cluster.get("region_size_mb", 256),
-            "memoryPerWorker":      cluster.get("memory_per_worker", "1GB"),
+            "regionSizeMb":         float(cluster.get("region_size_mb", 256)),
+            "memoryPerWorker":      _parse_memory_gb(cluster.get("memory_per_worker", "4GB"), 4.0),
             "useLocalDask":         cluster.get("on_local_cluster", False),
             "useSlurm":             cluster.get("on_slurm", False),
             "bfTileSizeMb":         cluster.get("bf_tile_size_mb", 512.0),
-            "jvmMemory":            cluster.get("jvm_memory", "2g"),
+            "jvmMemory":            _parse_jvm_gb(cluster.get("jvm_memory", "2g"), 2.0),
             "bfReadConcurrency":    cluster.get("bf_read_concurrency", 4),
         },
         "reader": {
@@ -141,6 +142,14 @@ def _config_to_react(cfg: dict) -> dict:
             "scaleY": "",    "unitY": "micrometer",
             "scaleX": "",    "unitX": "micrometer",
         },
+        "concatenation": {
+            "concatenationAxes": concat.get("concatenation_axes", "") or "",
+            "timeTag":           concat.get("time_tag", "")    or "",
+            "channelTag":        concat.get("channel_tag", "") or "",
+            "zTag":              concat.get("z_tag", "")       or "",
+            "yTag":              concat.get("y_tag", "")       or "",
+            "xTag":              concat.get("x_tag", "")       or "",
+        },
     }
 
 
@@ -151,6 +160,7 @@ def _react_to_config(data: dict) -> dict:
     down_d     = data.get("downscaling", {})
     reader_d   = data.get("reader", {})
     meta_d     = data.get("metadata", {})
+    concat_d   = data.get("concatenation", {})
     comp_d     = conv_d.get("compression", {})
 
     # Compression
@@ -181,14 +191,14 @@ def _react_to_config(data: dict) -> dict:
             "use_threading":                   False,
             "max_workers":                     cluster_d.get("maxWorkers", 4),
             "queue_size":                      cluster_d.get("queueSize", 4),
-            "region_size_mb":                  cluster_d.get("regionSizeMb", 256),
+            "region_size_mb":                  float(cluster_d.get("regionSizeMb", 256)),
             "max_concurrency":                 cluster_d.get("maxConcurrency", 4),
             "max_concurrent_scenes":           cluster_d.get("maxConcurrentScenes", 1),
-            "memory_per_worker":               cluster_d.get("memoryPerWorker", "1GB"),
+            "memory_per_worker":               _gb_to_memory_str(cluster_d.get("memoryPerWorker", 4)),
             "tensorstore_data_copy_concurrency": 4,
             "max_retries":                     10,
             "bf_tile_size_mb":                 cluster_d.get("bfTileSizeMb", 512.0),
-            "jvm_memory":                      cluster_d.get("jvmMemory", "2g"),
+            "jvm_memory":                      _gb_to_jvm_str(cluster_d.get("jvmMemory", 2)),
             "bf_read_concurrency":             cluster_d.get("bfReadConcurrency", 4),
         },
         "readers": {
@@ -249,6 +259,14 @@ def _react_to_config(data: dict) -> dict:
             "x_smart_scale_factor":     down_d.get("smartScaleX") or None,
             "time_smart_scale_factor":  down_d.get("smartScaleTime") or None,
         },
+        "concatenation": {
+            "concatenation_axes": concat_d.get("concatenationAxes") or None,
+            "time_tag":           concat_d.get("timeTag")    or None,
+            "channel_tag":        concat_d.get("channelTag") or None,
+            "z_tag":              concat_d.get("zTag")       or None,
+            "y_tag":              concat_d.get("yTag")       or None,
+            "x_tag":              concat_d.get("xTag")       or None,
+        },
     }
 
 
@@ -257,6 +275,64 @@ def _parse_int(value) -> int:
         return int(str(value).strip().split(",")[0])
     except (ValueError, TypeError):
         return 0
+
+
+def _parse_memory_gb(value, default: float = 4.0) -> float:
+    """Parse a memory string like '4GB', '4gb', '0.5GB', '512MB' → float GB.
+    If *value* is already numeric it is returned as-is (assumed GB)."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().lower()
+    for suffix, divisor in [("gb", 1), ("mb", 1024), ("g", 1), ("m", 1024), ("b", 1)]:
+        if s.endswith(suffix):
+            try:
+                return float(s[: -len(suffix)]) / divisor
+            except ValueError:
+                break
+    try:
+        return float(s)
+    except ValueError:
+        return default
+
+
+def _parse_jvm_gb(value, default: float = 2.0) -> float:
+    """Parse a JVM heap string like '2g', '4G', '2048m' → float GB.
+    If *value* is already numeric it is returned as-is (assumed GB)."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().lower()
+    if s.endswith("m"):
+        try:
+            return float(s[:-1]) / 1024
+        except ValueError:
+            return default
+    for suffix in ("gb", "g", "b"):
+        if s.endswith(suffix):
+            try:
+                return float(s[: -len(suffix)])
+            except ValueError:
+                break
+    try:
+        return float(s)
+    except ValueError:
+        return default
+
+
+def _gb_to_memory_str(val, default: str = "4GB") -> str:
+    """Float GB → '4GB' or '4.5GB' string for Dask memory_per_worker."""
+    try:
+        gb = float(val)
+        return f"{int(gb)}GB" if gb == int(gb) else f"{gb:.1f}GB"
+    except (TypeError, ValueError):
+        return str(val) if val else default
+
+
+def _gb_to_jvm_str(val, default: str = "2g") -> str:
+    """Float GB → '4g' string for JVM -Xmx (rounded to nearest integer GB)."""
+    try:
+        return f"{max(1, round(float(val)))}g"
+    except (TypeError, ValueError):
+        return str(val) if val else default
 
 
 # ---------------------------------------------------------------------------

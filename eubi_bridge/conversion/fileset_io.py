@@ -591,6 +591,7 @@ class BatchFile:
         """
         pruned    = prune_seriesfix(series_path)
         scene_idx = self._scene_idx(series_path, pruned)
+        kwargs.pop('series', None)  # scene_idx is authoritative here
         manager   = ArrayManager(pruned, series=scene_idx,
                                  metadata_reader=metadata_reader, **kwargs)
         try:

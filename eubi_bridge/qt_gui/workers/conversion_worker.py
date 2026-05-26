@@ -31,6 +31,23 @@ _ANSI_ESC = _re.compile(
 
 # ── Config helpers ────────────────────────────────────────────────────────────
 
+def _gb_to_memory_str(val) -> str:
+    """Float GB → '4GB' or '4.5GB' string for Dask memory_per_worker."""
+    try:
+        gb = float(val)
+        return f"{int(gb)}GB" if gb == int(gb) else f"{gb:.1f}GB"
+    except (TypeError, ValueError):
+        return str(val) if val else "4GB"
+
+
+def _gb_to_jvm_str(val) -> str:
+    """Float GB → '4g' string for JVM -Xmx (rounded to nearest integer GB)."""
+    try:
+        return f"{max(1, round(float(val)))}g"
+    except (TypeError, ValueError):
+        return str(val) if val else "2g"
+
+
 def _parse_range(range_str: str):
     if not range_str:
         return None
@@ -105,9 +122,9 @@ def _build_kwargs(config: dict) -> dict:
         "region_size_mb":           cluster_config.get("regionSizeMb", 64),
         "max_concurrency":          cluster_config.get("maxConcurrency", 4),
         "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 1),
-        "memory_per_worker":        cluster_config.get("memoryPerWorker", "4GB"),
+        "memory_per_worker":        _gb_to_memory_str(cluster_config.get("memoryPerWorker", 4)),
         "bf_tile_size_mb":          cluster_config.get("bfTileSizeMb", 512.0),
-        "jvm_memory":               cluster_config.get("jvmMemory", "2g"),
+        "jvm_memory":               _gb_to_jvm_str(cluster_config.get("jvmMemory", 2)),
         "bf_read_concurrency":      cluster_config.get("bfReadConcurrency", 4),
         "on_local_cluster":         cluster_config.get("useLocalDask", False),
         "on_slurm":                 cluster_config.get("useSlurm", False),

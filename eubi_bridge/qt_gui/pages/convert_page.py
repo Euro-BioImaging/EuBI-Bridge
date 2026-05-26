@@ -258,11 +258,19 @@ class ConvertPage(QWidget):
         _, self._max_concurrent_scenes = _labeled_spin("Max Concurrent Scenes:", 1, 64, 1)
         lay.addLayout(_row(QLabel("Max Concurrent Scenes:"), self._max_concurrent_scenes))
 
-        _, self._region_size_mb = _labeled_spin("Region Size MB:", 1, 4096, 256)
-        lay.addLayout(_row(QLabel("Region Size MB:"), self._region_size_mb))
+        self._region_size_mb = QDoubleSpinBox()
+        self._region_size_mb.setRange(1.0, 65536.0)
+        self._region_size_mb.setValue(256.0)
+        self._region_size_mb.setSingleStep(32.0)
+        self._region_size_mb.setDecimals(1)
+        lay.addLayout(_form_row("Region Size (MB):", self._region_size_mb))
 
-        self._memory_per_worker = QLineEdit("1GB")
-        lay.addLayout(_form_row("Memory/Worker:", self._memory_per_worker))
+        self._memory_per_worker = QDoubleSpinBox()
+        self._memory_per_worker.setRange(0.5, 1024.0)
+        self._memory_per_worker.setValue(4.0)
+        self._memory_per_worker.setSingleStep(1.0)
+        self._memory_per_worker.setDecimals(1)
+        lay.addLayout(_form_row("Memory/Worker (GB):", self._memory_per_worker))
 
         self._use_local_dask = QCheckBox("Use Local Dask")
         lay.addWidget(self._use_local_dask)
@@ -316,14 +324,17 @@ class ConvertPage(QWidget):
         self._bf_tile_size_mb.setRange(1.0, 65536.0)
         self._bf_tile_size_mb.setValue(512.0)
         self._bf_tile_size_mb.setSingleStep(64.0)
-        bf_lay.addLayout(_form_row("BF Tile Size MB:", self._bf_tile_size_mb))
+        bf_lay.addLayout(_form_row("BF Tile Size (MB):", self._bf_tile_size_mb))
 
         _, self._bf_read_concurrency = _labeled_spin("BF Read Concurrency:", 1, 64, 4)
         bf_lay.addLayout(_row(QLabel("BF Read Concurrency:"), self._bf_read_concurrency))
 
-        self._jvm_memory = QLineEdit("2g")
-        self._jvm_memory.setPlaceholderText("e.g. 2g, 4g, 8g")
-        bf_lay.addLayout(_form_row("JVM Memory:", self._jvm_memory))
+        self._jvm_memory = QDoubleSpinBox()
+        self._jvm_memory.setRange(0.5, 512.0)
+        self._jvm_memory.setValue(2.0)
+        self._jvm_memory.setSingleStep(1.0)
+        self._jvm_memory.setDecimals(1)
+        bf_lay.addLayout(_form_row("JVM Memory (GB):", self._jvm_memory))
 
         lay.addWidget(bf_group)
 
@@ -714,8 +725,8 @@ class ConvertPage(QWidget):
         self._queue_size.setValue(c.get("queueSize", 4))
         self._max_concurrency.setValue(c.get("maxConcurrency", 4))
         self._max_concurrent_scenes.setValue(c.get("maxConcurrentScenes", 1))
-        self._region_size_mb.setValue(c.get("regionSizeMb", 256))
-        self._memory_per_worker.setText(str(c.get("memoryPerWorker", "1GB")))
+        self._region_size_mb.setValue(float(c.get("regionSizeMb", 256.0)))
+        self._memory_per_worker.setValue(float(c.get("memoryPerWorker", 4.0)))
         self._use_local_dask.setChecked(c.get("useLocalDask", False))
         self._use_slurm.setChecked(c.get("useSlurm", False))
         self._slurm_partition.setText(c.get("slurmPartition", ""))
@@ -723,7 +734,7 @@ class ConvertPage(QWidget):
         self._slurm_time.setText(c.get("slurmTime", "24:00:00"))
         self._bf_tile_size_mb.setValue(float(c.get("bfTileSizeMb", 512.0)))
         self._bf_read_concurrency.setValue(c.get("bfReadConcurrency", 4))
-        self._jvm_memory.setText(str(c.get("jvmMemory", "2g")))
+        self._jvm_memory.setValue(float(c.get("jvmMemory", 2.0)))
 
         r = cfg.get("reader", {})
         self._read_all_scenes.setChecked(r.get("readAllScenes", True))
@@ -809,6 +820,14 @@ class ConvertPage(QWidget):
             if u_idx >= 0:
                 unit_combo.setCurrentIndex(u_idx)
 
+        concat = cfg.get("concatenation", {})
+        self._concat_edits["time"].setText(concat.get("timeTag", "") or "")
+        self._concat_edits["channel"].setText(concat.get("channelTag", "") or "")
+        self._concat_edits["z"].setText(concat.get("zTag", "") or "")
+        self._concat_edits["y"].setText(concat.get("yTag", "") or "")
+        self._concat_edits["x"].setText(concat.get("xTag", "") or "")
+        self._concat_axes.setText(concat.get("concatenationAxes", "") or "")
+
         if "_configPath" in cfg:
             self._config_path = cfg["_configPath"]
             self._config_path_label.setText(os.path.basename(cfg["_configPath"]))
@@ -822,7 +841,7 @@ class ConvertPage(QWidget):
                 "maxConcurrency":      self._max_concurrency.value(),
                 "maxConcurrentScenes": self._max_concurrent_scenes.value(),
                 "regionSizeMb":        self._region_size_mb.value(),
-                "memoryPerWorker":     self._memory_per_worker.text().strip(),
+                "memoryPerWorker":     self._memory_per_worker.value(),
                 "useLocalDask":        self._use_local_dask.isChecked(),
                 "useSlurm":            self._use_slurm.isChecked(),
                 "slurmPartition":      self._slurm_partition.text().strip(),
@@ -830,7 +849,7 @@ class ConvertPage(QWidget):
                 "slurmTime":           self._slurm_time.text().strip() or "24:00:00",
                 "bfTileSizeMb":        self._bf_tile_size_mb.value(),
                 "bfReadConcurrency":   self._bf_read_concurrency.value(),
-                "jvmMemory":           self._jvm_memory.text().strip() or "2g",
+                "jvmMemory":           self._jvm_memory.value(),
             },
             "reader": {
                 "readAllScenes":     self._read_all_scenes.isChecked(),
