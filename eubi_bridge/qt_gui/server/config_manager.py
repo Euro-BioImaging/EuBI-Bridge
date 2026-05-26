@@ -187,9 +187,9 @@ def _react_to_config(data: dict) -> dict:
             "view_index":        _parse_int(reader_d.get("viewIndex", "0")),
             "phase_index":       _parse_int(reader_d.get("phaseIndex", "0")),
             "illumination_index": _parse_int(reader_d.get("illuminationIndex", "0")),
-            "scene_index":       0,
+            "scene_index":       "all",
             "rotation_index":    _parse_int(reader_d.get("rotationIndex", "0")),
-            "mosaic_tile_index": 0,
+            "mosaic_tile_index": None,
             "sample_index":      _parse_int(reader_d.get("sampleIndex", "0")),
         },
         "conversion": {

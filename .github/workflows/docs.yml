@@ -1,0 +1,30 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install project + docs dependencies
+        run: pip install -e ".[docs]" pydantic>=2.0
+
+      - name: Regenerate CLI reference
+        run: python docs/scripts/gen_cli_ref.py
+
+      - name: Build and deploy
+        env:
+          DISABLE_MKDOCS_2_WARNING: "true"
+        run: mkdocs gh-deploy --force

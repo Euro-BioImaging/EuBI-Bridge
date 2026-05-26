@@ -5,9 +5,9 @@ pan support, and a timing overlay.
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtCore import QPointF, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import QSizePolicy, QWidget
+from PyQt6.QtWidgets import QRubberBand, QSizePolicy, QWidget
 
 
 class ImageWidget(QWidget):
@@ -22,6 +22,10 @@ class ImageWidget(QWidget):
     pan_changed    = pyqtSignal(float, float)  # delta_row, delta_col
     pan_released   = pyqtSignal()              # mouse-up after drag
     wheel_scrolled = pyqtSignal(int)
+    roi_selected   = pyqtSignal(float, float, float, float)  # x1,y1,x2,y2 widget-px (crop mode)
+    box_selected   = pyqtSignal(float, float, float, float)  # x1,y1,x2,y2 widget-px (box mode)
+    annotate_at    = pyqtSignal(float, float)                # sx,sy widget-px — left btn (annotate mode)
+    erase_at       = pyqtSignal(float, float)                # sx,sy widget-px — right btn (annotate mode)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,6 +38,13 @@ class ImageWidget(QWidget):
         self._ax_v: str = "Y"
         self._ax_t: str = "Z"
 
+        # Interaction mode: 'pan' | 'crop' | 'box' | 'annotate'
+        self._mode: str = 'pan'
+        self._roi_start: QPointF | None = None
+        self._roi_rect:  QRect   | None = None   # persisted crop-box overlay (cyan)
+        self._box_rect:  QRect   | None = None   # persisted annotation-box overlay (orange)
+        self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+
         self.setMinimumSize(300, 300)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
@@ -41,6 +52,22 @@ class ImageWidget(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
 
     # ── Public API ────────────────────────────────────────────────────────────
+
+    def set_mode(self, mode: str) -> None:
+        """Switch interaction mode: 'pan', 'crop', 'box', or 'annotate'."""
+        self._mode = mode
+        self._roi_start = None
+        self._rubber_band.hide()
+        if mode == 'pan':
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self._roi_rect = None   # clear crop box; annotation box persists
+        else:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def clear_annotation_box(self) -> None:
+        """Remove the persistent annotation box overlay."""
+        self._box_rect = None
+        self.update()
 
     def set_axes(self, h_axis: str, v_axis: str, through_axis: str):
         """Update orientation labels (call before or after set_frame)."""
@@ -121,6 +148,32 @@ class ImageWidget(QWidget):
 
         self._draw_axis_lines(painter, x_dev, y_dev, img_w, img_h)
 
+        dpr = self.devicePixelRatioF()
+
+        # Crop-box persistent overlay — cyan
+        if self._roi_rect is not None:
+            dev_rect = QRect(
+                int(self._roi_rect.x()      * dpr),
+                int(self._roi_rect.y()      * dpr),
+                int(self._roi_rect.width()  * dpr),
+                int(self._roi_rect.height() * dpr),
+            )
+            painter.fillRect(dev_rect, QColor(0, 220, 255, 55))
+            painter.setPen(QPen(QColor(0, 220, 255, 200), 2))
+            painter.drawRect(dev_rect)
+
+        # Annotation-box persistent overlay — orange
+        if self._box_rect is not None:
+            dev_rect = QRect(
+                int(self._box_rect.x()      * dpr),
+                int(self._box_rect.y()      * dpr),
+                int(self._box_rect.width()  * dpr),
+                int(self._box_rect.height() * dpr),
+            )
+            painter.fillRect(dev_rect, QColor(255, 160, 0, 40))
+            painter.setPen(QPen(QColor(255, 160, 0, 220), 2))
+            painter.drawRect(dev_rect)
+
     # ── Axis overlay ──────────────────────────────────────────────────────────
 
     def _draw_axis_lines(self, painter: QPainter,
@@ -190,32 +243,76 @@ class ImageWidget(QWidget):
     # ── Mouse events ──────────────────────────────────────────────────────────
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start = (event.position().x(), event.position().y())
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = event.position()
+        if self._mode == 'pan':
+            self._drag_start = (pos.x(), pos.y())
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif self._mode in ('crop', 'box'):
+            self._roi_start = pos
+            self._rubber_band.setGeometry(QRect(pos.toPoint(), QSize()))
+            self._rubber_band.show()
+        elif self._mode == 'annotate':
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.annotate_at.emit(pos.x(), pos.y())
+            elif event.button() == Qt.MouseButton.RightButton:
+                self.erase_at.emit(pos.x(), pos.y())
 
     def mouseMoveEvent(self, event):
-        if self._drag_start is None or self._pixmap is None:
+        pos = event.position()
+        if self._mode == 'pan':
+            if self._drag_start is None or self._pixmap is None:
+                return
+            px, py = pos.x(), pos.y()
+            dx = px - self._drag_start[0]
+            dy = py - self._drag_start[1]
+            self._drag_start = (px, py)
+
+            _, _, dw, dh = self._display_rect()
+            img_w = self._pixmap.width()
+            img_h = max(1, int(self._pixmap.height() * self._aspect))
+            scale_x = dw / max(img_w, 1)
+            scale_y = dh / max(img_h, 1)
+
+            delta_col = -dx / scale_x
+            delta_row = -dy / scale_y / self._aspect
+            self.pan_changed.emit(delta_row, delta_col)
+        elif self._mode in ('crop', 'box') and self._roi_start is not None:
+            rect = QRect(self._roi_start.toPoint(), pos.toPoint()).normalized()
+            self._rubber_band.setGeometry(rect)
+        elif self._mode == 'annotate':
+            if event.buttons() & Qt.MouseButton.LeftButton:
+                self.annotate_at.emit(pos.x(), pos.y())
+            elif event.buttons() & Qt.MouseButton.RightButton:
+                self.erase_at.emit(pos.x(), pos.y())
+
+    def mouseReleaseEvent(self, event):
+        if event.button() not in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             return
-        px, py = event.position().x(), event.position().y()
-        dx = px - self._drag_start[0]
-        dy = py - self._drag_start[1]
-        self._drag_start = (px, py)
-
-        _, _, dw, dh = self._display_rect()
-        img_w = self._pixmap.width()
-        img_h = max(1, int(self._pixmap.height() * self._aspect))
-        scale_x = dw / max(img_w, 1)
-        scale_y = dh / max(img_h, 1)
-
-        delta_col = -dx / scale_x
-        delta_row = -dy / scale_y / self._aspect
-        self.pan_changed.emit(delta_row, delta_col)
-
-    def mouseReleaseEvent(self, _event):
-        self._drag_start = None
-        self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.pan_released.emit()
+        if self._mode == 'annotate':
+            return  # press/move signals already handled; nothing extra on release
+        if self._mode == 'pan':
+            self._drag_start = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.pan_released.emit()
+        elif self._mode in ('crop', 'box') and self._roi_start is not None:
+            pos = event.position()
+            self._rubber_band.hide()
+            rect = QRect(self._roi_start.toPoint(), pos.toPoint()).normalized()
+            x1, y1 = float(self._roi_start.x()), float(self._roi_start.y())
+            x2, y2 = pos.x(), pos.y()
+            self._roi_start = None
+            if self._mode == 'crop':
+                self._roi_rect = rect
+                self.update()
+                self.roi_selected.emit(x1, y1, x2, y2)
+            else:  # 'box'
+                self._box_rect = rect
+                self.update()
+                self.box_selected.emit(x1, y1, x2, y2)
+        elif self._mode == 'annotate':
+            pass  # annotate_at already emitted on press/move
 
     def wheelEvent(self, event):
         delta = event.angleDelta().y()

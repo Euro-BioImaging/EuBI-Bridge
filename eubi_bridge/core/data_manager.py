@@ -1,159 +1,334 @@
+"""Image data management for EuBI-Bridge.
+
+Three-layer design
+------------------
+1. ``ImageReader`` (ABC) — format-specific loaders (PFFImageMeta, TIFFImageMeta,
+   H5ImageMeta, NGFFImageMeta).  All async I/O, no array-state knowledge.
+
+2. ``ArrayState`` — pure data container.  Holds the array, axes, scales, units,
+   channels.  Owns all array transformations (squeeze, transpose, crop) and
+   channel helpers.  No I/O, no async.
+
+3. ``ArrayManager`` — coordinator.  Picks the right ``ImageReader`` in ``init()``,
+   populates ``ArrayState`` after loading, orchestrates scene/tile switching, and
+   owns pyramid/OME-XML I/O methods (still async but clearly separated from the
+   pure-data layer).
+
+``conversion_worker.py`` accesses ``ArrayManager`` through its public interface
+which is unchanged: ``manager.array``, ``manager.axes``, ``manager.scaledict``,
+``manager.fill_default_meta()``, etc. all forward to ``ArrayState`` transparently.
+"""
+from __future__ import annotations
+
 import asyncio
 import copy
 import json
 import os
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
-#from xml.etree.ElementPath import ops
 
 import dask
+import dask.delayed
 import natsort
 import numpy as np
 import psutil
 import zarr
 from dask import array as da
-from ome_types.model import (OME, Channel, Image, Pixels,  # TiffData, Plane
+from ome_types.model import (OME, Channel, Image, Pixels,
                              Pixels_DimensionOrder, PixelType, UnitsLength,
                              UnitsTime)
 
-from eubi_bridge.core.readers import (  # read_single_image_asarray,
+from eubi_bridge.core.readers import (
     read_metadata_via_bfio, read_metadata_via_bioio_bioformats,
     read_metadata_via_extension, read_single_image)
 from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
 from eubi_bridge.external.dyna_zarr import operations as ops
 from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
-from eubi_bridge.utils.array_utils import autocompute_chunk_shape
+from eubi_bridge.utils.array_utils import autocompute_chunk_shape, get_array_chunks
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
                                           sensitive_glob, take_filepaths)
 
-# Set up logger for this module
 logger = get_logger(__name__)
 
 
-def abbreviate_units(measure: str) -> str:
-    """Abbreviate a unit of measurement.
+# ---------------------------------------------------------------------------
+# bfio tiled reading helpers (bioformats fallback path only)
+# ---------------------------------------------------------------------------
 
-    Given a human-readable unit of measurement, return its abbreviated form.
+def _is_bioformats_backed(reader: object) -> bool:
+    """Return True when *reader* is backed by the ``bioio_bioformats`` plugin.
 
-    Parameters
-    ----------
-    measure : str
-        The human-readable unit of measurement to abbreviate, e.g. "millimeter".
-
-    Returns
-    -------
-    str
-        The abbreviated form of the unit of measurement, e.g. "mm".
-
-    Notes
-    -----
-    The abbreviations are as follows:
-
-    * Length measurements:
-        - millimeter: mm
-        - centimeter: cm
-        - decimeter: dm
-        - meter: m
-        - decameter: dam
-        - hectometer: hm
-        - kilometer: km
-        - micrometer: µm
-        - nanometer: nm
-        - picometer: pm
-    * Time measurements:
-        - second: s
-        - millisecond: ms
-        - microsecond: µs
-        - nanosecond: ns
-        - minute: min
-        - hour: h
+    This is the fallback reader for formats without a native bioio extension
+    (e.g. ``.mrc``, ``.dm4``).  Native plugins (CZI, ND2, LIF, TIFF…) return
+    False and keep their existing ``get_image_dask_data()`` path.
     """
+    try:
+        return "bioio_bioformats" in type(reader.img).__module__
+    except AttributeError:
+        return False
+
+
+# Thread-local BioReader cache — one open reader per PATH per dask thread.
+#
+# Bio-Formats' setId() (called inside BioReader.__init__) costs 7-10 s because it
+# parses the entire file index.  For a multi-series file (e.g. LIF with 10 series)
+# this cost was paid once per series per thread.
+#
+# Fix: cache at the PATH level.  The first access for a given (path, thread) pays
+# setId() once.  All subsequent accesses for ANY series of that file call setSeries()
+# on the already-open Java ImageReader — that is essentially free.
+import threading as _threading
+_tl_readers: _threading.local = _threading.local()
+
+
+def _get_cached_reader(path: str, series: int):
+    """Return a cached BioReader for this thread.
+
+    setId() is called only once per path per thread.  Series switching is free
+    via setSeries() on the underlying Java reader.
+
+    bfio validates reads against its Python-level br.Z/Y/X, which are set at
+    open time and reflect the ORIGINAL series.  Switching to a series with
+    LARGER dimensions would cause z1 > br.Z assertion errors.  When that
+    happens we close and re-open so Python metadata is refreshed.  Switching
+    to a series with SMALLER or equal dimensions is always safe (stale br.Z is
+    conservative).
+    """
+    from bfio import BioReader
+    if not hasattr(_tl_readers, 'cache'):
+        _tl_readers.cache = {}
+    if path not in _tl_readers.cache:
+        _tl_readers.cache[path] = BioReader(path, level=series)
+        return _tl_readers.cache[path]
+
+    br = _tl_readers.cache[path]
+    try:
+        rdr = br._backend._rdr
+        if int(rdr.getSeries()) != series:
+            rdr.setSeries(series)
+            # After switching, check whether new series is larger than the
+            # stale Python metadata.  Java dimensions are always up-to-date.
+            new_z = int(rdr.getSizeZ())
+            new_y = int(rdr.getSizeY())
+            new_x = int(rdr.getSizeX())
+            if new_z > br.Z or new_y > br.Y or new_x > br.X:
+                # Re-open so bfio's Python layer sees the correct dimensions.
+                try:
+                    br.close()
+                except Exception:
+                    pass
+                _tl_readers.cache[path] = BioReader(path, level=series)
+    except Exception:
+        pass
+    return _tl_readers.cache[path]
+
+
+def _ome_dtype(pixel_type) -> np.dtype:
+    """Convert an OME PixelType enum (or its string value) to a numpy dtype."""
+    name = (pixel_type.value if hasattr(pixel_type, 'value') else str(pixel_type)).lower()
+    _MAP = {
+        'uint8': np.uint8, 'uint16': np.uint16, 'uint32': np.uint32,
+        'int8': np.int8, 'int16': np.int16, 'int32': np.int32,
+        'float': np.float32, 'double': np.float64,
+        'bit': np.bool_, 'complex': np.complex64, 'double-complex': np.complex128,
+    }
+    return np.dtype(_MAP.get(name, np.float32))
+
+
+def _compute_tile_shape(
+    T: int, C: int, Z: int, Y: int, X: int, dtype: np.dtype, tile_mb: float,
+) -> tuple[int, int, int, int, int]:
+    """Derive a (t, c, z, y, x) tile shape using a priority-ordered budget.
+
+    Budget is allocated in order X → Y → Z → C → T:
+    - Fill the XY plane first (whole plane if it fits, otherwise square tile).
+    - Any remaining budget is spent on additional Z planes.
+    - Any remaining budget is spent on additional C channels.
+    - Any remaining budget is spent on additional T frames.
+
+    Maximising each dimension reduces the number of BioReader opens per series,
+    which at 7-10 s each dominates total conversion time.
+    """
+    tile_bytes = tile_mb * 1024 ** 2
+    itemsize = np.dtype(dtype).itemsize
+    remaining = tile_bytes / itemsize   # budget in pixels
+
+    # Priority 1: X and Y
+    if Y * X <= remaining:
+        y_tile, x_tile = Y, X
+    else:
+        yx_side = max(1, int(round(remaining ** 0.5)))
+        y_tile = min(yx_side, Y)
+        x_tile = min(yx_side, X)
+    remaining /= y_tile * x_tile
+
+    # Priority 2: Z
+    z_tile = max(1, min(Z, int(remaining)))
+    remaining /= z_tile
+
+    # Priority 3: C
+    c_tile = max(1, min(C, int(remaining)))
+    remaining /= c_tile
+
+    # Priority 4: T
+    t_tile = max(1, min(T, int(remaining)))
+
+    return t_tile, c_tile, z_tile, y_tile, x_tile
+
+
+def _read_bfio_tile(
+    path: str,
+    y0: int, y1: int,
+    x0: int, x1: int,
+    z0: int, z1: int,
+    c0: int, c1: int,
+    t0: int, t1: int,
+    series: int = 0,
+) -> np.ndarray:
+    """Read a (T_tile, C_tile, Z_tile, Y, X) block via bfio.
+
+    One BioReader open covers all (t, c, z) combinations in the tile, amortising
+    Java/Bio-Formats init overhead.  Returns shape ``(t1-t0, c1-c0, z1-z0, y1-y0, x1-x0)``.
+    """
+    # Reuse a cached reader for this thread — avoids the 7-10 s BioReader open
+    # cost on every task.  Thread-local storage means no locking is needed.
+    br = _get_cached_reader(path, series)
+    frames = []
+    for t in range(t0, t1):
+        # Read plane-by-plane: 0.8 ms each vs 1334 ms for a multi-dim slice.
+        c_vols = []
+        for c in range(c0, c1):
+            z_planes = []
+            for z in range(z0, z1):
+                p = br[y0:y1, x0:x1, z:z + 1, c:c + 1, t:t + 1]
+                z_planes.append(np.asarray(p).reshape(y1 - y0, x1 - x0))
+            c_vols.append(np.stack(z_planes, axis=0))   # (Z_tile, Y, X)
+        frames.append(np.stack(c_vols, axis=0))         # (C_tile, Z_tile, Y, X)
+    return np.stack(frames, axis=0)                     # → (T_tile, C_tile, Z_tile, Y, X)
+
+
+def _build_tiled_dask_array(
+    path: str,
+    tile_mb: float = 256.0,
+    series: int = 0,
+    shape: 'tuple[int,int,int,int,int] | None' = None,
+    dtype: 'np.dtype | None' = None,
+) -> da.Array:
+    """Build a lazy (T, C, Z, Y, X) dask array using bfio tiles.
+
+    Each dask task reads one priority-ordered tile block via ``_read_bfio_tile``.
+    Tile shape is derived from *tile_mb* with priority X → Y → Z → C → T.
+
+    *shape* ``(T, C, Z, Y, X)`` and *dtype* may be supplied from already-loaded
+    OME-XML metadata to skip the BioReader shape probe, keeping scene loading
+    fully lazy and allowing reads to overlap with writes.
+    """
+    if shape is not None and dtype is not None:
+        T, C, Z, Y, X = shape
+    else:
+        from bfio import BioReader
+        with BioReader(path, level=series) as br:
+            T, C, Z, Y, X = br.T, br.C, br.Z, br.Y, br.X
+            dtype = br.dtype
+
+    t_tile, c_tile, z_tile, y_tile, x_tile = _compute_tile_shape(
+        T, C, Z, Y, X, dtype, tile_mb)
+    logger.info(
+        "bfio tiled read: shape=(T=%d,C=%d,Z=%d,Y=%d,X=%d) dtype=%s "
+        "tile=(%d,%d,%d,%d,%d) tile_mb=%.1f",
+        T, C, Z, Y, X, dtype, t_tile, c_tile, z_tile, y_tile, x_tile, tile_mb,
+    )
+
+    # Priority order T → C → Z → Y → X (outer → inner).
+    # Each task reads (t_tile, c_tile, z_tile, y_tile, x_tile) — one BioReader open.
+    t_blocks = []
+    for t0 in range(0, T, t_tile):
+        t1 = min(t0 + t_tile, T)
+        c_blocks = []
+        for c0 in range(0, C, c_tile):
+            c1 = min(c0 + c_tile, C)
+            z_blocks = []
+            for z0 in range(0, Z, z_tile):
+                z1 = min(z0 + z_tile, Z)
+                y_rows = []
+                for y0 in range(0, Y, y_tile):
+                    y1 = min(y0 + y_tile, Y)
+                    x_cols = []
+                    for x0 in range(0, X, x_tile):
+                        x1 = min(x0 + x_tile, X)
+                        block = da.from_delayed(
+                            dask.delayed(_read_bfio_tile)(
+                                path, y0, y1, x0, x1, z0, z1, c0, c1, t0, t1, series
+                            ),
+                            shape=(t1-t0, c1-c0, z1-z0, y1-y0, x1-x0),
+                            dtype=dtype,
+                        )
+                        x_cols.append(block)
+                    y_rows.append(da.concatenate(x_cols, axis=4))   # join X
+                z_blocks.append(da.concatenate(y_rows, axis=3))     # join Y
+            c_blocks.append(da.concatenate(z_blocks, axis=2))       # join Z
+        t_blocks.append(da.concatenate(c_blocks, axis=1))           # join C
+    return da.concatenate(t_blocks, axis=0)                         # join T → (T,C,Z,Y,X)
+
+
+# ---------------------------------------------------------------------------
+# Module-level utilities
+# ---------------------------------------------------------------------------
+
+def abbreviate_units(measure: str) -> str:
+    """Return the abbreviated form of a unit string, e.g. 'micrometer' → 'µm'."""
     if measure is None:
         return None
-
     abbreviations = {
-        # Length measurements
-        "millimeter": "mm",
-        "centimeter": "cm",
-        "decimeter": "dm",
-        "meter": "m",
-        "decameter": "dam",
-        "hectometer": "hm",
-        "kilometer": "km",
-        "micrometer": "µm",
-        "nanometer": "nm",
+        "millimeter": "mm", "centimeter": "cm", "decimeter": "dm",
+        "meter": "m", "decameter": "dam", "hectometer": "hm",
+        "kilometer": "km", "micrometer": "µm", "nanometer": "nm",
         "picometer": "pm",
-
-        # Time measurements
-        "second": "s",
-        "millisecond": "ms",
-        "microsecond": "µs",
-        "nanosecond": "ns",
-        "minute": "min",
-        "hour": "h"
+        # angstrom: official symbol Å; Bio-Formats / older OME also use plain "A"
+        "angstrom": "Å", "angström": "Å",
+        "second": "s", "millisecond": "ms",
+        "microsecond": "µs", "nanosecond": "ns", "minute": "min", "hour": "h",
     }
-
-    # Return the input if it's already an abbreviation
-    if measure.lower() in abbreviations.values():
-        return measure.lower()
-
+    if measure in abbreviations.values():
+        return measure
     return abbreviations.get(measure.lower(), "Unknown")
 
 
 def expand_units(measure: str) -> str:
-    """
-    Expand a unit of measurement.
-
-    Given an abbreviated unit of measurement, return its expanded form.
-
-    Parameters
-    ----------
-    measure : str
-        The abbreviated unit of measurement to expand, e.g. "mm".
-
-    Returns
-    -------
-    str
-        The expanded form of the unit of measurement, e.g. "millimeter".
-    """
-    # Define the abbreviations and their expansions
-
+    """Return the expanded form of an abbreviated unit, e.g. 'µm' → 'micrometer'."""
     if measure is None:
         return None
-
     expansions = {
-        # Length measurements
-        "mm": "millimeter",
-        "cm": "centimeter",
-        "dm": "decimeter",
-        "m": "meter",
-        "dam": "decameter",
-        "hm": "hectometer",
-        "km": "kilometer",
-        "µm": "micrometer",
-        "nm": "nanometer",
+        "mm": "millimeter", "cm": "centimeter", "dm": "decimeter",
+        "m": "meter", "dam": "decameter", "hm": "hectometer",
+        "km": "kilometer", "µm": "micrometer", "nm": "nanometer",
         "pm": "picometer",
-
-        # Time measurements
-        "s": "second",
-        "ms": "millisecond",
-        "µs": "microsecond",
-        "ns": "nanosecond",
-        "min": "minute",
-        "h": "hour"
+        # angstrom variants: Å (U+00C5), å (U+00E5 lowercase), A (older OME abbreviation)
+        "Å": "angstrom", "å": "angstrom", "A": "angstrom",
+        "s": "second", "ms": "millisecond",
+        "µs": "microsecond", "ns": "nanosecond", "min": "minute", "h": "hour",
     }
-
-    # Return the input if it's already an expanded form
-    if measure.lower() in expansions.values():
-        return measure.lower()
-
-    # Return the expanded form if it exists, else return "Unknown"
-    return expansions.get(measure.lower(), "Unknown")
+    if measure in expansions.values():
+        return measure
+    # Try exact match first (preserves case-sensitive symbols like Å), then lowercase fallback
+    return expansions.get(measure, expansions.get(measure.lower(), "Unknown"))
 
 
-def create_ome_xml(  # make 5D omexml
+def expand_hex_shorthand(hex_color: str) -> str:
+    """Expand a shorthand hex colour, e.g. '#abc' → '#aabbcc'."""
+    if not hex_color.startswith('#'):
+        raise ValueError("Hex color must start with '#'")
+    shorthand = hex_color[1:]
+    if not all(c in '0123456789ABCDEFabcdef' for c in shorthand):
+        raise ValueError("Invalid hex digits")
+    return '#' + ''.join([c * 2 for c in shorthand])
+
+
+def create_ome_xml(
         image_shape: tuple,
         axis_order: str,
         pixel_size_x: float = None,
@@ -166,8 +341,9 @@ def create_ome_xml(  # make 5D omexml
         unit_t: str = None,
         dtype: str = "uint8",
         image_name: str = "Default Image",
-        channel_names: list = None
-) -> str:
+        channel_names: list = None,
+) -> OME:
+    """Build an OME metadata object from image shape and physical metadata."""
     fullaxes = 'xyczt'
     if len(axis_order) != len(image_shape):
         raise ValueError("Length of axis_order must match length of image_shape")
@@ -177,9 +353,8 @@ def create_ome_xml(  # make 5D omexml
         'time_increment': pixel_size_t,
         'physical_size_z': pixel_size_z,
         'physical_size_y': pixel_size_y,
-        'physical_size_x': pixel_size_x
+        'physical_size_x': pixel_size_x,
     }
-
     pixel_size_map = {}
     for ax in 'tzyx':
         if ax == 't':
@@ -195,67 +370,41 @@ def create_ome_xml(  # make 5D omexml
         'physical_size_y_unit': unit_y,
         'physical_size_x_unit': unit_x,
     }
-
-    unit_map = {}
+    unit_map_ = {}
     for ax in 'tzyx':
         if ax == 't':
             if ax in axis_order.lower():
-                unit_map['time_increment_unit'] = unit_t or 'second'
+                unit_map_['time_increment_unit'] = unit_t or 'second'
         else:
             if ax in axis_order.lower():
-                unit_map[f'physical_size_{ax}_unit'] = unit_basemap[f'physical_size_{ax}_unit'] or 'MICROMETER'
-    unit_map = {key: abbreviate_units(value) for key, value in unit_map.items() if value is not None}
+                unit_map_[f'physical_size_{ax}_unit'] = unit_basemap[f'physical_size_{ax}_unit'] or 'MICROMETER'
+    unit_map_ = {k: abbreviate_units(v) for k, v in unit_map_.items() if v is not None}
 
-    # Map numpy dtype to OME PixelType
     dtype_map = {
-        "uint8": PixelType.UINT8,
-        "uint16": PixelType.UINT16,
-        "uint32": PixelType.UINT32,
-        "int8": PixelType.INT8,
-        "int16": PixelType.INT16,
-        "int32": PixelType.INT32,
-        "float32": PixelType.FLOAT,
-        "float64": PixelType.DOUBLE,
+        "uint8": PixelType.UINT8, "uint16": PixelType.UINT16,
+        "uint32": PixelType.UINT32, "int8": PixelType.INT8,
+        "int16": PixelType.INT16, "int32": PixelType.INT32,
+        "float32": PixelType.FLOAT, "float64": PixelType.DOUBLE,
     }
-
     if dtype not in dtype_map:
         raise ValueError(f"Unsupported dtype: {dtype}")
 
-    pixel_type = dtype_map[dtype]
-
-    # Initialize axis sizes
     size_map_ = dict(zip(axis_order.lower(), image_shape))
-    size_map = {}
-    for ax in fullaxes:
-        if ax in size_map_:
-            size_map[f'size_{ax}'] = size_map_[ax]
-        else:
-            size_map[f'size_{ax}'] = 1
+    size_map = {f'size_{ax}': size_map_.get(ax, 1) for ax in fullaxes}
 
     if channel_names is None or len(channel_names) != size_map['size_c']:
-        channels = [Channel(id=f"Channel:{idx}",  # TODO: if exists, directly take the channel names
-                            samples_per_pixel=1)
-                    for idx in range(size_map['size_c'])]
+        channels = [Channel(id=f"Channel:{i}", samples_per_pixel=1)
+                    for i in range(size_map['size_c'])]
     else:
-        channels = [Channel(id=f"Channel:{idx}",  # TODO: if exists, directly take the channel names
-                            samples_per_pixel=1,
-                            name=channel_names[idx])
-                    for idx in range(size_map['size_c'])]
+        channels = [Channel(id=f"Channel:{i}", samples_per_pixel=1, name=channel_names[i])
+                    for i in range(size_map['size_c'])]
 
     pixels = Pixels(
         dimension_order=Pixels_DimensionOrder(fullaxes.upper()),
-        **size_map,
-        type=pixel_type,
-        **pixel_size_map,
-        **unit_map,
-        channels=channels,
+        **size_map, type=dtype_map[dtype],
+        **pixel_size_map, **unit_map_, channels=channels,
     )
-
-    image = Image(id="Image:0", name=image_name, pixels=pixels)
-
-    ome = OME(images=[image])
-
-    return ome
+    return OME(images=[Image(id="Image:0", name=image_name, pixels=pixels)])
 
 
 def parse_series(series: Union[Iterable, int]):
@@ -266,27 +415,93 @@ def parse_series(series: Union[Iterable, int]):
     return series
 
 
-class PFFImageMeta:
+# ---------------------------------------------------------------------------
+# ImageReader — abstract base for all format-specific loaders
+# ---------------------------------------------------------------------------
+
+class ImageReader(ABC):
+    """Contract for format-specific image loaders.
+
+    Concrete implementations: PFFImageMeta, TIFFImageMeta, H5ImageMeta,
+    NGFFImageMeta.  All I/O is async; metadata getters are synchronous once
+    the dataset has been loaded via ``read_dataset()``.
+    """
+
+    # ── mandatory async I/O ──────────────────────────────────────────────
+
+    @abstractmethod
+    async def read_dataset(self) -> None:
+        """Load metadata and array data concurrently."""
+
+    @abstractmethod
+    async def get_arraydata(self) -> Any:
+        """Return the dask/zarr array for the current scene."""
+
+    @abstractmethod
+    async def get_pyramid(self, version: str = '0.4') -> Pyramid:
+        """Return (or build) a Pyramid from the loaded data."""
+
+    # ── optional scene / tile switching (default: no-op) ────────────────
+
+    async def set_scene(self, scene_index: int) -> None:
+        pass
+
+    async def set_tile(self, tile_index: int) -> None:
+        pass
+
+    # ── synchronous metadata getters (available after read_dataset) ──────
+
+    @abstractmethod
+    def get_axes(self) -> str: ...
+
+    @abstractmethod
+    def get_scaledict(self) -> dict: ...
+
+    @abstractmethod
+    def get_unitdict(self) -> dict: ...
+
+    @abstractmethod
+    def get_channels(self) -> Optional[list]: ...
+
+    def get_scales(self) -> list:
+        sd = self.get_scaledict()
+        return [sd[ax] for ax in self.get_axes() if ax != 'c' and ax in sd]
+
+    def get_units(self) -> list:
+        ud = self.get_unitdict()
+        return [ud[ax] for ax in self.get_axes() if ax != 'c' and ax in ud]
+
+    # ── scene / tile counts (default: single scene, single tile) ─────────
+
+    @property
+    def n_scenes(self) -> int:
+        return 1
+
+    @property
+    def n_tiles(self) -> int:
+        return 1
+
+
+# ---------------------------------------------------------------------------
+# PFFImageMeta — generic format reader (Bio-Formats / bioio)
+# ---------------------------------------------------------------------------
+
+class PFFImageMeta(ImageReader):
     essential_omexml_fields = {
         "physical_size_x", "physical_size_x_unit",
         "physical_size_y", "physical_size_y_unit",
         "physical_size_z", "physical_size_z_unit",
         "time_increment", "time_increment_unit",
-        "size_x", "size_y", "size_z", "size_t", "size_c"
+        "size_x", "size_y", "size_z", "size_t", "size_c",
     }
 
-    def __init__(self,
-                 path,
-                 meta_reader="bioio",
-                 aszarr=False
-                 ):
-        # series = parse_series(series)
+    def __init__(self, path, meta_reader="bioio", aszarr=False,
+                 reader_tile_size_mb: float = 256.0,
+                 force_bioformats: bool = False):
         self.root = path
         self._series = 0
-        # images = [self.omemeta.images[series]]
         self.omemeta = None
         self.pyr = None
-        self._series = 0
         self._tile = 0
         self._aszarr = aszarr
         self.arraydata = None
@@ -294,39 +509,29 @@ class PFFImageMeta:
         self._meta_reader = meta_reader
         self._n_scenes = None
         self._n_tiles = None
-        # self._channels = None
+        self._tile_mb = float(reader_tile_size_mb)
+        self._force_bioformats = bool(force_bioformats)
+        self._bfio_tiling = False   # set True when bfio tiled path is active
 
-    def __getstate__(self):
-        return self.__dict__.copy()
-
-    def __setstate__(self, state):
-        self.__dict__.update(state)
+    def __getstate__(self): return self.__dict__.copy()
+    def __setstate__(self, state): self.__dict__.update(state)
 
     async def read_omemeta(self):
-        """Extract OME metadata without blocking on reader initialization.
-        
-        This method ONLY extracts metadata. Scene/tile selection is deferred
-        to read_dataset() after both metadata and image reader are ready,
-        ensuring true concurrency without circular dependencies.
-        """
         if self.root.endswith('ome') or self.root.endswith('xml'):
             from ome_types import OME
             omemeta = OME().from_xml(self.root)
         else:
             if self._meta_reader == 'bioio':
-                # Try to read the metadata via bioio
                 try:
                     omemeta = await read_metadata_via_extension(self.root, series=self._series)
                 except Exception as e:
-                    # Fallback to bioformats if bioio extension reader fails
-                    logger.debug(f"bioio extension reader failed for {self.root}: {e}. Falling back to bioformats.")
+                    logger.debug(f"bioio extension reader failed for {self.root}: {e}. Falling back.")
                     omemeta = await read_metadata_via_bioio_bioformats(self.root, series=self._series)
             elif self._meta_reader == 'bfio':
                 try:
-                    omemeta = await read_metadata_via_bfio(self.root)  # don't pass series, will be handled afterwards
+                    omemeta = await read_metadata_via_bfio(self.root)
                 except Exception as e:
-                    # Fallback to bioformats if bfio reader fails
-                    logger.debug(f"bfio reader failed for {self.root}: {e}. Falling back to bioformats.")
+                    logger.debug(f"bfio reader failed for {self.root}: {e}. Falling back.")
                     omemeta = await read_metadata_via_bioio_bioformats(self.root, series=self._series)
             else:
                 raise ValueError(f"Unsupported metadata reader: {self._meta_reader}")
@@ -335,211 +540,181 @@ class PFFImageMeta:
 
     async def get_arraydata(self):
         pix = self.pixels
-        # img = self.reader.img
         dims = self.reader.img.dims
         shape = (pix.size_t, pix.size_c, pix.size_z, pix.size_y, pix.size_x)
-
         if not hasattr(dims, 'S'):
-            dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TCZYX')
+            dask_data = self.reader.get_image_dask_data(dimensions_to_read='TCZYX')
         elif hasattr(dims, 'S') and not hasattr(dims, 'C'):
-            logger.warning(f"As dimension names, 'S' was found but no 'C'. 'S' is being assumed as channel dimension.")
-            dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TSZYX')
-            logger.info(f"Current dask data shape: {dask_data.shape}")
+            logger.warning("'S' found but no 'C' — treating 'S' as channel dimension.")
+            dask_data = self.reader.get_image_dask_data(dimensions_to_read='TSZYX')
         elif hasattr(dims, 'S') and hasattr(dims, 'C'):
-            if dims.C != pix.size_c & dims.S == pix.size_c:
-                logger.warning(f"As dimension names, both 'S' and 'C' were found but 'S' seems to match the real dimension number. Assuming 'S' as channel dimension.")
-                dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TSZYX')
-                logger.info(f"Current dask data shape: {dask_data.shape}")
+            if dims.C != pix.size_c and dims.S == pix.size_c:
+                logger.warning("'S' matches channel count better than 'C' — using 'S'.")
+                dask_data = self.reader.get_image_dask_data(dimensions_to_read='TSZYX')
             else:
-                dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TCZYX')
+                dask_data = self.reader.get_image_dask_data(dimensions_to_read='TCZYX')
         else:
-            dask_data = self.reader.get_image_dask_data(dimensions_to_read = 'TCZYX')
+            dask_data = self.reader.get_image_dask_data(dimensions_to_read='TCZYX')
         return dask_data
 
-    async def set_scene(self, scene_index):
+    async def set_scene(self, scene_index: int) -> None:
         self._series = scene_index
         if self.reader is not None:
             self.reader.set_scene(self._series)
-            self.arraydata = await self.get_arraydata()
-        # if self.omemeta is not None:
-        #     self.pixels = copy.deepcopy(self.omemeta.images[self._series].pixels)
-        #     missing_fields = self.essential_omexml_fields - self.pixels.model_fields_set
-        #     self.pixels.model_fields_set.update(missing_fields)
+            if not self._bfio_tiling:
+                self.arraydata = await self.get_arraydata()
+        elif self._bfio_tiling:
+            # force_bioformats or bfio fallback: rebuild dask graph for new series.
+            # Use OME-XML shape to avoid a blocking BioReader probe.
+            shape, dtype = self._bfio_shape_from_meta()
+            self.arraydata = _build_tiled_dask_array(
+                self.root, tile_mb=self._tile_mb, series=self._series,
+                shape=shape, dtype=dtype)
 
-    async def set_tile(self, mosaic_tile_index):
+    async def set_tile(self, tile_index: int) -> None:
         self._tile = 0
-        if self.reader is not None:
-            if hasattr(self.reader, 'set_tile') and self.reader.n_tiles > 1:
-                self._tile = mosaic_tile_index
-                self.reader.set_tile(self._tile)
+        if self.reader is not None and hasattr(self.reader, 'set_tile') and self.reader.n_tiles > 1:
+            self._tile = tile_index
+            self.reader.set_tile(self._tile)
+            if not self._bfio_tiling:
                 self.arraydata = await self.get_arraydata()
 
-        # if self.omemeta is not None:
-        #     self.pixels = copy.deepcopy(self.omemeta.images[self._series].pixels)
-        #     missing_fields = self.essential_omexml_fields - self.pixels.model_fields_set
-        #     self.pixels.model_fields_set.update(missing_fields)
-
     @property
-    def n_tiles(self):
-        """Get number of tiles, with fallback to cached value."""
+    def n_tiles(self) -> int:
         if self.reader is not None and hasattr(self.reader, 'n_tiles'):
             try:
                 return self.reader.n_tiles
             except Exception as e:
-                logger.warning(f"Failed to get n_tiles from reader: {e}. Using cached value.")
-        return self._n_tiles
+                logger.warning(f"Failed to get n_tiles: {e}. Using cached value.")
+        return self._n_tiles or 1
 
     @property
-    def n_scenes(self):
-        if self.root.endswith('.lsm'):
-            return self._n_scenes # use the one from ome metadata.
-            # With .lsm files, a downscaled version of the image is stored as a second scene. This is not found in the ome metadata.
-        else:
-            return self.reader.n_scenes # Use the one from the one from Reader.scenes. Note that this is sometimes (with .lsm images) not consistent with the ome metadata.
-
+    def n_scenes(self) -> int:
+        if self.reader is None or self.root.endswith('.lsm'):
+            # OME-XML (read_omemeta) is the single source of truth for series count.
+            return self._n_scenes or 1
+        return self.reader.n_scenes
 
     def get_pixels(self):
-        """Get pixels metadata from OME metadata, with validation."""
         if self.omemeta is None:
-            raise ValueError(f"OME metadata not loaded for path {self.root}")
+            raise ValueError(f"OME metadata not loaded for {self.root}")
         if self._series >= len(self.omemeta.images):
-            raise ValueError(f"Series {self._series} out of range for path {self.root}")
-        
+            raise ValueError(f"Series {self._series} out of range for {self.root}")
         try:
             pixels = self.omemeta.images[self._series].pixels
-            missing_fields = self.essential_omexml_fields - pixels.model_fields_set
-            pixels.model_fields_set.update(missing_fields)
+            missing = self.essential_omexml_fields - pixels.model_fields_set
+            pixels.model_fields_set.update(missing)
         except (AttributeError, IndexError) as e:
-            raise ValueError(f"Failed to get pixels from path {self.root} series {self._series}: {e}") from e
+            raise ValueError(f"Failed to get pixels from {self.root} series {self._series}: {e}") from e
         return pixels
 
     @property
     def pixels(self):
         return self.get_pixels()
 
+    def _bfio_shape_from_meta(self):
+        """Return (shape, dtype) from already-loaded OME-XML — no BioReader open."""
+        pix = self.pixels
+        shape = (pix.size_t, pix.size_c, pix.size_z, pix.size_y, pix.size_x)
+        dtype = _ome_dtype(pix.type)
+        return shape, dtype
+
     async def read_img(self, **kwargs):
+        if self._force_bioformats:
+            # User explicitly wants bfio tiled path — skip bioio entirely.
+            self._bfio_tiling = True
+            shape, dtype = self._bfio_shape_from_meta()
+            self.arraydata = _build_tiled_dask_array(
+                self.root, tile_mb=self._tile_mb, series=self._series,
+                shape=shape, dtype=dtype)
+            return
+
         self.reader = await read_single_image(self.root, aszarr=self._aszarr, **kwargs)
-        await self.set_scene(self._series)
-        await self.set_tile(self._tile)
-        self.arraydata = await self.get_arraydata()
 
-    async def get_pyramid(self, version='0.4'):
-        ### add channels from omemeta
-        array = await self.get_arraydata()
-        pyr = Pyramid().from_array(array=array,
-                                   axis_order=self.get_axes(),
-                                   unit_list=self.get_units(),
-                                   scale=self.get_scales(),
-                                   version=version,
-                                   name="Series_0"
-                                   )
-        return pyr
+        if _is_bioformats_backed(self.reader):
+            # bioio_bioformats fallback — Bio-Formats can't read >2 GB planes in one call.
+            # Set the flag BEFORE calling set_scene so it doesn't overwrite self.arraydata.
+            self._bfio_tiling = True
+            self.reader.set_scene(self._series)
+            shape, dtype = self._bfio_shape_from_meta()
+            self.arraydata = _build_tiled_dask_array(
+                self.root, tile_mb=self._tile_mb, series=self._series,
+                shape=shape, dtype=dtype)
+        else:
+            # Native bioio plugin (CZI, ND2, LIF, TIFF…) — unchanged path.
+            self._bfio_tiling = False
+            await self.set_scene(self._series)
+            await self.set_tile(self._tile)
+            self.arraydata = await self.get_arraydata()
 
-    async def read_dataset(self):
-        """Read metadata and image data concurrently instead of sequentially.
-        
-        Metadata extraction (JVM startup, XML parsing) and image reader initialization
-        are independent and can run in parallel. This significantly speeds up batch
-        processing: 50 files saves ~50-250 seconds by overlapping these operations.
-        
-        Scene/tile selection happens AFTER both operations complete to avoid
-        circular dependencies (set_scene needs self.reader, which is only ready
-        after read_img completes).
-        """
-        await asyncio.gather(
-            self.read_omemeta(),
-            self.read_img()
+    async def get_pyramid(self, version='0.4') -> Pyramid:
+        # Use the already-built tiled array when read_img() set it (bioformats path).
+        # Calling get_arraydata() again would re-issue a full-plane openBytes and
+        # hit the 2 GB limit for large files.
+        array = self.arraydata if self.arraydata is not None else await self.get_arraydata()
+        return Pyramid().from_array(
+            array=array, axis_order=self.get_axes(),
+            unit_list=self.get_units(), scale=self.get_scales(),
+            version=version, name="Series_0",
         )
-        # Now both operations are complete, safely set scene and tile
+
+    async def read_dataset(self) -> None:
+        await asyncio.gather(self.read_omemeta(), self.read_img())
         await self.set_scene(self._series)
         await self.set_tile(self._tile)
 
-    def get_axes(self):
+    def get_axes(self) -> str:
         return 'tczyx'
 
-    def get_scaledict(self):
+    def get_scaledict(self) -> dict:
         return {
             't': self.pixels.time_increment,
             'z': self.pixels.physical_size_z,
             'y': self.pixels.physical_size_y,
-            'x': self.pixels.physical_size_x
+            'x': self.pixels.physical_size_x,
         }
 
-    def get_scales(self):
-        scaledict = self.get_scaledict()
-        caxes = [ax for ax in self.get_axes() if ax != 'c']
-        return [scaledict[ax] for ax in caxes]
-
-    def get_unitdict(self):
+    def get_unitdict(self) -> dict:
         return {
             't': self.pixels.time_increment_unit.name.lower(),
             'z': self.pixels.physical_size_z_unit.name.lower(),
             'y': self.pixels.physical_size_y_unit.name.lower(),
-            'x': self.pixels.physical_size_x_unit.name.lower()
+            'x': self.pixels.physical_size_x_unit.name.lower(),
         }
 
-    def get_units(self):
-        unitdict = self.get_unitdict()
-        caxes = [ax for ax in self.get_axes() if ax != 'c']
-        return [unitdict[ax] for ax in caxes]
-
-    def get_channels(self): #TODO: Here fix 'things_to_solve' point 10
+    def get_channels(self) -> Optional[list]:
         pixels = self.get_pixels()
-        if not hasattr(pixels, 'channels'):
+        if not hasattr(pixels, 'channels') or len(pixels.channels) == 0:
             return None
-        if len(pixels.channels) == 0:
-            return None
-        ###
         if len(pixels.channels) < pixels.size_c:
-            chn = ChannelIterator(num_channels=pixels.size_c)
-            channels = chn._channels
-        elif len(pixels.channels) == pixels.size_c:
-            channels = []
-            for _, channel in enumerate(pixels.channels):
-                color = channel.color.as_hex().upper()
-                color = expand_hex_shorthand(color)
-                name = channel.name
-                channels.append(dict(
-                    label=name,
-                    color=color
-                ))
-        return channels
+            return ChannelIterator(num_channels=pixels.size_c)._channels
+        return [
+            dict(label=ch.name, color=expand_hex_shorthand(ch.color.as_hex().upper()))
+            for ch in pixels.channels
+        ]
 
-    def snapshot(self):
-        """Return a snapshot of safe-to-copy attributes."""
-        state = {}
-        for key, value in self.__dict__.items():
-            if key in ("reader", "omemeta", "pyr"):  # skip non-copyable stuff
-                continue
-            state[key] = copy.deepcopy(value)
-        return state
+    def snapshot(self) -> dict:
+        return {
+            k: copy.deepcopy(v)
+            for k, v in self.__dict__.items()
+            if k not in ("reader", "omemeta", "pyr")
+        }
 
-    def restore(self, snapshot):
-        """Restore a previously taken snapshot."""
-        for key, value in snapshot.items():
-            setattr(self, key, copy.deepcopy(value))
+    def restore(self, snapshot: dict) -> None:
+        for k, v in snapshot.items():
+            setattr(self, k, copy.deepcopy(v))
 
-    # async def read_array_data(self):
-    #     self._arraydata = await read_single_image_asarray(self.root_path, scene_index=self.series)
 
+# ---------------------------------------------------------------------------
+# TIFFImageMeta
+# ---------------------------------------------------------------------------
 
 class TIFFImageMeta(PFFImageMeta):
-    essential_omexml_fields = {
-        "physical_size_x", "physical_size_x_unit",
-        "physical_size_y", "physical_size_y_unit",
-        "physical_size_z", "physical_size_z_unit",
-        "time_increment", "time_increment_unit",
-        "size_x", "size_y", "size_z", "size_t", "size_c"
-    }
+    essential_omexml_fields = PFFImageMeta.essential_omexml_fields
 
-    def __init__(self,
-                 path,
-                 meta_reader="bioio",
-                 aszarr=False,
-                 ):
+    def __init__(self, path, meta_reader="bioio", aszarr=False):
         if not path.endswith(('.tif', '.tiff', '.lsm')):
-            raise Exception(f"The given path is not a TIFF file: {path}")
-
+            raise ValueError(f"Not a TIFF file: {path}")
         super().__init__(path, meta_reader, aszarr)
 
     async def read_omemeta(self):
@@ -550,1169 +725,997 @@ class TIFFImageMeta(PFFImageMeta):
         self._meta = tif.series[self._series]
         await super().read_omemeta()
 
-    def get_axes(self):
-        """
-        Get normalized axis order.
-        
-        When using dyna_zarr (aszarr=True), returns 'tczyx' since TIFFDynaZarrReader
-        normalizes all TIFF data to 5D TCZYX.
-        
-        Otherwise, returns native TIFF axes with some normalization.
-        """
-        # If using dyna_zarr, data is normalized to 5D TCZYX
+    def get_axes(self) -> str:
         if self._aszarr:
             return 'tczyx'
-        
-        # Otherwise, use native TIFF axes with normalization
         axes = self._meta.axes.lower()
-        # if 's' in axes:
-        #     axes = axes.replace('s', 'c')
-        # if 'q' in axes:
-        #     axes = axes.replace('q', 'c')
         default_axes_cut = default_axes[-len(axes):]
         newaxes = []
-        for ax in axes:
+        for i, ax in enumerate(axes):
             if ax == 's':
                 ax = 'c'
-            if ax in default_axes:
-                newaxes.append(ax)
-            else:
-                idx = axes.index(ax)
-                newaxes.append(default_axes_cut[idx])
+            newaxes.append(ax if ax in default_axes else default_axes_cut[i])
         return ''.join(newaxes)
 
-    def get_scaledict(self):
-        """
-        Get scale values for each axis.
-        
-        When using dyna_zarr (aszarr=True), extracts metadata from the native TIFF 
-        dimensions and fills in defaults for added singleton dimensions.
-        Otherwise, returns native TIFF scales filtered by actual axes.
-        """
+    def get_scaledict(self) -> dict:
         if self._aszarr:
-            # Get parent's scale dict (from OME metadata)
-            parent_scaledict = super().get_scaledict()
-            
-            # Get the native TIFF axes (what actually exists in the file)
+            parent_sd = super().get_scaledict()
             native_axes = self._meta.axes.lower()
-            
-            # Build the 5D TCZYX scale dict with actual values for existing dims
-            # and defaults for added singleton dims
-            scaledict_5d = {}
-            for ax in 'tczyx':
-                if ax in native_axes:
-                    # Use the actual value from parent if available
-                    scaledict_5d[ax] = parent_scaledict.get(ax, scale_map.get(ax, 1.0))
-                else:
-                    # Use default for added singleton dimensions
-                    scaledict_5d[ax] = scale_map.get(ax, 1.0)
-            
-            return scaledict_5d
-        
-        # Otherwise, use parent implementation
-        scaledict = super().get_scaledict()
-        axes = self.get_axes()
-        return {ax: scaledict[ax]
-                for ax in axes
-                if ax in scaledict
-                }
-    
-    def get_scales(self):
-        """
-        Get scale values as list.
-        
-        When using dyna_zarr, returns scales for all 5D TCZYX (excluding channel).
-        """
-        scaledict = self.get_scaledict()
-        caxes = [ax for ax in self.get_axes() if ax != 'c']
-        return [scaledict[ax] for ax in caxes]
+            return {
+                ax: parent_sd.get(ax, scale_map.get(ax, 1.0)) if ax in native_axes
+                else scale_map.get(ax, 1.0)
+                for ax in 'tczyx'
+            }
+        sd = super().get_scaledict()
+        return {ax: sd[ax] for ax in self.get_axes() if ax in sd}
 
-    def get_unitdict(self):
-        """
-        Get unit strings for each axis.
-        
-        When using dyna_zarr (aszarr=True), extracts metadata from the native TIFF
-        dimensions and fills in defaults for added singleton dimensions.
-        Otherwise, returns native TIFF units filtered by actual axes.
-        """
+    def get_scales(self) -> list:
+        sd = self.get_scaledict()
+        return [sd[ax] for ax in self.get_axes() if ax != 'c']
+
+    def get_unitdict(self) -> dict:
         if self._aszarr:
-            # Get parent's unit dict (from OME metadata)
-            parent_unitdict = super().get_unitdict()
-            
-            # Get the native TIFF axes (what actually exists in the file)
+            parent_ud = super().get_unitdict()
             native_axes = self._meta.axes.lower()
-            
-            # Build the 5D TCZYX unit dict with actual values for existing dims
-            # and defaults for added singleton dims
-            unitdict_5d = {}
-            for ax in 'tczyx':
-                if ax in native_axes:
-                    # Use the actual value from parent if available
-                    unitdict_5d[ax] = parent_unitdict.get(ax, unit_map.get(ax))
-                else:
-                    # Use default for added singleton dimensions
-                    unitdict_5d[ax] = unit_map.get(ax)
-            
-            return unitdict_5d
-        
-        # Otherwise, use parent implementation
-        unitdict = super().get_unitdict()
-        caxes = [ax for ax in self.get_axes() if ax != 'c']
-        return {ax: unitdict[ax]
-                for ax in caxes
-                if ax in unitdict
-                }
+            return {
+                ax: parent_ud.get(ax, unit_map.get(ax)) if ax in native_axes
+                else unit_map.get(ax)
+                for ax in 'tczyx'
+            }
+        ud = super().get_unitdict()
+        return {ax: ud[ax] for ax in self.get_axes() if ax != 'c' and ax in ud}
 
+
+# ---------------------------------------------------------------------------
+# H5ImageMeta
+# ---------------------------------------------------------------------------
 
 class H5ImageMeta(PFFImageMeta):
-    essential_omexml_fields = {
-        "physical_size_x", "physical_size_x_unit",
-        "physical_size_y", "physical_size_y_unit",
-        "physical_size_z", "physical_size_z_unit",
-        "time_increment", "time_increment_unit",
-        "size_x", "size_y", "size_z", "size_t", "size_c"
-    }
+    essential_omexml_fields = PFFImageMeta.essential_omexml_fields
 
-    def __init__(self,
-                 path,
-                 meta_reader="bioio",  # placeholder
-                 **kwargs
-                 ):
+    def __init__(self, path, meta_reader="bioio", **kwargs):
+        if not path.endswith('.h5'):
+            raise ValueError(f"Not an HDF5 file: {path}")
+        super().__init__(path, meta_reader, aszarr=False, **kwargs)
 
-        if path.endswith('.h5'):
-            super().__init__(path, meta_reader,
-                             aszarr=False, **kwargs)
-        else:
-            raise Exception(f"The given path is not an HDF5 file: {path}")
-
-    async def read_omemeta(self, **kwargs):  # This is not real omemeta, just meta.
+    async def read_omemeta(self, **kwargs):
         import h5py
         f = h5py.File(self.root)
         dset_name = list(f.keys())[self._series]
         ds = f[dset_name]
         self._ds = ds
         self._attrs = dict(ds.attrs)
-        self.n_scenes = len(list(f.keys()))
+        self._n_scenes = len(list(f.keys()))
 
-    def get_axes(self):
-        attrs = self._attrs
-        axistags = attrs.get('axistags', {})
-        if isinstance(axistags, str):
-            axistags = json.loads(axistags)
+    def _parse_axistags(self) -> dict:
+        """Return the axistags dict from h5py attrs, handling str and non-dict forms."""
+        raw = self._attrs.get('axistags', {})
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if not isinstance(raw, dict):
+            return {}
+        return raw
+
+    def get_axes(self) -> str:
+        axistags = self._parse_axistags()
         axlist = axistags.get('axes', [])
         axes = []
-        for idx, ax in enumerate(axlist):
-            if 'key' in ax:
-                if ax['key'] in 'tczyx':
-                    axes.append(ax['key'])
-                else:
-                    axes.append(default_axes[idx])
-            else:
-                axes.append(default_axes[idx])
-        axes = ''.join(axes)
-        return axes
+        for i, ax in enumerate(axlist):
+            key = ax.get('key', '')
+            axes.append(key if key in 'tczyx' else default_axes[i])
+        return ''.join(axes)
 
-    def get_scaledict(self):
-        attrs = self._attrs
-        axistags = attrs.get('axistags', {})
-        if isinstance(axistags, str):
-            axistags = json.loads(axistags)
-        scaledict = {}
-        axes = self.get_axes()
-        axlist = axistags.get('axes', [])
-
-        for idx, ax in enumerate(axlist):
-            if ax['key'] == 'c':
+    def get_scaledict(self) -> dict:
+        axistags = self._parse_axistags()
+        sd = {}
+        for ax in axistags.get('axes', []):
+            key = ax.get('key', '')
+            if key == 'c' or key not in self.get_axes():
                 continue
-            if 'key' in ax:
-                if ax['key'] in axes:
-                    if 'scale' in ax:
-                        scaledict[ax['key']] = ax['scale']
-                    elif 'resolution' in ax:
-                        scaledict[ax['key']] = ax['resolution']
-                    else:
-                        scaledict[ax['key']] = scale_map[ax['key']]
-        return scaledict
+            sd[key] = ax.get('scale', ax.get('resolution', scale_map.get(key, 1.0)))
+        return sd
 
-    def get_unitdict(self):
-        attrs = self._attrs
-        axistags = attrs.get('axistags', {})
-        if isinstance(axistags, str):
-            axistags = json.loads(axistags)
-        unitdict = {}
-        axes = self.get_axes()
-        axlist = axistags.get('axes', [])
-        axes = self.get_axes()
-        for idx, ax in enumerate(axlist):
-            if 'key' in ax:
-                if ax['key'] == 'c':
-                    continue
-                if ax['key'] in axes:
-                    if 'unit' in ax:
-                        unitdict[ax['key']] = ax['scale']
-                    else:
-                        unitdict[ax['key']] = unit_map[ax['key']]
-        return unitdict
+    def get_unitdict(self) -> dict:
+        axistags = self._parse_axistags()
+        ud = {}
+        for ax in axistags.get('axes', []):
+            key = ax.get('key', '')
+            if key == 'c' or key not in self.get_axes():
+                continue
+            ud[key] = ax.get('unit', unit_map.get(key))
+        return ud
 
-    def get_channels(self):
+    def get_channels(self) -> list:
         return []
 
 
-# path = f"/home/oezdemir/PycharmProjects/TIM2025/data/h5/ilastik_img/Patient2_002.h5"
-# h5 = H5ImageMeta(path)
-# await h5.read_omemeta()
+# ---------------------------------------------------------------------------
+# NGFFImageMeta
+# ---------------------------------------------------------------------------
 
+class NGFFImageMeta(PFFImageMeta):
+    def __init__(self, path, aszarr=False):
+        if not is_zarr_group(path):
+            raise ValueError(f"Not an NGFF group: {path}")
+        super().__init__(path=path, aszarr=aszarr)
+        self._base_path = '0'
 
-class NGFFImageMeta(PFFImageMeta):  ### Maybe set_scene can pick particular resolution layer?
-    def __init__(self,
-                 path,
-                 aszarr=False
-                 ):
-        if is_zarr_group(path):
-            super().__init__(path=path, aszarr=aszarr)
-            self._base_path = '0'  ### This will be represented as series later.
-        else:
-            raise Exception(f"The given path is not an NGFF group: {path}")
-
-    async def read_omemeta(self, **kwargs):  # This is not really omemeta, it is just meta.
-        if self.reader is None: # MockImg from read_pyramid
-            self.reader = await read_single_image(self.root, # = read_pyramid
-                                                aszarr=self._aszarr,
-                                                **kwargs)
+    async def read_omemeta(self, **kwargs):
+        if self.reader is None:
+            self.reader = await read_single_image(self.root, aszarr=self._aszarr, **kwargs)
         self._meta = self.reader.pyr.meta
 
     async def read_img(self, **kwargs):
-        self.reader = await read_single_image(self.root,
-                                            aszarr=self._aszarr,
-                                            **kwargs)
-        # await self.set_scene(self._series)
+        self.reader = await read_single_image(self.root, aszarr=self._aszarr, **kwargs)
         self.arraydata = await self.get_arraydata()
 
-    # async def get_arraydata(self):
-    #     return self._img.get_image_dask_data()
-
-    async def read_dataset(self):
-        """Read metadata and image data concurrently for NGFF/Zarr pyramids.
-        
-        Since NGFF pyramids have metadata embedded in the zarr store, both
-        metadata extraction and pyramid reader initialization can proceed in parallel.
-        """
-        await asyncio.gather(
-            self.read_omemeta(),
-            self.read_img()
-        )
+    async def read_dataset(self) -> None:
+        await asyncio.gather(self.read_omemeta(), self.read_img())
         self._meta = self.reader.pyr.meta
 
-    def get_axes(self):
+    def get_axes(self) -> str:
         return self._meta.axis_order
 
-    def get_scales(self):
+    def get_scales(self) -> list:
         return self._meta.get_scale(self._base_path)
 
-    def get_scaledict(self):
+    def get_scaledict(self) -> dict:
         return self._meta.get_scaledict(self._base_path)
 
-    def get_units(self):
+    def get_units(self) -> list:
         return self._meta.unit_list
 
-    def get_unitdict(self):
+    def get_unitdict(self) -> dict:
         return self._meta.unit_dict
 
-    def get_channels(self):
-        if not hasattr(self._meta, 'channels'):
-            return None
-        return self._meta.channels
+    def get_channels(self) -> Optional[list]:
+        return getattr(self._meta, 'channels', None)
 
-    async def get_arraydata(self): ###TODO UPDATE LIKE PFFImageMeta
+    async def get_arraydata(self):
         return self.reader.get_image_dask_data()
 
-    async def get_pyramid(self, version='0.4'):
-        ### add channels from omemeta
+    async def get_pyramid(self, version='0.4') -> Pyramid:
         return self.reader.pyr
 
 
-def expand_hex_shorthand(hex_color):
-    """
-    Expands a shorthand hex color of any valid length (e.g., #abc → #aabbcc, #1234 → #11223344).
-    """
-    if not hex_color.startswith('#'):
-        raise ValueError("Hex color must start with '#'")
+# ---------------------------------------------------------------------------
+# ArrayState — pure data + transformation layer (no I/O, no async)
+# ---------------------------------------------------------------------------
 
-    shorthand = hex_color[1:]
+class ArrayState:
+    """Immutable-ish container for array data, physical metadata, and channels.
 
-    if not all(c in '0123456789ABCDEFabcdef' for c in shorthand):
-        raise ValueError("Invalid hex digits")
-
-    expanded = '#' + ''.join([c * 2 for c in shorthand])
-    return expanded
-
-
-class ArrayManager:  ### Unify the classes above.
-    """Async-friendly version of ArrayManager.
-
-    Any potentially blocking I/O is offloaded to a thread via ``asyncio.to_thread``.
-    CPU / in-memory ops (crop, transpose, etc.) remain synchronous.
+    Owns all transformations (squeeze, transpose, crop) and channel helpers.
+    No I/O.  No async.  Every method that modifies state does so in-place.
     """
 
-    # TODO: Fix the data type change from layer0 to layer 1,2,3..
-    essential_omexml_fields = {
-        "physical_size_x", "physical_size_x_unit",
-        "physical_size_y", "physical_size_y_unit",
-        "physical_size_z", "physical_size_z_unit",
-        "time_increment", "time_increment_unit",
-        "size_x", "size_y", "size_z", "size_t", "size_c"
-    }
-
-    # ------------------------------------------------------------------
-    # Construction / initialization
-    # ------------------------------------------------------------------
-    def __init__(self,
-                 path: Union[str, Path, None] = None,
-                 metadata_reader: str = 'bfio',  # bfio or aicsimageio
-                 skip_dask: bool = False,
-                 **kwargs: Any):
-        self.path = str(path) if path is not None else None
-        self.series = kwargs.get('series', 0)
-        self.series_path = self.path + f'_{self.series}'
-        self.mosaic_tile_index = kwargs.get('mosaic_tile_index', None)
-        if self.mosaic_tile_index is not None:
-            self.series_path += f'_tile{self.mosaic_tile_index}'
-
-        self._meta_reader = metadata_reader
-        self._skip_dask = skip_dask
-
-        # Will be set during init()
-        self.img = None
+    def __init__(self):
+        self.array: Optional[Union[da.Array, zarr.Array, DynamicArray]] = None
         self.axes: str = ""
-        self.array: Optional[Union[da.Array, zarr.Array]] = None
-        self.ndim: Optional[int] = None
-        self.caxes: str = ""
-        self.chunkdict: Dict[str, Any] = {}
-        self.shapedict: Dict[str, int] = {}
-        self._channels: Optional[List[Dict[str, Any]]] = None
         self.scaledict: Dict[str, Any] = {}
         self.unitdict: Dict[str, Any] = {}
-        self.omemeta = None
-        self.pyr = None
-        self.img = None
-        self.loaded_scenes = None
-        self.loaded_tiles = None
+        self._channels: Optional[List[Dict[str, Any]]] = None
+        self.chunkdict: Dict[str, Any] = {}
+        self.shapedict: Dict[str, int] = {}
+        self.pyr: Optional[Pyramid] = None
+        self.omemeta: Any = None
 
-    def __getstate__(self):
-        return self.__dict__.copy()
+    # ── derived properties ────────────────────────────────────────────────
 
-    def __setstate__(self, state):
-        self.__dict__.update(state)
+    @property
+    def ndim(self) -> int:
+        return self.array.ndim if self.array is not None else 0
 
-    async def init(self):
-        """Async initializer: detects image type and loads metadata off-thread."""
-        import asyncio
-        if not self.path is None:
-            # try:
-            if await asyncio.to_thread(is_zarr_group, self.path):
-                self.img = await asyncio.to_thread(NGFFImageMeta,
-                                                   self.path,
-                                                   self._skip_dask)
-            elif self.path.endswith('.h5'):
-                self.img = await asyncio.to_thread(H5ImageMeta,
-                                                   self.path,
-                                                   self._meta_reader
-                                                   )
-            elif not self._skip_dask:
-                self.img = await asyncio.to_thread(PFFImageMeta,
-                                                   self.path,
-                                                   self._meta_reader,
-                                                   self._skip_dask,
-                                                   )
+    @property
+    def caxes(self) -> str:
+        return ''.join(ax for ax in self.axes if ax != 'c')
+
+    @property
+    def scales(self) -> list:
+        if len(self.scaledict) < len(self.axes):
+            return [self.scaledict[ax] for ax in self.caxes if ax in self.scaledict]
+        return [self.scaledict[ax] for ax in self.axes if ax in self.scaledict]
+
+    @property
+    def units(self) -> list:
+        if len(self.unitdict) < len(self.axes):
+            return [self.unitdict[ax] for ax in self.caxes if ax in self.unitdict]
+        return [self.unitdict[ax] for ax in self.axes if ax in self.unitdict]
+
+    @property
+    def channels(self) -> Optional[list]:
+        return self._channels
+
+    @property
+    def chunks(self) -> list:
+        return [self.chunkdict[ax] for ax in self.axes if ax in self.chunkdict]
+
+    # ── state update ──────────────────────────────────────────────────────
+
+    def update(
+        self,
+        array=None,
+        axes: Optional[str] = None,
+        units: Optional[List[Any]] = None,
+        scales: Optional[List[Any]] = None,
+    ) -> None:
+        """Update state from explicit values.  All arguments must be provided
+        explicitly — there is no fallback to an external reader here."""
+        if axes is not None:
+            self.axes = axes
+        if array is not None:
+            self.array = array
+            assert len(self.axes) == self.array.ndim, (
+                f"axes length {len(self.axes)} != array ndim {self.array.ndim}"
+            )
+
+        self._update_chunk_and_shape()
+
+        if units is not None:
+            if len(units) == len(self.axes):
+                self.unitdict = dict(zip(list(self.axes), units))
+            elif len(units) == len(self.caxes):
+                self.unitdict = dict(zip(list(self.caxes), units))
             else:
-                if (str(self.path).endswith(('tif', 'tiff'))):
-                    # and
-                    # not str(self.path).endswith(('ome.tif', 'ome.tiff'))):
-                    self.img = await asyncio.to_thread(TIFFImageMeta,
-                                                       self.path,
-                                                       self._meta_reader,
-                                                       self._skip_dask)
-                else:
-                    logger.warning(f"The given path is not a TIFF file: {self.path}.\n"
-                                   f"The 'skip_dask' option is ignored, as its use is currently limited to TIFF files.")
-                    self.img = await asyncio.to_thread(PFFImageMeta,
-                                                       self.path,
-                                                       self._meta_reader,
-                                                       self._skip_dask,
-                                                       )
+                raise ValueError(
+                    f"Unit length {len(units)} doesn't match axes '{self.axes}' "
+                    f"or caxes '{self.caxes}'."
+                )
 
-            await self.img.read_dataset()
-            await self.set_scene(self.series)
-            if self.mosaic_tile_index is not None:
-                await self.set_tile(self.mosaic_tile_index)
-            if self.img.omemeta is not None:
-                self.omemeta = self.img.omemeta
-        return self
-
-    async def set_scene(self, scene_idx):
-        # if self.series == scene_idx:
-        #     return self
-        if self.img is not None:
-            await self.img.set_scene(scene_idx)
-            self.pyr = await self.img.get_pyramid()
-            # Pull basic properties
-            self.axes = self.img.get_axes()
-            self.set_arraydata(self.img.arraydata)
-            self.series = scene_idx
-            self.series_path = self.path + f'_{self.series}'
-            self.omemeta = self.img.omemeta
-            # self.pixels = copy.copy(self.omemeta.images[self.series].pixels)
-            self._channels = self.img.get_channels()
-        else:
-            raise Exception("Image is missing. An image needs to be read.")
-        return self
-
-    async def set_tile(self, mosaic_tile_index):
-        if self.img is not None:
-            await self.img.set_tile(mosaic_tile_index)
-            self.pyr = await self.img.get_pyramid()
-            # Pull basic properties
-            self.axes = self.img.get_axes()
-            self.set_arraydata(self.img.arraydata)
-            self.mosaic_tile_index = self.img._tile
-            self.series_path = self.path + f'_{self.series}' + f'_tile{self.mosaic_tile_index}'
-            self.omemeta = self.img.omemeta
-            # self.pixels = copy.copy(self.omemeta.images[self.series].pixels)
-            self._channels = self.img.get_channels()
-        else:
-            raise Exception("Image is missing. An image needs to be read.")
-        return self
-
-    async def load_scenes(self,
-                          scene_indices: Union[int, str, List[int]]
-                          ):
-        """TODO: Maybe make sure it checks and loads only available indices."""
-
-        # if self.img.n_scenes is None:
-        #     self.loaded_scenes = {self.series_path: self}
-        #     return
-
-        if scene_indices == 'all':
-            scene_indices = list(range(self.img.n_scenes))
-            logger.info(f"Number of scenes to load: {len(scene_indices)}")
-        elif np.isscalar(scene_indices):
-            scene_indices = [scene_indices]
-
-        scene_indices_ = []
-        for idx in scene_indices:
-            if idx < self.img.n_scenes:
-                scene_indices_.append(idx)
+        if scales is not None:
+            if len(scales) == len(self.axes):
+                self.scaledict = dict(zip(list(self.axes), scales))
+            elif len(scales) == len(self.caxes):
+                self.scaledict = dict(zip(list(self.caxes), scales))
+                self.scaledict['c'] = 1
             else:
-                logger.warning(f"Scene index {idx} is out of bounds for the path {self.path}.\n"
-                               f"Skipping the nonexistent scene {idx}.")
-        scene_indices = scene_indices_
-        scenes = []
+                raise ValueError(
+                    f"Scale length {len(scales)} doesn't match axes '{self.axes}' "
+                    f"or caxes '{self.caxes}'."
+                )
 
-        async def copy_scene(manager, scene_idx):
-            await manager.set_scene(scene_idx)
-            return copy.copy(manager)
+        if 'c' in self.shapedict:
+            self._ensure_correct_channels()
 
-        for scene_idx in scene_indices:
-            scenes.append(copy_scene(self, scene_idx))
-        import asyncio
-        scenelist = await asyncio.gather(*scenes)
-        self.loaded_scenes = {scene.series_path: scene for scene in scenelist}
-        return self.loaded_scenes
-
-    async def load_tiles(self, tile_indices: Union[int, str, List[int]]):
-        """TODO: Maybe make sure it checks and loads only available indices."""
-        n_tiles = self.img.n_tiles or 1
-        if tile_indices == 'all':
-            tile_indices = list(range(n_tiles))
-            logger.info(f"Number of tiles to load: {len(tile_indices)}")
-        elif np.isscalar(tile_indices):
-            tile_indices = [tile_indices]
-        tile_indices_ = []
-        for idx in tile_indices:
-            if idx < n_tiles:
-                tile_indices_.append(idx)
-            else:
-                logger.warning(f"Tile index {idx} is out of bounds for the path {self.path}.\n"
-                               f"Skipping the nonexistent tile {idx}.")
-        tile_indices = tile_indices_
-        tiles = []
-
-        async def copy_scene(manager, tile_idx):
-            await manager.set_tile(tile_idx)
-            return copy.copy(manager)
-
-        for tile_idx in tile_indices:
-            tiles.append(copy_scene(self, tile_idx))
-        import asyncio
-        tilelist = await asyncio.gather(*tiles)
-        self.loaded_tiles = {tile.series_path: tile for tile in tilelist}
-        return self.loaded_tiles
-
-    # ------------------------------------------------------------------
-    # Metadata helpers
-    # ------------------------------------------------------------------
-    def fill_default_meta(self):
-        # if self.pyr is not None:
-        #     zgroup = self.pyr.meta.zarr_group
-        #     omero_copy = copy.copy(self.pyr.meta.omero)
-        if self.array is None:
-            raise Exception("Array is missing. An array needs to be assigned.")
-        new_scaledict: Dict[str, Any] = {}
-        new_unitdict: Dict[str, Any] = {}
-        values = list(self.scaledict.values())
-        if None not in values:
-            return self
-
-        for ax, value in self.scaledict.items():
-            if value is None:
-                if (ax in ('z', 'y')) and self.scaledict.get('x') is not None:
-                    new_scaledict[ax] = self.scaledict['x']
-                    new_unitdict[ax] = self.unitdict['x']
-                else:
-                    new_scaledict[ax] = scale_map[ax]
-                    new_unitdict[ax] = unit_map[ax]
-            else:
-                if ax in self.scaledict:
-                    new_scaledict[ax] = self.scaledict[ax]
-                if ax in self.unitdict:
-                    new_unitdict[ax] = self.unitdict[ax]
-
-        new_units = [new_unitdict[ax] for ax in self.axes if ax in new_unitdict]
-        new_scales = [new_scaledict[ax] for ax in self.axes if ax in new_scaledict]
-
-        self.set_arraydata(self.array, self.axes, new_units, new_scales)
-        return self
-
-    def get_pixel_size_basemap(self, t=1, z=1, y=1, x=1, **kwargs):
-        return {'pixel_size_t': t, 'pixel_size_z': z, 'pixel_size_y': y, 'pixel_size_x': x}
-
-    def get_unit_basemap(self, t='second', z='micrometer', y='micrometer', x='micrometer', **kwargs):
-        return {'unit_t': t, 'unit_z': z, 'unit_y': y, 'unit_x': x}
-
-    def update_meta(self,
-                    new_scaledict: Dict[str, Any] = {},
-                    new_unitdict: Dict[str, Any] = {}):
-        # await self.set_scene(self.series) # TODO!!! Probably set scene first
-        scaledict = self.img.get_scaledict()
-        for key, val in new_scaledict.items():
-            if key in scaledict and val is not None:
-                scaledict[key] = val
-
-        scales = [scaledict[ax] for ax in (self.axes if 'c' in scaledict else self.caxes)]
-
-        unitdict = self.img.get_unitdict()  # TODO: remove this and use set values directly.
-        for key, val in new_unitdict.items():
-            if key in unitdict and val is not None:
-                unitdict[key] = val
-
-        units = [expand_units(unitdict[ax]) for ax in (self.axes if 'c' in unitdict else self.caxes)]
-
-        self.set_arraydata(array=self.array, axes=self.axes, units=units, scales=scales)
-
-    def _ensure_correct_channels(self):
+    def _update_chunk_and_shape(self) -> None:
         if self.array is None:
             return
-        if self.channels is None:
-            return
-        shapedict = dict(zip(list(self.axes), self.array.shape))
-        csize = shapedict.get('c', None)
-        if csize is None:
-            return
-        channelsize = len(self.channels)
-        if channelsize > csize:
-            self._channels = [channel for channel in self.channels if channel['label'] is not None]
+        chunks = get_array_chunks(self.array)
+        if chunks is None:
+            raise TypeError(f"Unsupported array type: {type(self.array)}")
+        self.chunkdict = dict(zip(list(self.axes), chunks))
+        self.shapedict = dict(zip(list(self.axes), self.array.shape))
 
-    def fix_bad_channels(self):
+    # ── metadata helpers ──────────────────────────────────────────────────
+
+    def fill_default_meta(self) -> None:
+        """Fill None scale/unit values with sensible defaults."""
+        if self.array is None:
+            raise ValueError("Array is missing — assign an array before filling defaults.")
+        if None not in self.scaledict.values():
+            return
+        new_sd: Dict[str, Any] = {}
+        new_ud: Dict[str, Any] = {}
+        for ax, val in self.scaledict.items():
+            if val is None:
+                if ax in ('z', 'y') and self.scaledict.get('x') is not None:
+                    new_sd[ax] = self.scaledict['x']
+                    new_ud[ax] = self.unitdict.get('x', unit_map.get('x'))
+                else:
+                    new_sd[ax] = scale_map.get(ax, 1.0)
+                    new_ud[ax] = unit_map.get(ax)
+            else:
+                new_sd[ax] = val
+                new_ud[ax] = self.unitdict.get(ax, unit_map.get(ax))
+        new_units = [new_ud[ax] for ax in self.axes if ax in new_ud]
+        new_scales = [new_sd[ax] for ax in self.axes if ax in new_sd]
+        self.update(self.array, self.axes, new_units, new_scales)
+
+    def _ensure_correct_channels(self) -> None:
+        if self.array is None or self._channels is None:
+            return
+        csize = self.shapedict.get('c')
+        if csize is not None and len(self._channels) > csize:
+            self._channels = [ch for ch in self._channels if ch.get('label') is not None]
+
+    def fix_bad_channels(self) -> None:
+        """Replace missing/empty channel labels with auto-generated defaults."""
+        if not self._channels:
+            return
         chn = ChannelIterator()
-        for i, channel in enumerate(self.channels):
+        for i, channel in enumerate(self._channels):
             if channel.get('label') in (None, ''):
-                channel = next(chn)
-            self.channels[i] = channel
+                self._channels[i] = next(chn)
 
-    def compute_intensity_extrema(self,
-                                  dtype
-                                  ):
+    def compute_intensity_extrema(self, dtype) -> tuple:
         if 'c' in self.axes:
-            c_axis = self.axes.index('c')
-            n_channels = self.array.shape[c_axis]
+            n_channels = self.array.shape[self.axes.index('c')]
         else:
-            c_axis = None
             n_channels = 1
         if dtype is None:
             dtype = self.array.dtype
         if np.issubdtype(dtype, np.integer):
-            starts = [np.iinfo(dtype).min for _ in range(n_channels)]
-            ends = [np.iinfo(dtype).max for _ in range(n_channels)]
+            return ([np.iinfo(dtype).min] * n_channels,
+                    [np.iinfo(dtype).max] * n_channels)
         elif np.issubdtype(dtype, np.floating):
-            starts = [np.finfo(dtype).min for _ in range(n_channels)]
-            ends = [np.finfo(dtype).max for _ in range(n_channels)]
-        else:
-            raise ValueError(f"Unsupported dtype {dtype}")
-        return starts, ends
+            return ([np.finfo(dtype).min] * n_channels,
+                    [np.finfo(dtype).max] * n_channels)
+        raise ValueError(f"Unsupported dtype {dtype}")
 
-    def compute_intensity_limits(self,
-                                 from_array=False,
-                                 dtype=None,
-                                 start_intensity=None,
-                                 end_intensity=None,
-                                 ):
-        if 'c' in self.axes:
-            c_axis = self.axes.index('c')
-            n_channels = self.array.shape[c_axis]
-        else:
-            c_axis = None
-            n_channels = 1
-        starts = None
-        ends = None
-
-        if start_intensity is not None:
-            starts = [start_intensity for _ in range(n_channels)]
-        if end_intensity is not None:
-            ends = [end_intensity for _ in range(n_channels)]
-
+    def compute_intensity_limits(
+        self,
+        from_array: bool = False,
+        dtype=None,
+        start_intensity=None,
+        end_intensity=None,
+    ) -> tuple:
+        n_channels = (self.array.shape[self.axes.index('c')]
+                      if 'c' in self.axes else 1)
+        starts = [start_intensity] * n_channels if start_intensity is not None else None
+        ends   = [end_intensity]   * n_channels if end_intensity   is not None else None
         if starts is not None and ends is not None:
             return starts, ends
 
-        if from_array and self.array is None:
-            raise Exception(f"Manager needs an array to detect the intensity extrema.")
-        elif dtype is None and self.array is None:
-            raise Exception(f"Manager needs a dtype to detect the intensity extrema.")
-        elif from_array:
-            if 'c' in self.axes:
-                axes_to_compute = tuple([self.axes.index(ax) for ax in self.axes if ax != 'c'])
-            else:
-                axes_to_compute = tuple([self.axes.index(ax) for ax in self.axes])
-            if isinstance(self.array, zarr.Array):
-                arr = da.from_zarr(self.array)
-            else:
-                arr = self.array
+        if from_array:
+            if self.array is None:
+                raise ValueError("Array required for from_array=True.")
+            axes_to_compute = tuple(i for i, ax in enumerate(self.axes) if ax != 'c')
+            arr = da.from_zarr(self.array) if isinstance(self.array, zarr.Array) else self.array
             if starts is None:
-                starts = arr.min(axis=axes_to_compute).compute().tolist()
-                if np.isscalar(starts):
-                    starts = [starts]
+                v = arr.min(axis=axes_to_compute).compute().tolist()
+                starts = [v] if np.isscalar(v) else v
             if ends is None:
-                ends = arr.max(axis=axes_to_compute).compute().tolist()
-                if np.isscalar(ends):
-                    ends = [ends]
+                v = arr.max(axis=axes_to_compute).compute().tolist()
+                ends = [v] if np.isscalar(v) else v
         else:
             if dtype is None:
+                if self.array is None:
+                    raise ValueError("dtype or array required.")
                 dtype = self.array.dtype
             if np.issubdtype(dtype, np.integer):
-                if starts is None:
-                    starts = [np.iinfo(dtype).min for _ in range(n_channels)]
-                if ends is None:
-                    ends = [np.iinfo(dtype).max for _ in range(n_channels)]
+                starts = starts or [np.iinfo(dtype).min] * n_channels
+                ends   = ends   or [np.iinfo(dtype).max] * n_channels
             elif np.issubdtype(dtype, np.floating):
-                if starts is None:
-                    starts = [np.finfo(dtype).min for _ in range(n_channels)]
-                if ends is None:
-                    ends = [np.finfo(dtype).max for _ in range(n_channels)]
+                starts = starts or [np.finfo(dtype).min] * n_channels
+                ends   = ends   or [np.finfo(dtype).max] * n_channels
             else:
                 raise ValueError(f"Unsupported dtype {dtype}")
         return starts, ends
 
-    # ------------------------------------------------------------------
-    # Array + axes state
-    # ------------------------------------------------------------------
-    def set_arraydata(self,
-                      array=None,
-                      axes: Optional[str] = None,
-                      units: Optional[List[Any]] = None,
-                      scales: Optional[List[Any]] = None,
-                      **kwargs):
-        axes = axes or self.img.get_axes()
-        units = units or self.img.get_units()
-        scales = scales or self.img.get_scales()
+    # ── array transformations ─────────────────────────────────────────────
 
-        self.axes = axes
-        if array is not None:
-            self.array = array
-            self.ndim = self.array.ndim
-            #print(self.ndim, self.array.shape)
-            #print(self.axes)
-            assert len(self.axes) == self.ndim
-
-        self.caxes = ''.join([ax for ax in axes if ax != 'c'])
-        if self.array is not None:
-            if isinstance(self.array, zarr.Array):
-                chunks = self.array.chunks
-            elif isinstance(self.array, da.Array):
-                chunks = self.array.chunksize
-            elif isinstance(self.array, DynamicArray):
-                chunks = self.array.chunks
-            else:
-                raise Exception(f"Array type {type(self.array)} is not supported.")
-            self.chunkdict = dict(zip(list(self.axes), chunks))
-            self.shapedict = dict(zip(list(self.axes), self.array.shape))
-            if 'c' in self.shapedict:
-                self._ensure_correct_channels()
-
-        if len(units) == len(self.axes):
-            self.unitdict = dict(zip(list(self.axes), units))
-        elif len(units) == len(self.caxes):
-            self.unitdict = dict(zip(list(self.caxes), units))
-        else:
-            raise Exception("Unit length is invalid.")
-
-        if len(scales) == len(self.axes):
-            self.scaledict = dict(zip(list(self.axes), scales))
-        elif len(scales) == len(self.caxes):
-            self.scaledict = dict(zip(list(self.caxes), scales))
-            self.scaledict['c'] = 1
-        else:
-            raise Exception("Scale length is invalid")
-
-    # async def read_arraydata(self):
-    #     await self.img.read_array_data()
-    #     self.set_arraydata(self.img._arraydata)
-
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
-    @property
-    def scales(self):
-        if len(self.scaledict) < len(self.axes):
-            return [self.scaledict[ax] for ax in self.caxes]
-        elif len(self.scaledict) == len(self.axes):
-            return [self.scaledict[ax] for ax in self.axes]
-        else:
-            raise ValueError
-
-    @property
-    def units(self):
-        if len(self.unitdict) < len(self.axes):
-            return [self.unitdict[ax] for ax in self.caxes]
-        elif len(self.unitdict) == len(self.axes):
-            return [self.unitdict[ax] for ax in self.axes]
-        else:
-            raise ValueError
-
-    @property
-    def channels(self):
-        if self._channels is not None:
-            return self._channels
-        return self.img.get_channels()
-
-    @property
-    def chunks(self):
-        return [self.chunkdict[ax] for ax in self.axes]
-
-    # ------------------------------------------------------------------
-    # Pyramid + OME-XML
-    # ------------------------------------------------------------------
-    async def sync_pyramid(self, create_omexml_if_not_exists: bool = False, save_changes = False):
-        """Synchronize scale/unit metadata with pyramid and update/save OME-XML.
-        Offloads pyramid + file I/O parts to threads.
-        """
-        if self.pyr is None:
-            raise Exception("No pyramid exists.")
-
-        # Update scales/units on pyramid (likely fast, but be safe if it touches disk)
-        await asyncio.to_thread(self.pyr.update_scales, **self.scaledict)
-        await asyncio.to_thread(self.pyr.update_units, **self.unitdict)
-
-        ################# Critical ###################
-        if isinstance(self.img, NGFFImageMeta):
-            for idx,new_channel_meta in enumerate(self.channels):
-                channel = self.pyr.meta.metadata['omero']['channels'][idx]
-                channel.update(new_channel_meta)
-                self.pyr.meta.metadata['omero']['channels'][idx] = channel
-        else:
-            self.pyr.meta.metadata['omero']['channels'] = self.channels
-
-        self.pyr.meta._pending_changes = True
-        ##############################################
-
-        if self.omemeta is None:
-            # Lazy import in thread to avoid blocking if heavy
-            def _create_ome():
-                return create_ome_xml(
-                    image_shape=self.pyr.base_array.shape,
-                    axis_order=self.pyr.axes,
-                    pixel_size_x=self.pyr.meta.scaledict.get('0', {}).get('x'),
-                    pixel_size_y=self.pyr.meta.scaledict.get('0', {}).get('y'),
-                    pixel_size_z=self.pyr.meta.scaledict.get('0', {}).get('z'),
-                    pixel_size_t=self.pyr.meta.scaledict.get('0', {}).get('t'),
-                    unit_x=self.pyr.meta.unit_dict.get('x'),
-                    unit_y=self.pyr.meta.unit_dict.get('y'),
-                    unit_z=self.pyr.meta.unit_dict.get('z'),
-                    unit_t=self.pyr.meta.unit_dict.get('t'),
-                    dtype=str(self.pyr.base_array.dtype),
-                    image_name=self.pyr.meta.multiscales.get('name', 'Default image'),
-                    channel_names=[channel['label'] for channel in self.channels],
-                )
-
-            self.omemeta = await asyncio.to_thread(_create_ome)
-
-        # Update / write OME XML if exists or requested to create
-        try:
-            if self.pyr.gr is not None and ('OME' in list(self.pyr.gr.keys()) or create_omexml_if_not_exists):
-                await self.save_omexml(self.pyr.gr.store.root, overwrite=True)
-        except (OSError, AttributeError) as e:
-            # OSError for filesystem issues, AttributeError for store without local root
-            logger.warning(f"Failed to save OME-XML for pyramid: {e}")
-        if save_changes:
-            await asyncio.to_thread(self.pyr.meta.save_changes)
-
-    async def create_omemeta(self):
-        self.fill_default_meta()
-        pixel_size_basemap = self.get_pixel_size_basemap(**self.scaledict)
-        unit_basemap = self.get_unit_basemap(**self.unitdict)
-
-        self.omemeta = create_ome_xml(
-            image_shape=self.array.shape,
-            axis_order=self.axes,
-            **pixel_size_basemap,
-            **unit_basemap,
-            dtype=str(self.array.dtype),
-            channel_names=[channel['label'] for channel in self.channels]
-        )
-        self.pixels = self.omemeta.images[0].pixels
-        missing_fields = self.essential_omexml_fields - self.pixels.model_fields_set
-        self.pixels.model_fields_set.update(missing_fields)
-        self.omemeta.images[0].pixels = self.pixels
-        return self
-
-    async def save_omexml(self, base_path: str, overwrite: bool = False):
-        # TODO: Update for s3.
-        # if self.img.omemeta is None:
-        await self.create_omemeta()
-        # else:
-        #     self.omemeta = self.img.omemeta
-        assert self.omemeta is not None, "No ome-xml exists."
-        gr = await asyncio.to_thread(zarr.group, base_path)
-        try:
-            path = os.path.join(gr.store.root, 'OME', 'METADATA.ome.xml')
-        except AttributeError as e:
-            # Zarr store doesn't have .root attribute (e.g., cloud storage)
-            logger.warning(f"Writing OME-XML is currently only possible with local stores: {e}")
-            return
-        await asyncio.to_thread(gr.create_group, 'OME', overwrite=overwrite)
-
-        def _write_text_file(p: str, text: str):
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, 'w', encoding='utf-8') as f:
-                f.write(text)
-
-        await asyncio.to_thread(_write_text_file, path, self.omemeta.to_xml())
-
-        if gr.info._zarr_format == 2:
-            gr['OME'].attrs["series"] = [self.series]
-        else:  # zarr format 3
-            gr['OME'].attrs["ome"] = dict(version="0.5", series=[str(self.series)])
-
-    # ------------------------------------------------------------------
-    # Array ops (in-memory / lazy with Dask)
-    # ------------------------------------------------------------------
-    def squeeze(self):
+    def squeeze(self) -> None:
+        """Remove singleton dimensions in-place."""
         if all(n > 1 for n in self.array.shape):
             return
         if isinstance(self.array, zarr.Array):
-            logger.warning(f"Zarr arrays are not supported for squeeze operation.\n"
-                           f"Zarr array for the path {self.series_path} is being converted to dask array.")
-            array = da.from_array(self.array)
+            logger.warning("Zarr arrays don't support squeeze — converting to dask.")
+            arr = da.from_array(self.array)
         else:
-            array = self.array
-        singlet_axes = [ax for ax, size in self.shapedict.items() if size == 1]
-        newaxes = ''.join(ax for ax in self.axes if ax not in singlet_axes)
-        newunits, newscales = [], []
-        assert (len(self.scaledict) - len(self.unitdict)) <= 1
-        for ax in self.axes:
-            if ax not in singlet_axes:
-                if ax in self.unitdict:
-                    newunits.append(self.unitdict[ax])
-                if ax in self.scaledict:
-                    newscales.append(self.scaledict[ax])
-        if isinstance(array, DynamicArray):
-            newarray = ops.squeeze(array)
-        else:
-            newarray = da.squeeze(array)
-        #print(f"newaxes: {newaxes}")
-        #print(f"newunits: {newunits}")
-        #print(f"newscales: {newscales}")
-        #print(f"newarray.shape: {newarray.shape}")
-        self.set_arraydata(newarray, newaxes, newunits, newscales)
-        if self.pyr is not None:
-            version = self.pyr.meta.multiscales.get('version', '0.4')
-        else:
-            version = '0.4'
-        self.pyr = Pyramid().from_array(newarray,
-                                        axis_order=newaxes,
-                                        unit_list=newunits,
-                                        scale=newscales,
-                                        version=version,
-                                        name = 'squeezed',
-                                        )
+            arr = self.array
+        singlet = {ax for ax, sz in self.shapedict.items() if sz == 1}
+        newaxes  = ''.join(ax for ax in self.axes  if ax not in singlet)
+        newunits = [self.unitdict[ax]  for ax in self.axes if ax not in singlet and ax in self.unitdict]
+        newscales = [self.scaledict[ax] for ax in self.axes if ax not in singlet and ax in self.scaledict]
+        newarray = ops.squeeze(arr) if isinstance(arr, DynamicArray) else da.squeeze(arr)
+        self.update(newarray, newaxes, newunits, newscales)
+        version = self.pyr.meta.multiscales.get('version', '0.4') if self.pyr else '0.4'
+        self.pyr = Pyramid().from_array(newarray, axis_order=newaxes,
+                                         unit_list=newunits, scale=newscales,
+                                         version=version, name='squeezed')
 
-    def transpose(self, newaxes: str): # TODO: review and test this method. Requires recreating pyramid as well.
+    def transpose(self, newaxes: str) -> None:
+        """Reorder array axes in-place."""
         newaxes = ''.join(ax for ax in newaxes if ax in self.axes)
-        new_ids = [self.axes.index(ax) for ax in newaxes]
-        newunits, newscales = [], []
-        assert (len(self.scaledict) - len(self.unitdict)) <= 1
-        for ax in newaxes:
-            if ax in self.unitdict:
-                newunits.append(self.unitdict[ax])
-            if ax in self.scaledict:
-                newscales.append(self.scaledict[ax])
+        new_ids  = [self.axes.index(ax) for ax in newaxes]
+        newunits = [self.unitdict[ax]  for ax in newaxes if ax in self.unitdict]
+        newscales = [self.scaledict[ax] for ax in newaxes if ax in self.scaledict]
         if isinstance(self.array, DynamicArray):
             newarray = ops.transpose(self.array, axes=new_ids)
         else:
             newarray = self.array.transpose(*new_ids)
-        self.set_arraydata(newarray, newaxes, newunits, newscales)
+        self.update(newarray, newaxes, newunits, newscales)
 
     def crop(self,
-             trange=None,
-             crange=None,
-             zrange=None,
-             yrange=None,
-             xrange=None):
+             trange=None, crange=None, zrange=None,
+             yrange=None, xrange=None) -> None:
+        """Slice array and update channel list in-place."""
+        if self.pyr is None:
+            raise ValueError("Pyramid must be set before cropping.")
         omero_copy = copy.copy(self.pyr.meta.omero)
         slicedict = {
-            't': slice(*trange) if trange is not None else slice(None),
-            'c': slice(*crange) if crange is not None else slice(None),
-            'z': slice(*zrange) if zrange is not None else slice(None),
-            'y': slice(*yrange) if yrange is not None else slice(None),
-            'x': slice(*xrange) if xrange is not None else slice(None),
+            't': slice(*trange) if trange else slice(None),
+            'c': slice(*crange) if crange else slice(None),
+            'z': slice(*zrange) if zrange else slice(None),
+            'y': slice(*yrange) if yrange else slice(None),
+            'x': slice(*xrange) if xrange else slice(None),
         }
-        slicedict = {ax: r for ax, r in slicedict.items() if ax in self.axes}
-        ### slice channels:
+        slicedict = {ax: s for ax, s in slicedict.items() if ax in self.axes}
         if 'c' in slicedict and 'c' in self.axes:
-            c_slice = slicedict.get('c')
-            # Handle None values in slice (from slice(None) for full range)
-            start = c_slice.start if c_slice.start is not None else 0
-            stop = c_slice.stop if c_slice.stop is not None else len(omero_copy['channels'])
-            channels = [omero_copy['channels'][i] for i in range(start, stop)]
-            self.pyr.meta.omero['channels'] = channels
-        ####
-        slices = tuple([slicedict[ax] for ax in self.axes])
-        logger.info(f"The array with shape {self.array.shape} is cropped to {slicedict}")
-        if isinstance(self.array, zarr.Array):
-            logger.warn(f"The crop option is only supported for dask arrays.\n"
-                        f"Zarr array for the path {self.series_path} is being converted to dask array.")
-            array = da.from_array(self.array)
-        else:
-            array = self.array
-        array = array[slices]
-        logger.info(f"The cropped array shape: {array.shape}")
-        self.set_arraydata(array, self.axes, self.units, self.scales)
-
-
-    def split_series(self):
-        """Split each series into a separate ArrayManager using set_scene method.
-        Create proper root path representing series number."""
-
-    def split(self):
-        # TODO: implement as needed
-        pass
+            cs = slicedict['c']
+            start = cs.start or 0
+            stop  = cs.stop  or len(omero_copy['channels'])
+            self.pyr.meta.omero['channels'] = omero_copy['channels'][start:stop]
+        arr = (da.from_array(self.array) if isinstance(self.array, zarr.Array)
+               else self.array)
+        slices = tuple(slicedict[ax] for ax in self.axes)
+        logger.info(f"Cropping {self.array.shape} → {slicedict}")
+        arr = arr[slices]
+        logger.info(f"Cropped shape: {arr.shape}")
+        self.update(arr, self.axes, self.units, self.scales)
 
     def get_autocomputed_chunks(self, dtype=None):
-        array_shape = self.array.shape
-        dtype = dtype or self.array.dtype
-        axes = self.axes
-        chunk_shape = autocompute_chunk_shape(array_shape=array_shape, axes=axes, dtype=dtype)
-        return chunk_shape
+        return autocompute_chunk_shape(
+            array_shape=self.array.shape,
+            axes=self.axes,
+            dtype=dtype or self.array.dtype,
+        )
 
+
+# ---------------------------------------------------------------------------
+# SceneLoader — owns reader lifetime and scene/tile snapshotting
+# ---------------------------------------------------------------------------
+
+class SceneLoader:
+    """Opens an image file, snapshots all requested scenes into independent
+    ``ArrayManager`` objects, then releases the reader.
+
+    The JVM / bioio reader is always freed before ``load()`` returns, even on
+    error, so ``ArrayManager`` never holds a long-lived reader reference.
+    """
+
+    def __init__(self, path: str, metadata_reader: str = 'bfio', skip_dask: bool = False,
+                 reader_tile_size_mb: float = 256.0, force_bioformats: bool = False):
+        self.path = path
+        self._meta_reader = metadata_reader
+        self._skip_dask = skip_dask
+        self._tile_mb = float(reader_tile_size_mb)
+        self._force_bioformats = bool(force_bioformats)
+        self._img: Optional[ImageReader] = None
+        self.n_scenes: int = 0
+        self.n_tiles: int = 0
+        self.is_ngff: bool = False
+
+    async def _open(self) -> None:
+        """Detect image type, open reader, populate n_scenes / n_tiles / is_ngff."""
+        path = self.path
+        if await asyncio.to_thread(is_zarr_group, path):
+            self._img = await asyncio.to_thread(NGFFImageMeta, path, self._skip_dask)
+            self.is_ngff = True
+        elif path.endswith('.h5'):
+            self._img = await asyncio.to_thread(H5ImageMeta, path, self._meta_reader)
+        elif not self._skip_dask:
+            self._img = await asyncio.to_thread(
+                PFFImageMeta, path, self._meta_reader, self._skip_dask,
+                self._tile_mb, self._force_bioformats,
+            )
+        else:
+            if path.endswith(('.tif', '.tiff')):
+                self._img = await asyncio.to_thread(TIFFImageMeta, path,
+                                                     self._meta_reader, self._skip_dask)
+            else:
+                logger.warning(
+                    f"skip_dask is only supported for TIFF files; ignored for {path}")
+                self._img = await asyncio.to_thread(
+                    PFFImageMeta, path, self._meta_reader, self._skip_dask,
+                    self._tile_mb, self._force_bioformats,
+                )
+        await self._img.read_dataset()
+        self.n_scenes = self._img.n_scenes
+        self.n_tiles  = self._img.n_tiles
+
+    async def _snapshot(self, series: int, tile: Optional[int] = None) -> "ArrayManager":
+        """Capture the reader's current state into a fresh independent ArrayManager.
+
+        The caller must have already called ``set_scene`` / ``set_tile`` on
+        ``self._img`` before invoking this.
+        """
+        state = ArrayState()
+        state.pyr = await self._img.get_pyramid()
+        state.update(
+            array=self._img.arraydata,
+            axes=self._img.get_axes(),
+            units=self._img.get_units(),
+            scales=self._img.get_scales(),
+        )
+        state._channels = self._img.get_channels()
+        state.omemeta   = self._img.omemeta
+        mgr = ArrayManager(
+            path=self.path,
+            metadata_reader=self._meta_reader,
+            skip_dask=self._skip_dask,
+            state=state,
+            series=series,
+            mosaic_tile_index=tile,
+        )
+        mgr._n_scenes    = self.n_scenes
+        mgr._n_tiles     = self.n_tiles
+        mgr._is_ngff     = self.is_ngff
+        mgr._bfio_tiling = getattr(self._img, '_bfio_tiling', False)
+        return mgr
+
+    async def load(
+        self,
+        scene_indices: Union[int, str, List[int]] = 0,
+        mosaic_tile_index: Optional[Union[int, str, List[int]]] = None,
+    ) -> List["ArrayManager"]:
+        """Open file, snapshot all requested scenes/tiles, release reader.
+
+        Returns one ``ArrayManager`` per (scene, tile) pair.
+        """
+        await self._open()
+        managers: List["ArrayManager"] = []
+        try:
+            if scene_indices == 'all':
+                indices = list(range(self.n_scenes))
+            elif np.isscalar(scene_indices):
+                indices = [int(scene_indices)]
+            else:
+                indices = list(scene_indices)
+            valid = [i for i in indices if i < self.n_scenes]
+            if len(valid) < len(indices):
+                logger.warning(
+                    f"Skipping out-of-range scene indices: {set(indices) - set(valid)}")
+
+            if mosaic_tile_index is not None:
+                if mosaic_tile_index == 'all':
+                    tile_indices: List[int] = list(range(self.n_tiles))
+                elif np.isscalar(mosaic_tile_index):
+                    tile_indices = [int(mosaic_tile_index)]
+                else:
+                    tile_indices = list(mosaic_tile_index)
+                valid_tiles = [t for t in tile_indices if t < self.n_tiles]
+                if len(valid_tiles) < len(tile_indices):
+                    logger.warning(
+                        f"Skipping out-of-range tile indices: "
+                        f"{set(tile_indices) - set(valid_tiles)}")
+            else:
+                valid_tiles = None
+
+            for scene_idx in valid:
+                await self._img.set_scene(scene_idx)
+                if valid_tiles is None:
+                    managers.append(await self._snapshot(scene_idx))
+                else:
+                    for tile_idx in valid_tiles:
+                        await self._img.set_tile(tile_idx)
+                        managers.append(await self._snapshot(scene_idx, tile_idx))
+        finally:
+            self._img = None
+        return managers
+
+
+# ---------------------------------------------------------------------------
+# ArrayManager — coordinator (loading + I/O + scene orchestration)
+# ---------------------------------------------------------------------------
+
+class ArrayManager:
+    """Coordinates image loading and exposes a unified interface for the
+    conversion pipeline.
+
+    Internally owns:
+    - ``_reader`` (ImageReader) — format-specific loader
+    - ``_state``  (ArrayState)  — pure array data + metadata
+
+    All public attributes and methods that ``conversion_worker.py`` accesses
+    (``array``, ``axes``, ``scaledict``, ``fill_default_meta()``, etc.) are
+    forwarded transparently to ``_state``.
+    """
+
+    essential_omexml_fields = PFFImageMeta.essential_omexml_fields
+
+    def __init__(
+        self,
+        path: Union[str, Path, None] = None,
+        metadata_reader: str = 'bfio',
+        skip_dask: bool = False,
+        state: Optional[ArrayState] = None,
+        **kwargs: Any,
+    ):
+        self.path = str(path) if path is not None else None
+        self.series = kwargs.get('series', 0)
+        self.series_path = (self.path or '') + f'_{self.series}'
+        self.mosaic_tile_index = kwargs.get('mosaic_tile_index', None)
+        if self.mosaic_tile_index is not None:
+            self.series_path += f'_tile{self.mosaic_tile_index}'
+
+        self._meta_reader        = metadata_reader
+        self._skip_dask          = skip_dask
+        self._tile_mb            = float(kwargs.get('reader_tile_size_mb', 256.0))
+        self._force_bioformats   = bool(kwargs.get('force_bioformats', False))
+
+        self.loaded_scenes:  Optional[dict] = None
+        self.loaded_tiles:   Optional[dict] = None
+        self._n_scenes:      int  = 0
+        self._n_tiles:       int  = 0
+        self._is_ngff:       bool = False
+        self._bfio_tiling:   bool = False
+
+        # Data + metadata layer (pure, no I/O)
+        self.state: ArrayState = state if state is not None else ArrayState()
+
+    def __getstate__(self): return self.__dict__.copy()
+    def __setstate__(self, state): self.__dict__.update(state)
+
+    # ── ArrayState property forwarding (backward-compatible interface) ────
+
+    @property
+    def array(self): return self.state.array
+    @array.setter
+    def array(self, v): self.state.array = v
+
+    @property
+    def axes(self) -> str: return self.state.axes
+    @axes.setter
+    def axes(self, v): self.state.axes = v
+
+    @property
+    def ndim(self) -> int: return self.state.ndim
+
+    @property
+    def caxes(self) -> str: return self.state.caxes
+
+    @property
+    def scaledict(self) -> dict: return self.state.scaledict
+    @scaledict.setter
+    def scaledict(self, v): self.state.scaledict = v
+
+    @property
+    def unitdict(self) -> dict: return self.state.unitdict
+    @unitdict.setter
+    def unitdict(self, v): self.state.unitdict = v
+
+    @property
+    def _channels(self): return self.state._channels
+    @_channels.setter
+    def _channels(self, v): self.state._channels = v
+
+    @property
+    def chunkdict(self) -> dict: return self.state.chunkdict
+    @property
+    def shapedict(self) -> dict: return self.state.shapedict
+    @property
+    def scales(self) -> list: return self.state.scales
+    @property
+    def units(self) -> list: return self.state.units
+    @property
+    def channels(self) -> Optional[list]: return self.state.channels
+    @property
+    def chunks(self) -> list: return self.state.chunks
+
+    @property
+    def pyr(self) -> Optional[Pyramid]: return self.state.pyr
+    @pyr.setter
+    def pyr(self, v): self.state.pyr = v
+
+    @property
+    def omemeta(self): return self.state.omemeta
+    @omemeta.setter
+    def omemeta(self, v): self.state.omemeta = v
+
+    # ── ArrayState transformation delegation ─────────────────────────────
+
+    def fill_default_meta(self):    return self.state.fill_default_meta()
+    def fix_bad_channels(self):     return self.state.fix_bad_channels()
+    def squeeze(self):              return self.state.squeeze()
+    def transpose(self, newaxes):   return self.state.transpose(newaxes)
+    def crop(self, **kwargs):       return self.state.crop(**kwargs)
+    def get_autocomputed_chunks(self, dtype=None):
+        return self.state.get_autocomputed_chunks(dtype)
+    def compute_intensity_extrema(self, dtype):
+        return self.state.compute_intensity_extrema(dtype)
+    def compute_intensity_limits(self, **kwargs):
+        return self.state.compute_intensity_limits(**kwargs)
+    def _ensure_correct_channels(self):
+        return self.state._ensure_correct_channels()
+
+    def set_arraydata(
+        self,
+        array=None,
+        axes: Optional[str] = None,
+        units: Optional[list] = None,
+        scales: Optional[list] = None,
+        **_,
+    ) -> None:
+        """Update ArrayState.  Falls back to the current state for any
+        argument not explicitly supplied."""
+        if axes   is None: axes   = self.state.axes
+        if units  is None: units  = self.state.units
+        if scales is None: scales = self.state.scales
+        self.state.update(array=array, axes=axes, units=units, scales=scales)
+
+    # ── Loading (delegates to SceneLoader) ───────────────────────────────
+
+    async def init(self):
+        """Detect image type, load data, populate state via SceneLoader."""
+        if self.path is None:
+            return self
+        loader = SceneLoader(self.path, self._meta_reader, self._skip_dask,
+                             reader_tile_size_mb=self._tile_mb,
+                             force_bioformats=self._force_bioformats)
+        await loader._open()
+        self._n_scenes = loader.n_scenes
+        self._n_tiles  = loader.n_tiles
+        self._is_ngff  = loader.is_ngff
+        try:
+            await loader._img.set_scene(self.series)  # type: ignore[union-attr]
+            if self.mosaic_tile_index is not None:
+                await loader._img.set_tile(self.mosaic_tile_index)  # type: ignore[union-attr]
+            mgr = await loader._snapshot(self.series, self.mosaic_tile_index)
+            self.state = mgr.state
+        finally:
+            loader._img = None
+        return self
+
+    def close_reader(self) -> None:
+        """No-op: the reader is now owned and released by SceneLoader."""
+
+    async def load_scenes(self, scene_indices: Union[int, str, List[int]]):
+        assert self.path is not None, "Cannot load scenes: path is None."
+        loader = SceneLoader(self.path, self._meta_reader, self._skip_dask,
+                             reader_tile_size_mb=self._tile_mb,
+                             force_bioformats=self._force_bioformats)
+        managers = await loader.load(scene_indices=scene_indices)
+        self._n_scenes = loader.n_scenes
+        self._n_tiles  = loader.n_tiles
+        self._is_ngff  = loader.is_ngff
+        self.loaded_scenes = {m.series_path: m for m in managers}
+        return self.loaded_scenes
+
+    async def load_tiles(self, tile_indices: Union[int, str, List[int]]):
+        if not self.loaded_scenes:
+            raise RuntimeError("Call load_scenes() before load_tiles().")
+        scene_mgr = next(iter(self.loaded_scenes.values()))
+        scene_idx = scene_mgr.series
+        assert self.path is not None, "Cannot load tiles: path is None."
+        loader = SceneLoader(self.path, self._meta_reader, self._skip_dask,
+                             reader_tile_size_mb=self._tile_mb,
+                             force_bioformats=self._force_bioformats)
+        await loader._open()
+        try:
+            await loader._img.set_scene(scene_idx)  # type: ignore[union-attr]
+            n_tiles = loader.n_tiles
+            if tile_indices == 'all':
+                tile_list_input: List[int] = list(range(n_tiles))
+            elif np.isscalar(tile_indices):
+                tile_list_input = [int(tile_indices)]  # type: ignore[arg-type]
+            else:
+                tile_list_input = list(tile_indices)  # type: ignore[arg-type]
+            valid = [i for i in tile_list_input if i < n_tiles]
+            if len(valid) < len(tile_list_input):
+                logger.warning(
+                    f"Skipping out-of-range tile indices: {set(tile_list_input) - set(valid)}")
+            tiles = []
+            for tile_idx in valid:
+                await loader._img.set_tile(tile_idx)  # type: ignore[union-attr]
+                tiles.append(await loader._snapshot(scene_idx, tile_idx))
+        finally:
+            loader._img = None
+            self._n_tiles = loader.n_tiles
+        self.loaded_tiles = {t.series_path: t for t in tiles}
+        return self.loaded_tiles
+
+    # ── Metadata helpers ──────────────────────────────────────────────────
+
+    def get_pixel_size_basemap(self, t=1, z=1, y=1, x=1, **_):
+        return {'pixel_size_t': t, 'pixel_size_z': z, 'pixel_size_y': y, 'pixel_size_x': x}
+
+    def get_unit_basemap(self, t='second', z='micrometer', y='micrometer', x='micrometer', **_):
+        return {'unit_t': t, 'unit_z': z, 'unit_y': y, 'unit_x': x}
+
+    def update_meta(self, new_scaledict: dict = None, new_unitdict: dict = None):
+        new_scaledict = new_scaledict or {}
+        new_unitdict  = new_unitdict  or {}
+        # Use the already-loaded state as the base.
+        sd = dict(self.state.scaledict)
+        for k, v in new_scaledict.items():
+            if k in sd and v is not None:
+                sd[k] = v
+        scales = [sd[ax] for ax in (self.axes if 'c' in sd else self.caxes)]
+
+        ud = dict(self.state.unitdict)
+        for k, v in new_unitdict.items():
+            if k in ud and v is not None:
+                ud[k] = v
+        units = [expand_units(ud[ax]) for ax in (self.axes if 'c' in ud else self.caxes)]
+        self.state.update(array=self.array, axes=self.axes, units=units, scales=scales)
+
+    # ── Pyramid / OME-XML I/O (async, genuine I/O) ───────────────────────
+
+    async def sync_pyramid(
+        self,
+        create_omexml_if_not_exists: bool = False,
+        save_changes: bool = False,
+    ) -> None:
+        if self.state.pyr is None:
+            raise RuntimeError("No pyramid — load data first.")
+        pyr = self.state.pyr
+        await asyncio.to_thread(pyr.update_scales, **self.scaledict)
+        await asyncio.to_thread(pyr.update_units,  **self.unitdict)
+
+        if self._is_ngff:
+            for i, ch_meta in enumerate(self.channels):
+                pyr.meta.metadata['omero']['channels'][i].update(ch_meta)
+        else:
+            pyr.meta.metadata['omero']['channels'] = self.channels
+        pyr.meta._pending_changes = True
+
+        if self.state.omemeta is None:
+            def _create():
+                return create_ome_xml(
+                    image_shape=pyr.base_array.shape,
+                    axis_order=pyr.axes,
+                    pixel_size_x=pyr.meta.scaledict.get('0', {}).get('x'),
+                    pixel_size_y=pyr.meta.scaledict.get('0', {}).get('y'),
+                    pixel_size_z=pyr.meta.scaledict.get('0', {}).get('z'),
+                    pixel_size_t=pyr.meta.scaledict.get('0', {}).get('t'),
+                    unit_x=pyr.meta.unit_dict.get('x'),
+                    unit_y=pyr.meta.unit_dict.get('y'),
+                    unit_z=pyr.meta.unit_dict.get('z'),
+                    unit_t=pyr.meta.unit_dict.get('t'),
+                    dtype=str(pyr.base_array.dtype),
+                    image_name=pyr.meta.multiscales.get('name', 'Default image'),
+                    channel_names=[ch['label'] for ch in self.channels],
+                )
+            self.state.omemeta = await asyncio.to_thread(_create)
+
+        try:
+            if pyr.gr is not None and ('OME' in list(pyr.gr.keys()) or create_omexml_if_not_exists):
+                await self.save_omexml(pyr.gr.store.root, overwrite=True)
+        except (OSError, AttributeError) as e:
+            logger.warning(f"Could not save OME-XML: {e}")
+
+        if save_changes:
+            await asyncio.to_thread(pyr.meta.save_changes)
+
+    async def create_omemeta(self):
+        self.state.fill_default_meta()
+        ps_map = self.get_pixel_size_basemap(**self.scaledict)
+        u_map  = self.get_unit_basemap(**self.unitdict)
+        self.state.omemeta = create_ome_xml(
+            image_shape=self.array.shape,
+            axis_order=self.axes,
+            **ps_map, **u_map,
+            dtype=str(self.array.dtype),
+            channel_names=[ch['label'] for ch in self.channels],
+        )
+        pixels = self.state.omemeta.images[0].pixels
+        missing = self.essential_omexml_fields - pixels.model_fields_set
+        pixels.model_fields_set.update(missing)
+        self.state.omemeta.images[0].pixels = pixels
+        return self
+
+    async def save_omexml(self, base_path: str, overwrite: bool = False) -> None:
+        await self.create_omemeta()
+        assert self.state.omemeta is not None
+        gr = await asyncio.to_thread(zarr.group, base_path)
+        try:
+            path = os.path.join(gr.store.root, 'OME', 'METADATA.ome.xml')
+        except AttributeError as e:
+            logger.warning(f"OME-XML can only be written to local stores: {e}")
+            return
+        await asyncio.to_thread(gr.create_group, 'OME', overwrite=overwrite)
+
+        def _write(p, text):
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write(text)
+
+        await asyncio.to_thread(_write, path, self.state.omemeta.to_xml())
+        if gr.info._zarr_format == 2:
+            gr['OME'].attrs["series"] = [self.series]
+        else:
+            gr['OME'].attrs["ome"] = dict(version="0.5", series=[str(self.series)])
+
+    # ── Stubs ─────────────────────────────────────────────────────────────
+
+    def split_series(self): pass
+    def split(self): pass
+
+
+# ---------------------------------------------------------------------------
+# ChannelIterator
+# ---------------------------------------------------------------------------
 
 class ChannelIterator:
-    """
-    Iterator for generating and managing channel colors.
+    """Generate and cycle through channel colour entries."""
 
-    This class provides a way to iterate through a sequence of channel colors,
-    generating new colors in a visually distinct sequence when needed.
-    """
     DEFAULT_COLORS = [
-        "FF0000",  # Red
-        "00FF00",  # Green
-        "0000FF",  # Blue
-        "FF00FF",  # Magenta
-        "00FFFF",  # Cyan
-        "FFFF00",  # Yellow
-        "FFFFFF",  # White
+        "FF0000", "00FF00", "0000FF", "FF00FF", "00FFFF", "FFFF00", "FFFFFF",
     ]
 
-    def __init__(self, num_channels=0):
-        """
-        Initialize the channel iterator.
-
-        Args:
-            num_channels: Initial number of channels to pre-generate
-        """
-        self._channels = []
+    def __init__(self, num_channels: int = 0):
+        self._channels: List[dict] = []
         self._current_index = 0
         self._generate_channels(num_channels)
 
-    def _generate_channels(self, count):
-        """Generate the specified number of unique channel colors."""
+    def _generate_channels(self, count: int) -> None:
         for i in range(len(self._channels), count):
             if i < len(self.DEFAULT_COLORS):
                 color = self.DEFAULT_COLORS[i]
             else:
-                # Generate a distinct color by distributing hues
-                hue = int((i * 137.5) % 360)  # Golden angle for distinct colors
+                hue = int((i * 137.5) % 360)
                 r, g, b = self._hsv_to_rgb(hue / 360.0, 1.0, 1.0)
-                color = f"{int(r * 255):02X}{int(g * 255):02X}{int(b * 255):02X}"
+                color = f"{int(r*255):02X}{int(g*255):02X}{int(b*255):02X}"
             self._channels.append({"label": f"Channel {i + 1}", "color": color})
 
     @staticmethod
-    def _hsv_to_rgb(h, s, v):
-        """Convert HSV color space to RGB color space."""
-        h = h * 6.0
+    def _hsv_to_rgb(h: float, s: float, v: float) -> tuple:
+        h *= 6.0
         i = int(h)
-        f = h - i
-        p = v * (1.0 - s)
-        q = v * (1.0 - s * f)
-        t = v * (1.0 - s * (1.0 - f))
-
-        if i == 0:
-            return v, t, p
-        elif i == 1:
-            return q, v, p
-        elif i == 2:
-            return p, v, t
-        elif i == 3:
-            return p, q, v
-        elif i == 4:
-            return t, p, v
-        else:
-            return v, p, q
+        f, p, q, t = h - i, v*(1-s), v*(1-s*( h-i)), v*(1-s*(1-(h-i)))
+        return [(v,t,p),(q,v,p),(p,v,t),(p,q,v),(t,p,v),(v,p,q)][i % 6]
 
     def __iter__(self):
-        """Return the iterator object itself."""
         self._current_index = 0
         return self
 
-    def __next__(self):
-        """Return the next channel color."""
+    def __next__(self) -> dict:
         if self._current_index >= len(self._channels):
             self._generate_channels(len(self._channels) + 1)
+        result = self._channels[self._current_index]
+        self._current_index += 1
+        return result
 
-        if self._current_index < len(self._channels):
-            result = self._channels[self._current_index]
-            self._current_index += 1
-            return result
-        raise StopIteration
-
-    def get_channel(self, index):
-        """
-        Get channel color by index.
-
-        Args:
-            index: Index of the channel to retrieve
-
-        Returns:
-            dict: Channel information with 'label' and 'color' keys
-        """
+    def get_channel(self, index: int) -> dict:
         if index >= len(self._channels):
             self._generate_channels(index + 1)
         return self._channels[index]
 
-    def __len__(self):
-        """Return the number of generated channels."""
+    def __len__(self) -> int:
         return len(self._channels)
 
 
-class BatchManager:
-    def __init__(self,
-                 # managers
-                 ):
-        pass
-        # self.managers = managers
+# ---------------------------------------------------------------------------
+# BatchManager
+# ---------------------------------------------------------------------------
 
-    async def init(self,
-                   managers
-                   ):
+class BatchManager:
+    """Applies operations to a collection of ArrayManagers in step."""
+
+    def __init__(self):
+        self.managers: dict = {}
+
+    async def init(self, managers: dict) -> "BatchManager":
         self.managers = managers
         return self
 
-    async def _collect_scaledict(self, **kwargs):
-        """
-        Retrieves pixel sizes for image dimensions.
+    async def _collect_scaledict(self, **kwargs) -> dict:
+        keys = ['t', 'c', 'z', 'y', 'x']
+        vals = [kwargs.get(f'{ax}_scale' if ax != 'c' else 'channel_scale', None) for ax in keys]
+        return {k: v for k, v in zip(keys, vals) if v is not None}
 
-        Args:
-            **kwargs: Pixel sizes for time, channel, z, y, and x dimensions.
+    async def _collect_unitdict(self, **kwargs) -> dict:
+        keys = ['t', 'c', 'z', 'y', 'x']
+        vals = [kwargs.get(f'{ax}_unit' if ax != 'c' else 'channel_unit', None) for ax in keys]
+        return {k: v for k, v in zip(keys, vals) if v is not None}
 
-        Returns:
-            list: Pixel sizes.
-        """
-        t = kwargs.get('time_scale', None)
-        c = kwargs.get('channel_scale', None)
-        y = kwargs.get('y_scale', None)
-        x = kwargs.get('x_scale', None)
-        z = kwargs.get('z_scale', None)
-        fulldict = dict(zip('tczyx', [t, c, z, y, x]))
-        final = {key: val for key, val in fulldict.items() if val is not None}
-        return final
-
-    async def _collect_unitdict(self, **kwargs):
-        """
-        Retrieves unit specifications for image dimensions.
-
-        Args:
-            **kwargs: Unit values for time, channel, z, y, and x dimensions.
-
-        Returns:
-            list: Unit values.
-        """
-        t = kwargs.get('time_unit', None)
-        c = kwargs.get('channel_unit', None)
-        y = kwargs.get('y_unit', None)
-        x = kwargs.get('x_unit', None)
-        z = kwargs.get('z_unit', None)
-        fulldict = dict(zip('tczyx', [t, c, z, y, x]))
-        final = {key: val for key, val in fulldict.items() if val is not None}
-        return final
-
-    async def _collect_chunks(self, **kwargs):  ###
-        """
-        Retrieves chunk specifications for image dimensions.
-
-        Args:
-            **kwargs: Chunk sizes for time, channel, z, y, and x dimensions.
-
-        Returns:
-            list: Chunk shape.
-        """
-        t = kwargs.get('time_chunk', None)
-        c = kwargs.get('channel_chunk', None)
-        y = kwargs.get('y_chunk', None)
-        x = kwargs.get('x_chunk', None)
-        z = kwargs.get('z_chunk', None)
-        fulldict = dict(zip('tczyx', [t, c, z, y, x]))
-        final = {key: val for key, val in fulldict.items() if val is not None}
-        return final
+    async def _collect_chunks(self, **kwargs) -> dict:
+        keys = ['t', 'c', 'z', 'y', 'x']
+        vals = [kwargs.get(f'{ax}_chunk' if ax != 'c' else 'channel_chunk', None) for ax in keys]
+        return {k: v for k, v in zip(keys, vals) if v is not None}
 
     async def fill_default_meta(self):
-        for key, manager in self.managers.items():
-            manager.fill_default_meta()
+        for mgr in self.managers.values():
+            mgr.fill_default_meta()
 
     async def squeeze(self):
-        for key, manager in self.managers.items():
-            manager.squeeze()
+        for mgr in self.managers.values():
+            mgr.squeeze()
 
-    async def to_cupy(self):
-        for key, manager in self.managers.items():
-            manager.to_cupy()
+    async def crop(self, time_range=None, channel_range=None,
+                   z_range=None, y_range=None, x_range=None, **_):
+        if any(v is not None for v in (time_range, channel_range, z_range, y_range, x_range)):
+            for mgr in self.managers.values():
+                mgr.crop(trange=time_range, crange=channel_range,
+                          zrange=z_range, yrange=y_range, xrange=x_range)
 
-    async def crop(self,
-                   time_range=None,
-                   channel_range=None,
-                   z_range=None,
-                   y_range=None,
-                   x_range=None,
-                   **kwargs  # placehold
-                   ):
-        if any([item is not None
-                for item in (time_range,
-                             channel_range,
-                             z_range,
-                             y_range,
-                             x_range)]):
-            for key, manager in self.managers.items():
-                manager.crop(time_range, channel_range, z_range, y_range, x_range)
-
-    async def transpose(self, newaxes):
-        for key, manager in self.managers.items():
-            manager.transpose(newaxes)
+    async def transpose(self, newaxes: str):
+        for mgr in self.managers.values():
+            mgr.transpose(newaxes)
 
     async def sync_pyramids(self):
-        pass
+        pass  # stub
+
+    async def to_cupy(self):
+        pass  # stub

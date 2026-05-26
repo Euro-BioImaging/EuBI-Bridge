@@ -1,35 +1,33 @@
-# os.environ["TENSORSTORE_LOCK_DISABLE"] = "1"
+import asyncio
 import concurrent.futures
+import gc
 import itertools
+import math
 import os
 import shutil
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
+from queue import Queue
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import dask
-import numcodecs
+import dask.array as da
 import numpy as np
 import s3fs
 import tensorstore as ts
-import inspect
-
 import zarr
 
-# zarr 2.x has no version kwarg in zarr.group(); zarr 3.x renamed it from
-# zarr_version to zarr_format across releases.  Build a helper once at import.
-_group_sig = inspect.signature(zarr.group).parameters
-if "zarr_format" in _group_sig:
-    def _zarr_group(store, overwrite: bool, zarr_format: int):
-        return zarr.group(store, overwrite=overwrite, zarr_format=zarr_format)
-elif "zarr_version" in _group_sig:
-    def _zarr_group(store, overwrite: bool, zarr_format: int):
-        return zarr.group(store, overwrite=overwrite, zarr_version=zarr_format)
-else:
-    def _zarr_group(store, overwrite: bool, zarr_format: int):
-        return zarr.group(store, overwrite=overwrite)
+
+def _zarr_group(store, overwrite: bool, zarr_format: int) -> zarr.Group:
+    """Create or open a zarr group, handling keyword differences across zarr versions."""
+    try:
+        return zarr.group(store, overwrite=overwrite, zarr_format=zarr_format)  # type: ignore[arg-type]
+    except TypeError:
+        try:
+            return zarr.group(store, overwrite=overwrite, zarr_version=zarr_format)  # type: ignore[call-arg,arg-type]
+        except TypeError:
+            return zarr.group(store, overwrite=overwrite)
 
 from dask import delayed
 from distributed import get_client
@@ -37,15 +35,16 @@ from zarr import codecs
 from zarr.storage import LocalStore
 
 ### internal imports
+from eubi_bridge.core.config_models import CompressorConfig
 from eubi_bridge.ngff.multiscales import NGFFMetadataHandler, Pyramid
 from eubi_bridge.utils.array_utils import (autocompute_chunk_shape,
                                            compute_chunk_batch,
+                                           get_array_chunks,
                                            get_chunk_shape,
                                            get_chunksize_from_array)
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import is_zarr_group
-
-# import logging, warnings
+from eubi_bridge.utils.storage_utils import make_kvstore
 
 logger = get_logger(__name__)
 
@@ -73,206 +72,12 @@ def _is_resource_backed(arr) -> bool:
         return False
 
 
-# logging.getLogger('distributed.diskutils').setLevel(logging.CRITICAL)
-
-# logging.basicConfig(level=logging.INFO,
-#                     stream=sys.stdout,
-#                     force=True)
 
 ZARR_V2 = 2
 ZARR_V3 = 3
 DEFAULT_DIMENSION_SEPARATOR = "/"
-DEFAULT_COMPRESSION_LEVEL = 5
-DEFAULT_COMPRESSION_ALGORITHM = "zstd"
 
 
-@dataclass
-class CompressorConfig:
-    name: str = 'blosc'
-    params: dict = None
-
-    def __post_init__(self):
-        self.params = self.params or {}
-
-def autocompute_color(channel_ix: int):
-    default_colors = [
-        "FF0000",  # Red
-        "00FF00",  # Green
-        "0000FF",  # Blue
-        "FF00FF",  # Magenta
-        "00FFFF",  # Cyan
-        "FFFF00",  # Yellow
-        "FFFFFF",  # White
-    ]
-    color = default_colors[channel_ix] if channel_ix < len(default_colors) else f"{channel_ix * 40 % 256:02X}{channel_ix * 85 % 256:02X}{channel_ix * 130 % 256:02X}"
-    return color
-
-def create_zarr_array(directory: Union[Path, str, zarr.Group],
-                      array_name: str,
-                      shape: Tuple[int, ...],
-                      chunks: Tuple[int, ...],
-                      dtype: Any,
-                      overwrite: bool = False) -> zarr.Array:
-    """Create a new Zarr array in the specified directory or group.
-    
-    Parameters
-    ----------
-    directory : Union[Path, str, zarr.Group]
-        Directory path or Zarr group where the array will be created.
-    array_name : str
-        Name of the array to create.
-    shape : Tuple[int, ...]
-        Shape of the array.
-    chunks : Tuple[int, ...]
-        Chunk shape for the array.
-    dtype : Any
-        Data type of the array.
-    overwrite : bool, optional
-        If True, overwrite existing array with the same name. Default is False.
-        
-    Returns
-    -------
-    zarr.Array
-        The created Zarr array.
-    """
-    chunks = tuple(np.minimum(shape, chunks))
-
-    if not isinstance(directory, zarr.Group):
-        path = os.path.join(directory, array_name)
-        dataset = zarr.create(shape=shape,
-                              chunks=chunks,
-                              dtype=dtype,
-                              store=path,
-                              dimension_separator='/',
-                              overwrite=overwrite)
-    else:
-        dataset = directory.create(name=array_name,
-                                   shape=shape,
-                                   chunks=chunks,
-                                   dtype=dtype,
-                                   dimension_separator='/',
-                                   overwrite=overwrite)
-    return dataset
-
-
-def get_regions(array_shape: Tuple[int, ...],
-                region_shape: Tuple[int, ...],
-                as_slices: bool = False) -> list:
-    """Generate regions for tiled access to an array.
-    
-    Divides an array into regions of specified size, returning either
-    coordinate tuples or Python slice objects for each region.
-    
-    Parameters
-    ----------
-    array_shape : Tuple[int, ...]
-        Shape of the full array.
-    region_shape : Tuple[int, ...]
-        Shape of each region/tile.
-    as_slices : bool, optional
-        If True, return regions as slice objects. If False, return as
-        coordinate tuples. Default is False.
-        
-    Returns
-    -------
-    list
-        List of regions, either as coordinate tuples or slice objects.
-    """
-    assert len(array_shape) == len(region_shape)
-    steps = []
-    for size, inc in zip(array_shape, region_shape):
-        seq = np.arange(0, size, inc)
-        if size > seq[-1]:
-            seq = np.append(seq, size)
-        increments = tuple((seq[i], seq[i + 1]) for i in range(len(seq) - 1))
-        if as_slices:
-            steps.append(tuple(slice(*item) for item in increments))
-        else:
-            steps.append(increments)
-    return list(itertools.product(*steps))
-
-
-def get_compressor(name,
-                   zarr_format = ZARR_V2,
-                   **params): ### TODO: continue this, add for zarr3
-    # Handle no compression case
-    if name is None or name == '' or (isinstance(name, str) and name.lower() == 'none'):
-        return None
-    
-    name = name.lower()
-
-    # Apply Blosc-specific defaults (with integer shuffle) when no params provided.
-    # This is the only place Blosc defaults are set, so non-Blosc compressors
-    # never receive Blosc-specific keys (cname, shuffle, blocksize).
-    if name == 'blosc' and not params:
-        params = {'cname': 'lz4', 'clevel': 5, 'shuffle': 1, 'blocksize': 0}
-    
-    # Reject unsupported codecs due to tensorstore backend limitations
-    if name in ('lz4', 'lzma'):
-        raise ValueError(
-            f"⚠️ Codec '{name.upper()}' is not supported! "
-            f"The tensorstore backend (used for writing zarr files) does not support this codec. "
-            f"Supported codecs: blosc, zstd, gzip, bz2 (Zarr v2 only), none. "
-            f"For compression similar to LZ4, use 'blosc' with cname='lz4' instead."
-        )
-    
-    assert zarr_format in (ZARR_V2, ZARR_V3)
-    compression_dict2 = {
-        "blosc": "Blosc",
-        "bz2": "BZ2",
-        "gzip": "GZip",
-        "lzma": "LZMA",
-        "lz4": "LZ4",
-        "pcodec": "PCodec",
-        "zfpy": "ZFPY",
-        "zlib": "Zlib",
-        "zstd": "Zstd"
-    }
-
-    compression_dict3 = {
-        "blosc": "BloscCodec",
-        "gzip": "GzipCodec",
-        "sharding": "ShardingCodec",
-        "zstd": "ZstdCodec",
-        "crc32ccodec": "CRC32CCodec"
-    }
-
-    if zarr_format == ZARR_V2:
-        if name not in compression_dict2:
-            raise ValueError(f"Unsupported compressor '{name}' for Zarr v2. Supported: {list(compression_dict2.keys())}")
-        compressor_name = compression_dict2[name]
-        compressor_instance = getattr(numcodecs, compressor_name)
-    elif zarr_format == ZARR_V3:
-        if name not in compression_dict3:
-            raise ValueError(f"Unsupported compressor '{name}' for Zarr v3. Supported: {list(compression_dict3.keys())}")
-        compressor_name = compression_dict3[name]
-        compressor_instance = getattr(codecs, compressor_name)
-        
-        # For Zarr v3 BloscCodec, convert integer shuffle to string enum value
-        if name == 'blosc' and 'shuffle' in params:
-            if isinstance(params['shuffle'], int):
-                shuffle_map = {0: 'noshuffle', 1: 'shuffle', 2: 'bitshuffle'}
-                params['shuffle'] = shuffle_map.get(params['shuffle'], str(params['shuffle']))
-    else:
-        raise Exception("Unsupported Zarr format")
-    
-    compressor = compressor_instance(**params)
-    return compressor
-
-
-def get_default_fill_value(dtype):
-    try:
-        dtype = np.dtype(dtype.name)
-    except (AttributeError, TypeError):
-        # dtype may not have .name attribute or conversion may fail
-        pass
-    if np.issubdtype(dtype, np.integer):
-        return 0
-    elif np.issubdtype(dtype, np.floating):
-        return 0.0
-    elif np.issubdtype(dtype, np.bool_):
-        return False
-    return None
 
 def _create_zarr_v2_array(
         store_path: Union[Path, str],
@@ -283,9 +88,7 @@ def _create_zarr_v2_array(
         dimension_separator: str,
         overwrite: bool,
 ) -> zarr.Array:
-    compressor = get_compressor(compressor_config.name,
-                                zarr_format=ZARR_V2,
-                                **compressor_config.params)
+    compressor = compressor_config.build(zarr_format=ZARR_V2)
     return zarr.create(
         shape=shape,
         chunks=chunks,
@@ -308,9 +111,7 @@ def _create_zarr_v3_array(
         overwrite: bool = False,
         **kwargs
 ) -> zarr.Array:
-    compressor = get_compressor(compressor_config.name,
-                                zarr_format=ZARR_V3,
-                                **compressor_config.params)
+    compressor = compressor_config.build(zarr_format=ZARR_V3)
     # For Zarr v3, only include compressors if not None (no compression)
     compressors = [compressor] if compressor is not None else []
     return zarr.create_array(
@@ -388,254 +189,39 @@ def _create_zarr_array(
         # **kwargs
     )
 
-def write_chunk_with_zarrpy(chunk: np.ndarray, zarr_array: zarr.Array, block_info: Dict) -> None:
-    if hasattr(chunk, "get"):
-        chunk = chunk.get()  # Convert CuPy -> NumPy
-    zarr_array[tuple(slice(*b) for b in block_info[0]["array-location"])] = chunk
-
-# def compute_block_slices(arr, block_shape):
-#     """Return slices defining large blocks over the array."""
-#     slices_per_dim = [range(0, s, b) for
-#                       s, b in zip(arr.shape, block_shape)]
-#     blocks = []
-#     for starts in itertools.product(*slices_per_dim):
-#         block_slices = tuple(slice(start, min(start+b, dim)) for start, b, dim in zip(starts, block_shape, arr.shape))
-#         blocks.append(block_slices)
-#     return blocks
-
-def compute_block_slices(arr, block_shape):
-    """Compute block slices for the given array and shard sizes."""
-    shards = block_shape
-    block_slices = []
-    for starts in np.ndindex(*[arr.shape[i] // shards[i] + (1 if arr.shape[i] % shards[i] else 0)
-                               for i in range(len(arr.shape))]):
-        slices = tuple(slice(start * shard, min((start + 1) * shard, arr.shape[i]))
-                       for start, shard, i in zip(starts, shards, range(len(arr.shape))))
-        block_slices.append(slices)
-    return block_slices
-
-async def write_block_optimized(arr, ts_store, block_slices):
-    """Optimized single block write with efficient Dask computation."""
-    # Get block data and compute if it's a Dask array
-    block = arr[block_slices]
-    if hasattr(block, 'compute'):
-        block = block.compute()
-
-    # Write and wait for completion
-    write_future = ts_store[block_slices].write(block)
-    write_future.result()
-    return 1
 
 
-import asyncio
-import concurrent.futures
-import copy
-import gc
-import itertools
-import math
-import os
-import threading
-import time
-from queue import Queue
-from typing import Any, Optional, Tuple, Union
+# ---------------------------------------------------------------------------
+# Shared write helpers
+# ---------------------------------------------------------------------------
 
-import dask.array as da
-import numpy as np
-import tensorstore as ts
-import zarr
-
-from eubi_bridge.utils.storage_utils import make_kvstore
-
-
-async def write_with_tensorstore_async(
-        arr: Union[da.Array, zarr.Array, ts.TensorStore],
-        store_path: Union[str, os.PathLike],
-        chunks: Optional[Tuple[int, ...]] = None,
-        shards: Optional[Tuple[int, ...]] = None,
-        dimension_names: str = None,
-        dtype: Any = None,
-        compressor: str = 'blosc',
-        compressor_params: dict = None,
-        overwrite: bool = True,
-        zarr_format: int = 2,
-        pixel_sizes: Optional[Tuple[float, ...]] = None,
-        max_concurrency: int = 8,
-        compute_batch_size: int = 8,
-        memory_limit_per_batch: int = 1024,
-        ts_io_concurrency: Optional[int] = None,
-        **kwargs
-) -> 'ts.TensorStore':
-    """
-    Hybrid writer: da.compute micro-batches + overlap compute(next) with writes(current).
-
-    - compute_batch_size: number of blocks passed to a single da.compute(...) call
-    - max_concurrency: number of parallel write threads (ThreadPoolExecutor)
-    - ts_io_concurrency: optional int to set kvstore file_io_concurrency limit (if desired)
-    """
-    compressor_params = compressor_params or {}
+def _normalize_dtype(dtype, arr) -> np.dtype:
+    """Coerce dtype to np.dtype, falling back to arr.dtype when None."""
+    if dtype is None:
+        return np.dtype(arr.dtype)
+    if isinstance(dtype, str):
+        return np.dtype(dtype)
     try:
-        dtype = np.dtype(dtype.name)
+        return np.dtype(dtype.name)
     except Exception:
-        dtype = np.dtype(dtype)
-    fill_value = kwargs.get('fill_value', get_default_fill_value(dtype))
+        return np.dtype(dtype)
 
-    if chunks is None:
-        chunks = get_chunk_shape(arr, 
-                                 default_chunks=tuple([1,1,96,96,96][:-len(arr.shape)])  # default chunk size if none provided
-                                 )
-    chunks = tuple(int(size) for size in chunks)
 
+def _align_shards(shards, chunks) -> tuple:
+    """Return a shard tuple whose every element is a multiple of the matching chunk size."""
     if shards is None:
-        shards = copy.deepcopy(chunks)
-    if not np.allclose(np.mod(shards, chunks), 0):
-        multiples = np.floor_divide(shards, chunks)
-        shards = np.multiply(multiples, chunks)
-    shards = tuple(int(size) for size in np.ravel(shards))
+        return tuple(chunks)
+    shards = np.asarray(shards)
+    chunks_arr = np.asarray(chunks)
+    if not np.allclose(np.mod(shards, chunks_arr), 0):
+        shards = np.multiply(np.floor_divide(shards, chunks_arr), chunks_arr)
+    return tuple(int(s) for s in np.ravel(shards))
 
-    # Optionally tune TensorStore file I/O concurrency inside kvstore spec
-    kvstore = make_kvstore(store_path)
-    if ts_io_concurrency:
-        kvstore["file_io_concurrency"] = {"limit": int(ts_io_concurrency)}
 
-    if zarr_format == 3:
-        # Build codec pipeline using proper zarr.codecs API
-        bytes_codec = codecs.BytesCodec(endian=codecs.Endian.little)
-        crc32c_codec = codecs.Crc32cCodec()
-        
-        # Get compressor codec object and convert to dict
-        compressor_codec = get_compressor(compressor, zarr_format=ZARR_V3, **compressor_params)
-        
-        # Build inner codecs list
-        inner_codecs = [bytes_codec.to_dict()]
-        if compressor_codec is not None:
-            inner_codecs.append(compressor_codec.to_dict())
-        
-        # Build index codecs list
-        index_codecs = [bytes_codec.to_dict(), crc32c_codec.to_dict()]
-        
-        zarr_metadata = {
-            "data_type": np.dtype(dtype).name,
-            "shape": arr.shape,
-            "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": shards}},
-            "dimension_names": list(dimension_names) if dimension_names else [],
-            "codecs": [
-                {
-                    "name": "sharding_indexed",
-                    "configuration": {
-                        "chunk_shape": chunks,
-                        "codecs": inner_codecs,
-                        "index_codecs": index_codecs,
-                        "index_location": "end"
-                    }
-                }
-            ],
-            "node_type": "array"
-        }
-    else:
-        zarr_metadata = {
-            "compressor": {"id": compressor, **compressor_params},
-            "dtype": np.dtype(dtype).str,
-            "shape": arr.shape,
-            "chunks": chunks,
-            "fill_value": fill_value,
-            "dimension_separator": '/',
-        }
-
-    zarr_spec = {
-        "driver": "zarr" if zarr_format == 2 else "zarr3",
-        "kvstore": kvstore,
-        "metadata": zarr_metadata,
-        "create": True,
-        "delete_existing": overwrite,
-    }
-
-    ctx = ts.Context({
-        "cache_pool": {"total_bytes_limit": 1_000_000_000},  # 1 GB local cache
-        "data_copy_concurrency": {"limit": 64},
-        "s3_request_concurrency": {"limit": 32},
-        "s3_request_retries": {"max_retries": 5},
-    })
-
-    ts_store = ts.open(zarr_spec, context=ctx).result()
-
-    block_size = compute_chunk_batch(arr, dtype, memory_limit_per_batch)
-    block_size = tuple([max(bs, cs) for bs, cs in zip(block_size, chunks)])
-    block_size = tuple((math.ceil(bs / cs) * cs) for bs, cs in zip(block_size, chunks))
-    blocks = compute_block_slices(arr, block_size)
-    total_blocks = len(blocks)
-
-    # split blocks into micro-batches
-    compute_batches = [blocks[i:i + compute_batch_size]
-                       for i in range(0, len(blocks), compute_batch_size)]
-
-    loop = asyncio.get_running_loop()
-    write_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_concurrency))
-
-    success_count = 0
-
-    # helper to write a single block (runs in threadpool)
-    def _write_block(bs, data):
-        # keep writer simple: block slice indexing then write and wait for ts future
-        return ts_store[bs].write(data).result()
-
-    try:
-        # Kick off compute for the first batch in background
-        next_compute_future = None
-        if compute_batches:
-            first_batch_blocks = compute_batches[0]
-            # Prepare Dask objects for that batch
-            dask_objs = [arr[bs] for bs in first_batch_blocks]
-            # run da.compute in executor so we don't block the loop
-            next_compute_future = loop.run_in_executor(
-                None, lambda *objs: da.compute(*objs), *dask_objs
-            )
-
-        # iterate batches, compute current (await previous future) and schedule next compute
-        for i, batch_blocks in enumerate(compute_batches):
-            # schedule compute for the next batch (if any)
-            if i + 1 < len(compute_batches):
-                next_batch_blocks = compute_batches[i + 1]
-                next_dask_objs = [arr[bs] for bs in next_batch_blocks]
-                # Note: None as executor uses default ThreadPoolExecutor from loop.run_in_executor
-                next_future = loop.run_in_executor(None, lambda *objs: da.compute(*objs), *next_dask_objs)
-            else:
-                next_future = None
-
-            # wait for current compute (the previously kicked-off one)
-            if next_compute_future is None:
-                # This can happen if there were no initial compute; compute inline as fallback
-                dask_objs = [arr[bs] for bs in batch_blocks]
-                computed = da.compute(*dask_objs) if hasattr(arr, 'compute') else tuple(dask_objs)
-            else:
-                computed = await next_compute_future  # tuple of numpy arrays
-
-            # Now write all blocks of this batch concurrently using write_executor
-            write_futures = []
-            for bs, data in zip(batch_blocks, computed):
-                # submit to write threadpool
-                write_futures.append(loop.run_in_executor(write_executor, _write_block, bs, data))
-
-            # Wait for all writes in this batch to complete
-            await asyncio.gather(*write_futures)
-
-            success_count += len(batch_blocks)
-            logger.info(
-                f"From the array with shape {arr.shape},\n"
-                f"with the allocated region size {block_size} for the memory limit {memory_limit_per_batch} and dtype {dtype},\n"
-                f"wrote {success_count}/{total_blocks} blocks (batch {i+1}/{len(compute_batches)}) to {store_path}"
-            )
-
-            # advance next_compute_future
-            next_compute_future = next_future
-
-        # if there is a leftover compute future (for final scheduled compute) wait and discard (shouldn't happen)
-        if next_compute_future is not None:
-            await next_compute_future
-
-    finally:
-        write_executor.shutdown(wait=True)
-
-    # ---- Metadata handling (unchanged) ----
+def _write_ngff_metadata(store_path, pixel_sizes) -> None:
+    """Attach a single dataset entry to the parent group's NGFF multiscales metadata."""
+    if pixel_sizes is None:
+        return
     gr_path = os.path.dirname(store_path)
     arrpath = os.path.basename(store_path)
     gr = zarr.group(gr_path)
@@ -644,11 +230,6 @@ async def write_with_tensorstore_async(
     handler.read_metadata()
     handler.add_dataset(path=arrpath, scale=pixel_sizes, overwrite=True)
     handler.save_changes()
-
-    return ts_store
-
-
-
 
 
 
@@ -756,7 +337,10 @@ async def downscale_with_tensorstore_async(
                     dtype = np.dtype(arr.dtype.name),
                     region_size_mb = downscale_region_size_mb,
                     # **kwargs,
-                    **{k: v for k, v in kwargs.items() if k not in ('max_concurrency', 'dtype', 'compressor', 'compressor_params', 'zarr_format', 'region_size_mb')}
+                    **{k: v for k, v in kwargs.items() if k not in (
+                        'max_concurrency', 'dtype', 'compressor', 'compressor_params',
+                        'zarr_format', 'region_size_mb',
+                    )}
                 )
                 
                 coro = write_with_queue_async(**params)
@@ -783,9 +367,7 @@ async def downscale_with_tensorstore_async(
         logger.error(f"Error during concurrent downscale writes: {e}", exc_info=True)
         raise
     
-    pyr = Pyramid(gr_path)
-
-    return pyr
+    return Pyramid(gr_path)
 
 
 def _get_or_create_multimeta(gr: zarr.Group,
@@ -1111,20 +693,10 @@ async def write_with_queue_async(
     if queue_size is None:
         queue_size = min(128, max(8, num_readers))
     
-    if dtype is None:
-        dtype = arr.dtype
-    elif isinstance(dtype, str):
-        dtype = np.dtype(dtype)
-    
+    dtype = _normalize_dtype(dtype, arr)
     if output_chunks is None:
         output_chunks = get_chunk_shape(arr)
-    
-    if output_shards is None:
-        output_shards = copy.deepcopy(output_chunks)
-    if not np.allclose(np.mod(output_shards, output_chunks), 0):
-        multiples = np.floor_divide(output_shards, output_chunks)
-        output_shards = np.multiply(multiples, output_chunks)
-    output_shards = tuple(int(size) for size in np.ravel(output_shards))
+    output_shards = _align_shards(output_shards, output_chunks)
 
     # === CREATE ARRAY WITH ZARR LIBRARY FIRST ===
     # This ensures all compressor parameters are applied correctly
@@ -1154,16 +726,7 @@ async def write_with_queue_async(
     )
 
     # === COMPUTE REGION SHAPE ===
-    input_chunks = None
-    try:
-        if hasattr(arr, 'chunks'):
-            # Dask array - extract numeric chunks
-            input_chunks = tuple(c[0] if isinstance(c, tuple) else c for c in arr.chunks)
-        elif hasattr(arr, 'chunk_shape'):
-            # DynamicArray
-            input_chunks = arr.chunk_shape
-    except Exception:
-        pass
+    input_chunks = get_array_chunks(arr)
 
     region_shape = _compute_region_shape(
         input_shape=arr.shape,
@@ -1188,27 +751,7 @@ async def write_with_queue_async(
     }
     
     ts_store = await ts.open(spec_dict)
-    
-    # # === COMPUTE REGION SHAPE ===
-    # input_chunks = None
-    # try:
-    #     if hasattr(arr, 'chunks'):
-    #         # Dask array - extract numeric chunks
-    #         input_chunks = tuple(c[0] if isinstance(c, tuple) else c for c in arr.chunks)
-    #     elif hasattr(arr, 'chunk_shape'):
-    #         # DynamicArray
-    #         input_chunks = arr.chunk_shape
-    # except Exception:
-    #     pass
-    
-    # region_shape = _compute_region_shape(
-    #     input_shape=arr.shape,
-    #     final_chunks=output_chunks,
-    #     region_size_mb=region_size_mb,
-    #     dtype=dtype,
-    #     input_chunks=input_chunks
-    # )
-    
+
     if verbose:
         logger.info(f"Queue-based writer: {num_readers} readers, {max_concurrency} writers, region_shape={region_shape}")
     
@@ -1374,17 +917,7 @@ async def write_with_queue_async(
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _run_threaded_write)
     
-    # === METADATA HANDLING ===
-    if pixel_sizes is not None:
-        gr_path = os.path.dirname(output_path)
-        arrpath = os.path.basename(output_path)
-        gr = zarr.group(gr_path)
-        handler = NGFFMetadataHandler()
-        handler.connect_to_group(gr)
-        handler.read_metadata()
-        handler.add_dataset(path=arrpath, scale=pixel_sizes, overwrite=True)
-        handler.save_changes()
-    
+    _write_ngff_metadata(output_path, pixel_sizes)
     return ts_store
 
 
@@ -1393,7 +926,7 @@ async def store_multiscale_async(
     arr: Union[da.Array, zarr.Array],
     output_path: Union[Path, str],
     axes: Sequence[str],
-    scales: Sequence[Tuple[float, ...]],  # pixel sizes
+    scales: Sequence[float],  # per-axis physical pixel sizes (flat, e.g. [1.0, 1.0, 0.5, 0.25, 0.25])
     units: Sequence[str],
     zarr_format: int = 2,
     auto_chunk: bool = True,
@@ -1417,7 +950,6 @@ async def store_multiscale_async(
     gc_interval: float = 15.0,              # Seconds between garbage collections
     **kwargs
 ) -> 'ts.TensorStore':
-    # logger.info(f"The array with shape {arr.shape} will be written to {output_path}.")
     import tensorstore as ts
     writer_func = write_with_queue_async
     # Get important kwargs:
@@ -1513,7 +1045,7 @@ async def store_multiscale_async(
         dimension_names=list(axes),
         compressor=compressor,
         compressor_params=compressor_params,
-        pixel_sizes=scales,  # Base layer scale
+        pixel_sizes=tuple(scales),  # Base layer scale
         num_readers=num_readers,
         max_concurrency=max_concurrency,
         region_size_mb=region_size_mb,
@@ -1521,7 +1053,7 @@ async def store_multiscale_async(
         gc_interval=gc_interval,
         overwrite=overwrite,
         verbose=verbose,
-        output_shards=shards
+        output_shards=shards,
     )
 
     base_elapsed = (time.time() - base_start_time) / 60

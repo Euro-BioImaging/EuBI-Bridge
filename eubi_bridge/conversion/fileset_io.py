@@ -5,7 +5,6 @@ from typing import Dict, Iterable, List, Union
 
 import dask.array as da
 import numpy as np
-from dask import delayed
 from natsort import natsorted
 
 from eubi_bridge.core.data_manager import (ArrayManager,  # , prune_seriesfix
@@ -15,9 +14,7 @@ from eubi_bridge.external.dyna_zarr import operations as ops, DynamicArray
                         
 logger = get_logger(__name__)
 
-transpose_list = lambda l: list(map(list, zip(*l)))
 get_numerics = lambda string: list(re.findall(r'\d+', string))
-get_alpha = lambda string: ''.join([i for i in string if not i.isnumeric()])
 
 
 def get_matches(pattern, strings, return_non_matches=False):
@@ -37,47 +34,6 @@ def get_matches(pattern, strings, return_non_matches=False):
     if return_non_matches:
         return matches
     return [match for match in matches if match is not None]
-
-
-def split_by_match(filepaths, *args):
-    """
-    Group filepaths based on matching patterns.
-
-    Args:
-        filepaths (list): List of file paths to search in.
-        *args: Variable number of patterns to search for in filepaths.
-
-    Returns:
-        dict: Dictionary with patterns as keys and lists of matching filepaths as values.
-    """
-    ret = dict().fromkeys(args)
-    for key in args:
-        matches = get_matches(key, filepaths)
-        ret[key] = matches
-    return ret
-
-
-def find_match_and_numeric(filepaths, *args):
-    """
-    Find matches in filepaths and group them by their numeric suffixes.
-
-    Args:
-        filepaths (list): List of file paths to search in.
-        *args: Variable number of patterns to search for in filepaths.
-
-    Returns:
-        dict: Dictionary where keys are matched patterns and values are lists of match objects.
-    """
-    ret = {}
-    for key in args:
-        matches = get_matches(key, filepaths)
-        for match in matches:
-            span = match.string[match.start():match.end()]
-            if span not in ret.keys():
-                ret[span] = [match]
-            else:
-                ret[span].append(match)
-    return ret
 
 
 def concatenate_shapes_along_axis(shapes: Iterable,
@@ -136,88 +92,6 @@ def accumulate_slices_along_axis(shapes: Iterable,
         slclist[axis] = slice(*tup)
         slices[idx] = tuple(slclist)
     return slices
-
-
-def find_consensus_sequence(strings: List[str]) -> tuple:
-    """
-    Find consensus sequence using column-based majority voting.
-    
-    Pads all strings to the same length with '_', then identifies
-    which positions have differing characters across the strings.
-    
-    Args:
-        strings: List of strings to find consensus from
-        
-    Returns:
-        (consensus_str, variable_positions_list): Consensus string and list of 
-        positions where characters differ
-    """
-    if not strings:
-        return '', []
-    
-    max_len = max(len(s) for s in strings)
-    padded_strings = [s.ljust(max_len, '_') for s in strings]
-    
-    consensus_chars = []
-    variable_positions = []
-    
-    for pos in range(max_len):
-        chars_at_pos = [s[pos] for s in padded_strings]
-        
-        # Find most common character (majority voting)
-        char_counts = {}
-        for ch in chars_at_pos:
-            char_counts[ch] = char_counts.get(ch, 0) + 1
-        
-        most_common = max(char_counts.items(), key=lambda x: x[1])[0]
-        consensus_chars.append(most_common)
-        
-        # Check if all characters at this position are the same
-        if len(set(chars_at_pos)) > 1:
-            variable_positions.append(pos)
-    
-    return ''.join(consensus_chars), variable_positions
-
-
-def subtract_tags_from_filenames(filenames: List[str], tags: List[str]) -> Dict:
-    """
-    Subtract tags from filenames, returning before/after parts separately.
-    
-    Args:
-        filenames: List of filenames (basenames, not full paths)
-        tags: List of tags to find and remove from each filename
-        
-    Returns:
-        Dict with keys:
-            - 'before_parts': Strings before each tag
-            - 'after_parts': Strings after each tag
-            - 'tag_positions': Index where each tag starts
-            - 'mappings': Tuples of (filename, tag, before, after, position)
-    """
-    before_parts = []
-    after_parts = []
-    tag_positions = []
-    mappings = []
-    
-    for filename, tag in zip(filenames, tags):
-        idx = filename.find(tag)
-        if idx == -1:
-            raise ValueError(f"Tag '{tag}' not found in filename '{filename}'")
-        
-        before = filename[:idx]
-        after = filename[idx + len(tag):]
-        
-        before_parts.append(before)
-        after_parts.append(after)
-        tag_positions.append(idx)
-        mappings.append((filename, tag, before, after, idx))
-    
-    return {
-        'before_parts': before_parts,
-        'after_parts': after_parts,
-        'tag_positions': tag_positions,
-        'mappings': mappings
-    }
 
 
 def reduce_paths_flexible(paths: Iterable[str],
@@ -315,7 +189,7 @@ def reduce_paths_flexible(paths: Iterable[str],
         raise ValueError("dimension_tag must be a string or a tuple/list of strings")
 
 
-def parse_channel_tag_from_string(channel_tag: str) -> tuple:
+def parse_channel_tag_from_string(channel_tag: Union[str, tuple, None]) -> Union[tuple, str, None]:
     """
     Parse a channel tag as a tuple of strings.
 
@@ -558,10 +432,6 @@ class FileSet:
                 dimension_tag,
                 replace_with=f'_{self.AXIS_DICT[axis]}set'
             )
-            #print(f"Group reduced paths: {group_reduced_paths}")
-            #print(f"Dimension tag: {dimension_tag}")
-            #print(f"New reduced path: {new_reduced_path}")
-            #print(f"Replacing with: _{self.AXIS_DICT[axis]}set")
             new_reduced_paths = [new_reduced_path] * len(group_reduced_paths)
 
             # If arrays are present, concatenate them
@@ -584,87 +454,44 @@ class FileSet:
         #pprint.pprint(self.path_dict)
         return group
 
-    def get_concatenated_array_paths(self):
-        unique_paths = []
-        unique_input_paths = []
-        unique_ids = []
-
-        # Process paths in natural sort order
-        for key in self.path_dict:
-            path = self.path_dict[key]
-            if path not in unique_paths:
-                unique_input_paths.append(key)
-                unique_paths.append(path)
-                unique_ids.append(key)
-
-        # Get arrays for unique paths
-        return {
-            key: path
-            for key, path in zip(unique_input_paths, unique_paths)
-        }
-
-    def get_concatenated_arrs(self) -> Dict[str, tuple]:
-        """
-        Get a dictionary of concatenated arrays with their metadata.
-
-        Returns:
-            dict: A dictionary where keys are input paths and values are tuples of
-                (updated_path, array_data).
-        """
-        # Get unique paths and their corresponding keys
-        unique_paths = []
-        unique_input_paths = []
-        unique_ids = []
-
-        # Process paths in natural sort order
-        for key in self.path_dict:
-            path = self.path_dict[key]
-            if path not in unique_paths:
-                unique_input_paths.append(key)
-                unique_paths.append(path)
-                unique_ids.append(key)
-
-        # Get arrays for unique paths
-        unique_arrays = [self.array_dict[path] for path in unique_ids]
-
-        # Create result dictionary
-        return {
-            key: arr
-            for key, arr in zip(unique_input_paths, unique_arrays)
-        }
+    def get_concatenated_array_paths(self) -> Dict[str, str]:
+        """Return ``{input_path: output_path}`` for each unique output."""
+        return {k: p for k, (p, _) in self.get_concatenated_arrays().items()}
 
     def get_concatenated_arrays(self) -> Dict[str, tuple]:
-        """
-        Get a dictionary of concatenated arrays with their metadata.
+        """Return ``{input_path: (output_path, array)}`` for each unique output."""
+        unique_output_paths: list = []
+        input_paths: list = []
+        rep_keys: list = []
 
-        Returns:
-            dict: A dictionary where keys are input paths and values are tuples of
-                (updated_path, array_data).
-        """
-        # Get unique paths and their corresponding keys
-        unique_paths = []
-        unique_input_paths = []
-        unique_ids = []
-
-        # Process paths in natural sort order
         for key in self.path_dict:
-            path = self.path_dict[key]
-            if path not in unique_paths:
-                unique_input_paths.append(key)
-                unique_paths.append(path)
-                unique_ids.append(key)
+            output_path = self.path_dict[key]
+            if output_path not in unique_output_paths:
+                input_paths.append(key)
+                unique_output_paths.append(output_path)
+                rep_keys.append(key)
 
-        # Get arrays for unique paths
-        unique_arrays = [self.array_dict[path] for path in unique_ids]
-
-        # Create result dictionary
+        if self.array_dict is not None:
+            arrays = [self.array_dict[k] for k in rep_keys]
+        else:
+            arrays = [None] * len(rep_keys)
         return {
-            key: (path, arr)
-            for key, path, arr in zip(unique_input_paths, unique_paths, unique_arrays)
+            k: (p, a)
+            for k, p, a in zip(input_paths, unique_output_paths, arrays)
         }
 
+    def get_concatenated_arrs(self) -> Dict[str, object]:
+        """Return ``{input_path: array}`` — convenience wrapper around get_concatenated_arrays."""
+        return {k: arr for k, (_, arr) in self.get_concatenated_arrays().items()}
 
-def prune_seriesfix(path):
+
+def prune_seriesfix(path: str) -> str:
+    """Strip a trailing ``_<digits>`` series suffix added by ArrayManager.
+
+    ``ArrayManager.series_path`` is ``path + f'_{series_idx}'``.  This function
+    inverts that so ``BatchFile`` can reconstruct the base path before passing
+    it to a fresh ``ArrayManager``.
+    """
     end = path[-1]
     while end.isnumeric():
         path = path[:-1]
@@ -672,316 +499,304 @@ def prune_seriesfix(path):
     if end == '_':
         path = path[:-1]
     return path
+
+
 class BatchFile:
-    def __init__(self,
-                 filepaths: Iterable[str],
-                 shapes: Iterable[tuple | list] = None,
-                 axis_tag0: Union[str, tuple] = None,
-                 axis_tag1: Union[str, tuple] = None,
-                 axis_tag2: Union[str, tuple] = None,
-                 axis_tag3: Union[str, tuple] = None,
-                 axis_tag4: Union[str, tuple] = None,
-                 arrays: Dict[str, da.Array] = None,
-                 ):
+    """Orchestrates multi-file aggregative loading: file grouping, manager
+    construction, channel fusion, and output dict generation.
 
-        ### Handle categorical labels. Prefilter files and arrays for the presence of categorical labels
-        if shapes is None:
-            shapes = [None] * len(filepaths)
+    Call order required by the caller (``AggregativeConverter.digest``):
+        1. ``_construct_managers(axes, series, ...)``
+        2. ``_construct_channel_managers(series, ...)``
+        3. ``_complete_process(axes)``
+        4. ``get_output_dicts(root_path)``
+
+    Series key contract
+    -------------------
+    ``AggregativeConverter.read_dataset`` stores images under
+    ``img.series_path`` (= ``path + f'_{series_idx}'``).  Those keys are what
+    ``BatchFile`` receives as ``filepaths`` and ``arrays``.  ``prune_seriesfix``
+    strips the suffix so a plain ``ArrayManager`` can be constructed; after
+    ``load_scenes`` the suffix is re-added and the keys round-trip correctly.
+    """
+
+    def __init__(
+        self,
+        filepaths: Iterable[str],
+        shapes: Iterable[tuple | list] = None,
+        axis_tag0: Union[str, tuple] = None,
+        axis_tag1: Union[str, tuple] = None,
+        axis_tag2: Union[str, tuple] = None,
+        axis_tag3: Union[str, tuple] = None,
+        axis_tag4: Union[str, tuple] = None,
+        arrays: Dict[str, da.Array] = None,
+    ):
+        filepaths = list(filepaths)
+
+        if arrays is not None:
+            if not isinstance(arrays, dict):
+                raise TypeError(f"arrays must be a dict, got {type(arrays).__name__}")
+            filepaths = natsorted(filepaths)
+            arrs_list = [arrays[p] for p in filepaths]
+            self.arrays = dict(zip(filepaths, arrs_list))
+            # Pass arrays only — FileSet derives shapes from arr.shape.
+            self.fileset = FileSet(
+                filepaths,
+                axis_tag0=axis_tag0, axis_tag1=axis_tag1,
+                axis_tag2=axis_tag2, axis_tag3=axis_tag3, axis_tag4=axis_tag4,
+                arrays=arrs_list,
+            )
+        elif shapes is not None:
             shapedict = dict(zip(filepaths, shapes))
-        if arrays is None:
-            arrs = [None] * len(filepaths)
-            arraydict = dict(zip(filepaths, arrs))
+            filepaths = natsorted(filepaths)
+            shapes_list = [shapedict[p] for p in filepaths]
+            self.arrays = {}
+            self.fileset = FileSet(
+                filepaths,
+                shapes=shapes_list,
+                axis_tag0=axis_tag0, axis_tag1=axis_tag1,
+                axis_tag2=axis_tag2, axis_tag3=axis_tag3, axis_tag4=axis_tag4,
+            )
         else:
-            assert isinstance(arrays, dict)
-            arraydict = arrays
+            raise ValueError("Either shapes or arrays must be provided.")
+        self.managers: dict = {}
+        self.channel_managers: dict = {}
+        self.channels_per_output: dict = {}
+        self.sample_paths: list = []
+        self.channel_sample_paths: list = []
 
-        arrs_sel = []
-        shapes_sel = []
-        paths = []
+    # ── private helpers ───────────────────────────────────────────────────
 
-        paths = filepaths
-        filepaths = natsorted(paths)
-        arrs_sel = [arraydict[path] for path in filepaths]
-        shapes_sel = [shapedict[path] for path in filepaths]
-        self.arrays = dict(zip(filepaths, arrs_sel))
-        ###
+    @staticmethod
+    def _scene_idx(series_path: str, pruned: str) -> int:
+        """Extract the scene index encoded in a ``series_path`` suffix (``_<N>``)."""
+        suffix = series_path[len(pruned):]
+        if suffix.startswith('_') and suffix[1:].isdigit():
+            return int(suffix[1:])
+        return 0
 
-        self.fileset = FileSet(filepaths,
-                          shapes=shapes_sel,
-                          axis_tag0=axis_tag0,
-                          axis_tag1=axis_tag1,
-                          axis_tag2=axis_tag2,
-                          axis_tag3=axis_tag3,
-                          axis_tag4=axis_tag4,
-                          arrays=arrs_sel
-                        )
-        self.managers = None
-        self.channel_managers = None
+    async def _load_one_scene(
+        self,
+        series_path: str,
+        metadata_reader: str,
+        **kwargs,
+    ) -> ArrayManager:
+        """Open the base file for *series_path*, seek to its scene, and return
+        an ``ArrayManager`` whose state reflects exactly that scene.
 
-    def split_channel_groups(self):
+        *series_path* is expected to carry a ``_<N>`` suffix (as produced by
+        ``ArrayManager.series_path``).  The scene index is extracted from that
+        suffix so each call loads one specific scene — avoiding the concurrent-
+        mutation race in ``load_scenes()`` when called with multiple indices.
+        """
+        pruned    = prune_seriesfix(series_path)
+        scene_idx = self._scene_idx(series_path, pruned)
+        manager   = ArrayManager(pruned, series=scene_idx,
+                                 metadata_reader=metadata_reader, **kwargs)
+        try:
+            await manager.init()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to open '{pruned}' (scene {scene_idx}): {exc}"
+            ) from exc
+        return manager
 
+    @staticmethod
+    def _resolve_root_path(root_path: str) -> str:
+        """Strip glob wildcards from *root_path* and resolve the real base dir.
+
+        e.g. ``/data/exp/**/*.tif`` → ``/data/exp``
+        """
+        parts = os.path.normpath(root_path).split(os.sep)
+        top = list(part for part in parts if '*' not in part)
+        if os.name == 'nt':
+            drive, _ = os.path.splitdrive(root_path)
+            return os.path.join(drive + os.sep, *top)
+        return os.path.join(os.sep, *top)
+
+    @staticmethod
+    def _make_output_key(updated_path: str, root_path: str, path_separator: str) -> str:
+        """Convert an absolute output path to a flat string key relative to *root_path*."""
+        rel = os.path.relpath(updated_path, root_path)
+        # Strip leading ".." segments produced when a dimension tag was a
+        # directory component (e.g. frames\000.tif) and the replacement moved
+        # the path up one level.
+        rel = os.sep.join(p for p in rel.split(os.sep) if p != '..')
+        rel = os.path.splitext(rel)[0]
+        return rel.replace(os.sep, path_separator)
+
+    # ── public methods ────────────────────────────────────────────────────
+
+    def split_channel_groups(self) -> dict:
         fileset = self.fileset
-        sub_filesets = {}
-        axis_tags = copy.deepcopy(fileset.axis_tags)
-
-        if all([item is None for item in axis_tags]):
-            groups = copy.deepcopy(fileset.path_dict)
-            for key, value in groups.items():
-                groups[key] = [value]
+        if all(t is None for t in fileset.axis_tags):
+            groups = {k: [v] for k, v in fileset.path_dict.items()}
         elif fileset.axis_tags[1] is None:
             groups = copy.deepcopy(fileset.group)
         else:
-            axis_tags[1] = None
             groups = fileset._split_by(fileset.axis_tags[1])
-
         return groups
 
-    async def _construct_managers(self,
-                          axes: Iterable[int] = [],
-                          series: int = None,
-                          metadata_reader: str = 'bfio',
-                          **kwargs
-                          ):
-        if series is None:
-            series = 0
+    async def _construct_managers(
+        self,
+        axes: Iterable[int] = (),
+        metadata_reader: str = 'bfio',
+        **kwargs,
+    ) -> dict:
+        """Concatenate along *axes*, then load one ``ArrayManager`` per sample path.
 
+        Each sample path carries a ``_<N>`` scene suffix (set by
+        ``ArrayManager.series_path``).  The scene index is extracted from the
+        suffix and used directly so that every manager reflects exactly the
+        right scene — avoiding the shared-state race in ``load_scenes()`` when
+        called concurrently with ``asyncio.gather``.
+        """
         for axis in axes:
             self.fileset.concatenate_along(axis)
+
         arrays_ = self.fileset.get_concatenated_arrays()
         self.sample_paths = list(arrays_.keys())
-        pruned_paths = list(set(prune_seriesfix(path) for path in self.sample_paths))
 
-        managers = [ArrayManager(path,
-                                 series = 0,
-                                 metadata_reader = metadata_reader,
-                                 **kwargs) for path in pruned_paths]
-        self.managers = {} # Speed up this part
-        for manager in managers:
-            logger.info(f"Reference manager: {manager.path} constructed.")
-            await manager.init()
-            await manager.load_scenes(series)
-            self.managers.update(**manager.loaded_scenes)
+        self.managers = {}
+        for series_path in dict.fromkeys(self.sample_paths):  # order-preserving dedup
+            logger.info(f"Loading manager: '{series_path}'")
+            manager = await self._load_one_scene(series_path, metadata_reader, **kwargs)
+            self.managers[series_path] = manager
+
         return self.managers
 
-    def _fuse_channels(self): # Concatenates channel metadata actually.
-        """Merge channel metadata from all channel files into each output manager.
-        
-        When concatenating along the channel axis, all input channels should be
-        merged into a single channel list, and this list should be assigned to
-        the output managers (not the individual channel file managers).
+    def _fuse_channels(self) -> None:
+        """Merge channel metadata from all per-channel managers into every
+        output manager. Called by ``_complete_process`` when axis 1 (channel)
+        is in the concatenation axes.
         """
-        channelsdict = {
-            key: self.channel_managers[key].channels
-            for key in self.channel_sample_paths  # preserves channel order
-        }
-
-        channelslist = []
+        channelslist: list = []
         for key in self.channel_sample_paths:
-            channelslist.extend(channelsdict[key])
-
+            channels = self.channel_managers[key].channels or []
+            channelslist.extend(channels)
         for manager in self.managers.values():
             manager._channels = channelslist
 
-    async def _construct_channel_managers(self,
-                      series: int = None,
-                      metadata_reader: str = 'bfio',
-                      **kwargs
-                      ):
-        if series is None:
-            series = 0
-        if np.isscalar(series) and (series != 'all'):
-            series = [series]
+    async def _construct_channel_managers(
+        self,
+        metadata_reader: str = 'bfio',
+        **kwargs,
+    ) -> dict:
+        """Load one ``ArrayManager`` per channel group for channel-metadata
+        extraction.  Must be called after ``_construct_managers``.
+
+        Already-loaded paths are reused from ``self.managers`` without a second
+        disk read.  Each unloaded path is opened at its specific scene index
+        (extracted from the ``_<N>`` suffix), matching the approach used in
+        ``_construct_managers``.
+        """
+        if not self.managers:
+            raise RuntimeError(
+                "_construct_channel_managers() requires _construct_managers() "
+                "to be called first."
+            )
 
         grs = self.split_channel_groups()
         self.channel_sample_paths = [grs[grname][0] for grname in grs]
 
-        channel_managers = {}
-        unloaded_paths = []
-        for path in self.channel_sample_paths:  # preserves channel order
-            if path in self.managers:  # already loaded — reuse
-                channel_managers[path] = self.managers[path]
-            else:
-                unloaded_paths.append(path)
-
-        pruned_paths = list(set(prune_seriesfix(path) for path in unloaded_paths))
-        managers = [ArrayManager(path,
-                                 series=0,
-                                 metadata_reader=metadata_reader,
-                                 **kwargs) for path in pruned_paths]
-        for manager in managers:
-            await manager.init()
-            await manager.load_scenes(series)
-            channel_managers.update(**manager.loaded_scenes)
-
-        self.channel_managers = {key: channel_managers[key] for key in self.channel_sample_paths}
+        channel_managers: dict = {}
+        unloaded: list = []
 
         for path in self.channel_sample_paths:
-            manager = self.channel_managers[path]
-            manager._ensure_correct_channels()
-            manager.fix_bad_channels()
+            if path in self.managers:
+                channel_managers[path] = self.managers[path]
+            else:
+                unloaded.append(path)
+
+        for series_path in unloaded:
+            logger.info(f"Loading channel manager: '{series_path}'")
+            manager = await self._load_one_scene(series_path, metadata_reader, **kwargs)
+            channel_managers[series_path] = manager
+            self.managers[series_path] = manager
+
+        missing = [k for k in self.channel_sample_paths if k not in channel_managers]
+        if missing:
+            raise RuntimeError(
+                f"Could not resolve channel managers for {len(missing)} path(s): {missing}"
+            )
+
+        self.channel_managers = {k: channel_managers[k] for k in self.channel_sample_paths}
+
+        for path in self.channel_sample_paths:
+            mgr = self.channel_managers[path]
+            mgr._ensure_correct_channels()
+            mgr.fix_bad_channels()
 
         return self.channel_managers
 
-    async def _complete_process(self,
-                          axes: Iterable[int] = [],
-                          ):
-
-        if self.managers is None:
-            raise ValueError("Managers have not been constructed in advance.")
-        if self.channel_managers is None:
-            raise ValueError("Channel managers have not been constructed in advance.")
+    async def _complete_process(self, axes: Iterable[int] = ()) -> None:
+        if not self.managers:
+            raise RuntimeError(
+                "_complete_process() requires _construct_managers() to be called first."
+            )
+        if not self.channel_managers:
+            raise RuntimeError(
+                "_complete_process() requires _construct_channel_managers() to be called first."
+            )
 
         if 1 in axes:
             self._fuse_channels()
 
         self.channels_per_output = {
             manager.series_path: manager.channels
-            for
-            manager in self.managers.values()
+            for manager in self.managers.values()
         }
 
-    def _update_nonunique_channel_colors(self,
-                                         channels
-                                         ):
-        colors = [channel['color'] for channel in channels]
+    def _update_nonunique_channel_colors(self, channels: list) -> list:
+        colors = [ch['color'] for ch in channels]
         if len(set(colors)) < len(colors):
             chn = ChannelIterator(num_channels=len(colors))
-            for channel, _channel in zip(channels, chn._channels):
-                channel['color'] = _channel['color']
+            for ch, default_ch in zip(channels, chn._channels):
+                ch['color'] = default_ch['color']
         return channels
 
-    async def get_output_paths_managers(self,
-                         root_path,
-                         path_separator: str = '-',
-                         ):
-        # TODO: split the path finding and the array costruction.
-        # Make the path finding async, then.
-        fileset = self.fileset
-        root_path_ = os.path.normpath(root_path).split(os.sep)
-        root_path_top = []
-        for item in root_path_:
-            if '*' in item:
-                break
-            root_path_top.append(item)
+    async def get_output_paths_managers(
+        self,
+        root_path: str,
+        path_separator: str = '-',
+    ) -> tuple:
+        root_path = self._resolve_root_path(root_path)
+        arraypaths = self.fileset.get_concatenated_array_paths()
 
-        if os.name == 'nt':
-            drive, _ = os.path.splitdrive(root_path)
-            root_path = os.path.join(drive + os.sep, *root_path_top)
-        else:
-            root_path = os.path.join(os.sep, *root_path_top)
-
-        arraypaths = fileset.get_concatenated_array_paths()
-
-        arrays, channels, sample_paths, managers = {}, {}, {}, {}
+        sample_paths: dict = {}
+        managers: dict = {}
 
         for key, updated_key in arraypaths.items():
-            new_key = os.path.relpath(updated_key, root_path)
-            # Strip leading ".." segments that arise when the dimension tag was a directory
-            # component (e.g. frames\000.tif) and the replacement moved the path up one level.
-            new_key = os.sep.join(p for p in new_key.split(os.sep) if p != '..')
-            new_key = os.path.splitext(new_key)[0]
-            new_key = new_key.replace(os.sep, path_separator)
+            new_key = self._make_output_key(updated_key, root_path, path_separator)
+            self.channels_per_output[key] = self._update_nonunique_channel_colors(
+                self.channels_per_output[key]
+            )
             sample_paths[new_key] = key
-
-            ### Update colors if they are not unique
-            self.channels_per_output[key] = self._update_nonunique_channel_colors(self.channels_per_output[key])
-            ###
-
-            channels[new_key] = self.channels_per_output[key]
             managers[new_key] = self.managers[key]
             managers[new_key]._channels = self.channels_per_output[key]
 
-        return (#arrays,
-                sample_paths,
-                managers
-                )
+        return sample_paths, managers
 
-    async def get_output_arraydicts(self,
-                         root_path,
-                         path_separator: str = '-',
-                         ):
-        # TODO: split the path finding and the array costruction.
-        # Make the path finding async, then.
-        fileset = self.fileset
-        root_path_ = os.path.normpath(root_path).split(os.sep)
-        root_path_top = []
-        for item in root_path_:
-            if '*' in item:
-                break
-            root_path_top.append(item)
+    async def get_output_dicts(
+        self,
+        root_path: str,
+        path_separator: str = '-',
+    ) -> tuple:
+        root_path = self._resolve_root_path(root_path)
+        arrays_: dict = self.fileset.get_concatenated_arrays()
 
-        if os.name == 'nt':
-            # Use os.path.splitdrive to handle any drive letter
-            drive, _ = os.path.splitdrive(root_path)
-            root_path = os.path.join(drive + os.sep, *root_path_top)
-        else:
-            root_path = os.path.join(os.sep, *root_path_top)
+        arrays: dict = {}
+        sample_paths: dict = {}
+        managers: dict = {}
 
-        sample_paths, managers = await self.get_output_paths_managers(root_path,
-                                                                      path_separator
-                                                                      )
-        arraydicts = fileset.get_concatenated_arrs()
-
-        arrays, channels, sample_paths, managers = {}, {}, {}, {}
-
-        for key in arraydicts.keys():
-            arr = arraydicts[key]
-            updated_key = sample_paths[key]
-            new_key = os.path.relpath(updated_key, root_path)
-            new_key = os.path.splitext(new_key)[0]
-            new_key = new_key.replace(os.sep, path_separator)
-            arrays[new_key] = key
-
-            ### Update colors if they are not unique
-            # self.channels_per_output[key] = self._update_nonunique_channel_colors(self.channels_per_output[key])
-            ###
-
-        return (arrays,
-                )
-
-    async def get_output_dicts(self,
-                         root_path,
-                         path_separator: str = '-',
-                         ):
-        # TODO: split the path finding and the array costruction.
-        # Make the path finding async, then.
-        fileset = self.fileset
-        root_path_ = os.path.normpath(root_path).split(os.sep)
-        root_path_top = []
-        for item in root_path_:
-            if '*' in item:
-                break
-            root_path_top.append(item)
-
-        if os.name == 'nt':
-            # Use os.path.splitdrive to handle any drive letter
-            drive, _ = os.path.splitdrive(root_path)
-            root_path = os.path.join(drive + os.sep, *root_path_top)
-        else:
-            root_path = os.path.join(os.sep, *root_path_top)
-
-        arrays_ = fileset.get_concatenated_arrays()  ### ! Careful here
-
-        arrays, channels, sample_paths, managers = {}, {}, {}, {}
-
-        for key, vals in arrays_.items():
-            (updated_key, arr, ) = vals
-            new_key = os.path.relpath(updated_key, root_path)
-            # Strip leading ".." segments that arise when the dimension tag was a directory
-            # component (e.g. frames\000.tif) and the replacement moved the path up one level.
-            new_key = os.sep.join(p for p in new_key.split(os.sep) if p != '..')
-            new_key = new_key.replace(os.sep, path_separator)
-            arrays[new_key] = arrays_[key][1]
+        for key, (updated_key, arr) in arrays_.items():
+            new_key = self._make_output_key(updated_key, root_path, path_separator)
+            self.channels_per_output[key] = self._update_nonunique_channel_colors(
+                self.channels_per_output[key]
+            )
+            arrays[new_key] = arr
             sample_paths[new_key] = key
-
-            ### Update colors if they are not unique
-            self.channels_per_output[key] = self._update_nonunique_channel_colors(self.channels_per_output[key])
-            ###
-
-            channels[new_key] = self.channels_per_output[key]
             managers[new_key] = self.managers[key]
             managers[new_key]._channels = self.channels_per_output[key]
 
-        return (arrays,
-                sample_paths,
-                managers)
+        return arrays, sample_paths, managers

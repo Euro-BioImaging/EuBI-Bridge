@@ -104,8 +104,17 @@ def find_libjvm() -> str:
     )
 
 
-def soft_start_jvm() -> None:
-    """Start JVM with bundled JARs only, bypassing Maven/JGO entirely."""
+def soft_start_jvm(jvm_memory: Optional[str] = None) -> None:
+    """Start JVM with bundled JARs only, bypassing Maven/JGO entirely.
+
+    Parameters
+    ----------
+    jvm_memory : str, optional
+        Maximum JVM heap size, e.g. ``'4g'``, ``'8g'``, ``'512m'``.
+        If not given here, the environment variable ``EUBI_JVM_MEMORY`` is
+        checked.  When neither is set the JVM uses its default (roughly 25 %
+        of available RAM).
+    """
     import pathlib
     import traceback
 
@@ -150,8 +159,12 @@ def soft_start_jvm() -> None:
 
         logger.info(f"Starting JVM with {len(jars)} bioformats JARs + jpype JAR")
 
-        # Prepare JVM arguments
-        jvm_args = ['-Djava.awt.headless=true']  # Disable GUI for HPC/headless environments
+        # Prepare JVM arguments — headless mode + optional heap limit
+        effective_memory = jvm_memory or os.environ.get('EUBI_JVM_MEMORY')
+        jvm_args = ['-Djava.awt.headless=true']
+        if effective_memory:
+            jvm_args.append(f'-Xmx{effective_memory}')
+            logger.info(f"JVM max heap set to {effective_memory}")
 
         # Prepare JVM keyword arguments
         jvm_kwargs = {
@@ -181,6 +194,11 @@ def soft_start_jvm() -> None:
         traceback.print_exc()
 
     # Method 2: Force scyjava to use local JARs only (fallback)
+    effective_memory = jvm_memory or os.environ.get('EUBI_JVM_MEMORY')
+    if effective_memory:
+        scyjava.config.add_option(f'-Xmx{effective_memory}')
+        logger.info(f"JVM max heap set to {effective_memory} (scyjava path)")
+
     # Clear any Maven configuration
     scyjava.config.endpoints.clear()
     scyjava.config.maven_offline = True

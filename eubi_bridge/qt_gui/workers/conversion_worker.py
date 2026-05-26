@@ -3,7 +3,7 @@ Conversion worker — manages a spawned conversion subprocess from a QThread.
 
 The actual conversion (bridge.to_zarr) runs in a dedicated child process so
 that cancel() can reliably kill the entire process tree — including all
-ProcessPoolExecutor workers spawned by converter.py — without depending on
+ProcessPoolExecutor workers spawned by dispatcher.py — without depending on
 cooperation from asyncio.gather or concurrent.futures.
 """
 from __future__ import annotations

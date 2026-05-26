@@ -62,7 +62,21 @@ dependencies = [
     "rich>=14.1.0",
     "h5py",
     "fire>=0.0.0",
+    "scikit-learn>=1.0",
+    "xgboost>=1.7",
 ]
+# PyTorch must be installed separately to match the local CUDA version.
+# CPU-only:  pip install torch
+# CUDA 12.x: pip install torch --index-url https://download.pytorch.org/whl/cu121
+# Or use the convenience extra (CPU-only fallback):
+#   pip install "eubi_bridge[deep]"
+[project.optional-dependencies]
+deep = ["torch>=2.0"]
+docs = [
+    "mkdocs-material>=9.5",
+    "pymdown-extensions>=10.0",
+]
+
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

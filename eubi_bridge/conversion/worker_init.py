@@ -6,7 +6,7 @@ import multiprocessing as mp
 import os
 import sys
 
-from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.logging_config import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -124,6 +124,24 @@ def initialize_worker_process(tensorstore_data_copy_concurrency='default'):
 
     if _worker_initialized:
         return
+
+    # Suppress the JPype overload-resolution TypeError that fires when bfio's
+    # BioReader.__del__ calls loci.formats.ImageReader.close() during GC.
+    # The error is benign (the JVM cleans up regardless) but very noisy.
+    _original_unraisablehook = sys.unraisablehook
+
+    def _unraisablehook(unraisable):
+        if (isinstance(unraisable.exc_value, TypeError)
+                and 'loci.formats.ImageReader.close' in str(unraisable.exc_value)):
+            return
+        _original_unraisablehook(unraisable)
+
+    sys.unraisablehook = _unraisablehook
+
+    # Spawned worker processes inherit no logging handlers from the parent.
+    # Configure a stderr handler here so every logger.info/warning/error call
+    # from this process flows to the terminal.
+    setup_logging()
 
     logger.info(f"[Worker {mp.current_process().name}] Starting initialization...")
     

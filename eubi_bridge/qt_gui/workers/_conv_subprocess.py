@@ -94,7 +94,7 @@ def _conversion_subprocess(call_args: dict, log_queue, result_queue) -> None:
     root.setLevel(_log.INFO)
 
     # ── Import eubi_bridge after capture is in place ──────────────────────────
-    import eubi_bridge.conversion.converter as _conv_module
+    import eubi_bridge.conversion.dispatcher as _conv_module
     from eubi_bridge.mp_logging_setup import setup_mp_logging_with_worker_init
 
     # ── Patch ProcessPoolExecutor so worker sub-processes log to the queue ────

@@ -28,6 +28,10 @@ conda-recipe/.cache/
 .DS_Store
 Thumbs.db
 
+# Extensions — private modules not ready for distribution
+eubi_bridge/workflows/
+eubi_bridge/extensions/
+
 .vscode/
 .idea/
 *.swp

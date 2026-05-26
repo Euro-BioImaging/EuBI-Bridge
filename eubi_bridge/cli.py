@@ -92,7 +92,7 @@ def patch_fire_no_literal_eval_for(*arg_names):
         fire.core._original_ParseValue = fire.core._ParseValue
 
     def _parse_value_custom(value, index, arg, metadata):
-        if any(name in arg for name in arg_names):
+        if arg is not None and any(name in arg for name in arg_names):
             return value
         return fire.core._original_ParseValue(value, index, arg, metadata)
 
@@ -107,7 +107,15 @@ def main():
     # JDK is bundled in the wheel during build via _build_backend.py
     # No runtime download needed - it's already in the package
     
-    patch_fire_no_literal_eval_for("includes", "excludes")
+    patch_fire_no_literal_eval_for(
+        "includes", "excludes",        # comma-separated glob patterns
+        "time_tag", "channel_tag",     # comma-separated file tags
+        "z_tag", "y_tag", "x_tag",
+        "channel_labels",              # "idx,label;..." format
+        "channel_colors",              # "idx,RRGGBB;..." format
+        "concatenation_axes",          # axis string, e.g. "tc"
+        "memory_per_worker",           # size string, e.g. "8GB"
+    )
 
     # JVM is now lazily initialized only when needed (in to_zarr, show_pixel_meta, etc.)
     # Don't set spawn here - already set at module level
