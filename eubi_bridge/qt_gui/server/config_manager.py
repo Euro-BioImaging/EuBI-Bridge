@@ -56,13 +56,17 @@ def _config_to_react(cfg: dict) -> dict:
 
     return {
         "cluster": {
-            "maxWorkers":       cluster.get("max_workers", 4),
-            "queueSize":        cluster.get("queue_size", 4),
-            "maxConcurrency":   cluster.get("max_concurrency", 4),
-            "regionSizeMb":     cluster.get("region_size_mb", 256),
-            "memoryPerWorker":  cluster.get("memory_per_worker", "1GB"),
-            "useLocalDask":     cluster.get("on_local_cluster", False),
-            "useSlurm":         cluster.get("on_slurm", False),
+            "maxWorkers":           cluster.get("max_workers", 4),
+            "queueSize":            cluster.get("queue_size", 4),
+            "maxConcurrency":       cluster.get("max_concurrency", 4),
+            "maxConcurrentScenes":  cluster.get("max_concurrent_scenes", 1),
+            "regionSizeMb":         cluster.get("region_size_mb", 256),
+            "memoryPerWorker":      cluster.get("memory_per_worker", "1GB"),
+            "useLocalDask":         cluster.get("on_local_cluster", False),
+            "useSlurm":             cluster.get("on_slurm", False),
+            "bfTileSizeMb":         cluster.get("bf_tile_size_mb", 512.0),
+            "jvmMemory":            cluster.get("jvm_memory", "2g"),
+            "bfReadConcurrency":    cluster.get("bf_read_concurrency", 4),
         },
         "reader": {
             "readAsMosaic":      readers.get("as_mosaic", False),
@@ -72,10 +76,11 @@ def _config_to_react(cfg: dict) -> dict:
             "rotationIndex":     str(readers.get("rotation_index", 0)),
             "sampleIndex":       str(readers.get("sample_index", 0)),
             # scene / mosaic indices are represented differently in ebridge – leave as strings
-            "readAllScenes":    True,
-            "sceneIndices":     str(readers.get("scene_index", 0)) if readers.get("scene_index") not in (None, 0, "all") else "",
-            "readAllTiles":     True,
+            "readAllScenes":     True,
+            "sceneIndices":      str(readers.get("scene_index", 0)) if readers.get("scene_index") not in (None, 0, "all") else "",
+            "readAllTiles":      True,
             "mosaicTileIndices": str(readers.get("mosaic_tile_index", 0)) if readers.get("mosaic_tile_index") not in (None, 0, "all") else "",
+            "forceBioformats":   readers.get("force_bioformats", False),
         },
         "conversion": {
             "zarrFormat":           conv.get("zarr_format", 2),
@@ -178,9 +183,13 @@ def _react_to_config(data: dict) -> dict:
             "queue_size":                      cluster_d.get("queueSize", 4),
             "region_size_mb":                  cluster_d.get("regionSizeMb", 256),
             "max_concurrency":                 cluster_d.get("maxConcurrency", 4),
+            "max_concurrent_scenes":           cluster_d.get("maxConcurrentScenes", 1),
             "memory_per_worker":               cluster_d.get("memoryPerWorker", "1GB"),
             "tensorstore_data_copy_concurrency": 4,
             "max_retries":                     10,
+            "bf_tile_size_mb":                 cluster_d.get("bfTileSizeMb", 512.0),
+            "jvm_memory":                      cluster_d.get("jvmMemory", "2g"),
+            "bf_read_concurrency":             cluster_d.get("bfReadConcurrency", 4),
         },
         "readers": {
             "as_mosaic":         reader_d.get("readAsMosaic", False),
@@ -191,6 +200,7 @@ def _react_to_config(data: dict) -> dict:
             "rotation_index":    _parse_int(reader_d.get("rotationIndex", "0")),
             "mosaic_tile_index": None,
             "sample_index":      _parse_int(reader_d.get("sampleIndex", "0")),
+            "force_bioformats":  reader_d.get("forceBioformats", False),
         },
         "conversion": {
             "zarr_format":           conv_d.get("zarrFormat", 2),

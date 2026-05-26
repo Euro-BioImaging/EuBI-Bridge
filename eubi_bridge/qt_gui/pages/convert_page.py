@@ -297,6 +297,36 @@ class ConvertPage(QWidget):
         self._use_slurm.toggled.connect(_toggle_slurm)
         _toggle_slurm(False)
 
+        # ── Bio-Formats group ─────────────────────────────────────────────────
+        bf_group = QGroupBox("Bio-Formats Settings")
+        bf_lay = QVBoxLayout(bf_group)
+        bf_lay.setSpacing(6)
+
+        note = QLabel(
+            "These settings apply only when the bfio/Bio-Formats fallback reader is "
+            "active (e.g. MRC, IMS, BMP, and other formats without a native plugin) "
+            "or when the Force Bio-Formats option is enabled in the Reader tab. "
+            "They have no effect when a native reader (CZI, ND2, LIF, TIFF…) is used."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray; font-style: italic;")
+        bf_lay.addWidget(note)
+
+        self._bf_tile_size_mb = QDoubleSpinBox()
+        self._bf_tile_size_mb.setRange(1.0, 65536.0)
+        self._bf_tile_size_mb.setValue(512.0)
+        self._bf_tile_size_mb.setSingleStep(64.0)
+        bf_lay.addLayout(_form_row("BF Tile Size MB:", self._bf_tile_size_mb))
+
+        _, self._bf_read_concurrency = _labeled_spin("BF Read Concurrency:", 1, 64, 4)
+        bf_lay.addLayout(_row(QLabel("BF Read Concurrency:"), self._bf_read_concurrency))
+
+        self._jvm_memory = QLineEdit("2g")
+        self._jvm_memory.setPlaceholderText("e.g. 2g, 4g, 8g")
+        bf_lay.addLayout(_form_row("JVM Memory:", self._jvm_memory))
+
+        lay.addWidget(bf_group)
+
         lay.addStretch()
 
     def _build_reader_tab(self):
@@ -339,6 +369,13 @@ class ConvertPage(QWidget):
             edit = QLineEdit("0")
             setattr(self, attr, edit)
             lay.addLayout(_form_row(label, edit))
+
+        self._force_bioformats = QCheckBox("Force Bio-Formats (bfio tiled reader)")
+        self._force_bioformats.setToolTip(
+            "Force the bfio tiled reader even for natively-supported formats (CZI, ND2, LIF…).\n"
+            "Useful when the native reader gives incorrect results."
+        )
+        lay.addWidget(self._force_bioformats)
 
         lay.addStretch()
 
@@ -684,6 +721,9 @@ class ConvertPage(QWidget):
         self._slurm_partition.setText(c.get("slurmPartition", ""))
         self._slurm_account.setText(c.get("slurmAccount", ""))
         self._slurm_time.setText(c.get("slurmTime", "24:00:00"))
+        self._bf_tile_size_mb.setValue(float(c.get("bfTileSizeMb", 512.0)))
+        self._bf_read_concurrency.setValue(c.get("bfReadConcurrency", 4))
+        self._jvm_memory.setText(str(c.get("jvmMemory", "2g")))
 
         r = cfg.get("reader", {})
         self._read_all_scenes.setChecked(r.get("readAllScenes", True))
@@ -696,6 +736,7 @@ class ConvertPage(QWidget):
         self._illumination_index.setText(str(r.get("illuminationIndex", "0")))
         self._rotation_index.setText(str(r.get("rotationIndex", "0")))
         self._sample_index.setText(str(r.get("sampleIndex", "0")))
+        self._force_bioformats.setChecked(r.get("forceBioformats", False))
 
         conv = cfg.get("conversion", {})
         fmt = conv.get("zarrFormat", 2)
@@ -776,17 +817,20 @@ class ConvertPage(QWidget):
         """Read all UI controls and build a camelCase config dict."""
         return {
             "cluster": {
-                "maxWorkers":      self._max_workers.value(),
-                "queueSize":       self._queue_size.value(),
-                "maxConcurrency":       self._max_concurrency.value(),
-                "maxConcurrentScenes":  self._max_concurrent_scenes.value(),
-                "regionSizeMb":    self._region_size_mb.value(),
-                "memoryPerWorker": self._memory_per_worker.text().strip(),
-                "useLocalDask":    self._use_local_dask.isChecked(),
-                "useSlurm":        self._use_slurm.isChecked(),
-                "slurmPartition":  self._slurm_partition.text().strip(),
-                "slurmAccount":    self._slurm_account.text().strip(),
-                "slurmTime":       self._slurm_time.text().strip() or "24:00:00",
+                "maxWorkers":          self._max_workers.value(),
+                "queueSize":           self._queue_size.value(),
+                "maxConcurrency":      self._max_concurrency.value(),
+                "maxConcurrentScenes": self._max_concurrent_scenes.value(),
+                "regionSizeMb":        self._region_size_mb.value(),
+                "memoryPerWorker":     self._memory_per_worker.text().strip(),
+                "useLocalDask":        self._use_local_dask.isChecked(),
+                "useSlurm":            self._use_slurm.isChecked(),
+                "slurmPartition":      self._slurm_partition.text().strip(),
+                "slurmAccount":        self._slurm_account.text().strip(),
+                "slurmTime":           self._slurm_time.text().strip() or "24:00:00",
+                "bfTileSizeMb":        self._bf_tile_size_mb.value(),
+                "bfReadConcurrency":   self._bf_read_concurrency.value(),
+                "jvmMemory":           self._jvm_memory.text().strip() or "2g",
             },
             "reader": {
                 "readAllScenes":     self._read_all_scenes.isChecked(),
@@ -799,6 +843,7 @@ class ConvertPage(QWidget):
                 "illuminationIndex": self._illumination_index.text().strip(),
                 "rotationIndex":     self._rotation_index.text().strip(),
                 "sampleIndex":       self._sample_index.text().strip(),
+                "forceBioformats":   self._force_bioformats.isChecked(),
             },
             "conversion": {
                 "zarrFormat":           self._zarr_format.currentData(),

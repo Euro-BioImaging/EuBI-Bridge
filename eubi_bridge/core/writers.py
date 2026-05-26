@@ -516,12 +516,18 @@ def _compute_region_shape(input_shape, final_chunks, region_size_mb, dtype=None,
     if current_bytes >= target_bytes:
         return tuple(region_arr.tolist())
     
-    # STEP 2: Compute expansion increments using LCM (maintains both alignments)
+    # STEP 2: Compute expansion increments using LCM (maintains both alignments).
+    # When lcm(input_chunk, output_chunk) >= dim_size the increment is larger
+    # than the entire dimension: the first expansion step jumps straight to full
+    # extent, making fine-grained region sizing impossible.  This happens when
+    # gcd(input_chunk, output_chunk) is very small relative to the chunk sizes
+    # (e.g. bfio tile=16384, output_chunk=724 → lcm≈2.96M >> dim_size=50960).
+    # Fall back to output_chunk in that case so the budget can be honoured.
     expansion_increments = np.zeros(len(region_arr), dtype=np.int64)
     for i in range(len(region_arr)):
         gcd = np.gcd(input_chunk_arr[i], output_chunk_arr[i])
         lcm = (input_chunk_arr[i] * output_chunk_arr[i]) // gcd
-        expansion_increments[i] = lcm
+        expansion_increments[i] = output_chunk_arr[i] if lcm >= input_arr[i] else lcm
     
     # STEP 3: Expand dimensions in reverse order (last → first)
     for dim in reversed(range(len(region_arr))):
