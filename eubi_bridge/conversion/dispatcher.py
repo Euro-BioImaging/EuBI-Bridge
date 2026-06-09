@@ -190,6 +190,8 @@ async def _dispatch_unary_with_slurm(jobs: list) -> list:
         cluster_kwargs['account'] = cfg.slurm_account
     if cfg.slurm_partition:
         cluster_kwargs['queue'] = cfg.slurm_partition
+    if cfg.slurm_sif_path:
+        cluster_kwargs['python'] = f"apptainer exec --bind /usr/lib64:/usr/lib64 --bind /etc/slurm:/etc/slurm --bind /etc/munge:/etc/munge --bind /run/munge:/run/munge --bind /etc/passwd:/etc/passwd --bind /etc/group:/etc/group {cfg.slurm_sif_path} python"
 
     slurm_cluster = SLURMCluster(**cluster_kwargs)
     slurm_cluster.scale(cfg.max_workers)
@@ -506,6 +508,7 @@ async def run_aggregative_with_slurm(input_path, output_path, **kwargs):
     slurm_mem       = kwargs.get('memory_per_worker', '8GB')
     slurm_account   = kwargs.get('slurm_account', None)
     slurm_partition = kwargs.get('slurm_partition', None)
+    slurm_sif_path  = kwargs.get('slurm_sif_path', None)
     tsc             = kwargs.get('tensorstore_data_copy_concurrency', 'default')
     worker_timeout  = int(kwargs.get('slurm_worker_timeout', 300))
 
@@ -520,6 +523,8 @@ async def run_aggregative_with_slurm(input_path, output_path, **kwargs):
         cluster_kwargs['account'] = slurm_account
     if slurm_partition:
         cluster_kwargs['queue'] = slurm_partition
+    if slurm_sif_path:
+        cluster_kwargs['python'] = f"apptainer exec --bind /usr/lib64:/usr/lib64 --bind /etc/slurm:/etc/slurm --bind /etc/munge:/etc/munge --bind /run/munge:/run/munge --bind /etc/passwd:/etc/passwd --bind /etc/group:/etc/group {slurm_sif_path} python"
 
     cluster = SLURMCluster(**cluster_kwargs)
     cluster.scale(1)

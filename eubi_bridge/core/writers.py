@@ -240,6 +240,7 @@ async def downscale_with_tensorstore_async(
         downscale_method='simple',
         min_dimension_size = None,
         smart_scale_factor = None,
+        max_concurrent_downscale_layers: int = 3,
         **kwargs
     ):
     try:
@@ -260,6 +261,7 @@ async def downscale_with_tensorstore_async(
 
     # Extract region_size_mb from kwargs with default value
     region_size_mb = kwargs.get('region_size_mb', 8.0)
+    max_concurrency = kwargs.pop('max_concurrency', None)
 
     # min_dimension_size = kwargs.get('min_dimension_size', None)
     # scale_factor = [scale_factor_dict[ax] for ax in pyr.meta.axis_order]
@@ -336,7 +338,7 @@ async def downscale_with_tensorstore_async(
                     pixel_sizes = tuple(pyr.downscaler.dm.scales[int(key)]),
                     dtype = np.dtype(arr.dtype.name),
                     region_size_mb = downscale_region_size_mb,
-                    # **kwargs,
+                    max_concurrency = max_concurrency,
                     **{k: v for k, v in kwargs.items() if k not in (
                         'max_concurrency', 'dtype', 'compressor', 'compressor_params',
                         'zarr_format', 'region_size_mb',
@@ -350,19 +352,30 @@ async def downscale_with_tensorstore_async(
                 logger.error(f"Failed to prepare layer {key} for writing: {e}", exc_info=True)
                 raise
     
-    logger.info(f"Starting concurrent writes for {len(coros)} downscaled layers...")
-    
-    # Write all downscaled layers concurrently
+    n_concurrent = max(1, min(max_concurrent_downscale_layers, len(coros)))
+    logger.info(
+        f"Starting concurrent writes for {len(coros)} downscaled layers "
+        f"(max {n_concurrent} at a time)..."
+    )
+
+    semaphore = asyncio.Semaphore(n_concurrent)
+
+    async def _bounded(coro):
+        async with semaphore:
+            return await coro
+
     try:
-        results = await asyncio.gather(*[coro for _, coro in coros], return_exceptions=True)
-        
-        # Check for exceptions in results
+        results = await asyncio.gather(
+            *[_bounded(coro) for _, coro in coros],
+            return_exceptions=True,
+        )
+
         for (key, _), result in zip(coros, results):
             if isinstance(result, Exception):
                 logger.error(f"Failed to write layer {key}: {result}", exc_info=result)
                 raise result
-        
-        logger.info(f"All downscaled layers written successfully")
+
+        logger.info("All downscaled layers written successfully")
     except Exception as e:
         logger.error(f"Error during concurrent downscale writes: {e}", exc_info=True)
         raise
@@ -954,6 +967,7 @@ async def store_multiscale_async(
     region_size_mb: float = 8.0,            # Target size of read regions in MB
     queue_size: Optional[int] = None,       # Maximum queue size (default: adaptive)
     gc_interval: float = 15.0,              # Seconds between garbage collections
+    max_concurrent_downscale_layers: int = 3,
     **kwargs
 ) -> 'ts.TensorStore':
     import tensorstore as ts
@@ -1087,6 +1101,7 @@ async def store_multiscale_async(
                 max_concurrency=max_concurrency,
                 queue_size=queue_size,
                 region_size_mb=region_size_mb,
+                max_concurrent_downscale_layers=max_concurrent_downscale_layers,
                 # dtype=dtype,
                 **{k: v for k, v in kwargs.items() if k != 'max_concurrency'}
             )

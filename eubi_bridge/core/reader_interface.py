@@ -56,7 +56,7 @@ class ImageReader(ABC):
         """Number of tiles in the current scene (for mosaic images)."""
         pass
     
-    # ========== Scene Management ==========
+    # ========== Scene / Tile Management ==========
     
     @abstractmethod
     def set_scene(self, scene_index: int) -> None:
@@ -92,6 +92,50 @@ class ImageReader(ABC):
             If tile_index is out of range.
         """
         pass
+
+    # ========== View / Illumination Management (optional, format-specific) ==========
+    #
+    # These are optional extension points for formats that carry multiple views
+    # (e.g. light-sheet multi-angle) or multiple illumination channels (e.g.
+    # CZI illumination dimension 'I').  The default implementations are no-ops
+    # so that formats that don't have these dimensions remain fully compatible.
+
+    @property
+    def n_views(self) -> int:
+        """Number of views available in the file (default 1)."""
+        return 1
+
+    @property
+    def n_illuminations(self) -> int:
+        """Number of illuminations available in the file (default 1)."""
+        return 1
+
+    def set_view(self, view_index: int) -> None:
+        """
+        Select the active view.
+
+        Parameters
+        ----------
+        view_index : int
+            0-based view index.
+
+        The default implementation is a no-op for formats without views.
+        Override in format-specific readers that expose multiple views.
+        """
+
+    def set_illumination(self, illumination_index: int) -> None:
+        """
+        Select the active illumination.
+
+        Parameters
+        ----------
+        illumination_index : int
+            0-based illumination index.
+
+        The default implementation is a no-op for formats without illumination
+        dimensions.  Override in format-specific readers that expose multiple
+        illuminations.
+        """
     
     # ========== Data Access ==========
     

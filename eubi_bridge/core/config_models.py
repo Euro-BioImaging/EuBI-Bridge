@@ -104,6 +104,8 @@ class ClusterConfig(BaseModel):
     slurm_account: Optional[str] = None
     slurm_partition: Optional[str] = None
     slurm_worker_timeout: int = Field(default=300, gt=0)
+    slurm_sif_path: Optional[str] = None   # Apptainer SIF for workers
+    max_concurrent_downscale_layers: int = Field(default=3, gt=0)
 
 
 # ---------------------------------------------------------------------------
@@ -116,15 +118,21 @@ class ReaderConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     as_mosaic: bool = False
-    view_index: int = Field(default=0, ge=0)
+    # Accept int, 'all', or comma-separated ints (e.g. '0,1,2')
+    view_index: Union[int, str] = 0
     phase_index: int = Field(default=0, ge=0)
-    illumination_index: int = Field(default=0, ge=0)
+    # Accept int, 'all', or comma-separated ints (e.g. '0,1')
+    illumination_index: Union[int, str] = 0
     # Accept int, 'all', or comma-separated ints (e.g. '0,2,4')
     scene_index: Union[int, str] = 0
     rotation_index: int = Field(default=0, ge=0)
     mosaic_tile_index: Union[int, str, None] = None
     sample_index: int = Field(default=0, ge=0)
     force_bioformats: bool = False
+    # When True, arrays for each view / illumination are stacked along the
+    # channel axis rather than written as separate OME-Zarr outputs.
+    concat_views: bool = False
+    concat_illuminations: bool = False
 
     @field_validator('scene_index', mode='before')
     @classmethod
@@ -137,6 +145,22 @@ class ReaderConfig(BaseModel):
                 return parts[0] if len(parts) == 1 else v
             except ValueError:
                 raise ValueError(f"scene_index must be an int, 'all', or comma-separated ints; got {v!r}")
+        return v
+
+    @field_validator('view_index', 'illumination_index', mode='before')
+    @classmethod
+    def _validate_multi_index(cls, v):
+        if isinstance(v, int) or v == 'all':
+            return v
+        if isinstance(v, str):
+            try:
+                parts = [int(x.strip()) for x in v.split(',')]
+                return parts[0] if len(parts) == 1 else v
+            except ValueError:
+                raise ValueError(
+                    f"view_index / illumination_index must be an int, 'all', or "
+                    f"comma-separated ints; got {v!r}"
+                )
         return v
 
     @field_validator('mosaic_tile_index', mode='before')
@@ -183,7 +207,7 @@ class ConversionConfig(BaseModel):
     y_range: Optional[Any] = None
     x_range: Optional[Any] = None
     dimension_order: str = "tczyx"
-    compressor: str = "blosc"
+    compressor: Optional[str] = "blosc"
     compressor_params: dict = Field(default_factory=dict)
     overwrite: bool = False
     override_channel_names: bool = False
@@ -197,7 +221,9 @@ class ConversionConfig(BaseModel):
 
     @field_validator("compressor")
     @classmethod
-    def _validate_compressor(cls, v: str) -> str:
+    def _validate_compressor(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
         name = (v or "").lower()
         if name in REJECTED_COMPRESSORS:
             raise ValueError(
@@ -304,12 +330,14 @@ class CompressorConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    name: str = "blosc"
+    name: Optional[str] = "blosc"
     params: dict = Field(default_factory=dict)
 
     @field_validator("name")
     @classmethod
-    def _validate_name(cls, v: str) -> str:
+    def _validate_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
         name = (v or "").lower()
         if name in REJECTED_COMPRESSORS:
             raise ValueError(
@@ -325,7 +353,7 @@ class CompressorConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_blosc_params(self) -> "CompressorConfig":
-        if self.name.lower() == "blosc" and self.params:
+        if self.name and self.name.lower() == "blosc" and self.params:
             cname = self.params.get("cname", "lz4")
             if cname not in BLOSC_CNAMES:
                 raise ValueError(

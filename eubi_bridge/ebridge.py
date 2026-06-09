@@ -145,6 +145,8 @@ class ConfigManager:
             mosaic_tile_index=0,
             sample_index=0,
             force_bioformats=False,
+            concat_views=False,
+            concat_illuminations=False,
         ),
         conversion=dict(
             verbose=False,
@@ -320,7 +322,9 @@ class ConfigManager:
                           rotation_index: int = 'default',
                           mosaic_tile_index: int = 'default',
                           sample_index: int = 'default',
-                          force_bioformats: bool = 'default') -> None:
+                          force_bioformats: bool = 'default',
+                          concat_views: bool = 'default',
+                          concat_illuminations: bool = 'default') -> None:
         """Update reader parameters. Omitted arguments keep their current values."""
         params = {k: v for k, v in locals().items() if k != 'self'}
         for key, val in params.items():
@@ -1119,14 +1123,18 @@ class EuBIBridge:
                           rotation_index: int = 'default',
                           mosaic_tile_index: int = 'default',
                           sample_index: int = 'default',
-                          force_bioformats: bool = 'default') -> None:
+                          force_bioformats: bool = 'default',
+                          concat_views: bool = 'default',
+                          concat_illuminations: bool = 'default') -> None:
         """Update file-reader parameters. Omitted arguments keep their current values.
 
         Args:
             as_mosaic: Treat tiled acquisitions as a stitched mosaic (default False).
-            view_index: View index for multi-view formats (default 0).
+            view_index: View index for multi-view formats (default 0). Pass ``'all'``
+                or a comma-separated list (e.g. ``'0,2'``) to expose multiple views.
             phase_index: Phase index (default 0).
-            illumination_index: Illumination index (default 0).
+            illumination_index: Illumination index (default 0). Pass ``'all'`` or a
+                comma-separated list to expose multiple illuminations.
             scene_index: Scene / series index to read.  Pass an integer, ``'all'``,
                 or a comma-separated list such as ``'0,2,4'`` (default 0).
             rotation_index: Rotation index (default 0).
@@ -1134,6 +1142,10 @@ class EuBIBridge:
                 or a comma-separated list (default None = all tiles).
             sample_index: Sample index (default 0).
             force_bioformats: Force bfio tiled path even for natively-supported formats.
+            concat_views: Stack multiple views along the channel axis instead of
+                writing separate OME-Zarr outputs (default False).
+            concat_illuminations: Stack multiple illuminations along the channel axis
+                instead of writing separate OME-Zarr outputs (default False).
         """
         return self._cfg.configure_readers(**{k: v for k, v in locals().items() if k != 'self'})
 

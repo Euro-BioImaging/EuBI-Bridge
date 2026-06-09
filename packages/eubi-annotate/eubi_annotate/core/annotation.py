@@ -88,6 +88,29 @@ class AnnotationStore:
         """Return a copy of the (H×W) uint8 annotation slice."""
         return self._get_2d(t, z, orientation).copy()
 
+    def get_region_2d(
+        self,
+        t: int,
+        z: int,
+        orientation: str,
+        v0: int,
+        v1: int,
+        h0: int,
+        h1: int,
+    ) -> np.ndarray:
+        """Return a copy of the annotation sub-region [v0:v1, h0:h1].
+
+        Avoids copying the full annotation array — only the requested window
+        is materialised.  Coordinates are clipped to the array bounds.
+        """
+        full = self._get_2d(t, z, orientation)   # view, no copy
+        H, W = full.shape
+        r0 = max(0, min(v0, H - 1))
+        r1 = max(r0 + 1, min(v1, H))
+        c0 = max(0, min(h0, W - 1))
+        c1 = max(c0 + 1, min(h1, W))
+        return full[r0:r1, c0:c1].copy()
+
     def clear_slice(self, t: int, z: int, orientation: str) -> None:
         mask = self._get_2d(t, z, orientation)
         mask[:] = 0

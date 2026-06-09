@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eubi-annotate"
-version = "0.1.2b1"
+version = "0.1.2b4"
 description = "Pixel annotation and ML classifier (RF/XGB) for EuBI-Bridge."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 authors = [
-    {name = "Bugra Özdemir", email = "bugraa.ozdemir@gmail.com"}
+    {name = "Bugra Ã–zdemir", email = "bugraa.ozdemir@gmail.com"}
 ]
 license = "MIT"
 dependencies = [
-    "eubi-bridge>=0.1.2b1",
+    "eubi-bridge>=0.1.2b4",
     "scikit-learn>=1.0",
     "xgboost>=1.7",
 ]

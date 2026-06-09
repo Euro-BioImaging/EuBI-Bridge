@@ -16,11 +16,11 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -255,6 +255,13 @@ class ConvertPage(QWidget):
         _, self._max_concurrency = _labeled_spin("Max Concurrency:", 1, 128, 4)
         lay.addLayout(_row(QLabel("Max Concurrency:"), self._max_concurrency))
 
+        _, self._max_concurrent_downscale_layers = _labeled_spin("Max Concurrent Downscale Layers:", 1, 16, 3)
+        self._max_concurrent_downscale_layers.setToolTip(
+            "How many pyramid levels to downscale simultaneously. "
+            "Reduce for large 3D datasets to avoid OOM errors."
+        )
+        lay.addLayout(_row(QLabel("Max Concurrent Downscale Layers:"), self._max_concurrent_downscale_layers))
+
         _, self._max_concurrent_scenes = _labeled_spin("Max Concurrent Scenes:", 1, 64, 1)
         lay.addLayout(_row(QLabel("Max Concurrent Scenes:"), self._max_concurrent_scenes))
 
@@ -297,7 +304,11 @@ class ConvertPage(QWidget):
         self._slurm_time.setPlaceholderText("HH:MM:SS")
         _slurm_row_time = _slurm_row("SLURM Time Limit:", self._slurm_time)
 
-        self._slurm_rows = (_slurm_row_partition, _slurm_row_account, _slurm_row_time)
+        self._slurm_sif_path = QLineEdit()
+        self._slurm_sif_path.setPlaceholderText("e.g. /path/to/eubi-bridge.sif (leave blank to use host Python)")
+        _slurm_row_sif = _slurm_row("Apptainer SIF:", self._slurm_sif_path)
+
+        self._slurm_rows = (_slurm_row_partition, _slurm_row_account, _slurm_row_time, _slurm_row_sif)
 
         def _toggle_slurm(checked: bool):
             for w in self._slurm_rows:
@@ -343,44 +354,93 @@ class ConvertPage(QWidget):
     def _build_reader_tab(self):
         _, lay = self._scrolled_tab("Reader")
 
-        self._read_all_scenes = QCheckBox("Read All Scenes")
+        # ── Scenes ────────────────────────────────────────────────────────────
+        scene_group = QGroupBox("Scenes")
+        scene_lay = QVBoxLayout(scene_group)
+        self._read_all_scenes = QCheckBox("Read All")
         self._read_all_scenes.setChecked(True)
-        lay.addWidget(self._read_all_scenes)
-
+        scene_lay.addWidget(self._read_all_scenes)
         self._scene_indices = QLineEdit()
         self._scene_indices.setPlaceholderText("0,1,2  (blank = all)")
-        lay.addLayout(_form_row("Scene Indices:", self._scene_indices))
+        scene_lay.addLayout(_form_row("Indices:", self._scene_indices))
         self._read_all_scenes.toggled.connect(
             lambda c: self._scene_indices.setEnabled(not c)
         )
         self._scene_indices.setEnabled(False)
+        lay.addWidget(scene_group)
 
-        self._read_all_tiles = QCheckBox("Read All Tiles")
+        # ── Tiles ─────────────────────────────────────────────────────────────
+        tile_group = QGroupBox("Tiles")
+        tile_lay = QVBoxLayout(tile_group)
+        self._read_all_tiles = QCheckBox("Read All")
         self._read_all_tiles.setChecked(True)
-        lay.addWidget(self._read_all_tiles)
-
+        tile_lay.addWidget(self._read_all_tiles)
         self._mosaic_tile_indices = QLineEdit()
         self._mosaic_tile_indices.setPlaceholderText("0,1  (blank = all)")
-        lay.addLayout(_form_row("Mosaic Tile Indices:", self._mosaic_tile_indices))
+        tile_lay.addLayout(_form_row("Indices:", self._mosaic_tile_indices))
         self._read_all_tiles.toggled.connect(
             lambda c: self._mosaic_tile_indices.setEnabled(not c)
         )
         self._mosaic_tile_indices.setEnabled(False)
+        self._read_as_mosaic = QCheckBox("Read as Mosaic (stitch tiles)")
+        tile_lay.addWidget(self._read_as_mosaic)
+        lay.addWidget(tile_group)
 
-        self._read_as_mosaic = QCheckBox("Read as Mosaic")
-        lay.addWidget(self._read_as_mosaic)
+        # ── Views ─────────────────────────────────────────────────────────────
+        view_group = QGroupBox("Views")
+        view_lay = QVBoxLayout(view_group)
+        self._read_all_views = QCheckBox("Read All")
+        self._read_all_views.setChecked(True)
+        view_lay.addWidget(self._read_all_views)
+        self._view_indices = QLineEdit()
+        self._view_indices.setPlaceholderText("0,1  (blank = all)")
+        view_lay.addLayout(_form_row("Indices:", self._view_indices))
+        self._read_all_views.toggled.connect(
+            lambda c: self._view_indices.setEnabled(not c)
+        )
+        self._view_indices.setEnabled(False)
+        self._concat_views = QCheckBox("Concatenate along Channels")
+        view_lay.addWidget(self._concat_views)
+        lay.addWidget(view_group)
 
+        # ── Illuminations ─────────────────────────────────────────────────────
+        illu_group = QGroupBox("Illuminations")
+        illu_lay = QVBoxLayout(illu_group)
+        self._read_all_illuminations = QCheckBox("Read All")
+        self._read_all_illuminations.setChecked(True)
+        illu_lay.addWidget(self._read_all_illuminations)
+        self._illumination_indices = QLineEdit()
+        self._illumination_indices.setPlaceholderText("0,1  (blank = all)")
+        illu_lay.addLayout(_form_row("Indices:", self._illumination_indices))
+        self._read_all_illuminations.toggled.connect(
+            lambda c: self._illumination_indices.setEnabled(not c)
+        )
+        self._illumination_indices.setEnabled(False)
+        self._concat_illuminations = QCheckBox("Concatenate along Channels")
+        illu_lay.addWidget(self._concat_illuminations)
+        lay.addWidget(illu_group)
+
+        # ── Other Indices (Experimental) ──────────────────────────────────────
+        other_group = QGroupBox("Other Indices (Experimental)")
+        other_lay = QVBoxLayout(other_group)
+        self._phase_index = QLineEdit("0")
+        other_lay.addLayout(_form_row("Phase Index:", self._phase_index))
         for label, attr in [
-            ("View Index:",        "_view_index"),
-            ("Phase Index:",       "_phase_index"),
-            ("Illumination Index:", "_illumination_index"),
-            ("Rotation Index:",    "_rotation_index"),
-            ("Sample Index:",      "_sample_index"),
+            ("Rotation Index:", "_rotation_index"),
+            ("Sample Index:",   "_sample_index"),
         ]:
             edit = QLineEdit("0")
             setattr(self, attr, edit)
-            lay.addLayout(_form_row(label, edit))
+            other_lay.addLayout(_form_row(label, edit))
+        lay.addWidget(other_group)
 
+        # ── Separator ─────────────────────────────────────────────────────────
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        lay.addWidget(sep)
+
+        # ── Reader Backend ────────────────────────────────────────────────────
         self._force_bioformats = QCheckBox("Force Bio-Formats (bfio tiled reader)")
         self._force_bioformats.setToolTip(
             "Force the bfio tiled reader even for natively-supported formats (CZI, ND2, LIF…).\n"
@@ -724,6 +784,7 @@ class ConvertPage(QWidget):
         self._max_workers.setValue(c.get("maxWorkers", 4))
         self._queue_size.setValue(c.get("queueSize", 4))
         self._max_concurrency.setValue(c.get("maxConcurrency", 4))
+        self._max_concurrent_downscale_layers.setValue(c.get("maxConcurrentDownscaleLayers", 3))
         self._max_concurrent_scenes.setValue(c.get("maxConcurrentScenes", 1))
         self._region_size_mb.setValue(float(c.get("regionSizeMb", 256.0)))
         self._memory_per_worker.setValue(float(c.get("memoryPerWorker", 4.0)))
@@ -732,6 +793,7 @@ class ConvertPage(QWidget):
         self._slurm_partition.setText(c.get("slurmPartition", ""))
         self._slurm_account.setText(c.get("slurmAccount", ""))
         self._slurm_time.setText(c.get("slurmTime", "24:00:00"))
+        self._slurm_sif_path.setText(c.get("slurmSifPath", ""))
         self._bf_tile_size_mb.setValue(float(c.get("bfTileSizeMb", 512.0)))
         self._bf_read_concurrency.setValue(c.get("bfReadConcurrency", 4))
         self._jvm_memory.setValue(float(c.get("jvmMemory", 2.0)))
@@ -742,9 +804,13 @@ class ConvertPage(QWidget):
         self._read_all_tiles.setChecked(r.get("readAllTiles", True))
         self._mosaic_tile_indices.setText(r.get("mosaicTileIndices", ""))
         self._read_as_mosaic.setChecked(r.get("readAsMosaic", False))
-        self._view_index.setText(str(r.get("viewIndex", "0")))
+        self._read_all_views.setChecked(r.get("readAllViews", True))
+        self._view_indices.setText(r.get("viewIndices", ""))
+        self._concat_views.setChecked(r.get("concatViews", False))
         self._phase_index.setText(str(r.get("phaseIndex", "0")))
-        self._illumination_index.setText(str(r.get("illuminationIndex", "0")))
+        self._read_all_illuminations.setChecked(r.get("readAllIlluminations", True))
+        self._illumination_indices.setText(r.get("illuminationIndices", ""))
+        self._concat_illuminations.setChecked(r.get("concatIlluminations", False))
         self._rotation_index.setText(str(r.get("rotationIndex", "0")))
         self._sample_index.setText(str(r.get("sampleIndex", "0")))
         self._force_bioformats.setChecked(r.get("forceBioformats", False))
@@ -839,6 +905,7 @@ class ConvertPage(QWidget):
                 "maxWorkers":          self._max_workers.value(),
                 "queueSize":           self._queue_size.value(),
                 "maxConcurrency":      self._max_concurrency.value(),
+                "maxConcurrentDownscaleLayers": self._max_concurrent_downscale_layers.value(),
                 "maxConcurrentScenes": self._max_concurrent_scenes.value(),
                 "regionSizeMb":        self._region_size_mb.value(),
                 "memoryPerWorker":     self._memory_per_worker.value(),
@@ -847,6 +914,7 @@ class ConvertPage(QWidget):
                 "slurmPartition":      self._slurm_partition.text().strip(),
                 "slurmAccount":        self._slurm_account.text().strip(),
                 "slurmTime":           self._slurm_time.text().strip() or "24:00:00",
+                "slurmSifPath":        self._slurm_sif_path.text().strip() or None,
                 "bfTileSizeMb":        self._bf_tile_size_mb.value(),
                 "bfReadConcurrency":   self._bf_read_concurrency.value(),
                 "jvmMemory":           self._jvm_memory.value(),
@@ -856,11 +924,15 @@ class ConvertPage(QWidget):
                 "sceneIndices":      self._scene_indices.text().strip(),
                 "readAllTiles":      self._read_all_tiles.isChecked(),
                 "mosaicTileIndices": self._mosaic_tile_indices.text().strip(),
-                "readAsMosaic":      self._read_as_mosaic.isChecked(),
-                "viewIndex":         self._view_index.text().strip(),
-                "phaseIndex":        self._phase_index.text().strip(),
-                "illuminationIndex": self._illumination_index.text().strip(),
-                "rotationIndex":     self._rotation_index.text().strip(),
+                "readAsMosaic":         self._read_as_mosaic.isChecked(),
+                "readAllViews":         self._read_all_views.isChecked(),
+                "viewIndices":          self._view_indices.text().strip(),
+                "concatViews":          self._concat_views.isChecked(),
+                "phaseIndex":           self._phase_index.text().strip(),
+                "readAllIlluminations": self._read_all_illuminations.isChecked(),
+                "illuminationIndices":  self._illumination_indices.text().strip(),
+                "concatIlluminations":  self._concat_illuminations.isChecked(),
+                "rotationIndex":        self._rotation_index.text().strip(),
                 "sampleIndex":       self._sample_index.text().strip(),
                 "forceBioformats":   self._force_bioformats.isChecked(),
             },

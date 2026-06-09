@@ -473,13 +473,14 @@ def _generate_output_path(base_path: str, series_path: str,
 
 
 async def _load_input_manager(job: ConversionJob) -> ArrayManager:
-    """Open the input file, load all requested scenes/tiles, return a parent manager."""
+    """Open the input file, load all requested scenes/tiles/views/illuminations."""
     manager = ArrayManager(
         job.input_path,
         metadata_reader=job.conversion.metadata_reader,
         skip_dask=job.conversion.skip_dask,
         reader_tile_size_mb=job.cluster.bf_tile_size_mb,
         force_bioformats=job.readers.force_bioformats,
+        as_mosaic=job.readers.as_mosaic,
     )
 
     # scene_index may be 'all', an int, or a comma-separated string from CSV
@@ -516,11 +517,55 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
     elif mosaic_tile_index is not None:
         await manager.load_tiles(tile_indices=mosaic_tile_index)
 
+    # ── Views / illuminations ────────────────────────────────────────────
+    # Resolve view and illumination indices (same multi-value rules as scene_index).
+    def _parse_multi(value):
+        if value == 'all' or isinstance(value, list):
+            return value
+        if isinstance(value, str) and ',' in value:
+            return [int(x.strip()) for x in value.split(',')]
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+
+    view_index  = _parse_multi(job.readers.view_index)
+    illu_index  = _parse_multi(job.readers.illumination_index)
+
+    # Determine whether multi-view/illumination iteration is needed.
+    # A single int value of 0 with no concat flags means the default single-index
+    # behaviour — skip the extra loading step entirely for performance.
+    need_views = (
+        view_index != 0
+        or job.readers.concat_views
+        or view_index == 'all'
+        or isinstance(view_index, list)
+    )
+    need_illus = (
+        illu_index != 0
+        or job.readers.concat_illuminations
+        or illu_index == 'all'
+        or isinstance(illu_index, list)
+    )
+
+    if need_views or need_illus:
+        # Default to index 0 for the non-iterated dimension when not specified.
+        if not need_views:
+            view_index = 0
+        if not need_illus:
+            illu_index = 0
+        await manager.load_views_illuminations(
+            view_indices=view_index,
+            illumination_indices=illu_index,
+            concat_views=job.readers.concat_views,
+            concat_illuminations=job.readers.concat_illuminations,
+        )
+
     return manager
 
 
 async def unary_worker(job: ConversionJob) -> None:
-    """Convert a single input file to OME-Zarr (all scenes/tiles in parallel)."""
+    """Convert a single input file to OME-Zarr (all scenes/tiles/views/illuminations in parallel)."""
     manager = await _load_input_manager(job)
 
     # max_concurrent_scenes: how many scenes write simultaneously.
@@ -532,6 +577,17 @@ async def unary_worker(job: ConversionJob) -> None:
     tasks = []
     if manager.loaded_scenes is None:
         raise ValueError("At least one scene must be available.")
+
+    # ── View / illumination outputs take priority when present ───────────
+    if manager.loaded_views_illuminations is not None:
+        for man in manager.loaded_views_illuminations.values():
+            out_path = _generate_output_path(
+                job.output_path, man.series_path,
+                man.series if add_scene else None,
+            )
+            tasks.append(asyncio.create_task(
+                _process_single_scene(man, out_path, job, sem)
+            ))
     elif manager.loaded_tiles is None:
         for man in manager.loaded_scenes.values():
             out_path = _generate_output_path(

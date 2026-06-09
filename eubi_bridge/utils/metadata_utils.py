@@ -157,17 +157,17 @@ class ChannelParser:
         self._apply_intensity_windows()
         self._apply_user_customizations()
         return make_json_safe(self.output)
-    
+
     def _init_channels(self):
         """Initialize default channels from manager and merge with manager channels."""
         dtype = self.kwargs.get('dtype') or self.manager.array.dtype
         self.channel_count = self._get_channel_count()
-        
+
         default_channels = generate_channel_metadata(
             num_channels=self.channel_count,
             dtype=dtype
         )
-        
+
         self._merge_manager_channels(default_channels)
         
         self.output = copy.deepcopy(default_channels)

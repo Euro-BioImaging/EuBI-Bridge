@@ -74,23 +74,24 @@ class ClassifierWorker(QThread):
 
     def run(self) -> None:
         try:
-            if self._existing_model is not None:
-                clf = self._existing_model
-            else:
-                flat = self._label_region.ravel()
-                labeled = flat > 0
-                unique = np.unique(flat[labeled])
-                if not labeled.any() or len(unique) < 2:
-                    raise ValueError(
-                        "No labels in the annotation box and no existing model. "
-                        "Paint at least 2 classes inside the box first."
-                    )
+            flat    = self._label_region.ravel()
+            labeled = flat > 0
+            has_labels = labeled.any() and len(np.unique(flat[labeled])) >= 2
+
+            if has_labels:
                 clf = train_classifier_region(
                     label_region=self._label_region,
                     slice_region=self._slice_region,
                     n_estimators=self._n_estimators,
                     classifier=self._classifier,
                     **self._feat_kwargs,
+                )
+            elif self._existing_model is not None:
+                clf = self._existing_model
+            else:
+                raise ValueError(
+                    "No labels in the annotation box and no existing model. "
+                    "Paint at least 2 classes inside the box first."
                 )
 
             prediction = predict_region(clf, self._slice_region, **self._feat_kwargs)

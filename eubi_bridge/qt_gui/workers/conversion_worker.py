@@ -113,14 +113,17 @@ def _build_kwargs(config: dict) -> dict:
     else:
         compressor_params = {"level": compression.get("level", 5)}
 
-    scene_idx  = "all" if reader_config.get("readAllScenes", True)  else _parse_index(reader_config.get("sceneIndices", "0"))
-    mosaic_idx = "all" if reader_config.get("readAllTiles", True)   else _parse_index(reader_config.get("mosaicTileIndices", "0"))
+    scene_idx  = "all" if reader_config.get("readAllScenes", True)        else _parse_index(reader_config.get("sceneIndices", "0"))
+    mosaic_idx = "all" if reader_config.get("readAllTiles", True)          else _parse_index(reader_config.get("mosaicTileIndices", "0"))
+    view_idx   = "all" if reader_config.get("readAllViews", True)          else _parse_index(reader_config.get("viewIndices", "0"))
+    illu_idx   = "all" if reader_config.get("readAllIlluminations", True)  else _parse_index(reader_config.get("illuminationIndices", "0"))
 
     kwargs: dict = {
         "max_workers":              cluster_config.get("maxWorkers", 4),
         "queue_size":               cluster_config.get("queueSize", 10),
         "region_size_mb":           cluster_config.get("regionSizeMb", 64),
         "max_concurrency":          cluster_config.get("maxConcurrency", 4),
+        "max_concurrent_downscale_layers": cluster_config.get("maxConcurrentDownscaleLayers", 3),
         "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 1),
         "memory_per_worker":        _gb_to_memory_str(cluster_config.get("memoryPerWorker", 4)),
         "bf_tile_size_mb":          cluster_config.get("bfTileSizeMb", 512.0),
@@ -131,12 +134,15 @@ def _build_kwargs(config: dict) -> dict:
         "slurm_partition":          cluster_config.get("slurmPartition") or None,
         "slurm_account":            cluster_config.get("slurmAccount") or None,
         "slurm_time":               cluster_config.get("slurmTime", "24:00:00"),
+        "slurm_sif_path":           cluster_config.get("slurmSifPath") or None,
         "scene_index":              scene_idx,
         "mosaic_tile_index":        mosaic_idx,
         "as_mosaic":                reader_config.get("readAsMosaic", False),
-        "view_index":               _parse_index(reader_config.get("viewIndex", "0")),
+        "view_index":               view_idx,
         "phase_index":              _parse_index(reader_config.get("phaseIndex", "0")),
-        "illumination_index":       _parse_index(reader_config.get("illuminationIndex", "0")),
+        "illumination_index":       illu_idx,
+        "concat_views":             reader_config.get("concatViews", False),
+        "concat_illuminations":     reader_config.get("concatIlluminations", False),
         "rotation_index":           _parse_index(reader_config.get("rotationIndex", "0")),
         "sample_index":             _parse_index(reader_config.get("sampleIndex", "0")),
         "force_bioformats":         reader_config.get("forceBioformats", False),

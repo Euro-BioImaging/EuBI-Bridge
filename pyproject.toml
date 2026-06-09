@@ -5,12 +5,12 @@ backend-path = ["."]
 
 [project]
 name = "eubi_bridge"
-version = "0.1.2b1"
+version = "0.1.2b4"
 description = "A package for converting datasets to OME-Zarr format."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 authors = [
-    {name = "Bugra Özdemir", email = "bugraa.ozdemir@gmail.com"}
+    {name = "Bugra Ã–zdemir", email = "bugraa.ozdemir@gmail.com"}
 ]
 license = "MIT"
 dependencies = [
@@ -75,9 +75,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-flow     = ["eubi-flow>=0.1.2b1"]
-annotate = ["eubi-annotate>=0.1.2b1"]
-deep     = ["eubi-deep>=0.1.2b1"]
+flow     = ["eubi-flow>=0.1.2b4"]
+annotate = ["eubi-annotate>=0.1.2b4"]
+deep     = ["eubi-deep>=0.1.2b4"]
 docs     = ["mkdocs-material>=9.5", "pymdown-extensions>=10.0"]
 
 [tool.setuptools.package-data]
