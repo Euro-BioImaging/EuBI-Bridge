@@ -535,6 +535,9 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
     # Determine whether multi-view/illumination iteration is needed.
     # A single int value of 0 with no concat flags means the default single-index
     # behaviour — skip the extra loading step entirely for performance.
+    # load_views_illuminations itself probes the actual view/illumination count and
+    # early-exits without penalty for single-view/single-illumination formats (LIF,
+    # ND2, OME-TIFF, …) so we do not need to gate on file-level counts here.
     need_views = (
         view_index != 0
         or job.readers.concat_views

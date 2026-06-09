@@ -1222,6 +1222,8 @@ class SceneLoader:
         self._img: Optional[ImageReader] = None
         self.n_scenes: int = 0
         self.n_tiles: int = 0
+        self.n_views: int = 1
+        self.n_illuminations: int = 1
         self.is_ngff: bool = False
 
     async def _open(self) -> None:
@@ -1251,8 +1253,10 @@ class SceneLoader:
                     self._reader_kwargs,
                 )
         await self._img.read_dataset()
-        self.n_scenes = self._img.n_scenes
-        self.n_tiles  = self._img.n_tiles
+        self.n_scenes        = self._img.n_scenes
+        self.n_tiles         = self._img.n_tiles
+        self.n_views         = getattr(self._img, 'n_views', 1)
+        self.n_illuminations = getattr(self._img, 'n_illuminations', 1)
 
     async def _snapshot(self, series: int, tile: Optional[int] = None) -> "ArrayManager":
         """Capture the reader's current state into a fresh independent ArrayManager.
@@ -1378,10 +1382,12 @@ class ArrayManager:
         self.loaded_scenes:  Optional[dict] = None
         self.loaded_tiles:   Optional[dict] = None
         self.loaded_views_illuminations: Optional[dict] = None
-        self._n_scenes:      int  = 0
-        self._n_tiles:       int  = 0
-        self._is_ngff:       bool = False
-        self._bfio_tiling:   bool = False
+        self._n_scenes:       int  = 0
+        self._n_tiles:        int  = 0
+        self._n_views:        int  = 1
+        self._n_illuminations: int = 1
+        self._is_ngff:        bool = False
+        self._bfio_tiling:    bool = False
 
         # Data + metadata layer (pure, no I/O)
         self.state: ArrayState = state if state is not None else ArrayState()
@@ -1510,9 +1516,11 @@ class ArrayManager:
                              force_bioformats=self._force_bioformats,
                              as_mosaic=self._as_mosaic)
         managers = await loader.load(scene_indices=scene_indices)
-        self._n_scenes = loader.n_scenes
-        self._n_tiles  = loader.n_tiles
-        self._is_ngff  = loader.is_ngff
+        self._n_scenes        = loader.n_scenes
+        self._n_tiles         = loader.n_tiles
+        self._n_views         = loader.n_views
+        self._n_illuminations = loader.n_illuminations
+        self._is_ngff         = loader.is_ngff
         self.loaded_scenes = {m.series_path: m for m in managers}
         return self.loaded_scenes
 
@@ -1557,13 +1565,20 @@ class ArrayManager:
         concat_views: bool = False,
         concat_illuminations: bool = False,
     ) -> dict:
-        """For each already-loaded scene, iterate over requested views and
-        illuminations, snapshotting each (view, illumination) pair as an
+        """Iterate over requested views and illuminations for all loaded scenes,
+        snapshotting each (scene, view, illumination) combination as an
         independent ``ArrayManager``.
+
+        The file is opened exactly **once** regardless of how many scenes are
+        loaded.  Formats with only a single view and single illumination (LIF,
+        ND2, OME-TIFF, …) early-exit without cost, leaving
+        ``loaded_views_illuminations`` as ``None`` so that ``unary_worker``
+        falls back to ``loaded_scenes``.
 
         When *concat_views* or *concat_illuminations* is True the arrays for
         the respective dimension are stacked along the channel axis and a
-        single manager is produced per scene instead of one per combination.
+        single manager is produced per (scene, non-concatenated-dim) group
+        instead of one per combination.
 
         Results are stored in ``self.loaded_views_illuminations`` and also
         returned as ``{series_path: ArrayManager}``.
@@ -1571,31 +1586,81 @@ class ArrayManager:
         if not self.loaded_scenes:
             raise RuntimeError("Call load_scenes() before load_views_illuminations().")
 
+        assert self.path is not None
         import dask.array as da  # local import — mirrors rest of module
+
+        # Open the file ONCE with full view/illumination exposure so that
+        # n_views / n_illuminations report the real totals and all
+        # (scene × view × illumination) combinations can be processed in a
+        # single file open — avoiding the previous per-scene re-open cost.
+        loader = SceneLoader(
+            self.path, self._meta_reader, self._skip_dask,
+            reader_tile_size_mb=self._tile_mb,
+            force_bioformats=self._force_bioformats,
+            as_mosaic=self._as_mosaic,
+            reader_kwargs={'view_index': 'all', 'illumination_index': 'all'},
+        )
+        await loader._open()
+        assert loader._img is not None, "SceneLoader._open() failed to initialize _img"
+        reader = loader._img
 
         result: dict = {}
 
-        for scene_key, scene_mgr in (self.loaded_scenes or {}).items():
-            scene_idx = scene_mgr.series
-            assert self.path is not None
+        try:
+            # Probe actual total counts using the first loaded scene.
+            first_scene_mgr = next(iter(self.loaded_scenes.values()))
+            await reader.set_scene(first_scene_mgr.series)
+            n_total_views        = reader.n_views
+            n_total_illuminations = reader.n_illuminations
 
-            loader = SceneLoader(
-                self.path, self._meta_reader, self._skip_dask,
-                reader_tile_size_mb=self._tile_mb,
-                force_bioformats=self._force_bioformats,
-                as_mosaic=self._as_mosaic,
-                # Tell the reader to expose ALL views and illuminations so that
-                # n_views / n_illuminations return the full counts and
-                # set_view / set_illumination can iterate over them.
-                reader_kwargs={'view_index': 'all', 'illumination_index': 'all'},
-            )
-            await loader._open()
-            reader = loader._img  # type: ignore[union-attr]
+            # Persist so callers (e.g. inspect page) can read them.
+            self._n_views        = n_total_views
+            self._n_illuminations = n_total_illuminations
 
-            try:
+            # If the file has only a single view AND a single illumination
+            # there is nothing to iterate over.  Return without setting
+            # loaded_views_illuminations so unary_worker falls through to
+            # loaded_scenes (which already holds the correct data).
+            if n_total_views <= 1 and n_total_illuminations <= 1:
+                return {}
+
+            # ── Inner helper — snapshot one (scene, view, illumination) ──
+            async def _snapshot_vi(scene_idx: int, v_idx: int, i_idx: int) -> "ArrayManager":
+                reader.set_view(v_idx)           # sync — updates CZI index_map
+                reader.set_illumination(i_idx)   # sync — updates CZI index_map
+                # Re-read array with updated index_map so the snapshot holds
+                # the correct data slice.
+                if not getattr(reader, '_bfio_tiling', False):
+                    reader.arraydata = await reader.get_arraydata()
+                mgr = await loader._snapshot(scene_idx)
+                # OME-XML may report channels for all illuminations while
+                # get_image_dask_data returns only the slice for the current
+                # illumination.  Select the per-illumination window.
+                if mgr.array is not None and mgr.state._channels and 'c' in mgr.state.axes:
+                    c_size = mgr.array.shape[mgr.state.axes.index('c')]
+                    if len(mgr.state._channels) > c_size:
+                        offset = i_idx * c_size
+                        mgr.state._channels = mgr.state._channels[offset:offset + c_size]
+                # Build a clean series_path with view/illumination suffix BEFORE
+                # the extension so _generate_output_path parses it correctly.
+                p = Path(loader.path)
+                vi_parts: list = []
+                if n_total_views > 1:
+                    vi_parts.append(f'_view{v_idx}')
+                if n_total_illuminations > 1:
+                    vi_parts.append(f'_illu{i_idx}')
+                if vi_parts:
+                    mgr.series_path = str(
+                        p.parent / (p.stem + ''.join(vi_parts) + p.suffix)
+                    )
+                return mgr
+
+            # ── Process every loaded scene in the SAME file open ──────────
+            for scene_key, scene_mgr in self.loaded_scenes.items():
+                scene_idx = scene_mgr.series
                 await reader.set_scene(scene_idx)
 
-                # Resolve view list
+                # Resolve view list for this scene
                 n_views = reader.n_views
                 if view_indices == 'all':
                     v_list: List[int] = list(range(n_views))
@@ -1605,7 +1670,7 @@ class ArrayManager:
                     v_list = list(view_indices)
                 v_list = [v for v in v_list if v < n_views]
 
-                # Resolve illumination list
+                # Resolve illumination list for this scene
                 n_illu = reader.n_illuminations
                 if illumination_indices == 'all':
                     i_list: List[int] = list(range(n_illu))
@@ -1617,70 +1682,33 @@ class ArrayManager:
 
                 combos: List[tuple] = [(v, i) for v in v_list for i in i_list]
 
-                async def _snapshot_vi(v_idx: int, i_idx: int) -> "ArrayManager":
-                    """Set view+illumination, refresh arraydata, then snapshot."""
-                    reader.set_view(v_idx)           # sync — updates index_map
-                    reader.set_illumination(i_idx)   # sync — updates index_map
-                    # Re-read array with updated index_map so the snapshot holds
-                    # the correct data slice.
-                    if not getattr(reader, '_bfio_tiling', False):
-                        reader.arraydata = await reader.get_arraydata()
-                    mgr = await loader._snapshot(scene_idx)
-                    # OME-XML reports channels for the whole file (n_illuminations *
-                    # n_channels_per_illumination) while get_image_dask_data returns
-                    # only the slice for the current illumination index.  Select the
-                    # correct per-illumination window using i_idx as an offset so
-                    # channel names map 1-to-1 with data channels.
-                    if mgr.array is not None and mgr.state._channels and 'c' in mgr.state.axes:
-                        c_size = mgr.array.shape[mgr.state.axes.index('c')]
-                        total_ch = len(mgr.state._channels)
-                        if total_ch > c_size:
-                            offset = i_idx * c_size
-                            mgr.state._channels = mgr.state._channels[offset:offset + c_size]
-                    # Build a clean series_path that _generate_output_path can
-                    # parse: put the view/illumination suffix BEFORE the extension
-                    # so that split('.')[0] extracts the full stem correctly.
-                    from pathlib import Path
-                    p = Path(loader.path)
-                    vi_parts: list = []
-                    if reader.n_views > 1:
-                        vi_parts.append(f'_view{v_idx}')
-                    if reader.n_illuminations > 1:
-                        vi_parts.append(f'_illu{i_idx}')
-                    if vi_parts:
-                        mgr.series_path = str(
-                            p.parent / (p.stem + ''.join(vi_parts) + p.suffix)
-                        )
-                    return mgr
-
                 if not concat_views and not concat_illuminations:
-                    # ── separate output per (view, illumination) ────────────
+                    # ── separate output per (view, illumination) ──────────
                     for v_idx, i_idx in combos:
-                        mgr = await _snapshot_vi(v_idx, i_idx)
+                        mgr = await _snapshot_vi(scene_idx, v_idx, i_idx)
                         result[mgr.series_path] = mgr
 
                 else:
-                    # ── concatenate along channel axis ────────────────────
-                    # Group: when concat_views AND concat_illuminations both
-                    # True → one group per scene.  Otherwise group by the
-                    # non-concatenated dimension.
+                    # ── concatenate along channel axis ─────────────────────
+                    # Group by the non-concatenated dimension(s).
                     if concat_views and concat_illuminations:
                         groups = {(None, None): combos}
                     elif concat_views:
+                        # One output per illumination — views are concatenated
                         groups = {(None, i): [(v, i) for v in v_list] for i in i_list}
-                    else:  # concat_illuminations only
+                    else:
+                        # One output per view — illuminations are concatenated
                         groups = {(v, None): [(v, i) for i in i_list] for v in v_list}
 
                     for group_key, group_combos in groups.items():
-                        arrays = []
-                        all_channels = []
+                        arrays: list = []
+                        all_channels: list = []
                         snap_mgr = None
-                        # Fallback channel names per view: populated on first illumination
-                        # so that subsequent illuminations with unnamed channels (label=None)
-                        # inherit the names from illumination 0 of the same view.
+                        # Per-view channel name fallback so illuminations with
+                        # unlabelled channels inherit names from illumination 0.
                         view_fallback_names: dict = {}
                         for v_idx, i_idx in group_combos:
-                            snap_mgr = await _snapshot_vi(v_idx, i_idx)
+                            snap_mgr = await _snapshot_vi(scene_idx, v_idx, i_idx)
                             arr = snap_mgr.array
                             if arr is None:
                                 continue
@@ -1692,7 +1720,6 @@ class ArrayManager:
                                 prefix_parts.append(f'Illu{i_idx}')
                             prefix = '_'.join(prefix_parts) + '_'
                             snap_channels = snap_mgr.state._channels or []
-                            # Record first-seen names for this view as fallback
                             if v_idx not in view_fallback_names:
                                 view_fallback_names[v_idx] = [
                                     ch.get('label') for ch in snap_channels
@@ -1710,10 +1737,10 @@ class ArrayManager:
                             continue
 
                         concat_arr = da.concatenate(arrays, axis=1)  # axis 1 = C in TCZYX
-                        # Use state.update() so shapedict/chunkdict stay in sync
-                        # with the new channel count; direct array assignment would
-                        # leave shapedict stale and cause _ensure_correct_channels
-                        # to truncate the merged channel list back to the original size.
+                        # state.update() keeps shapedict/chunkdict in sync with the
+                        # new channel count; direct array assignment would leave
+                        # shapedict stale and cause _ensure_correct_channels to
+                        # truncate the merged channel list.
                         snap_mgr.state.update(
                             array=concat_arr,
                             axes=snap_mgr.state.axes,
@@ -1722,8 +1749,8 @@ class ArrayManager:
                             snap_mgr.state._channels = all_channels
                         result[snap_mgr.series_path] = snap_mgr
 
-            finally:
-                loader._img = None
+        finally:
+            loader._img = None
 
         self.loaded_views_illuminations = result
         return result

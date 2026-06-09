@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eubi-flow"
-version = "0.1.2b4"
+version = "0.1.2b5"
 description = "Workflow DAG engine and Flow GUI for EuBI-Bridge."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -13,7 +13,7 @@ authors = [
 ]
 license = "MIT"
 dependencies = [
-    "eubi-bridge>=0.1.2b4",
+    "eubi-bridge>=0.1.2b5",
 ]
 
 classifiers = [
