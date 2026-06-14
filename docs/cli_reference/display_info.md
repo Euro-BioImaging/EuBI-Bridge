@@ -11,7 +11,7 @@ click any command card to expand its full parameter reference.
     eubi show_config [OPTIONS]
     ```
 
-    With no arguments, prints the current ``.eubi_config.json``. Pass a name to inspect a saved config without activating it.
+    With no arguments, prints the current `.eubi_config.json`. Pass a name to inspect a saved config without activating it.
 
     <details>
     <summary>Optional arguments</summary>
@@ -20,7 +20,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--name</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Named config to display (e.g. ``hpc``).  If omitted, the active (default) config is shown.</p>
+    <p>Named config to display (e.g. `hpc`).  If omitted, the active (default) config is shown.</p>
     <pre><code># Inspect the 'hpc' profile without activating it
     eubi show_config --name hpc
     </code></pre>
@@ -37,7 +37,7 @@ click any command card to expand its full parameter reference.
     eubi show_root_defaults [OPTIONS]
     ```
 
-    These are the values that ``reset_config`` will restore.  Useful as a reference when tuning cluster or conversion settings.
+    These are the values that `reset_config` will restore.  Useful as a reference when tuning cluster or conversion settings.
 
 
 ??? command "**`version`**&ensp;—&ensp;Display the installed EuBI-Bridge version"

@@ -203,6 +203,28 @@ def parse_channel_tag_from_string(channel_tag: Union[str, tuple, None]) -> Union
         channel_tag = tuple(channel_tag.split(','))
     return channel_tag
 
+
+def channel_tag_format_error(channel_tag, filenames=None) -> str:
+    """Build an explanatory message for a single channel tag that yields no groups.
+
+    A bare (single) channel tag is interpreted as a prefix immediately followed
+    by a number; named/categorical channels must be given as a comma-separated
+    list.  This message tells the user exactly how to fix the invocation.
+    """
+    msg = (
+        f"Channel tag '{channel_tag}' was given as a single tag, which is "
+        f"interpreted as a prefix immediately followed by a number "
+        f"(e.g. 'channel' matches 'channel1', 'channel2'; 'c_' matches 'c_0', "
+        f"'c_1'), but no filenames contain '{channel_tag}<number>'. For named "
+        f"(categorical) channels that are not numbered, pass a comma-separated "
+        f"list of the full per-channel tags instead, e.g. "
+        f"\"--channel_tag gfp,mcherry\" or \"--channel_tag c_gfp,c_mcherry\"."
+    )
+    if filenames:
+        msg += f"\nAvailable files: {list(filenames)}"
+    return msg
+
+
 class FileSet:
     """
     A class to manage file paths and their shapes for multi-dimensional data.
@@ -636,6 +658,10 @@ class BatchFile:
             groups = copy.deepcopy(fileset.group)
         else:
             groups = fileset._split_by(fileset.axis_tags[1])
+            if not groups:
+                # A single (non-tuple) channel tag produced no groups: it matched
+                # filenames but had no numeric suffix to split on.
+                raise ValueError(channel_tag_format_error(fileset.axis_tags[1]))
         return groups
 
     async def _construct_managers(

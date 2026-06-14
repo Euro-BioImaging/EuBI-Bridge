@@ -69,6 +69,10 @@ async def read_single_image(
         from eubi_bridge.core.h5_reader import read_h5
         logger.debug("Detected HDF5 format")
         reader = read_h5(input_path, **kwargs)
+    elif input_path.lower().endswith('.ims'):
+        from eubi_bridge.core.ims_reader import read_ims
+        logger.debug("Detected Imaris format")
+        reader = read_ims(input_path, **kwargs)
     elif input_path.endswith(('.ome.tiff', '.ome.tif')) and not aszarr:
         from eubi_bridge.core.pff_reader import read_pff
         logger.debug("Detected OME-TIFF format (using pff reader)")

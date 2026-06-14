@@ -23,7 +23,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from eubi_bridge.ebridge import EuBIBridge
+from eubi_bridge.ebridge import EuBIBridge, ConfigureGroup
 from eubi_bridge.core.config_models import (
     ClusterConfig,
     ConversionConfig,
@@ -42,11 +42,11 @@ COMMAND_GROUPS: dict[str, list[str]] = {
     "Conversion": ["to_zarr", "validate_aggregative"],
     "Metadata": ["show_pixel_meta", "update_pixel_meta", "update_channel_meta"],
     "Configuration": [
-        "configure_cluster",
-        "configure_conversion",
-        "configure_downscale",
-        "configure_readers",
-        "configure_concatenation",
+        "configure.cluster",
+        "configure.conversion",
+        "configure.downscale",
+        "configure.readers",
+        "configure.concatenation",
     ],
     "Named Configs": [
         "with_config",
@@ -108,8 +108,11 @@ _FIELD_HINTS: dict[str, str] = {
     "slurm_account": "SLURM account name.",
     "slurm_partition": "SLURM partition / queue.",
     "slurm_worker_timeout": "Seconds to wait for SLURM workers to start.",
+    "slurm_sif_path": "Path to an Apptainer/Singularity `.sif` image to run SLURM workers inside (optional).",
+    "max_concurrent_downscale_layers": "How many pyramid levels are downscaled in parallel per file (default 1 = sequential, lowest memory).",
     # ConversionConfig
-    "zarr_format": "Zarr specification version. `2` = classic chunk-based; `3` = next-gen with sharding support.",
+    "ome_zarr_version": "OME-Zarr (NGFF) version to write: `0.4` (backed by Zarr v2) or `0.5` (backed by Zarr v3, which enables sharding). This is the preferred control and supersedes `zarr_format` — the underlying zarr container format is derived from it.",
+    "zarr_format": "**Deprecated** — use `ome_zarr_version` instead. Zarr container version: `2` = OME-Zarr 0.4 (classic chunk-based); `3` = OME-Zarr 0.5 (sharding support).",
     "skip_dask": "Read TIFF files via zarr's native aszarr backend instead of dask. Faster for large TIFFs; ignored for non-TIFF formats.",
     "auto_chunk": "Auto-compute chunk shape to approximate `target_chunk_mb`. When `False`, the manual `*_chunk` values below are used.",
     "target_chunk_mb": "Target uncompressed chunk size in MB when `auto_chunk=True`.",
@@ -148,6 +151,12 @@ _FIELD_HINTS: dict[str, str] = {
     "n_layers": "Number of pyramid levels (None = auto).",
     "min_dimension_size": "Stop downscaling when smallest dimension reaches this size.",
     "downscale_method": "`simple` = stride/nearest (fastest). `mean` / `median` / `min` / `max` / `mode` = aggregation methods passed to TensorStore.",
+    "keep_existing_resolutions": "If the input already carries its own multiscale pyramid (e.g. `.ims`, `.zarr`), write each existing resolution level straight to the output OME-Zarr instead of rebuilding the pyramid (default False).",
+    "apply_smart_downscaling": "Choose per-axis downscale factors automatically from the pixel anisotropy so the pyramid approaches isotropy, instead of using the fixed `*_scale_factor` values (default False).",
+    "time_smart_scale_factor": "Override the smart-downscaling factor for the time axis (used when `apply_smart_downscaling=True`).",
+    "z_smart_scale_factor": "Override the smart-downscaling factor for the z axis (used when `apply_smart_downscaling=True`).",
+    "y_smart_scale_factor": "Override the smart-downscaling factor for the y axis (used when `apply_smart_downscaling=True`).",
+    "x_smart_scale_factor": "Override the smart-downscaling factor for the x axis (used when `apply_smart_downscaling=True`).",
     # ReaderConfig
     "scene_index": (
         "Scene / series index to read. Pass an integer for a single scene, "
@@ -155,14 +164,28 @@ _FIELD_HINTS: dict[str, str] = {
         "or comma-separated integers (e.g. `0,2,4`) for a subset of scenes."
     ),
     "mosaic_tile_index": (
-        "Mosaic tile index to read. Pass an integer, `all`, or comma-separated integers."
+        "Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or "
+        "comma-separated integers; each selected tile becomes a separate OME-Zarr "
+        "(named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. "
+        "Composes with scene / view / illumination selection (cartesian product)."
     ),
-    "as_mosaic": "Treat tiles as a mosaic.",
-    "view_index": "View index (for multi-view formats).",
+    "as_mosaic": "Stitch all mosaic tiles into a single full field-of-view output (instead of one OME-Zarr per tile).",
+    "view_index": (
+        "View(s) to read. Pass an integer, `all`, or comma-separated integers; each "
+        "selected view becomes a separate OME-Zarr (named `_view{N}`) unless "
+        "`--concat_views` stacks them along the channel axis."
+    ),
     "phase_index": "Phase index.",
-    "illumination_index": "Illumination index.",
+    "illumination_index": (
+        "Illumination(s) to read. Pass an integer, `all`, or comma-separated integers; "
+        "each selected illumination becomes a separate OME-Zarr (named `_illu{N}`) unless "
+        "`--concat_illuminations` stacks them along the channel axis."
+    ),
     "rotation_index": "Rotation index.",
     "sample_index": "Sample index.",
+    "force_bioformats": "Force the Java Bio-Formats reader even for formats EuBI-Bridge reads natively (CZI, ND2, LIF, IMS…). Useful as a fallback when a native read fails.",
+    "concat_views": "When reading multiple views, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per view.",
+    "concat_illuminations": "When reading multiple illuminations, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per illumination.",
     # ConcatenationConfig
     "concatenation_axes": (
         "Axes along which files are concatenated. Pass a string of axis letters "
@@ -240,7 +263,16 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "slurm_account": "eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount",
     "slurm_partition": "eubi to_zarr /data/input /data/output --on_slurm --slurm_partition gpu",
     "slurm_worker_timeout": "eubi to_zarr /data/input /data/output --on_slurm --slurm_worker_timeout 600",
+    "slurm_sif_path": "eubi to_zarr /data/input /data/output --on_slurm --slurm_sif_path /apps/eubi.sif",
+    "max_concurrent_downscale_layers": "eubi to_zarr /data/input /data/output --max_concurrent_downscale_layers 2",
     # ── ConversionConfig (to_zarr context) ───────────────────────────────────
+    "ome_zarr_version": [
+        "# Write OME-Zarr 0.4 (Zarr v2, the default)",
+        "eubi to_zarr /data/input /data/output --ome_zarr_version 0.4",
+        "",
+        "# Write OME-Zarr 0.5 (Zarr v3 — required for sharding)",
+        "eubi to_zarr /data/input /data/output --ome_zarr_version 0.5",
+    ],
     "zarr_format": "eubi to_zarr /data/input /data/output --zarr_format 3",
     "skip_dask": "eubi to_zarr /data/input /data/output --skip_dask",
     "auto_chunk": "eubi to_zarr /data/input /data/output --auto_chunk False --z_chunk 64 --y_chunk 256 --x_chunk 256",
@@ -250,11 +282,11 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "z_chunk": "eubi to_zarr /data/input /data/output --auto_chunk False --z_chunk 64",
     "y_chunk": "eubi to_zarr /data/input /data/output --auto_chunk False --y_chunk 256",
     "x_chunk": "eubi to_zarr /data/input /data/output --auto_chunk False --x_chunk 256",
-    "time_shard_coef": "eubi to_zarr /data/input /data/output --zarr_format 3 --time_shard_coef 1",
-    "channel_shard_coef": "eubi to_zarr /data/input /data/output --zarr_format 3 --channel_shard_coef 1",
-    "z_shard_coef": "eubi to_zarr /data/input /data/output --zarr_format 3 --z_shard_coef 5",
-    "y_shard_coef": "eubi to_zarr /data/input /data/output --zarr_format 3 --y_shard_coef 5",
-    "x_shard_coef": "eubi to_zarr /data/input /data/output --zarr_format 3 --x_shard_coef 5",
+    "time_shard_coef": "eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --time_shard_coef 1",
+    "channel_shard_coef": "eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --channel_shard_coef 1",
+    "z_shard_coef": "eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --z_shard_coef 5",
+    "y_shard_coef": "eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --y_shard_coef 5",
+    "x_shard_coef": "eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --x_shard_coef 5",
     "time_range": 'eubi to_zarr /data/input /data/output --time_range "0,10"',
     "channel_range": 'eubi to_zarr /data/input /data/output --channel_range "0,2"',
     "z_range": 'eubi to_zarr /data/input /data/output --z_range "5,50"',
@@ -291,6 +323,18 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "x_scale_factor": "eubi to_zarr /data/input /data/output --x_scale_factor 2",
     "time_scale_factor": "eubi to_zarr /data/input /data/output --time_scale_factor 1",
     "channel_scale_factor": "eubi to_zarr /data/input /data/output --channel_scale_factor 1",
+    "keep_existing_resolutions": [
+        "# Copy an .ims / .zarr input's own pyramid levels instead of rebuilding them",
+        "eubi to_zarr /data/input /data/output --keep_existing_resolutions",
+    ],
+    "apply_smart_downscaling": [
+        "# Let EuBI-Bridge pick per-axis factors from the voxel anisotropy",
+        "eubi to_zarr /data/input /data/output --apply_smart_downscaling",
+    ],
+    "z_smart_scale_factor": "eubi to_zarr /data/input /data/output --apply_smart_downscaling --z_smart_scale_factor 1",
+    "y_smart_scale_factor": "eubi to_zarr /data/input /data/output --apply_smart_downscaling --y_smart_scale_factor 2",
+    "x_smart_scale_factor": "eubi to_zarr /data/input /data/output --apply_smart_downscaling --x_smart_scale_factor 2",
+    "time_smart_scale_factor": "eubi to_zarr /data/input /data/output --apply_smart_downscaling --time_smart_scale_factor 1",
     # ── ReaderConfig (to_zarr context) ───────────────────────────────────────
     "scene_index": [
         "# Convert only scene 2 from a multi-scene file",
@@ -302,19 +346,46 @@ _EXAMPLES: dict[str, str | list[str]] = {
         "# Convert scenes 0, 2 and 4 only",
         "eubi to_zarr /data/input /data/output --scene_index 0,2,4",
     ],
-    "as_mosaic": "eubi to_zarr /data/input /data/output --as_mosaic",
-    "mosaic_tile_index": [
-        "# Read only the first mosaic tile",
-        "eubi to_zarr /data/input /data/output --as_mosaic --mosaic_tile_index 0",
-        "",
-        "# Read all tiles (default behaviour)",
-        "eubi to_zarr /data/input /data/output --as_mosaic --mosaic_tile_index all",
+    "as_mosaic": [
+        "# Stitch all mosaic tiles into a single full field-of-view output",
+        "eubi to_zarr /data/input /data/output --as_mosaic",
     ],
-    "view_index": "eubi to_zarr /data/input /data/output --view_index 1",
+    "mosaic_tile_index": [
+        "# Write every tile as its own OME-Zarr (default — each tile separate)",
+        "eubi to_zarr /data/input /data/output --mosaic_tile_index all",
+        "",
+        "# Write only tiles 0 and 2 (each as a separate output)",
+        "eubi to_zarr /data/input /data/output --mosaic_tile_index 0,2",
+        "",
+        "# Stitch all tiles into one mosaic instead of writing them separately",
+        "eubi to_zarr /data/input /data/output --as_mosaic",
+    ],
+    "view_index": [
+        "# Write each view as its own OME-Zarr",
+        "eubi to_zarr /data/input /data/output --view_index all",
+        "",
+        "# Concatenate all views along the channel axis into one output",
+        "eubi to_zarr /data/input /data/output --view_index all --concat_views",
+    ],
+    "concat_views": [
+        "# Stack every view onto the channel axis (cartesian with existing channels)",
+        "eubi to_zarr /data/input /data/output --view_index all --concat_views",
+    ],
     "phase_index": "eubi to_zarr /data/input /data/output --phase_index 1",
-    "illumination_index": "eubi to_zarr /data/input /data/output --illumination_index 1",
+    "illumination_index": [
+        "# Write each illumination as its own OME-Zarr",
+        "eubi to_zarr /data/input /data/output --illumination_index all",
+        "",
+        "# Concatenate all illuminations along the channel axis into one output",
+        "eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations",
+    ],
+    "concat_illuminations": [
+        "# Stack every illumination onto the channel axis (cartesian with existing channels)",
+        "eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations",
+    ],
     "rotation_index": "eubi to_zarr /data/input /data/output --rotation_index 0",
     "sample_index": "eubi to_zarr /data/input /data/output --sample_index 0",
+    "force_bioformats": "eubi to_zarr /data/input /data/output --force_bioformats",
     # ── ConcatenationConfig (to_zarr context) ────────────────────────────────
     "concatenation_axes": [
         "# Concatenate files along the channel axis",
@@ -475,310 +546,343 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
     },
 
     # ── configure_cluster ─────────────────────────────────────────────────────
-    "configure_cluster": {
+    "configure.cluster": {
         "max_workers": [
             "# Set the default number of parallel worker processes",
-            "eubi configure_cluster --max_workers 8",
+            "eubi configure cluster --max_workers 8",
         ],
         "queue_size": [
             "# Allow each worker to buffer more write tasks",
-            "eubi configure_cluster --queue_size 8",
+            "eubi configure cluster --queue_size 8",
         ],
         "region_size_mb": [
             "# Process larger spatial regions per task (reduces overhead on large arrays)",
-            "eubi configure_cluster --region_size_mb 512",
+            "eubi configure cluster --region_size_mb 512",
         ],
         "memory_per_worker": [
             "# Allocate 8 GB per worker (relevant for SLURM / LocalCluster)",
-            "eubi configure_cluster --memory_per_worker 8GB",
+            "eubi configure cluster --memory_per_worker 8GB",
         ],
         "max_concurrency": [
             "# Allow TensorStore to issue 8 write operations concurrently per worker",
-            "eubi configure_cluster --max_concurrency 8",
+            "eubi configure cluster --max_concurrency 8",
         ],
         "max_concurrent_scenes": [
             "# Convert 2 scenes within a single file simultaneously",
-            "eubi configure_cluster --max_concurrent_scenes 2",
+            "eubi configure cluster --max_concurrent_scenes 2",
         ],
         "on_local_cluster": [
             "# Use a Dask LocalCluster as the scheduler",
-            "eubi configure_cluster --on_local_cluster",
+            "eubi configure cluster --on_local_cluster",
         ],
         "on_slurm": [
             "# Submit workers to SLURM and set partition + account",
-            "eubi configure_cluster --on_slurm --slurm_account myaccount --slurm_partition gpu",
+            "eubi configure cluster --on_slurm --slurm_account myaccount --slurm_partition gpu",
         ],
         "use_threading": [
             "# Switch from ProcessPool to ThreadPool (useful when GIL is not a bottleneck)",
-            "eubi configure_cluster --use_threading",
+            "eubi configure cluster --use_threading",
         ],
         "tensorstore_data_copy_concurrency": [
             "# Allow TensorStore to copy data with 8 internal threads",
-            "eubi configure_cluster --tensorstore_data_copy_concurrency 8",
+            "eubi configure cluster --tensorstore_data_copy_concurrency 8",
         ],
         "max_retries": [
             "# Retry failed workers up to 5 times before aborting",
-            "eubi configure_cluster --max_retries 5",
+            "eubi configure cluster --max_retries 5",
         ],
         "slurm_time": [
             "# Set SLURM wall-clock limit to 48 hours",
-            "eubi configure_cluster --on_slurm --slurm_time 48:00:00",
+            "eubi configure cluster --on_slurm --slurm_time 48:00:00",
         ],
         "slurm_account": [
             "# Charge SLURM jobs to 'myproject'",
-            "eubi configure_cluster --on_slurm --slurm_account myproject",
+            "eubi configure cluster --on_slurm --slurm_account myproject",
         ],
         "slurm_partition": [
             "# Submit to the 'gpu' partition",
-            "eubi configure_cluster --on_slurm --slurm_partition gpu",
+            "eubi configure cluster --on_slurm --slurm_partition gpu",
         ],
         "slurm_worker_timeout": [
             "# Wait up to 10 minutes for SLURM workers to start",
-            "eubi configure_cluster --on_slurm --slurm_worker_timeout 600",
+            "eubi configure cluster --on_slurm --slurm_worker_timeout 600",
         ],
     },
 
     # ── configure_conversion ──────────────────────────────────────────────────
-    "configure_conversion": {
+    "configure.conversion": {
+        "ome_zarr_version": [
+            "# Default to OME-Zarr 0.5 (Zarr v3, enables sharding)",
+            "eubi configure conversion --ome_zarr_version 0.5",
+            "",
+            "# Default to OME-Zarr 0.4 (Zarr v2)",
+            "eubi configure conversion --ome_zarr_version 0.4",
+        ],
         "zarr_format": [
-            "# Switch to Zarr v3 (supports sharding)",
-            "eubi configure_conversion --zarr_format 3",
+            "# Deprecated — prefer 'ome_zarr_version'. Switch to Zarr v3 (supports sharding)",
+            "eubi configure conversion --zarr_format 3",
         ],
         "skip_dask": [
             "# Use zarr's native TIFF backend instead of dask (faster for large TIFFs)",
-            "eubi configure_conversion --skip_dask",
+            "eubi configure conversion --skip_dask",
         ],
         "auto_chunk": [
             "# Disable auto-chunking and set chunk sizes manually",
-            "eubi configure_conversion --auto_chunk False --z_chunk 64 --y_chunk 256 --x_chunk 256",
+            "eubi configure conversion --auto_chunk False --z_chunk 64 --y_chunk 256 --x_chunk 256",
         ],
         "target_chunk_mb": [
             "# Target 4 MB uncompressed chunks when auto_chunk is on",
-            "eubi configure_conversion --target_chunk_mb 4.0",
+            "eubi configure conversion --target_chunk_mb 4.0",
         ],
         "time_chunk": [
             "# Process one time point per chunk",
-            "eubi configure_conversion --auto_chunk False --time_chunk 1",
+            "eubi configure conversion --auto_chunk False --time_chunk 1",
         ],
         "channel_chunk": [
             "# Process one channel per chunk",
-            "eubi configure_conversion --auto_chunk False --channel_chunk 1",
+            "eubi configure conversion --auto_chunk False --channel_chunk 1",
         ],
         "z_chunk": [
             "# Set manual z chunk size (requires auto_chunk False)",
-            "eubi configure_conversion --auto_chunk False --z_chunk 64",
+            "eubi configure conversion --auto_chunk False --z_chunk 64",
         ],
         "y_chunk": [
             "# Set manual y chunk size (requires auto_chunk False)",
-            "eubi configure_conversion --auto_chunk False --y_chunk 256",
+            "eubi configure conversion --auto_chunk False --y_chunk 256",
         ],
         "x_chunk": [
             "# Set manual x chunk size (requires auto_chunk False)",
-            "eubi configure_conversion --auto_chunk False --x_chunk 256",
+            "eubi configure conversion --auto_chunk False --x_chunk 256",
         ],
         "time_shard_coef": [
             "# Shard = 1 × time chunk (no sharding on time axis)",
-            "eubi configure_conversion --zarr_format 3 --time_shard_coef 1",
+            "eubi configure conversion --ome_zarr_version 0.5 --time_shard_coef 1",
         ],
         "channel_shard_coef": [
             "# Shard = 1 × channel chunk",
-            "eubi configure_conversion --zarr_format 3 --channel_shard_coef 1",
+            "eubi configure conversion --ome_zarr_version 0.5 --channel_shard_coef 1",
         ],
         "z_shard_coef": [
             "# Shard = 5 × z chunk on the z axis",
-            "eubi configure_conversion --zarr_format 3 --z_shard_coef 5",
+            "eubi configure conversion --ome_zarr_version 0.5 --z_shard_coef 5",
         ],
         "y_shard_coef": [
             "# Shard = 5 × y chunk on the y axis",
-            "eubi configure_conversion --zarr_format 3 --y_shard_coef 5",
+            "eubi configure conversion --ome_zarr_version 0.5 --y_shard_coef 5",
         ],
         "x_shard_coef": [
             "# Shard = 5 × x chunk on the x axis",
-            "eubi configure_conversion --zarr_format 3 --x_shard_coef 5",
+            "eubi configure conversion --ome_zarr_version 0.5 --x_shard_coef 5",
         ],
         "time_range": [
             '# Keep only time frames 0–9 (start inclusive, stop exclusive)',
-            'eubi configure_conversion --time_range "0,10"',
+            'eubi configure conversion --time_range "0,10"',
         ],
         "channel_range": [
             "# Keep only the first two channels",
-            'eubi configure_conversion --channel_range "0,2"',
+            'eubi configure conversion --channel_range "0,2"',
         ],
         "z_range": [
             "# Keep z-slices 5 through 49",
-            'eubi configure_conversion --z_range "5,50"',
+            'eubi configure conversion --z_range "5,50"',
         ],
         "y_range": [
             "# Crop y to the first 512 pixels",
-            'eubi configure_conversion --y_range "0,512"',
+            'eubi configure conversion --y_range "0,512"',
         ],
         "x_range": [
             "# Crop x to the first 512 pixels",
-            'eubi configure_conversion --x_range "0,512"',
+            'eubi configure conversion --x_range "0,512"',
         ],
         "compressor": [
             "# Use zstd compression (good balance of speed and ratio)",
-            "eubi configure_conversion --compressor zstd",
+            "eubi configure conversion --compressor zstd",
             "",
             "# Disable compression entirely",
-            "eubi configure_conversion --compressor none",
+            "eubi configure conversion --compressor none",
         ],
         "compressor_params": [
             "# Use blosc with lz4 codec at compression level 9",
-            'eubi configure_conversion --compressor blosc --compressor_params \'{"cname": "lz4", "clevel": 9}\'',
+            'eubi configure conversion --compressor blosc --compressor_params \'{"cname": "lz4", "clevel": 9}\'',
         ],
         "overwrite": [
             "# Allow overwriting an existing OME-Zarr at the output path",
-            "eubi configure_conversion --overwrite",
+            "eubi configure conversion --overwrite",
         ],
         "override_channel_names": [
             "# Replace channel labels with the channel_tag values from filenames",
-            "eubi configure_conversion --override_channel_names",
+            "eubi configure conversion --override_channel_names",
         ],
         "channel_intensity_limits": [
             "# Compute display window limits from actual pixel data",
-            "eubi configure_conversion --channel_intensity_limits from_array",
+            "eubi configure conversion --channel_intensity_limits from_array",
             "",
             "# Let the viewer compute limits automatically",
-            "eubi configure_conversion --channel_intensity_limits auto",
+            "eubi configure conversion --channel_intensity_limits auto",
         ],
         "metadata_reader": [
             "# Use the Java BioFormats backend for metadata (more formats supported)",
-            "eubi configure_conversion --metadata_reader bioformats",
+            "eubi configure conversion --metadata_reader bioformats",
         ],
         "save_omexml": [
             "# Disable OME-XML sidecar file generation",
-            "eubi configure_conversion --save_omexml False",
+            "eubi configure conversion --save_omexml False",
         ],
         "squeeze": [
             "# Keep length-1 dimensions instead of removing them",
-            "eubi configure_conversion --squeeze False",
+            "eubi configure conversion --squeeze False",
         ],
         "dtype": [
             "# Cast pixel values to uint8 on write (reduces file size)",
-            "eubi configure_conversion --dtype uint8",
+            "eubi configure conversion --dtype uint8",
             "",
             "# Keep the source dtype",
-            "eubi configure_conversion --dtype auto",
+            "eubi configure conversion --dtype auto",
         ],
         "verbose": [
             "# Enable verbose per-chunk progress logging",
-            "eubi configure_conversion --verbose",
+            "eubi configure conversion --verbose",
         ],
     },
 
     # ── configure_downscale ───────────────────────────────────────────────────
-    "configure_downscale": {
+    "configure.downscale": {
         "n_layers": [
             "# Generate 5 pyramid levels",
-            "eubi configure_downscale --n_layers 5",
+            "eubi configure downscale --n_layers 5",
         ],
         "min_dimension_size": [
             "# Stop downscaling when the smallest spatial dimension is below 32 px",
-            "eubi configure_downscale --min_dimension_size 32",
+            "eubi configure downscale --min_dimension_size 32",
         ],
         "downscale_method": [
             "# Use mean aggregation (recommended for fluorescence images)",
-            "eubi configure_downscale --downscale_method mean",
+            "eubi configure downscale --downscale_method mean",
             "",
             "# Use nearest-neighbour striding (fastest, recommended for label images)",
-            "eubi configure_downscale --downscale_method simple",
+            "eubi configure downscale --downscale_method simple",
         ],
         "z_scale_factor": [
             "# Isotropic downscaling on all spatial axes",
-            "eubi configure_downscale --z_scale_factor 2 --y_scale_factor 2 --x_scale_factor 2",
+            "eubi configure downscale --z_scale_factor 2 --y_scale_factor 2 --x_scale_factor 2",
             "",
             "# Anisotropic — skip z downscaling for thick sections",
-            "eubi configure_downscale --z_scale_factor 1 --y_scale_factor 2 --x_scale_factor 2",
+            "eubi configure downscale --z_scale_factor 1 --y_scale_factor 2 --x_scale_factor 2",
         ],
-        "y_scale_factor": "eubi configure_downscale --y_scale_factor 2",
-        "x_scale_factor": "eubi configure_downscale --x_scale_factor 2",
+        "y_scale_factor": "eubi configure downscale --y_scale_factor 2",
+        "x_scale_factor": "eubi configure downscale --x_scale_factor 2",
         "time_scale_factor": [
             "# Disable time-axis downscaling (value 1 = no downscaling)",
-            "eubi configure_downscale --time_scale_factor 1",
+            "eubi configure downscale --time_scale_factor 1",
         ],
         "channel_scale_factor": [
             "# Disable channel-axis downscaling",
-            "eubi configure_downscale --channel_scale_factor 1",
+            "eubi configure downscale --channel_scale_factor 1",
+        ],
+        "keep_existing_resolutions": [
+            "# Copy a source pyramid (.ims / .zarr) verbatim instead of rebuilding it",
+            "eubi configure downscale --keep_existing_resolutions",
+        ],
+        "apply_smart_downscaling": [
+            "# Pick per-axis downscale factors automatically from voxel anisotropy",
+            "eubi configure downscale --apply_smart_downscaling",
         ],
     },
 
     # ── configure_readers ─────────────────────────────────────────────────────
-    "configure_readers": {
+    "configure.readers": {
         "as_mosaic": [
             "# Stitch tiled acquisitions into a single mosaic array on read",
-            "eubi configure_readers --as_mosaic",
+            "eubi configure readers --as_mosaic",
         ],
         "scene_index": [
             "# Always read scene 2 from multi-scene files",
-            "eubi configure_readers --scene_index 2",
+            "eubi configure readers --scene_index 2",
             "",
             "# Convert each scene to a separate OME-Zarr group",
-            "eubi configure_readers --scene_index all",
+            "eubi configure readers --scene_index all",
             "",
             "# Convert only scenes 0, 2 and 4",
-            "eubi configure_readers --scene_index 0,2,4",
+            "eubi configure readers --scene_index 0,2,4",
         ],
         "mosaic_tile_index": [
-            "# Read only the first tile of each mosaic acquisition",
-            "eubi configure_readers --as_mosaic --mosaic_tile_index 0",
+            "# Write every tile separately (default)",
+            "eubi configure readers --mosaic_tile_index all",
             "",
-            "# Read all tiles (default behaviour)",
-            "eubi configure_readers --as_mosaic --mosaic_tile_index all",
+            "# Write only tiles 0 and 2",
+            "eubi configure readers --mosaic_tile_index 0,2",
         ],
         "view_index": [
-            "# Select the second view in a multi-view dataset",
-            "eubi configure_readers --view_index 1",
+            "# Write each view separately",
+            "eubi configure readers --view_index all",
+            "",
+            "# Select only the second view",
+            "eubi configure readers --view_index 1",
         ],
         "phase_index": [
             "# Select phase index 1",
-            "eubi configure_readers --phase_index 1",
+            "eubi configure readers --phase_index 1",
         ],
         "illumination_index": [
-            "# Select illumination index 1",
-            "eubi configure_readers --illumination_index 1",
+            "# Write each illumination separately",
+            "eubi configure readers --illumination_index all",
+            "",
+            "# Select only the second illumination",
+            "eubi configure readers --illumination_index 1",
+        ],
+        "concat_views": [
+            "# Always stack views onto the channel axis",
+            "eubi configure readers --concat_views",
+        ],
+        "concat_illuminations": [
+            "# Always stack illuminations onto the channel axis",
+            "eubi configure readers --concat_illuminations",
+        ],
+        "force_bioformats": [
+            "# Always route reads through the Java Bio-Formats reader",
+            "eubi configure readers --force_bioformats",
         ],
         "rotation_index": [
             "# Select rotation index 0",
-            "eubi configure_readers --rotation_index 0",
+            "eubi configure readers --rotation_index 0",
         ],
         "sample_index": [
             "# Select sample index 0",
-            "eubi configure_readers --sample_index 0",
+            "eubi configure readers --sample_index 0",
         ],
     },
 
     # ── configure_concatenation ───────────────────────────────────────────────
-    "configure_concatenation": {
+    "configure.concatenation": {
         "concatenation_axes": [
             "# Concatenate files along the channel axis",
-            "eubi configure_concatenation --concatenation_axes c --channel_tag raw,mask",
+            "eubi configure concatenation --concatenation_axes c --channel_tag raw,mask",
             "",
             "# Concatenate along both z and channel axes simultaneously",
-            "eubi configure_concatenation --concatenation_axes zc --z_tag slices --channel_tag raw,mask",
+            "eubi configure concatenation --concatenation_axes zc --z_tag slices --channel_tag raw,mask",
         ],
         "time_tag": [
             "# Identify three time-point files by substrings in their names",
-            "eubi configure_concatenation --concatenation_axes t --time_tag t001,t002,t003",
+            "eubi configure concatenation --concatenation_axes t --time_tag t001,t002,t003",
         ],
         "channel_tag": [
             "# Two channels — raw fluorescence and segmentation mask",
-            "eubi configure_concatenation --concatenation_axes c --channel_tag raw,mask",
+            "eubi configure concatenation --concatenation_axes c --channel_tag raw,mask",
             "",
             "# Single channel — DAPI only",
-            "eubi configure_concatenation --concatenation_axes c --channel_tag DAPI",
+            "eubi configure concatenation --concatenation_axes c --channel_tag DAPI",
         ],
         "z_tag": [
             "# Multiple z-slices acquired as separate files",
-            "eubi configure_concatenation --concatenation_axes z --z_tag slice001,slice002,slice003",
+            "eubi configure concatenation --concatenation_axes z --z_tag slice001,slice002,slice003",
         ],
         "y_tag": [
             "# Two rows of a tile scan",
-            "eubi configure_concatenation --concatenation_axes y --y_tag row_top,row_bottom",
+            "eubi configure concatenation --concatenation_axes y --y_tag row_top,row_bottom",
         ],
         "x_tag": [
             "# Two columns of a tile scan",
-            "eubi configure_concatenation --concatenation_axes x --x_tag col_left,col_right",
+            "eubi configure concatenation --concatenation_axes x --x_tag col_left,col_right",
         ],
     },
 
@@ -789,7 +893,7 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
             "eubi with_config hpc to_zarr /data/input /data/output",
             "",
             "# Combine a named config with an inline override",
-            "eubi with_config hpc to_zarr /data/input /data/output --zarr_format 3",
+            "eubi with_config hpc to_zarr /data/input /data/output --ome_zarr_version 0.5",
         ],
     },
 
@@ -1082,7 +1186,7 @@ def _flag_collapsible(
     ]
     if valid_values and valid_values != "—":
         lines.append(f"    <p><strong>Valid values:</strong>&nbsp; {valid_values}</p>")
-    lines.append(f"    <p>{desc}</p>")
+    lines.append(f"    <p>{_rst_inline(desc)}</p>")
     if examples:
         if isinstance(examples, str):
             examples = [examples]
@@ -1113,8 +1217,97 @@ def _flag_collapsible(
 # Single command card renderer
 # ---------------------------------------------------------------------------
 
+def _resolve_method(name: str) -> Any:
+    """Resolve a (possibly dotted) command name to its method object.
+
+    ``"to_zarr"`` → ``EuBIBridge.to_zarr``;
+    ``"configure.cluster"`` → ``ConfigureGroup.cluster``.
+    """
+    if "." in name:
+        group, _, sub = name.partition(".")
+        group_cls = _GROUP_CLASSES.get(group)
+        return getattr(group_cls, sub, None) if group_cls else None
+    return getattr(EuBIBridge, name, None)
+
+
+# Group-prefix → class holding that group's subcommand methods.
+_GROUP_CLASSES: dict[str, Any] = {
+    "configure": ConfigureGroup,
+}
+
+
+_SECTION_RE = re.compile(
+    r"^(Args|Arguments|Returns|Raises|Note|Notes|Example|Examples|Yields):"
+)
+
+
+def _rst_inline(text: str) -> str:
+    """Convert reStructuredText ``inline code`` to Markdown `inline code`."""
+    return re.sub(r"``([^`]+)``", r"`\1`", text)
+
+
+def _render_doc_body(raw_doc: str) -> list[str]:
+    """Render the description between the summary line and the first section
+    header, preserving paragraph breaks and reStructuredText ``::`` literal
+    blocks (rendered as fenced ``shell`` code) instead of collapsing everything
+    into a single run-on line.
+
+    Returns admonition-body lines, indented four spaces.
+    """
+    out: list[str] = []
+    para: list[str] = []
+    code: list[str] = []
+    in_code = False
+
+    def flush_para() -> None:
+        if para:
+            text = _rst_inline(" ".join(s.strip() for s in para)).strip()
+            if text:
+                out.extend(["    " + text, ""])
+        para.clear()
+
+    def flush_code() -> None:
+        # Drop blank lines that bracket the literal block.
+        while code and code[0] == "":
+            code.pop(0)
+        while code and code[-1] == "":
+            code.pop()
+        if code:
+            out.append("    ```shell")
+            out.extend("    " + c for c in code)
+            out.extend(["    ```", ""])
+        code.clear()
+
+    for raw in raw_doc.splitlines()[1:]:        # skip the one-line summary
+        if _SECTION_RE.match(raw.strip()):
+            break
+        if in_code:
+            if raw.strip() == "" or raw[:1].isspace():
+                code.append(raw.strip())        # blank or still-indented → code
+                continue
+            flush_code()                        # dedented prose resumes
+            in_code = False
+        stripped = raw.strip()
+        if stripped == "":
+            flush_para()
+        elif stripped.endswith("::"):           # RST literal-block introducer
+            para.append(stripped[:-1])          # "chaining::" → "chaining:"
+            flush_para()
+            in_code = True
+        else:
+            para.append(stripped)
+    flush_para()
+    flush_code()
+    return out
+
+
 def _render_command(name: str, method: Any) -> str:
-    """Render one collapsible admonition card for a command."""
+    """Render one collapsible admonition card for a command.
+
+    *name* may be dotted (e.g. ``configure.cluster``); the CLI form replaces the
+    dot with a space (``eubi configure cluster``).
+    """
+    display = name.replace(".", " ")
     sig = inspect.signature(method)
     raw_doc = inspect.getdoc(method) or ""
     summary = raw_doc.split("\n")[0].rstrip(".")
@@ -1132,11 +1325,11 @@ def _render_command(name: str, method: Any) -> str:
 
     # Usage line
     req_str = " ".join(n.upper() for n, _ in required)
-    usage_parts = [f"eubi {name}", req_str, "[OPTIONS]"]
+    usage_parts = [f"eubi {display}", req_str, "[OPTIONS]"]
     usage = " ".join(p for p in usage_parts if p)
 
     lines: list[str] = [
-        f'??? command "**`{name}`**&ensp;—&ensp;{summary}"',
+        f'??? command "**`{display}`**&ensp;—&ensp;{summary}"',
         "",
         "    **Usage:**",
         "    ```shell",
@@ -1147,16 +1340,9 @@ def _render_command(name: str, method: Any) -> str:
         lines.append(f"    eubi with_config NAME {name} {req_str} [OPTIONS]")
     lines += ["    ```", ""]
 
-    # Extended description (between summary line and Args: section)
-    body_lines = []
-    for l in raw_doc.splitlines()[1:]:
-        stripped = l.strip()
-        if re.match(r"^(Args|Arguments|Returns|Raises|Note|Notes|Example|Examples|Yields):", stripped):
-            break
-        if stripped:
-            body_lines.append(stripped)
-    if body_lines:
-        lines += ["    " + " ".join(body_lines), ""]
+    # Extended description (between summary line and Args: section) — keeps
+    # paragraph breaks and reStructuredText literal blocks intact.
+    lines += _render_doc_body(raw_doc)
 
     # ── Required args ──
     if required:
@@ -1228,9 +1414,8 @@ click any command card to expand its full parameter reference.
 !!! tip "Named-config chaining"
     Prefix any command with `with_config NAME` to use a saved config profile:
     ```shell
-    eubi with_config hpc to_zarr /data/input /data/output --zarr_format 3
+    eubi with_config hpc to_zarr /data/input /data/output --ome_zarr_version 0.5
     ```
-    See [CLI Usage Guide](../cli.md) for the full workflow.
 
 """
 
@@ -1250,7 +1435,7 @@ def generate_section(group: str, commands: list[str]) -> str:
     intro = _CONVERSION_INTRO if group == "Conversion" else _SECTION_INTRO
     parts = [f"# {group}\n\n", intro]
     for cmd in commands:
-        method = getattr(EuBIBridge, cmd, None)
+        method = _resolve_method(cmd)
         if method is None:
             continue
         parts.append(_render_command(cmd, method))

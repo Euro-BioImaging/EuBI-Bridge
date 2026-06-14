@@ -17,6 +17,7 @@ import numpy as np
 import s3fs
 import tensorstore as ts
 import zarr
+from natsort import natsorted
 
 
 def _zarr_group(store, overwrite: bool, zarr_format: int) -> zarr.Group:
@@ -309,10 +310,12 @@ async def downscale_with_tensorstore_async(
 
     # compressor_params = dict(arr.codec.to_json())
 
-    # Write downscaled layers concurrently with fixed region size
-    # Fixed 16 MB regions ensure fast downscaling regardless of chunk size
-    downscale_region_size_mb = 16.0
-    logger.info(f"Downscaling with fixed region_size_mb={downscale_region_size_mb} MB")
+    # Write downscaled layers concurrently, reusing the same region size as the
+    # base write (region_size_mb, resolved from kwargs above) so downscaling
+    # honours the user's configured streaming-region budget instead of a fixed
+    # value.
+    downscale_region_size_mb = region_size_mb
+    logger.info(f"Downscaling with region_size_mb={downscale_region_size_mb} MB")
     
     coros = []
     layer_count = 0
@@ -1026,7 +1029,9 @@ async def store_multiscale_async(
     ### Make the base path (use outpath which is the wrapped/resolved path)
     base_store_path = os.path.join(outpath, '0')
     ### Add multiscales metadata
-    version = '0.5' if zarr_format == 3 else '0.4'
+    # Prefer an explicit OME-Zarr version (future-proof); fall back to deriving it
+    # from the zarr container format for the current 0.4<->2 / 0.5<->3 mapping.
+    version = kwargs.get('ome_zarr_version') or ('0.5' if zarr_format == 3 else '0.4')
     meta = _get_or_create_multimeta(
         gr,
         axis_order = axes,
@@ -1115,3 +1120,129 @@ async def store_multiscale_async(
         pyr = Pyramid(gr)
 
     return pyr
+
+
+async def store_existing_pyramid_async(
+    pyr: Pyramid,
+    output_path: Union[Path, str],
+    axes: Sequence[str],
+    units: Sequence[str],
+    channel_meta: Optional[dict] = None,
+    zarr_format: int = 2,
+    auto_chunk: bool = True,
+    output_chunks: Optional[Tuple[int, ...]] = None,
+    output_shard_coefficients: Optional[Tuple[int, ...]] = None,
+    overwrite: bool = False,
+    *,
+    num_readers: Optional[int] = None,
+    max_concurrency: Optional[int] = None,
+    region_size_mb: float = 8.0,
+    queue_size: Optional[int] = None,
+    gc_interval: float = 15.0,
+    **kwargs
+) -> Pyramid:
+    """Write all layers of an already-built multiscale ``Pyramid`` verbatim.
+
+    Unlike ``store_multiscale_async``, this does not call
+    ``downscale_with_tensorstore_async`` -- every resolution level present in
+    ``pyr.layers`` is written as-is to ``output_path/{level}``, using the
+    per-level scales from ``pyr.meta``.
+    """
+    writer_func = write_with_queue_async
+    verbose = kwargs.get('verbose', False)
+    output_shards = kwargs.get('output_shards', None)
+    target_chunk_mb = kwargs.get('target_chunk_mb', 1)
+    compressor = kwargs.get('compressor', 'blosc')
+    compressor_params = kwargs.get('compressor_params', {})
+    channels = channel_meta
+
+    outpath = wrap_output_path(output_path)
+    gr = _zarr_group(outpath, overwrite=overwrite, zarr_format=zarr_format)
+
+    version = kwargs.get('ome_zarr_version') or ('0.5' if zarr_format == 3 else '0.4')
+    meta = _get_or_create_multimeta(
+        gr,
+        axis_order=axes,
+        unit_list=units,
+        version=version
+    )
+
+    layers = pyr.layers
+    if channels == 'auto':
+        base_arr = layers[natsorted(layers.keys())[0]]
+        if 'c' in axes:
+            idx = axes.index('c')
+            size = base_arr.shape[idx]
+        else:
+            size = 1
+        meta.autocompute_omerometa(size, base_arr.dtype)
+    elif channels is not None:
+        if verbose:
+            logger.info(f"Adding channel metadata: {channels}")
+        meta.metadata['omero']['channels'] = channels
+
+    meta.save_changes()
+
+    for key in natsorted(layers.keys()):
+        arr = layers[key]
+        dtype = kwargs.get('dtype', arr.dtype)
+        if dtype is None:
+            dtype = arr.dtype
+        elif isinstance(dtype, str):
+            dtype = np.dtype(dtype)
+
+        if auto_chunk or output_chunks is None:
+            chunks = autocompute_chunk_shape(
+                arr.shape,
+                axes=axes,
+                target_chunk_mb=target_chunk_mb,
+                dtype=dtype
+            )
+        else:
+            chunks = output_chunks
+
+        chunks = np.minimum(chunks, arr.shape).tolist()
+        chunks = tuple(int(item) for item in chunks)
+
+        if output_shards is not None:
+            shards = output_shards
+        elif output_shard_coefficients is not None:
+            shards = tuple(int(c * s) for c, s in zip(chunks, output_shard_coefficients))
+        else:
+            shards = chunks
+        shards = tuple(int(item) for item in shards)
+
+        store_path = os.path.join(outpath, key)
+        scale = pyr.meta.get_scale(key)
+
+        if verbose:
+            logger.info(f"Writing existing resolution level '{key}' to {store_path} "
+                         f"with shape {arr.shape}, chunks {chunks}, scale {scale}")
+
+        level_start_time = time.time()
+        await writer_func(
+            arr=arr,
+            output_path=store_path,
+            output_chunks=chunks,
+            zarr_format=zarr_format,
+            dtype=dtype,
+            dimension_names=list(axes),
+            compressor=compressor,
+            compressor_params=compressor_params,
+            pixel_sizes=tuple(scale),
+            num_readers=num_readers,
+            max_concurrency=max_concurrency,
+            region_size_mb=region_size_mb,
+            queue_size=queue_size,
+            gc_interval=gc_interval,
+            overwrite=overwrite,
+            verbose=verbose,
+            output_shards=shards,
+        )
+        level_elapsed = (time.time() - level_start_time) / 60
+        logger.info(f"Resolution level '{key}' written in {level_elapsed:.2f} minutes")
+
+        meta.add_dataset(path=key, scale=scale)
+        meta.save_changes()
+
+    return Pyramid(gr)

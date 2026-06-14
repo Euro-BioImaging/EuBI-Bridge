@@ -18,7 +18,8 @@ import psutil
 from eubi_bridge.conversion.worker_init import safe_worker_wrapper
 from eubi_bridge.core.config_models import ChunkConfig, ConversionJob
 from eubi_bridge.core.data_manager import ArrayManager, _compute_tile_shape
-from eubi_bridge.core.writers import store_multiscale_async
+from eubi_bridge.core.writers import (store_existing_pyramid_async,
+                                       store_multiscale_async)
 from eubi_bridge.utils.array_utils import autocompute_chunk_shape
 from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger
@@ -157,8 +158,19 @@ def parse_scale_factors(manager: ArrayManager, job: ConversionJob) -> Tuple:
 
 
 def parse_smart_scale_factors(manager: ArrayManager, job: ConversionJob) -> Optional[Tuple]:
-    """Compute isotropic scale factors when ``apply_smart_downscaling`` is set in job.extra."""
-    if not job.extra.get('apply_smart_downscaling', False):
+    """Compute isotropic scale factors when ``apply_smart_downscaling`` is set.
+
+    Smart-scaling parameters live on ``job.downscale`` (the DownscaleConfig); the
+    legacy ``job.extra`` location is still honoured as a fallback.
+    """
+    ds = job.downscale
+
+    def _smart(name):
+        val = getattr(ds, name, None)
+        return val if val is not None else job.extra.get(name)
+
+    if not (getattr(ds, 'apply_smart_downscaling', False)
+            or job.extra.get('apply_smart_downscaling', False)):
         return None
 
     from eubi_bridge.core.scale import compute_isotropic_scale_factors
@@ -177,7 +189,7 @@ def parse_smart_scale_factors(manager: ArrayManager, job: ConversionJob) -> Opti
         ('y_smart_scale_factor', 'y'),
         ('x_smart_scale_factor', 'x'),
     ):
-        val = job.extra.get(kwarg_name)
+        val = _smart(kwarg_name)
         if val is not None:
             try:
                 auto_factors[axis] = max(1, int(val))
@@ -387,33 +399,62 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         if clus.bf_read_concurrency is not None:
             dask_kw['num_workers'] = clus.bf_read_concurrency
         with dask.config.set(**dask_kw):
-            await store_multiscale_async(
-                arr=manager.array,
-                dtype=conv.dtype,
-                output_path=output_path,
-                zarr_format=conv.zarr_format,
-                axes=manager.axes,
-                scales=parse_scales(manager, job),
-                units=parse_units(manager, job),
-                channel_meta=channel_meta,
-                auto_chunk=conv.auto_chunk,
-                output_chunks=parse_chunks(manager, job),
-                output_shard_coefficients=parse_shard_coefs(manager, job),
-                overwrite=conv.overwrite,
-                n_layers=ds.n_layers,
-                min_dimension_size=ds.min_dimension_size,
-                scale_factors=parse_scale_factors(manager, job),
-                smart_scale_factor=parse_smart_scale_factors(manager, job),
-                max_concurrency=clus.max_concurrency,
-                region_size_mb=clus.region_size_mb,
-                compute_batch_size=job.extra.get('compute_batch_size', 4),
-                queue_size=clus.queue_size,
-                memory_limit_per_batch=job.extra.get('memory_limit_per_batch', 1024),
-                verbose=conv.verbose,
-                compressor=conv.compressor,
-                compressor_params=conv.compressor_params,
-                downscale_method=ds.downscale_method,
-            )
+            if ds.keep_existing_resolutions and manager.pyr is not None and len(manager.pyr.layers) > 1:
+                logger.info(f"Preserving {len(manager.pyr.layers)} existing resolution levels "
+                            f"from source for {output_path}")
+                await store_existing_pyramid_async(
+                    pyr=manager.pyr,
+                    output_path=output_path,
+                    axes=manager.axes,
+                    units=parse_units(manager, job),
+                    channel_meta=channel_meta,
+                    zarr_format=conv.zarr_format,
+                    ome_zarr_version=conv.ome_zarr_version,
+                    auto_chunk=conv.auto_chunk,
+                    output_chunks=parse_chunks(manager, job),
+                    output_shard_coefficients=parse_shard_coefs(manager, job),
+                    overwrite=conv.overwrite,
+                    max_concurrency=clus.max_concurrency,
+                    region_size_mb=clus.region_size_mb,
+                    queue_size=clus.queue_size,
+                    verbose=conv.verbose,
+                    compressor=conv.compressor,
+                    compressor_params=conv.compressor_params,
+                    dtype=conv.dtype,
+                )
+            else:
+                if ds.keep_existing_resolutions:
+                    logger.info(f"keep_existing_resolutions is set but no existing multiscale "
+                                f"pyramid was found for {output_path}; rebuilding pyramid normally")
+                await store_multiscale_async(
+                    arr=manager.array,
+                    dtype=conv.dtype,
+                    output_path=output_path,
+                    zarr_format=conv.zarr_format,
+                    ome_zarr_version=conv.ome_zarr_version,
+                    axes=manager.axes,
+                    scales=parse_scales(manager, job),
+                    units=parse_units(manager, job),
+                    channel_meta=channel_meta,
+                    auto_chunk=conv.auto_chunk,
+                    output_chunks=parse_chunks(manager, job),
+                    output_shard_coefficients=parse_shard_coefs(manager, job),
+                    overwrite=conv.overwrite,
+                    n_layers=ds.n_layers,
+                    min_dimension_size=ds.min_dimension_size,
+                    scale_factors=parse_scale_factors(manager, job),
+                    smart_scale_factor=parse_smart_scale_factors(manager, job),
+                    max_concurrency=clus.max_concurrency,
+                    max_concurrent_downscale_layers=clus.max_concurrent_downscale_layers,
+                    region_size_mb=clus.region_size_mb,
+                    compute_batch_size=job.extra.get('compute_batch_size', 4),
+                    queue_size=clus.queue_size,
+                    memory_limit_per_batch=job.extra.get('memory_limit_per_batch', 1024),
+                    verbose=conv.verbose,
+                    compressor=conv.compressor,
+                    compressor_params=conv.compressor_params,
+                    downscale_method=ds.downscale_method,
+                )
 
         update_channels = conv.channel_intensity_limits == 'from_array'
 
@@ -446,6 +487,24 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                 await out_mgr.save_omexml(output_path, overwrite=True)
 
 
+async def _process_single_scene_safe(manager: ArrayManager, output_path: str,
+                                     job: ConversionJob, sem: asyncio.Semaphore) -> None:
+    """Run ``_process_single_scene``; on failure remove any partial output and
+    re-raise so the caller can record/skip it (used for graceful degradation on
+    damaged/corrupt inputs)."""
+    try:
+        await _process_single_scene(manager, output_path, job, sem)
+    except Exception:
+        import shutil
+        try:
+            target = output_path if output_path.endswith('.zarr') else f"{output_path}.zarr"
+            if os.path.isdir(target):
+                shutil.rmtree(target, ignore_errors=True)
+        except Exception:
+            pass
+        raise
+
+
 def _generate_output_path(base_path: str, series_path: str,
                           series_idx: Optional[int] = None,
                           tile_idx: Optional[int] = None) -> str:
@@ -465,7 +524,7 @@ def _generate_output_path(base_path: str, series_path: str,
     suffix = ""
 
     if series_idx is not None:
-        suffix += f"_{series_idx}"
+        suffix += f"_scene{series_idx}"
     if tile_idx is not None:
         suffix += f"_tile{tile_idx}"
 
@@ -481,6 +540,7 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
         reader_tile_size_mb=job.cluster.bf_tile_size_mb,
         force_bioformats=job.readers.force_bioformats,
         as_mosaic=job.readers.as_mosaic,
+        keep_existing_resolutions=job.downscale.keep_existing_resolutions,
     )
 
     # scene_index may be 'all', an int, or a comma-separated string from CSV
@@ -493,14 +553,6 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
         except ValueError:
             pass
 
-    await manager.load_scenes(scene_indices=series)
-    assert manager.loaded_scenes is not None
-
-    if job.conversion.verbose:
-        first = next(iter(manager.loaded_scenes.values()), None)
-        if first is not None:
-            logger.info(f"The manager array is of type: {type(first.array)}")
-
     mosaic_tile_index = job.readers.mosaic_tile_index
     if isinstance(mosaic_tile_index, str) and mosaic_tile_index != 'all' and ',' in mosaic_tile_index:
         mosaic_tile_index = [int(x.strip()) for x in mosaic_tile_index.split(',')]
@@ -510,12 +562,19 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
         except ValueError:
             mosaic_tile_index = None
 
-    if mosaic_tile_index is not None and len(manager.loaded_scenes) > 1:
-        logger.warning(
-            "Currently cannot load multiple scenes and multiple tiles at the same time. "
-            "Will load only the first tile.")
-    elif mosaic_tile_index is not None:
-        await manager.load_tiles(tile_indices=mosaic_tile_index)
+    # A single load handles scenes, tiles, and the multi-scene × multi-tile
+    # cross product (one output container per (scene, tile)).  Tiles only
+    # materialise when reading the un-stitched mosaic (as_mosaic=False); with
+    # as_mosaic=True there is a single stitched tile, so passing a tile index
+    # is a no-op.
+    await manager.load_scenes(scene_indices=series,
+                              mosaic_tile_index=mosaic_tile_index)
+    assert manager.loaded_scenes is not None
+
+    if job.conversion.verbose:
+        first = next(iter(manager.loaded_scenes.values()), None)
+        if first is not None:
+            logger.info(f"The manager array is of type: {type(first.array)}")
 
     # ── Views / illuminations ────────────────────────────────────────────
     # Resolve view and illumination indices (same multi-value rules as scene_index).
@@ -589,33 +648,63 @@ async def unary_worker(job: ConversionJob) -> None:
                 man.series if add_scene else None,
             )
             tasks.append(asyncio.create_task(
-                _process_single_scene(man, out_path, job, sem)
+                _process_single_scene_safe(man, out_path, job, sem)
             ))
     elif manager.loaded_tiles is None:
+        # Unified scene / tile / scene×tile path: each manager carries its own
+        # .series and .mosaic_tile_index, so name by whichever dimensions are
+        # genuinely multi-valued.
+        add_tile = (manager._n_tiles or 1) > 1
         for man in manager.loaded_scenes.values():
             out_path = _generate_output_path(
                 job.output_path, man.series_path,
                 man.series if add_scene else None,
+                man.mosaic_tile_index if (add_tile and man.mosaic_tile_index is not None) else None,
             )
             tasks.append(asyncio.create_task(
-                _process_single_scene(man, out_path, job, sem)
+                _process_single_scene_safe(man, out_path, job, sem)
             ))
     elif len(manager.loaded_scenes) == 1 and manager.loaded_tiles is not None:
+        # Legacy path: tiles loaded via the standalone load_tiles().
         n_tiles  = manager._n_tiles or 1
         add_tile = n_tiles > 1
         for tile in manager.loaded_tiles.values():
             out_path = _generate_output_path(
                 job.output_path, tile.series_path,
+                None,
                 tile.mosaic_tile_index if add_tile else None,
             )
             tasks.append(asyncio.create_task(
-                _process_single_scene(tile, out_path, job, sem)
+                _process_single_scene_safe(tile, out_path, job, sem)
             ))
     else:
         raise Exception(
             "Having both multiple scenes and multiple tiles is not currently supported.")
 
-    await asyncio.gather(*tasks)
+    # Tolerate per-scene read failures so a damaged/corrupt file still yields its
+    # readable scenes (e.g. a CZI whose subblock data is unreadable past some
+    # scene).  If every output fails, surface the error.
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    failures = [r for r in results if isinstance(r, BaseException)]
+    if failures:
+        for exc in failures:
+            logger.warning(f"Skipped a scene that could not be read: {exc}")
+        if len(failures) == len(results):
+            raise failures[0]
+        written = len(results) - len(failures)
+        # Total scenes the file's index advertises (before the readability cap
+        # and these per-scene skips), so the message reflects the WHOLE file.
+        total_in_file = getattr(manager, '_n_scenes_in_file', 0) or len(results)
+        unreadable = max(0, total_in_file - written)
+        logger.warning(
+            "\n" + "=" * 78 + "\n"
+            f"PARTIAL CONVERSION — DAMAGED FILE: {job.input_path}\n"
+            f"Converted {written} of {total_in_file} scene(s) that the file "
+            f"contains. {unreadable} scene(s) exist in the file but could NOT be "
+            f"read (damaged/corrupt data) and are MISSING from the output.\n"
+            f"If you need them, re-export or repair the source file (e.g. "
+            f"'Save As' in Zeiss ZEN).\n" + "=" * 78
+        )
 
 
 async def aggregative_worker(manager: ArrayManager,

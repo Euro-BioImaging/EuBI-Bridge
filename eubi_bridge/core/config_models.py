@@ -66,6 +66,59 @@ _ANY_LABEL = sorted(SUPPORTED_COMPRESSORS_ANY - {""})
 
 
 # ---------------------------------------------------------------------------
+# OME-Zarr version <-> zarr container format
+# ---------------------------------------------------------------------------
+
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+
+# Supported OME-Zarr (NGFF) versions and the zarr container format each requires.
+# Add new versions here as they are released (e.g. "0.6": 3).
+OME_ZARR_VERSIONS: Dict[str, int] = {"0.4": 2, "0.5": 3}
+
+_zarr_format_deprecation_warned = False
+
+
+def resolve_ome_zarr_target(ome_zarr_version, zarr_format=2, warn: bool = False) -> Tuple[str, int]:
+    """Resolve the effective ``(ome_zarr_version, zarr_format)`` for an output.
+
+    ``ome_zarr_version`` supersedes ``zarr_format``: when it names a recognised
+    OME-Zarr version it wins, and the zarr container format is derived from it.
+    When it is ``None`` or unrecognised, fall back to ``zarr_format`` (2 -> '0.4',
+    3 -> '0.5').  When ``warn`` is True a one-time deprecation warning is emitted
+    on fallback, steering users to ``ome_zarr_version`` (suppressed for the
+    silent normalisation that every ConversionConfig build performs).
+
+    Returns ``(version_str, zarr_format_int)``.
+    """
+    global _zarr_format_deprecation_warned
+    if ome_zarr_version is not None:
+        v = str(ome_zarr_version).strip().lstrip("vV")
+        if v in OME_ZARR_VERSIONS:
+            return v, OME_ZARR_VERSIONS[v]
+        if warn:
+            _logger.warning(
+                "Unrecognised ome_zarr_version %r (supported: %s); falling back "
+                "to zarr_format.", ome_zarr_version, sorted(OME_ZARR_VERSIONS),
+            )
+    try:
+        fmt = int(zarr_format)
+    except (TypeError, ValueError):
+        fmt = 2
+    if fmt not in (2, 3):
+        fmt = 2
+    version = "0.5" if fmt == 3 else "0.4"
+    if warn and not _zarr_format_deprecation_warned:
+        _logger.warning(
+            "DEPRECATION: 'zarr_format' is deprecated; use 'ome_zarr_version' "
+            "instead (e.g. ome_zarr_version='0.4' or '0.5'). This run resolved to "
+            "OME-Zarr %s (zarr v%d).", version, fmt,
+        )
+        _zarr_format_deprecation_warned = True
+    return version, fmt
+
+
+# ---------------------------------------------------------------------------
 # ClusterConfig
 # ---------------------------------------------------------------------------
 
@@ -82,12 +135,12 @@ class ClusterConfig(BaseModel):
     region_size_mb: int = Field(default=256, gt=0)
     max_concurrency: int = Field(default=4, ge=1)
     max_concurrent_scenes: int = Field(default=1, ge=1)
-    memory_per_worker: str = "1GB"
+    memory_per_worker: str = "3GB"
     tensorstore_data_copy_concurrency: int = Field(default=4, ge=1)
     max_retries: int = Field(default=10, ge=0, le=100)
     bf_read_concurrency: Optional[int] = Field(default=4, ge=1)
     bf_tile_size_mb: float = Field(default=512.0, gt=0.0)
-    jvm_memory: Optional[str] = "2g"
+    jvm_memory: Optional[str] = "1g"
 
     @field_validator('jvm_memory', mode='before')
     @classmethod
@@ -187,6 +240,9 @@ class ConversionConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     verbose: bool = False
+    # OME-Zarr (NGFF) version, e.g. '0.4' or '0.5'.  Supersedes zarr_format when
+    # set to a recognised version; None falls back to zarr_format (deprecated).
+    ome_zarr_version: Optional[str] = None
     zarr_format: Literal[2, 3] = 2
     skip_dask: bool = False
     auto_chunk: bool = True
@@ -237,6 +293,30 @@ class ConversionConfig(BaseModel):
             )
         return v
 
+    @field_validator("ome_zarr_version", mode="before")
+    @classmethod
+    def _coerce_ome_zarr_version(cls, v):
+        # Fire/JSON may deliver a numeric like 0.5; normalise to a string.
+        if v is None:
+            return None
+        return str(v)
+
+    @model_validator(mode="after")
+    def _resolve_ome_zarr_version(self) -> "ConversionConfig":
+        """Resolve ome_zarr_version / zarr_format into a consistent pair.
+
+        ome_zarr_version supersedes zarr_format; an unset/unrecognised version
+        falls back to zarr_format.  Resolution here is SILENT — the deprecation
+        warning is emitted once at the conversion entry point (to_zarr), so it
+        reflects the user's actual choice rather than every model build.  Runs
+        before the compressor check so it validates against the effective format.
+        """
+        version, fmt = resolve_ome_zarr_target(self.ome_zarr_version, self.zarr_format,
+                                               warn=False)
+        self.ome_zarr_version = version
+        self.zarr_format = fmt
+        return self
+
     @model_validator(mode="after")
     def _validate_compressor_for_format(self) -> "ConversionConfig":
         """Cross-field check: compressor must be valid for the chosen zarr_format."""
@@ -284,6 +364,15 @@ class DownscaleConfig(BaseModel):
     n_layers: Optional[int] = None
     min_dimension_size: int = Field(default=64, gt=0)
     downscale_method: Literal["simple", "mean", "median", "min", "max", "mode"] = "simple"
+    keep_existing_resolutions: bool = False
+    # Smart (isotropic) downscaling: when enabled, the first pyramid level uses
+    # automatically-computed factors to make voxels as isotropic as possible.
+    # Per-axis overrides may be given (None = auto).  Matches the GUI controls.
+    apply_smart_downscaling: bool = False
+    time_smart_scale_factor: Optional[int] = None
+    z_smart_scale_factor: Optional[int] = None
+    y_smart_scale_factor: Optional[int] = None
+    x_smart_scale_factor: Optional[int] = None
 
     @field_validator("n_layers")
     @classmethod

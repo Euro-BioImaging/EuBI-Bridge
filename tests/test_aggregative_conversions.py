@@ -285,17 +285,20 @@ class TestMultiAxisConcatenation:
         tmpdir, files = aggregative_zc_concat_files
         output = tmp_path / "output.zarr"
         
+        # Named (categorical) channels must be given as a comma-separated list
+        # of the full per-channel tags — a bare 'c_' would expect a numeric
+        # suffix (c_0, c_1), which these files don't have.
         run_eubi_command([
             str(tmpdir),
             str(output),
             '--concatenation_axes', 'zc',
             '--z_tag', 'z',
-            '--channel_tag', 'c_'
+            '--channel_tag', 'c_gfp,c_mcherry'
         ])
-        
+
         assert validate_zarr_exists(output)
         shape = get_base_array_shape(output)
-        
+
         # Should have concatenated Z slices and channels
         # Expected: 3 Z × 2 C × 128 × 128 = shape (6, 128, 128) or similar
         # depending on organization
@@ -305,39 +308,47 @@ class TestMultiAxisConcatenation:
 class TestTagFiltering:
     """Tests for tag-based file matching and filtering."""
     
-    def test_tag_filtering_with_exclude(self, aggregative_channel_categorical_files, tmp_path):
-        """Test that only files matching tags are included."""
-        tmpdir, files = aggregative_channel_categorical_files
+    def test_tag_filtering_with_exclude(self, aggregative_channel_with_brightfield_files, tmp_path):
+        """Test that --excludes drops matching files before concatenation.
+
+        Files contain gfp, mcherry and brightfield channels; excluding the
+        brightfield files must still leave two channel groups to concatenate.
+        """
+        tmpdir, files = aggregative_channel_with_brightfield_files
         output = tmp_path / "output.zarr"
-        
-        # Include only gfp, exclude mcherry
+
+        # Concatenate gfp + mcherry, excluding the brightfield acquisitions.
         run_eubi_command([
             str(tmpdir),
             str(output),
             '--concatenation_axes', 'c',
             '--time_tag', 't',
-            '--channel_tag', 'gfp',
-            '--excludes', 'mcherry'
+            '--channel_tag', 'gfp,mcherry',
+            '--excludes', 'brightfield'
         ])
-        
+
         assert validate_zarr_exists(output)
-        # Should only have 1 channel (gfp)
-        validate_channel_metadata(output, expected_n_channels=1)
-    
+        # Two channels remain (gfp, mcherry); brightfield excluded.
+        validate_channel_metadata(output, expected_n_channels=2)
+
     def test_partial_tag_match(self, aggregative_channel_categorical_files, tmp_path):
-        """Test that tag matching uses substring containment."""
+        """Test that categorical tag matching uses substring containment."""
         tmpdir, files = aggregative_channel_categorical_files
         output = tmp_path / "output.zarr"
-        
-        # Tag "gfp" should match files containing "gfp"
+
+        # Partial substrings 'gf' / 'cherry' should still match the full
+        # 'gfp' / 'mcherry' channel filenames by containment.
         run_eubi_command([
             str(tmpdir),
             str(output),
             '--concatenation_axes', 'c',
-            '--channel_tag', 'gfp'
+            '--time_tag', 't',
+            '--channel_tag', 'gf,cherry'
         ])
-        
+
         assert validate_zarr_exists(output)
+        # Both partial tags matched -> two channels.
+        validate_channel_metadata(output, expected_n_channels=2)
 
 
 class TestNoMatchingTags:
@@ -364,6 +375,31 @@ class TestNoMatchingTags:
         assert result.returncode != 0, f"Expected failure but got success. stderr: {result.stderr}"
         # Verify error message is explicit about tag mismatch
         assert 'does not match any files' in result.stderr, f"Expected error about tag not matching files. Got: {result.stderr}"
+
+    def test_single_categorical_tag_gives_clear_error(self, aggregative_channel_categorical_files, tmp_path):
+        """A single categorical channel tag (present in filenames but with no
+        numeric suffix) must fail with an actionable message pointing the user to
+        a comma-separated list, not a cryptic internal error."""
+        tmpdir, files = aggregative_channel_categorical_files
+        output = tmp_path / "output.zarr"
+
+        # 'gfp' appears in filenames but is not followed by a number.
+        eubi_path = find_eubi_executable()
+        result = subprocess.run(
+            [eubi_path, 'to_zarr',
+             str(tmpdir), str(output),
+             '--concatenation_axes', 'c',
+             '--time_tag', 't',
+             '--channel_tag', 'gfp'],
+            capture_output=True,
+            text=True
+        )
+
+        assert result.returncode != 0, f"Expected failure but got success. stderr: {result.stderr}"
+        combined = result.stderr + result.stdout
+        # Error must guide the user toward a comma-separated categorical list.
+        assert 'comma-separated' in combined, (
+            f"Expected actionable categorical-tag guidance. Got: {combined}")
 
 
 class TestOMEMetadataMerge:

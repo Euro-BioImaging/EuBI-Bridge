@@ -69,7 +69,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--output_file</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Write output to this path; use ``.html`` for HTML output.</p>
+    <p>Write output to this path; use `.html` for HTML output.</p>
     <pre><code># Save as an HTML report you can open in a browser
     eubi show_pixel_meta /data/input --output_file report.html
     </code></pre>
@@ -141,7 +141,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--z_scale</code></summary>
     <p><strong>Type:</strong>&nbsp; `float`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Physical pixel size along the z axis (e.g. ``0.5`` for 0.5 µm z-steps).</p>
+    <p>Physical pixel size along the z axis (e.g. `0.5` for 0.5 µm z-steps).</p>
     <pre><code># Set z-step size and unit together
     eubi update_pixel_meta /data/output --z_scale 0.5 --z_unit micrometer
     </code></pre>
@@ -169,7 +169,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--time_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Physical unit for the time axis (e.g. ``second``, ``millisecond``).</p>
+    <p>Physical unit for the time axis (e.g. `second`, `millisecond`).</p>
     <pre><code>eubi update_pixel_meta /data/output --time_scale 1.0 --time_unit second
     </code></pre>
     </details>
@@ -178,7 +178,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--z_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Physical unit for the z axis (e.g. ``micrometer``, ``nanometer``).</p>
+    <p>Physical unit for the z axis (e.g. `micrometer`, `nanometer`).</p>
     <pre><code>eubi update_pixel_meta /data/output --z_scale 0.5 --z_unit micrometer
     </code></pre>
     </details>
@@ -245,7 +245,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--channel_labels</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `""`</p>
-    <p>Index/name pairs, e.g. ``"0,DAPI;1,GFP"``.</p>
+    <p>Index/name pairs, e.g. `"0,DAPI;1,GFP"`.</p>
     <pre><code># Rename channels 0 and 1
     eubi update_channel_meta /data/output --channel_labels "0,DAPI;1,GFP"
     </code></pre>
@@ -258,7 +258,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--channel_colors</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `""`</p>
-    <p>Index/hex pairs, e.g. ``"0,0000FF;1,00FF00"``.</p>
+    <p>Index/hex pairs, e.g. `"0,0000FF;1,00FF00"`.</p>
     <pre><code># Set display colours in hex (blue DAPI, green GFP)
     eubi update_channel_meta /data/output --channel_colors "0,0000FF;1,00FF00"
     </code></pre>
@@ -271,7 +271,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--channel_intensity_limits</code></summary>
     <p><strong>Type:</strong>&nbsp; `Literal['from_dtype', 'from_array', 'auto']`</p>
     <p><strong>Default:</strong>&nbsp; `from_dtype`</p>
-    <p>``'from_dtype'`` (default), ``'from_array'``, or ``'auto'``.</p>
+    <p>`'from_dtype'` (default), `'from_array'`, or `'auto'`.</p>
     <pre><code># Compute per-channel min/max from the pixel data
     eubi update_channel_meta /data/output --channel_intensity_limits from_array
     </code></pre>

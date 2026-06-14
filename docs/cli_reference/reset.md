@@ -11,6 +11,6 @@ click any command card to expand its full parameter reference.
     eubi reset_config [OPTIONS]
     ```
 
-    Overwrites the active ``.eubi_config.json`` with the bundled root defaults.  Named configs (``hpc.json``, etc.) are not affected. Use ``show_root_defaults`` to inspect the values that will be written.
+    Overwrites the active `.eubi_config.json` with the bundled root defaults.  Named configs (`hpc.json`, etc.) are not affected. Use `show_root_defaults` to inspect the values that will be written.
 
 

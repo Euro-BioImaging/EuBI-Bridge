@@ -28,6 +28,7 @@ from eubi_bridge.core.config_models import (
     ClusterConfig,
     ConcatenationConfig,
     ConversionConfig,
+    resolve_ome_zarr_target,
     DownscaleConfig,
     ReaderConfig,
 )
@@ -128,12 +129,18 @@ class ConfigManager:
             region_size_mb=256,
             max_concurrency=4,
             max_concurrent_scenes=1,
-            memory_per_worker='1GB',
+            max_concurrent_downscale_layers=3,
+            memory_per_worker='3GB',
             tensorstore_data_copy_concurrency=4,
             max_retries=10,
             bf_read_concurrency=4,
             bf_tile_size_mb=512.0,
-            jvm_memory='2g',
+            jvm_memory='1g',
+            slurm_time='24:00:00',
+            slurm_account=None,
+            slurm_partition=None,
+            slurm_worker_timeout=300,
+            slurm_sif_path=None,
         ),
         readers=dict(
             as_mosaic=False,
@@ -150,6 +157,7 @@ class ConfigManager:
         ),
         conversion=dict(
             verbose=False,
+            ome_zarr_version=None,
             zarr_format=2,
             skip_dask=False,
             auto_chunk=True,
@@ -189,6 +197,12 @@ class ConfigManager:
             n_layers=None,
             min_dimension_size=64,
             downscale_method='simple',
+            keep_existing_resolutions=False,
+            apply_smart_downscaling=False,
+            time_smart_scale_factor=None,
+            z_smart_scale_factor=None,
+            y_smart_scale_factor=None,
+            x_smart_scale_factor=None,
         ),
         concatenation=dict(
             concatenation_axes=None,
@@ -297,6 +311,7 @@ class ConfigManager:
                           memory_per_worker: str = 'default',
                           max_concurrency: int = 'default',
                           max_concurrent_scenes: int = 'default',
+                          max_concurrent_downscale_layers: int = 'default',
                           on_local_cluster: bool = 'default',
                           on_slurm: bool = 'default',
                           use_threading: bool = 'default',
@@ -304,7 +319,12 @@ class ConfigManager:
                           max_retries: int = 'default',
                           bf_read_concurrency: int = 'default',
                           bf_tile_size_mb: float = 'default',
-                          jvm_memory: str = 'default') -> None:
+                          jvm_memory: str = 'default',
+                          slurm_time: str = 'default',
+                          slurm_account: str = 'default',
+                          slurm_partition: str = 'default',
+                          slurm_worker_timeout: int = 'default',
+                          slurm_sif_path: str = 'default') -> None:
         """Update cluster parameters. Omitted arguments keep their current values."""
         params = {k: v for k, v in locals().items() if k != 'self'}
         for key, val in params.items():
@@ -334,6 +354,7 @@ class ConfigManager:
         self._save_config_to_json(self.config)
 
     def configure_conversion(self,
+                             ome_zarr_version: str = 'default',
                              zarr_format: int = 'default',
                              skip_dask: bool = 'default',
                              auto_chunk: bool = 'default',
@@ -378,7 +399,14 @@ class ConfigManager:
                             channel_scale_factor: int = 'default',
                             z_scale_factor: int = 'default',
                             y_scale_factor: int = 'default',
-                            x_scale_factor: int = 'default') -> None:
+                            x_scale_factor: int = 'default',
+                            downscale_method: str = 'default',
+                            keep_existing_resolutions: bool = 'default',
+                            apply_smart_downscaling: bool = 'default',
+                            time_smart_scale_factor: int = 'default',
+                            z_smart_scale_factor: int = 'default',
+                            y_smart_scale_factor: int = 'default',
+                            x_smart_scale_factor: int = 'default') -> None:
         """Update downscale parameters. Omitted arguments keep their current values."""
         params = {k: v for k, v in locals().items() if k != 'self'}
         for key, val in params.items():
@@ -611,7 +639,9 @@ class ConfigManager:
             header_style="bold white on blue", padding=(0, 1), border_style="blue",
         )
         table.add_column("Section",   style="magenta", width=15)
-        table.add_column("Parameter", style="cyan",    width=25)
+        # Sized to fit the longest parameter name (e.g.
+        # 'tensorstore_data_copy_concurrency', 33 chars) without cropping.
+        table.add_column("Parameter", style="cyan",    width=35, no_wrap=True)
         table.add_column("Value",     style="green")
         section_list = list(config_sections.items())
         for idx, (section_name, section_dict) in enumerate(section_list):
@@ -631,6 +661,264 @@ class ConfigManager:
             if idx < len(section_list) - 1:
                 table.add_section()
         _console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# ConfigureGroup — `eubi configure <section>` subcommands
+# ---------------------------------------------------------------------------
+
+class ConfigureGroup:
+    """Update a configuration section. Run ``eubi configure`` to list sections.
+
+    Subcommands:
+
+    * ``cluster``       - parallelism / cluster / JVM settings
+    * ``conversion``    - Zarr output, chunking, compression, dtype
+    * ``downscale``     - pyramid level count and per-axis scale factors
+    * ``readers``       - scene / view / illumination / mosaic selection
+    * ``concatenation`` - aggregative axes and filename tags
+
+    Each subcommand updates only the arguments you pass; omitted arguments keep
+    their current values.  Example::
+
+        eubi configure cluster --max_workers 8
+    """
+
+    def __init__(self, config: 'ConfigManager'):
+        self._cfg = config
+
+    def cluster(self,
+                max_workers: int = 'default',
+                queue_size: int = 'default',
+                region_size_mb: int = 'default',
+                memory_per_worker: str = 'default',
+                max_concurrency: int = 'default',
+                max_concurrent_scenes: int = 'default',
+                max_concurrent_downscale_layers: int = 'default',
+                on_local_cluster: bool = 'default',
+                on_slurm: bool = 'default',
+                use_threading: bool = 'default',
+                tensorstore_data_copy_concurrency: int = 'default',
+                max_retries: int = 'default',
+                bf_read_concurrency: int = 'default',
+                bf_tile_size_mb: float = 'default',
+                jvm_memory: str = 'default',
+                slurm_time: str = 'default',
+                slurm_account: str = 'default',
+                slurm_partition: str = 'default',
+                slurm_worker_timeout: int = 'default',
+                slurm_sif_path: str = 'default') -> None:
+        """Update cluster / concurrency parameters. Omitted arguments keep their current values.
+
+        Args:
+            max_workers: Number of parallel file-level worker processes (default 4).
+            queue_size: Internal write-queue depth per worker (default 4).
+            region_size_mb: Region size in MB for spatial partitioning (default 256).
+            memory_per_worker: Memory limit accepted by SLURM / LocalCluster,
+                e.g. ``'8GB'`` (default ``'1GB'``).
+            max_concurrency: TensorStore write concurrency per worker (default 4).
+            max_concurrent_scenes: Parallel scenes within one file (default 1).
+                Increase only when writing a multi-scene file to a large store.
+            max_concurrent_downscale_layers: Number of downscaled pyramid layers
+                written concurrently per scene (default 3).
+            on_local_cluster: Use a Dask LocalCluster backend (default False).
+            on_slurm: Submit jobs to a SLURM cluster (default False).
+            use_threading: Use ThreadPool instead of ProcessPool (default False).
+            tensorstore_data_copy_concurrency: TensorStore internal copy threads
+                (default 4).
+            max_retries: Retries on broken worker process (default 10).
+            bf_read_concurrency: Dask thread count for parallel bfio tile reads
+                (default 4).  ``None`` lets dask choose (cpu_count).
+            bf_tile_size_mb: Tile size budget in MB for bfio tiled reading
+                (default 512).
+            jvm_memory: Maximum JVM heap for Bio-Formats, e.g. ``'8GB'``, ``'4GB'``.
+                Accepts ``'NGB'`` / ``'NMB'`` (like memory_per_worker) and normalises
+                internally to JVM format (``'Ng'`` / ``'Nm'``).  Default ``'2g'``.
+            slurm_time: SLURM job wall-clock limit, e.g. ``'24:00:00'`` (used only
+                when on_slurm=True).
+            slurm_account: SLURM account/allocation to charge (default None).
+            slurm_partition: SLURM partition/queue to submit to (default None).
+            slurm_worker_timeout: Seconds to wait for SLURM workers to start
+                (default 300).
+            slurm_sif_path: Path to an Apptainer/Singularity SIF image to run
+                workers in (default None).
+        """
+        return self._cfg.configure_cluster(**{k: v for k, v in locals().items() if k != 'self'})
+
+    def readers(self,
+                as_mosaic: bool = 'default',
+                view_index: int = 'default',
+                phase_index: int = 'default',
+                illumination_index: int = 'default',
+                scene_index: int = 'default',
+                rotation_index: int = 'default',
+                mosaic_tile_index: int = 'default',
+                sample_index: int = 'default',
+                force_bioformats: bool = 'default',
+                concat_views: bool = 'default',
+                concat_illuminations: bool = 'default') -> None:
+        """Update file-reader parameters. Omitted arguments keep their current values.
+
+        Args:
+            as_mosaic: Treat tiled acquisitions as a stitched mosaic (default False).
+            view_index: View index for multi-view formats (default 0). Pass ``'all'``
+                or a comma-separated list (e.g. ``'0,2'``) to expose multiple views.
+            phase_index: Phase index (default 0).
+            illumination_index: Illumination index (default 0). Pass ``'all'`` or a
+                comma-separated list to expose multiple illuminations.
+            scene_index: Scene / series index to read.  Pass an integer, ``'all'``,
+                or a comma-separated list such as ``'0,2,4'`` (default 0).
+            rotation_index: Rotation index (default 0).
+            mosaic_tile_index: Mosaic tile index.  Pass an integer, ``'all'``,
+                or a comma-separated list (default None = all tiles).
+            sample_index: Sample index (default 0).
+            force_bioformats: Force bfio tiled path even for natively-supported formats.
+            concat_views: Stack multiple views along the channel axis instead of
+                writing separate OME-Zarr outputs (default False).
+            concat_illuminations: Stack multiple illuminations along the channel axis
+                instead of writing separate OME-Zarr outputs (default False).
+        """
+        return self._cfg.configure_readers(**{k: v for k, v in locals().items() if k != 'self'})
+
+    def conversion(self,
+                   ome_zarr_version: str = 'default',
+                   zarr_format: int = 'default',
+                   skip_dask: bool = 'default',
+                   auto_chunk: bool = 'default',
+                   target_chunk_mb: float = 'default',
+                   time_chunk: int = 'default',
+                   channel_chunk: int = 'default',
+                   z_chunk: int = 'default',
+                   y_chunk: int = 'default',
+                   x_chunk: int = 'default',
+                   time_shard_coef: int = 'default',
+                   channel_shard_coef: int = 'default',
+                   z_shard_coef: int = 'default',
+                   y_shard_coef: int = 'default',
+                   x_shard_coef: int = 'default',
+                   time_range: int = 'default',
+                   channel_range: int = 'default',
+                   z_range: int = 'default',
+                   y_range: int = 'default',
+                   x_range: int = 'default',
+                   compressor: str = 'default',
+                   compressor_params: dict = 'default',
+                   overwrite: bool = 'default',
+                   override_channel_names: bool = 'default',
+                   channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
+                   metadata_reader: str = 'default',
+                   save_omexml: bool = 'default',
+                   squeeze: bool = 'default',
+                   dtype: str = 'default',
+                   verbose: bool = 'default') -> None:
+        """Update Zarr conversion parameters. Omitted arguments keep their current values.
+
+        Args:
+            ome_zarr_version: OME-Zarr (NGFF) version to write, e.g. ``'0.4'`` or
+                ``'0.5'``.  This is the preferred control and supersedes
+                ``zarr_format`` (the zarr container format is derived from it).
+            zarr_format: DEPRECATED zarr container version — ``2`` (default) or
+                ``3``.  Used only when ``ome_zarr_version`` is unset/unrecognised;
+                prefer ``ome_zarr_version``.
+            auto_chunk: Auto-compute chunk shape from array size (default True).
+            target_chunk_mb: Target chunk size in MB when auto_chunk is True.
+            time_chunk / channel_chunk / z_chunk / y_chunk / x_chunk:
+                Manual per-axis chunk sizes (used when auto_chunk is False).
+            time_shard_coef / channel_shard_coef / z_shard_coef / y_shard_coef / x_shard_coef:
+                Shard-to-chunk multipliers for Zarr v3 sharding (default 3 on spatial axes).
+            time_range / channel_range / z_range / y_range / x_range:
+                Crop ranges as ``"start,stop"`` strings applied before writing.
+            compressor: Compression codec — ``'blosc'`` (default), ``'gzip'``,
+                ``'zstd'``, ``'bz2'``, or ``'none'``.
+            compressor_params: Dict of codec parameters, e.g.
+                ``{'cname': 'lz4', 'clevel': 5}``.
+            overwrite: Overwrite existing output zarr (default False).
+            dtype: Output dtype — ``'auto'`` keeps the source dtype, or any
+                NumPy dtype string such as ``'uint16'``.
+            channel_intensity_limits: How to set OMERO window limits —
+                ``'from_dtype'`` (default) uses dtype min/max,
+                ``'from_array'`` computes per-channel min/max from pixel data,
+                ``'auto'`` lets the viewer decide.
+            squeeze: Remove singleton dimensions before writing (default True).
+            metadata_reader: Metadata backend — ``'bfio'`` (default) or
+                ``'bioformats'``.
+            save_omexml: Write a companion OME-XML file alongside the zarr
+                (default True).
+            verbose: Log verbose progress output (default False).
+        """
+        return self._cfg.configure_conversion(**{k: v for k, v in locals().items() if k != 'self'})
+
+    def downscale(self,
+                  n_layers: int = 'default',
+                  min_dimension_size: int = 'default',
+                  time_scale_factor: int = 'default',
+                  channel_scale_factor: int = 'default',
+                  z_scale_factor: int = 'default',
+                  y_scale_factor: int = 'default',
+                  x_scale_factor: int = 'default',
+                  downscale_method: str = 'default',
+                  keep_existing_resolutions: bool = 'default',
+                  apply_smart_downscaling: bool = 'default',
+                  time_smart_scale_factor: int = 'default',
+                  z_smart_scale_factor: int = 'default',
+                  y_smart_scale_factor: int = 'default',
+                  x_smart_scale_factor: int = 'default') -> None:
+        """Update downscale parameters. Omitted arguments keep their current values.
+
+        Args:
+            n_layers: Number of downscale pyramid levels to generate. ``None``
+                (default) auto-derives the count from ``min_dimension_size``.
+            min_dimension_size: Stop adding levels when the smallest spatial
+                dimension falls below this pixel count (default 64).
+            time_scale_factor: Downscale factor along the time axis (default 1,
+                i.e. no downscaling).
+            channel_scale_factor: Downscale factor along the channel axis (default 1).
+            z_scale_factor: Downscale factor along the z axis (default 2).
+            y_scale_factor: Downscale factor along the y axis (default 2).
+            x_scale_factor: Downscale factor along the x axis (default 2).
+            downscale_method: Pixel aggregation method for downscaling — one of
+                'simple', 'mean', 'median', 'min', 'max', 'mode' (default 'simple').
+            keep_existing_resolutions: If the input format already carries its
+                own multiscale pyramid (e.g. ``.ims``, ``.zarr``), write each
+                existing resolution level straight to the output OME-Zarr
+                instead of rebuilding the pyramid with the above scale factors
+                (default False).
+            apply_smart_downscaling: Make the first pyramid level use
+                automatically-computed factors that drive the voxels toward
+                isotropy (default False).
+            time_smart_scale_factor: Per-axis override for smart downscaling on
+                the time axis (default None = auto).
+            z_smart_scale_factor: Per-axis smart-downscaling override for z.
+            y_smart_scale_factor: Per-axis smart-downscaling override for y.
+            x_smart_scale_factor: Per-axis smart-downscaling override for x.
+        """
+        return self._cfg.configure_downscale(**{k: v for k, v in locals().items() if k != 'self'})
+
+    def concatenation(self,
+                      concatenation_axes: Union[str, int, None] = 'default',
+                      time_tag: Union[str, tuple, None] = 'default',
+                      channel_tag: Union[str, tuple, None] = 'default',
+                      z_tag: Union[str, tuple, None] = 'default',
+                      y_tag: Union[str, tuple, None] = 'default',
+                      x_tag: Union[str, tuple, None] = 'default') -> None:
+        """Update aggregative (concatenation) parameters. Omitted arguments keep their current values.
+
+        Args:
+            concatenation_axes: Axes along which to concatenate files.  Pass a
+                string of axis letters such as ``'tc'`` or ``'z'``, or an integer
+                axis index.  ``None`` disables aggregative mode entirely.
+            time_tag: Filename substring (or tuple of substrings) that identifies
+                a file as contributing to the time axis.
+            channel_tag: Filename substring (or tuple of substrings) identifying
+                the channel axis.
+            z_tag: Filename substring (or tuple of substrings) identifying the z
+                axis.
+            y_tag: Filename substring (or tuple of substrings) identifying the y
+                axis.
+            x_tag: Filename substring (or tuple of substrings) identifying the x
+                axis.
+        """
+        return self._cfg.configure_concatenation(**{k: v for k, v in locals().items() if k != 'self'})
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +976,13 @@ class ConversionManager:
         cluster_p    = self._config._collect_params('cluster',    **cli_kwargs)
         readers_p    = self._config._collect_params('readers',    **cli_kwargs)
         conversion_p = self._config._collect_params('conversion', **cli_kwargs)
+        # Emit the zarr_format deprecation once, reflecting the user's actual
+        # choice (the model resolves the same mapping silently).  Consult
+        # cli_kwargs too: a stale config may lack the ome_zarr_version key, so a
+        # CLI override would otherwise be invisible here.
+        resolve_ome_zarr_target(
+            conversion_p.get('ome_zarr_version') or cli_kwargs.get('ome_zarr_version'),
+            conversion_p.get('zarr_format', 2), warn=True)
         downscale_p  = self._config._collect_params('downscale',  **cli_kwargs)
         ClusterConfig(**cluster_p)
         ReaderConfig(**readers_p)
@@ -806,6 +1101,13 @@ class ConversionManager:
         cluster_p    = self._config._collect_params('cluster',    **cli_kwargs)
         readers_p    = self._config._collect_params('readers',    **cli_kwargs)
         conversion_p = self._config._collect_params('conversion', **cli_kwargs)
+        # Emit the zarr_format deprecation once, reflecting the user's actual
+        # choice (the model resolves the same mapping silently).  Consult
+        # cli_kwargs too: a stale config may lack the ome_zarr_version key, so a
+        # CLI override would otherwise be invisible here.
+        resolve_ome_zarr_target(
+            conversion_p.get('ome_zarr_version') or cli_kwargs.get('ome_zarr_version'),
+            conversion_p.get('zarr_format', 2), warn=True)
         downscale_p  = self._config._collect_params('downscale',  **cli_kwargs)
         merged = {**cluster_p, **readers_p, **conversion_p, **downscale_p}
         extra  = {k: v for k, v in kwargs.items() if k not in merged}
@@ -951,6 +1253,9 @@ class MetadataManager:
             cluster_p    = self._config._collect_params('cluster',    **kwargs)
             readers_p    = self._config._collect_params('readers',    **kwargs)
             conversion_p = self._config._collect_params('conversion', **kwargs)
+            resolve_ome_zarr_target(
+                conversion_p.get('ome_zarr_version') or kwargs.get('ome_zarr_version'),
+                conversion_p.get('zarr_format', 2), warn=True)
             if series is None:
                 series = readers_p['scene_index']
             combined = {
@@ -1072,193 +1377,18 @@ class EuBIBridge:
     def config(self, value: dict) -> None:
         self._cfg.config = value
 
-    def configure_cluster(self,
-                          max_workers: int = 'default',
-                          queue_size: int = 'default',
-                          region_size_mb: int = 'default',
-                          memory_per_worker: str = 'default',
-                          max_concurrency: int = 'default',
-                          max_concurrent_scenes: int = 'default',
-                          on_local_cluster: bool = 'default',
-                          on_slurm: bool = 'default',
-                          use_threading: bool = 'default',
-                          tensorstore_data_copy_concurrency: int = 'default',
-                          max_retries: int = 'default',
-                          bf_read_concurrency: int = 'default',
-                          bf_tile_size_mb: float = 'default',
-                          jvm_memory: str = 'default') -> None:
-        """Update cluster / concurrency parameters. Omitted arguments keep their current values.
+    @property
+    def configure(self) -> 'ConfigureGroup':
+        """Configuration subcommands — ``eubi configure cluster / conversion / downscale / readers / concatenation``.
 
-        Args:
-            max_workers: Number of parallel file-level worker processes (default 4).
-            queue_size: Internal write-queue depth per worker (default 4).
-            region_size_mb: Region size in MB for spatial partitioning (default 256).
-            memory_per_worker: Memory limit accepted by SLURM / LocalCluster,
-                e.g. ``'8GB'`` (default ``'1GB'``).
-            max_concurrency: TensorStore write concurrency per worker (default 4).
-            max_concurrent_scenes: Parallel scenes within one file (default 1).
-                Increase only when writing a multi-scene file to a large store.
-            on_local_cluster: Use a Dask LocalCluster backend (default False).
-            on_slurm: Submit jobs to a SLURM cluster (default False).
-            use_threading: Use ThreadPool instead of ProcessPool (default False).
-            tensorstore_data_copy_concurrency: TensorStore internal copy threads
-                (default 4).
-            max_retries: Retries on broken worker process (default 10).
-            bf_read_concurrency: Dask thread count for parallel bfio tile reads
-                (default 4).  ``None`` lets dask choose (cpu_count).
-            bf_tile_size_mb: Tile size budget in MB for bfio tiled reading
-                (default 512).
-            jvm_memory: Maximum JVM heap for Bio-Formats, e.g. ``'8GB'``, ``'4GB'``.
-                Accepts ``'NGB'`` / ``'NMB'`` (like memory_per_worker) and normalises
-                internally to JVM format (``'Ng'`` / ``'Nm'``).  Default ``'2g'``.
+        Run ``eubi configure`` with no subcommand to list the available
+        sections.  Bound to the active config so it composes with
+        ``with_config``::
+
+            eubi configure cluster --max_workers 8
+            eubi with_config hpc configure conversion --zarr_format 3
         """
-        return self._cfg.configure_cluster(**{k: v for k, v in locals().items() if k != 'self'})
-
-    def configure_readers(self,
-                          as_mosaic: bool = 'default',
-                          view_index: int = 'default',
-                          phase_index: int = 'default',
-                          illumination_index: int = 'default',
-                          scene_index: int = 'default',
-                          rotation_index: int = 'default',
-                          mosaic_tile_index: int = 'default',
-                          sample_index: int = 'default',
-                          force_bioformats: bool = 'default',
-                          concat_views: bool = 'default',
-                          concat_illuminations: bool = 'default') -> None:
-        """Update file-reader parameters. Omitted arguments keep their current values.
-
-        Args:
-            as_mosaic: Treat tiled acquisitions as a stitched mosaic (default False).
-            view_index: View index for multi-view formats (default 0). Pass ``'all'``
-                or a comma-separated list (e.g. ``'0,2'``) to expose multiple views.
-            phase_index: Phase index (default 0).
-            illumination_index: Illumination index (default 0). Pass ``'all'`` or a
-                comma-separated list to expose multiple illuminations.
-            scene_index: Scene / series index to read.  Pass an integer, ``'all'``,
-                or a comma-separated list such as ``'0,2,4'`` (default 0).
-            rotation_index: Rotation index (default 0).
-            mosaic_tile_index: Mosaic tile index.  Pass an integer, ``'all'``,
-                or a comma-separated list (default None = all tiles).
-            sample_index: Sample index (default 0).
-            force_bioformats: Force bfio tiled path even for natively-supported formats.
-            concat_views: Stack multiple views along the channel axis instead of
-                writing separate OME-Zarr outputs (default False).
-            concat_illuminations: Stack multiple illuminations along the channel axis
-                instead of writing separate OME-Zarr outputs (default False).
-        """
-        return self._cfg.configure_readers(**{k: v for k, v in locals().items() if k != 'self'})
-
-    def configure_conversion(self,
-                             zarr_format: int = 'default',
-                             skip_dask: bool = 'default',
-                             auto_chunk: bool = 'default',
-                             target_chunk_mb: float = 'default',
-                             time_chunk: int = 'default',
-                             channel_chunk: int = 'default',
-                             z_chunk: int = 'default',
-                             y_chunk: int = 'default',
-                             x_chunk: int = 'default',
-                             time_shard_coef: int = 'default',
-                             channel_shard_coef: int = 'default',
-                             z_shard_coef: int = 'default',
-                             y_shard_coef: int = 'default',
-                             x_shard_coef: int = 'default',
-                             time_range: int = 'default',
-                             channel_range: int = 'default',
-                             z_range: int = 'default',
-                             y_range: int = 'default',
-                             x_range: int = 'default',
-                             compressor: str = 'default',
-                             compressor_params: dict = 'default',
-                             overwrite: bool = 'default',
-                             override_channel_names: bool = 'default',
-                             channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
-                             metadata_reader: str = 'default',
-                             save_omexml: bool = 'default',
-                             squeeze: bool = 'default',
-                             dtype: str = 'default',
-                             verbose: bool = 'default') -> None:
-        """Update Zarr conversion parameters. Omitted arguments keep their current values.
-
-        Args:
-            zarr_format: Zarr version — ``2`` (default) or ``3``.
-            auto_chunk: Auto-compute chunk shape from array size (default True).
-            target_chunk_mb: Target chunk size in MB when auto_chunk is True.
-            time_chunk / channel_chunk / z_chunk / y_chunk / x_chunk:
-                Manual per-axis chunk sizes (used when auto_chunk is False).
-            time_shard_coef / channel_shard_coef / z_shard_coef / y_shard_coef / x_shard_coef:
-                Shard-to-chunk multipliers for Zarr v3 sharding (default 3 on spatial axes).
-            time_range / channel_range / z_range / y_range / x_range:
-                Crop ranges as ``"start,stop"`` strings applied before writing.
-            compressor: Compression codec — ``'blosc'`` (default), ``'gzip'``,
-                ``'zstd'``, ``'bz2'``, or ``'none'``.
-            compressor_params: Dict of codec parameters, e.g.
-                ``{'cname': 'lz4', 'clevel': 5}``.
-            overwrite: Overwrite existing output zarr (default False).
-            dtype: Output dtype — ``'auto'`` keeps the source dtype, or any
-                NumPy dtype string such as ``'uint16'``.
-            channel_intensity_limits: How to set OMERO window limits —
-                ``'from_dtype'`` (default) uses dtype min/max,
-                ``'from_array'`` computes per-channel min/max from pixel data,
-                ``'auto'`` lets the viewer decide.
-            squeeze: Remove singleton dimensions before writing (default True).
-            metadata_reader: Metadata backend — ``'bfio'`` (default) or
-                ``'bioformats'``.
-            save_omexml: Write a companion OME-XML file alongside the zarr
-                (default True).
-            verbose: Log verbose progress output (default False).
-        """
-        return self._cfg.configure_conversion(**{k: v for k, v in locals().items() if k != 'self'})
-
-    def configure_downscale(self,
-                            n_layers: int = 'default',
-                            min_dimension_size: int = 'default',
-                            time_scale_factor: int = 'default',
-                            channel_scale_factor: int = 'default',
-                            z_scale_factor: int = 'default',
-                            y_scale_factor: int = 'default',
-                            x_scale_factor: int = 'default') -> None:
-        """Update downscale parameters. Omitted arguments keep their current values.
-
-        Args:
-            n_layers: Number of downscale pyramid levels to generate (default 5).
-            min_dimension_size: Stop adding levels when the smallest spatial
-                dimension falls below this pixel count (default 64).
-            time_scale_factor: Downscale factor along the time axis (default 1,
-                i.e. no downscaling).
-            channel_scale_factor: Downscale factor along the channel axis (default 1).
-            z_scale_factor: Downscale factor along the z axis (default 2).
-            y_scale_factor: Downscale factor along the y axis (default 2).
-            x_scale_factor: Downscale factor along the x axis (default 2).
-        """
-        return self._cfg.configure_downscale(**{k: v for k, v in locals().items() if k != 'self'})
-
-    def configure_concatenation(self,
-                                concatenation_axes: Union[str, int, None] = 'default',
-                                time_tag: Union[str, tuple, None] = 'default',
-                                channel_tag: Union[str, tuple, None] = 'default',
-                                z_tag: Union[str, tuple, None] = 'default',
-                                y_tag: Union[str, tuple, None] = 'default',
-                                x_tag: Union[str, tuple, None] = 'default') -> None:
-        """Update aggregative (concatenation) parameters. Omitted arguments keep their current values.
-
-        Args:
-            concatenation_axes: Axes along which to concatenate files.  Pass a
-                string of axis letters such as ``'tc'`` or ``'z'``, or an integer
-                axis index.  ``None`` disables aggregative mode entirely.
-            time_tag: Filename substring (or tuple of substrings) that identifies
-                a file as contributing to the time axis.
-            channel_tag: Filename substring (or tuple of substrings) identifying
-                the channel axis.
-            z_tag: Filename substring (or tuple of substrings) identifying the z
-                axis.
-            y_tag: Filename substring (or tuple of substrings) identifying the y
-                axis.
-            x_tag: Filename substring (or tuple of substrings) identifying the x
-                axis.
-        """
-        return self._cfg.configure_concatenation(**{k: v for k, v in locals().items() if k != 'self'})
+        return ConfigureGroup(self._cfg)
 
     # ── named-config pass-throughs ────────────────────────────────────────
 
@@ -1270,6 +1400,11 @@ class EuBIBridge:
         take priority.  Designed for Fire chaining::
 
             eubi with_config hpc to_zarr input/ output/
+
+        Args:
+            name: Name of a saved config profile (without the ``.json``
+                extension), e.g. ``hpc``.  Must already exist — create profiles
+                with ``save_as`` or ``update_config --create``.
         """
         new_cfg = self._cfg.with_config(name)
         new_bridge = EuBIBridge.__new__(EuBIBridge)
@@ -1284,7 +1419,13 @@ class EuBIBridge:
         return self._cfg.list_configs()
 
     def save_as(self, name: str) -> None:
-        """Save the current config as a named config file."""
+        """Save the current config as a named config file.
+
+        Args:
+            name: Profile name to save under (without the ``.json`` extension),
+                e.g. ``hpc``.  May contain only letters, digits, hyphens, and
+                underscores.  Overwrites an existing profile of the same name.
+        """
         return self._cfg.save_as(name)
 
     def update_config(self, name_or_path: str, create: bool = False) -> None:
@@ -1292,13 +1433,19 @@ class EuBIBridge:
 
         Typical use: propagate default-config edits to a named config::
 
-            eubi configure_cluster --max_workers 64   # edits .eubi_config.json
+            eubi configure cluster --max_workers 64   # edits .eubi_config.json
             eubi update_config hpc                     # copies it to hpc.json
 
-        Note: ``with_config hpc configure_cluster ...`` already writes directly
+        Note: ``with_config hpc configure cluster ...`` already writes directly
         to hpc.json, so ``update_config`` is not needed in that flow.
 
-        Pass ``--create`` to allow creating the target if it does not exist.
+        Args:
+            name_or_path: Target to write the current config into.  A bare name
+                (e.g. ``hpc``) is resolved in the named-config registry; a value
+                containing a path separator or ending in ``.json`` is treated as
+                a literal filesystem path.
+            create: When True, create the target profile / file if it does not
+                already exist (default False raises if missing).
         """
         return self._cfg.update_config(name_or_path, create=create)
 

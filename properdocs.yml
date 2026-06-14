@@ -50,6 +50,12 @@ markdown_extensions:
   - md_in_html
   - tables
 
+# Internal audit/working docs that live under docs/ but must not ship in the site.
+exclude_docs: |
+  cli_audit_findings.md
+  cli.md
+  gui_tutorial.md
+
 plugins:
   - search
 
@@ -63,10 +69,8 @@ nav:
       - Named Configs: cli_reference/named_configs.md
       - Display & Info: cli_reference/display_info.md
       - Reset: cli_reference/reset.md
-  - CLI Usage Guide: cli.md
   - Conversion Tutorial: conversion_tutorial.md
   - Conversion Examples: conversion_examples.md
-  - GUI Tutorial: gui_tutorial.md
 
 extra_css:
   - css/custom.css

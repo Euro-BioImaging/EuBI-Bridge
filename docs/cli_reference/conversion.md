@@ -7,9 +7,8 @@ click any command card to expand its full parameter reference.
 !!! tip "Named-config chaining"
     Prefix any command with `with_config NAME` to use a saved config profile:
     ```shell
-    eubi with_config hpc to_zarr /data/input /data/output --zarr_format 3
+    eubi with_config hpc to_zarr /data/input /data/output --ome_zarr_version 0.5
     ```
-    See [CLI Usage Guide](../cli.md) for the full workflow.
 
 ??? command "**`to_zarr`**&ensp;—&ensp;Convert image data to OME-Zarr format"
 
@@ -175,7 +174,7 @@ click any command card to expand its full parameter reference.
     <details>
     <summary><code>--memory_per_worker</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `1GB`</p>
+    <p><strong>Default:</strong>&nbsp; `3GB`</p>
     <p>Memory limit for SLURM / LocalCluster workers.</p>
     <pre><code>eubi to_zarr /data/input /data/output --memory_per_worker 8GB
     </code></pre>
@@ -199,6 +198,29 @@ click any command card to expand its full parameter reference.
     <p>Override the configured max_retries.</p>
     <pre><code>eubi to_zarr /data/input /data/output --max_retries 3
     </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--bf_read_concurrency</code></summary>
+    <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; `4`</p>
+    <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--bf_tile_size_mb</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float`</p>
+    <p><strong>Default:</strong>&nbsp; `512.0`</p>
+    <p><strong>Valid values:</strong>&nbsp; > 0.0</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--jvm_memory</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; `1g`</p>
+    <p>—</p>
     </details>
 
     <details>
@@ -238,6 +260,25 @@ click any command card to expand its full parameter reference.
     </code></pre>
     </details>
 
+    <details>
+    <summary><code>--slurm_sif_path</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>Path to an Apptainer/Singularity `.sif` image to run SLURM workers inside (optional).</p>
+    <pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_sif_path /apps/eubi.sif
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--max_concurrent_downscale_layers</code></summary>
+    <p><strong>Type:</strong>&nbsp; `int`</p>
+    <p><strong>Default:</strong>&nbsp; `3`</p>
+    <p><strong>Valid values:</strong>&nbsp; > 0</p>
+    <p>How many pyramid levels are downscaled in parallel per file (default 1 = sequential, lowest memory).</p>
+    <pre><code>eubi to_zarr /data/input /data/output --max_concurrent_downscale_layers 2
+    </code></pre>
+    </details>
+
 
     </details>
 
@@ -255,10 +296,23 @@ click any command card to expand its full parameter reference.
     </details>
 
     <details>
+    <summary><code>--ome_zarr_version</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>OME-Zarr (NGFF) version to write: `0.4` (backed by Zarr v2) or `0.5` (backed by Zarr v3, which enables sharding). This is the preferred control and supersedes `zarr_format` — the underlying zarr container format is derived from it.</p>
+    <pre><code># Write OME-Zarr 0.4 (Zarr v2, the default)
+    eubi to_zarr /data/input /data/output --ome_zarr_version 0.4
+    </code></pre>
+    <pre><code># Write OME-Zarr 0.5 (Zarr v3 — required for sharding)
+    eubi to_zarr /data/input /data/output --ome_zarr_version 0.5
+    </code></pre>
+    </details>
+
+    <details>
     <summary><code>--zarr_format</code></summary>
     <p><strong>Type:</strong>&nbsp; `2` or `3`</p>
     <p><strong>Default:</strong>&nbsp; `2`</p>
-    <p>Zarr specification version. `2` = classic chunk-based; `3` = next-gen with sharding support.</p>
+    <p>**Deprecated** — use `ome_zarr_version` instead. Zarr container version: `2` = OME-Zarr 0.4 (classic chunk-based); `3` = OME-Zarr 0.5 (sharding support).</p>
     <pre><code>eubi to_zarr /data/input /data/output --zarr_format 3
     </code></pre>
     </details>
@@ -349,7 +403,7 @@ click any command card to expand its full parameter reference.
     <p><strong>Default:</strong>&nbsp; `1`</p>
     <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
     <p>Shard size = chunk × coef for the time axis. Zarr v3 only — ignored for v2.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --zarr_format 3 --time_shard_coef 1
+    <pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --time_shard_coef 1
     </code></pre>
     </details>
 
@@ -359,7 +413,7 @@ click any command card to expand its full parameter reference.
     <p><strong>Default:</strong>&nbsp; `1`</p>
     <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
     <p>Shard size = chunk × coef for the channel axis. Zarr v3 only — ignored for v2.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --zarr_format 3 --channel_shard_coef 1
+    <pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --channel_shard_coef 1
     </code></pre>
     </details>
 
@@ -369,7 +423,7 @@ click any command card to expand its full parameter reference.
     <p><strong>Default:</strong>&nbsp; `3`</p>
     <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
     <p>Shard size = chunk × coef for the z axis. Zarr v3 only — ignored for v2.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --zarr_format 3 --z_shard_coef 5
+    <pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --z_shard_coef 5
     </code></pre>
     </details>
 
@@ -379,7 +433,7 @@ click any command card to expand its full parameter reference.
     <p><strong>Default:</strong>&nbsp; `3`</p>
     <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
     <p>Shard size = chunk × coef for the y axis. Zarr v3 only — ignored for v2.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --zarr_format 3 --y_shard_coef 5
+    <pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --y_shard_coef 5
     </code></pre>
     </details>
 
@@ -389,7 +443,7 @@ click any command card to expand its full parameter reference.
     <p><strong>Default:</strong>&nbsp; `3`</p>
     <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
     <p>Shard size = chunk × coef for the x axis. Zarr v3 only — ignored for v2.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --zarr_format 3 --x_shard_coef 5
+    <pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --x_shard_coef 5
     </code></pre>
     </details>
 
@@ -447,7 +501,7 @@ click any command card to expand its full parameter reference.
 
     <details>
     <summary><code>--compressor</code></summary>
-    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; `blosc`</p>
     <p><strong>Valid values:</strong>&nbsp; v2: `blosc`, `bz2`, `gzip`, `none`, `zstd`; v3: `blosc`, `crc32ccodec`, `gzip`, `none`, `sharding`, `zstd`</p>
     <p>Compression codec.</p>
@@ -626,6 +680,64 @@ click any command card to expand its full parameter reference.
     </code></pre>
     </details>
 
+    <details>
+    <summary><code>--keep_existing_resolutions</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--keep_existing_resolutions` to enable &nbsp;·&nbsp; `--keep_existing_resolutions False` to disable</p>
+    <p>If the input already carries its own multiscale pyramid (e.g. `.ims`, `.zarr`), write each existing resolution level straight to the output OME-Zarr instead of rebuilding the pyramid (default False).</p>
+    <pre><code># Copy an .ims / .zarr input's own pyramid levels instead of rebuilding them
+    eubi to_zarr /data/input /data/output --keep_existing_resolutions
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--apply_smart_downscaling</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--apply_smart_downscaling` to enable &nbsp;·&nbsp; `--apply_smart_downscaling False` to disable</p>
+    <p>Choose per-axis downscale factors automatically from the pixel anisotropy so the pyramid approaches isotropy, instead of using the fixed `*_scale_factor` values (default False).</p>
+    <pre><code># Let EuBI-Bridge pick per-axis factors from the voxel anisotropy
+    eubi to_zarr /data/input /data/output --apply_smart_downscaling
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--time_smart_scale_factor</code></summary>
+    <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>Override the smart-downscaling factor for the time axis (used when `apply_smart_downscaling=True`).</p>
+    <pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --time_smart_scale_factor 1
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--z_smart_scale_factor</code></summary>
+    <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>Override the smart-downscaling factor for the z axis (used when `apply_smart_downscaling=True`).</p>
+    <pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --z_smart_scale_factor 1
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--y_smart_scale_factor</code></summary>
+    <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>Override the smart-downscaling factor for the y axis (used when `apply_smart_downscaling=True`).</p>
+    <pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --y_smart_scale_factor 2
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--x_smart_scale_factor</code></summary>
+    <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>Override the smart-downscaling factor for the x axis (used when `apply_smart_downscaling=True`).</p>
+    <pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --x_smart_scale_factor 2
+    </code></pre>
+    </details>
+
 
     </details>
 
@@ -637,18 +749,22 @@ click any command card to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
     <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--as_mosaic` to enable &nbsp;·&nbsp; `--as_mosaic False` to disable</p>
-    <p>Treat tiles as a mosaic.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --as_mosaic
+    <p>Stitch all mosaic tiles into a single full field-of-view output (instead of one OME-Zarr per tile).</p>
+    <pre><code># Stitch all mosaic tiles into a single full field-of-view output
+    eubi to_zarr /data/input /data/output --as_mosaic
     </code></pre>
     </details>
 
     <details>
     <summary><code>--view_index</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
+    <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
     <p><strong>Default:</strong>&nbsp; `0`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
-    <p>View index (for multi-view formats).</p>
-    <pre><code>eubi to_zarr /data/input /data/output --view_index 1
+    <p>View(s) to read. Pass an integer, `all`, or comma-separated integers; each selected view becomes a separate OME-Zarr (named `_view{N}`) unless `--concat_views` stacks them along the channel axis.</p>
+    <pre><code># Write each view as its own OME-Zarr
+    eubi to_zarr /data/input /data/output --view_index all
+    </code></pre>
+    <pre><code># Concatenate all views along the channel axis into one output
+    eubi to_zarr /data/input /data/output --view_index all --concat_views
     </code></pre>
     </details>
 
@@ -664,11 +780,14 @@ click any command card to expand its full parameter reference.
 
     <details>
     <summary><code>--illumination_index</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
+    <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
     <p><strong>Default:</strong>&nbsp; `0`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
-    <p>Illumination index.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --illumination_index 1
+    <p>Illumination(s) to read. Pass an integer, `all`, or comma-separated integers; each selected illumination becomes a separate OME-Zarr (named `_illu{N}`) unless `--concat_illuminations` stacks them along the channel axis.</p>
+    <pre><code># Write each illumination as its own OME-Zarr
+    eubi to_zarr /data/input /data/output --illumination_index all
+    </code></pre>
+    <pre><code># Concatenate all illuminations along the channel axis into one output
+    eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations
     </code></pre>
     </details>
 
@@ -702,12 +821,15 @@ click any command card to expand its full parameter reference.
     <summary><code>--mosaic_tile_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Mosaic tile index to read. Pass an integer, `all`, or comma-separated integers.</p>
-    <pre><code># Read only the first mosaic tile
-    eubi to_zarr /data/input /data/output --as_mosaic --mosaic_tile_index 0
+    <p>Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. Composes with scene / view / illumination selection (cartesian product).</p>
+    <pre><code># Write every tile as its own OME-Zarr (default — each tile separate)
+    eubi to_zarr /data/input /data/output --mosaic_tile_index all
     </code></pre>
-    <pre><code># Read all tiles (default behaviour)
-    eubi to_zarr /data/input /data/output --as_mosaic --mosaic_tile_index all
+    <pre><code># Write only tiles 0 and 2 (each as a separate output)
+    eubi to_zarr /data/input /data/output --mosaic_tile_index 0,2
+    </code></pre>
+    <pre><code># Stitch all tiles into one mosaic instead of writing them separately
+    eubi to_zarr /data/input /data/output --as_mosaic
     </code></pre>
     </details>
 
@@ -721,6 +843,38 @@ click any command card to expand its full parameter reference.
     </code></pre>
     </details>
 
+    <details>
+    <summary><code>--force_bioformats</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--force_bioformats` to enable &nbsp;·&nbsp; `--force_bioformats False` to disable</p>
+    <p>Force the Java Bio-Formats reader even for formats EuBI-Bridge reads natively (CZI, ND2, LIF, IMS…). Useful as a fallback when a native read fails.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --force_bioformats
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--concat_views</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--concat_views` to enable &nbsp;·&nbsp; `--concat_views False` to disable</p>
+    <p>When reading multiple views, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per view.</p>
+    <pre><code># Stack every view onto the channel axis (cartesian with existing channels)
+    eubi to_zarr /data/input /data/output --view_index all --concat_views
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--concat_illuminations</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--concat_illuminations` to enable &nbsp;·&nbsp; `--concat_illuminations False` to disable</p>
+    <p>When reading multiple illuminations, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per illumination.</p>
+    <pre><code># Stack every illumination onto the channel axis (cartesian with existing channels)
+    eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations
+    </code></pre>
+    </details>
+
 
     </details>
 
@@ -731,7 +885,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--concatenation_axes</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `int` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Axes to concatenate across files, e.g. ``'tc'``. If omitted the config value is used; ``None`` means unary conversion.</p>
+    <p>Axes to concatenate across files, e.g. `'tc'`. If omitted the config value is used; `None` means unary conversion.</p>
     <pre><code># Concatenate files along the channel axis
     eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask
     </code></pre>
@@ -942,7 +1096,7 @@ click any command card to expand its full parameter reference.
     <details>
     <summary><code>--memory_per_worker</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `1GB`</p>
+    <p><strong>Default:</strong>&nbsp; `3GB`</p>
     <p>Memory limit for SLURM / LocalCluster workers.</p>
     <pre><code>eubi to_zarr /data/input /data/output --memory_per_worker 8GB
     </code></pre>
@@ -966,6 +1120,29 @@ click any command card to expand its full parameter reference.
     <p>Retries on a broken worker process.</p>
     <pre><code>eubi to_zarr /data/input /data/output --max_retries 3
     </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--bf_read_concurrency</code></summary>
+    <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; `4`</p>
+    <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--bf_tile_size_mb</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float`</p>
+    <p><strong>Default:</strong>&nbsp; `512.0`</p>
+    <p><strong>Valid values:</strong>&nbsp; > 0.0</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--jvm_memory</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; `1g`</p>
+    <p>—</p>
     </details>
 
     <details>
@@ -1005,6 +1182,25 @@ click any command card to expand its full parameter reference.
     </code></pre>
     </details>
 
+    <details>
+    <summary><code>--slurm_sif_path</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>Path to an Apptainer/Singularity `.sif` image to run SLURM workers inside (optional).</p>
+    <pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_sif_path /apps/eubi.sif
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--max_concurrent_downscale_layers</code></summary>
+    <p><strong>Type:</strong>&nbsp; `int`</p>
+    <p><strong>Default:</strong>&nbsp; `3`</p>
+    <p><strong>Valid values:</strong>&nbsp; > 0</p>
+    <p>How many pyramid levels are downscaled in parallel per file (default 1 = sequential, lowest memory).</p>
+    <pre><code>eubi to_zarr /data/input /data/output --max_concurrent_downscale_layers 2
+    </code></pre>
+    </details>
+
 
     </details>
 
@@ -1016,18 +1212,22 @@ click any command card to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
     <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--as_mosaic` to enable &nbsp;·&nbsp; `--as_mosaic False` to disable</p>
-    <p>Treat tiles as a mosaic.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --as_mosaic
+    <p>Stitch all mosaic tiles into a single full field-of-view output (instead of one OME-Zarr per tile).</p>
+    <pre><code># Stitch all mosaic tiles into a single full field-of-view output
+    eubi to_zarr /data/input /data/output --as_mosaic
     </code></pre>
     </details>
 
     <details>
     <summary><code>--view_index</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
+    <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
     <p><strong>Default:</strong>&nbsp; `0`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
-    <p>View index (for multi-view formats).</p>
-    <pre><code>eubi to_zarr /data/input /data/output --view_index 1
+    <p>View(s) to read. Pass an integer, `all`, or comma-separated integers; each selected view becomes a separate OME-Zarr (named `_view{N}`) unless `--concat_views` stacks them along the channel axis.</p>
+    <pre><code># Write each view as its own OME-Zarr
+    eubi to_zarr /data/input /data/output --view_index all
+    </code></pre>
+    <pre><code># Concatenate all views along the channel axis into one output
+    eubi to_zarr /data/input /data/output --view_index all --concat_views
     </code></pre>
     </details>
 
@@ -1043,11 +1243,14 @@ click any command card to expand its full parameter reference.
 
     <details>
     <summary><code>--illumination_index</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
+    <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
     <p><strong>Default:</strong>&nbsp; `0`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
-    <p>Illumination index.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --illumination_index 1
+    <p>Illumination(s) to read. Pass an integer, `all`, or comma-separated integers; each selected illumination becomes a separate OME-Zarr (named `_illu{N}`) unless `--concat_illuminations` stacks them along the channel axis.</p>
+    <pre><code># Write each illumination as its own OME-Zarr
+    eubi to_zarr /data/input /data/output --illumination_index all
+    </code></pre>
+    <pre><code># Concatenate all illuminations along the channel axis into one output
+    eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations
     </code></pre>
     </details>
 
@@ -1081,12 +1284,15 @@ click any command card to expand its full parameter reference.
     <summary><code>--mosaic_tile_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Mosaic tile index to read. Pass an integer, `all`, or comma-separated integers.</p>
-    <pre><code># Read only the first mosaic tile
-    eubi to_zarr /data/input /data/output --as_mosaic --mosaic_tile_index 0
+    <p>Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. Composes with scene / view / illumination selection (cartesian product).</p>
+    <pre><code># Write every tile as its own OME-Zarr (default — each tile separate)
+    eubi to_zarr /data/input /data/output --mosaic_tile_index all
     </code></pre>
-    <pre><code># Read all tiles (default behaviour)
-    eubi to_zarr /data/input /data/output --as_mosaic --mosaic_tile_index all
+    <pre><code># Write only tiles 0 and 2 (each as a separate output)
+    eubi to_zarr /data/input /data/output --mosaic_tile_index 0,2
+    </code></pre>
+    <pre><code># Stitch all tiles into one mosaic instead of writing them separately
+    eubi to_zarr /data/input /data/output --as_mosaic
     </code></pre>
     </details>
 
@@ -1100,6 +1306,38 @@ click any command card to expand its full parameter reference.
     </code></pre>
     </details>
 
+    <details>
+    <summary><code>--force_bioformats</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--force_bioformats` to enable &nbsp;·&nbsp; `--force_bioformats False` to disable</p>
+    <p>Force the Java Bio-Formats reader even for formats EuBI-Bridge reads natively (CZI, ND2, LIF, IMS…). Useful as a fallback when a native read fails.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --force_bioformats
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--concat_views</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--concat_views` to enable &nbsp;·&nbsp; `--concat_views False` to disable</p>
+    <p>When reading multiple views, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per view.</p>
+    <pre><code># Stack every view onto the channel axis (cartesian with existing channels)
+    eubi to_zarr /data/input /data/output --view_index all --concat_views
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--concat_illuminations</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--concat_illuminations` to enable &nbsp;·&nbsp; `--concat_illuminations False` to disable</p>
+    <p>When reading multiple illuminations, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per illumination.</p>
+    <pre><code># Stack every illumination onto the channel axis (cartesian with existing channels)
+    eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations
+    </code></pre>
+    </details>
+
 
     </details>
 
@@ -1110,7 +1348,7 @@ click any command card to expand its full parameter reference.
     <summary><code>--concatenation_axes</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `int` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Axes to concatenate, e.g. ``'c'``.</p>
+    <p>Axes to concatenate, e.g. `'c'`.</p>
     <pre><code># Plan a channel concatenation
     eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask
     </code></pre>

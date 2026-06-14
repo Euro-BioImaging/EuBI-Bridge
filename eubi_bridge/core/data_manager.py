@@ -40,6 +40,7 @@ from ome_types.model import (OME, Channel, Image, Pixels,
                              Pixels_DimensionOrder, PixelType, UnitsLength,
                              UnitsTime)
 
+from eubi_bridge.core.czi_reader import CZIReader
 from eubi_bridge.core.readers import (
     read_metadata_via_bfio, read_metadata_via_bioio_bioformats,
     read_metadata_via_extension, read_single_image)
@@ -127,6 +128,33 @@ def _get_cached_reader(path: str, series: int):
     return _tl_readers.cache[path]
 
 
+def _bioformats_resolution_count(path: str) -> Optional[int]:
+    """Return Bio-Formats' CoreMetadata.resolutionCount for series 0, or None."""
+    try:
+        br = _get_cached_reader(path, 0)
+        core = br._backend._rdr.getCoreMetadataList()
+        return int(core[0].resolutionCount)
+    except Exception:
+        return None
+
+
+def _collapse_resolution_series(omemeta: OME, path: str) -> OME:
+    """Collapse Bio-Formats-flattened resolution-pyramid <Image> entries.
+
+    bioio_bioformats reports each internal resolution level of a pyramidal
+    image as a separate <Image> (flattenedResolutions=True). When
+    CoreMetadata.resolutionCount for series 0 equals the number of reported
+    <Image> elements, every one of them is a resolution level of a single
+    image -- keep only the full-resolution (first) one.
+    """
+    if len(omemeta.images) <= 1:
+        return omemeta
+    res_count = _bioformats_resolution_count(path)
+    if res_count is not None and res_count == len(omemeta.images):
+        omemeta.images = omemeta.images[:1]
+    return omemeta
+
+
 def _ome_dtype(pixel_type) -> np.dtype:
     """Convert an OME PixelType enum (or its string value) to a numpy dtype."""
     name = (pixel_type.value if hasattr(pixel_type, 'value') else str(pixel_type)).lower()
@@ -137,6 +165,95 @@ def _ome_dtype(pixel_type) -> np.dtype:
         'bit': np.bool_, 'complex': np.complex64, 'double-complex': np.complex128,
     }
     return np.dtype(_MAP.get(name, np.float32))
+
+
+def _ome_pixeltype_from_dtype(dtype) -> PixelType:
+    """Convert a numpy dtype to an OME PixelType enum. Inverse of ``_ome_dtype``."""
+    _MAP = {
+        np.dtype(np.uint8): PixelType.UINT8,
+        np.dtype(np.uint16): PixelType.UINT16,
+        np.dtype(np.uint32): PixelType.UINT32,
+        np.dtype(np.int8): PixelType.INT8,
+        np.dtype(np.int16): PixelType.INT16,
+        np.dtype(np.int32): PixelType.INT32,
+        np.dtype(np.float32): PixelType.FLOAT,
+        np.dtype(np.float64): PixelType.DOUBLE,
+        np.dtype(np.bool_): PixelType.BIT,
+        np.dtype(np.complex64): PixelType.COMPLEXFLOAT,
+        np.dtype(np.complex128): PixelType.COMPLEXDOUBLE,
+    }
+    return _MAP.get(np.dtype(dtype), PixelType.UINT16)
+
+
+def _build_ims_omemeta(path: str) -> OME:
+    """Build a synthetic single-``<Image>`` OME object from an Imaris (.ims) file.
+
+    Reads ``/DataSetInfo/Image`` (size/extent → physical pixel sizes),
+    ``/DataSetInfo/TimeInfo`` (timepoint count/increment), and
+    ``/DataSetInfo/Channel {c}`` (channel names) directly via h5py, plus the
+    dtype/shape of the ResolutionLevel 0 data.
+    """
+    import h5py
+    from eubi_bridge.core.ims_reader import _ims_attr_str
+
+    with h5py.File(path, 'r') as f:
+        img_attrs = f['DataSetInfo/Image'].attrs
+
+        size_x = int(_ims_attr_str(img_attrs, 'X', '1'))
+        size_y = int(_ims_attr_str(img_attrs, 'Y', '1'))
+        size_z = int(_ims_attr_str(img_attrs, 'Z', '1'))
+
+        def _extent(key, default):
+            val = _ims_attr_str(img_attrs, key, None)
+            return float(val) if val is not None else default
+
+        ext_min0, ext_max0 = _extent('ExtMin0', 0.0), _extent('ExtMax0', float(size_x))
+        ext_min1, ext_max1 = _extent('ExtMin1', 0.0), _extent('ExtMax1', float(size_y))
+        ext_min2, ext_max2 = _extent('ExtMin2', 0.0), _extent('ExtMax2', float(size_z))
+
+        physical_size_x = (ext_max0 - ext_min0) / size_x if size_x else 1.0
+        physical_size_y = (ext_max1 - ext_min1) / size_y if size_y else 1.0
+        physical_size_z = (ext_max2 - ext_min2) / size_z if size_z else 1.0
+
+        res0 = f['DataSet/ResolutionLevel 0']
+        n_timepoints = sum(1 for k in res0.keys() if k.startswith('TimePoint'))
+        n_channels = sum(1 for k in res0['TimePoint 0'].keys() if k.startswith('Channel'))
+
+        time_increment = 1.0
+        if 'TimeInfo' in f.get('DataSetInfo', {}):
+            time_attrs = f['DataSetInfo/TimeInfo'].attrs
+            if n_timepoints > 1:
+                try:
+                    from datetime import datetime
+                    fmt = '%Y-%m-%d %H:%M:%S.%f'
+                    t1 = datetime.strptime(_ims_attr_str(time_attrs, 'TimePoint1').strip(), fmt)
+                    t2 = datetime.strptime(_ims_attr_str(time_attrs, 'TimePoint2').strip(), fmt)
+                    time_increment = (t2 - t1).total_seconds() or 1.0
+                except Exception:
+                    time_increment = 1.0
+
+        channels = []
+        for c in range(n_channels):
+            name = None
+            channel_key = f'DataSetInfo/Channel {c}'
+            if channel_key in f:
+                name = _ims_attr_str(f[channel_key].attrs, 'Name', None)
+            channels.append(Channel(id=f"Channel:{c}", name=name or f"Channel {c}"))
+
+        data_dtype = f[f'/DataSet/ResolutionLevel 0/TimePoint 0/Channel 0/Data'].dtype
+
+    pixels = Pixels(
+        dimension_order=Pixels_DimensionOrder.XYZCT,
+        type=_ome_pixeltype_from_dtype(data_dtype),
+        size_x=size_x, size_y=size_y, size_z=size_z,
+        size_c=n_channels, size_t=n_timepoints,
+        physical_size_x=physical_size_x, physical_size_x_unit=UnitsLength.MICROMETER,
+        physical_size_y=physical_size_y, physical_size_y_unit=UnitsLength.MICROMETER,
+        physical_size_z=physical_size_z, physical_size_z_unit=UnitsLength.MICROMETER,
+        time_increment=time_increment, time_increment_unit=UnitsTime.SECOND,
+        channels=channels,
+    )
+    return OME(images=[Image(id="Image:0", name="Series_0", pixels=pixels)])
 
 
 def _compute_tile_shape(
@@ -541,14 +658,24 @@ class PFFImageMeta(ImageReader):
         if self.root.endswith('ome') or self.root.endswith('xml'):
             from ome_types import OME
             omemeta = OME().from_xml(self.root)
+        elif self.root.lower().endswith('.czi') and self._meta_reader == 'czi_native':
+            # Provisional native CZI metadata via pylibCZIrw (no JVM; enumerates
+            # all scenes from the directory).  Opt-in only
+            # (metadata_reader='czi_native'); the default CZI metadata path is
+            # still Bio-Formats.  NB: pylibCZIrw reads the directory, so for a
+            # corrupt/partial CZI it can report more scenes than are readable.
+            from eubi_bridge.core.czi_reader import build_czi_omemeta
+            omemeta = await asyncio.to_thread(build_czi_omemeta, self.root)
         else:
-            if self._meta_reader == 'bioio':
+            # 'czi_native' on a non-CZI input falls back to the default reader.
+            meta_reader = 'bfio' if self._meta_reader == 'czi_native' else self._meta_reader
+            if meta_reader == 'bioio':
                 try:
                     omemeta = await read_metadata_via_extension(self.root, series=self._series)
                 except Exception as e:
                     logger.debug(f"bioio extension reader failed for {self.root}: {e}. Falling back.")
                     omemeta = await read_metadata_via_bioio_bioformats(self.root, series=self._series)
-            elif self._meta_reader == 'bfio':
+            elif meta_reader == 'bfio':
                 try:
                     omemeta = await read_metadata_via_bfio(self.root)
                 except Exception as e:
@@ -556,7 +683,7 @@ class PFFImageMeta(ImageReader):
                     omemeta = await read_metadata_via_bioio_bioformats(self.root, series=self._series)
             else:
                 raise ValueError(f"Unsupported metadata reader: {self._meta_reader}")
-        self.omemeta = omemeta
+        self.omemeta = _collapse_resolution_series(omemeta, self.root)
         self._n_scenes = len(self.omemeta.images)
 
     async def get_arraydata(self):
@@ -591,6 +718,36 @@ class PFFImageMeta(ImageReader):
             self.arraydata = _build_tiled_dask_array(
                 self.root, tile_mb=self._tile_mb, series=self._series,
                 shape=shape, dtype=dtype)
+
+    async def set_scene_isolated(self, scene_index: int) -> None:
+        """Switch scenes using a FRESH underlying reader pinned to this scene.
+
+        Native bioio readers (CZI/ND2/LIF…) resolve the scene index *lazily*, at
+        dask compute time, from a single mutable reader (``_current_scene_index``).
+        ``SceneLoader`` snapshots every scene's lazy array up front and only
+        computes them later (at write time), so reusing one reader across scenes
+        makes every snapshot read whichever scene the reader was last left on —
+        silently corrupting all but the last scene, and crashing outright when the
+        per-scene stitched geometry differs.  Giving each scene its own reader
+        instance that is never mutated again keeps the snapshots independent.
+
+        Single-scene formats and the Bio-Formats tiled path already bake the
+        series index into their graphs, so they fall back to the plain
+        ``set_scene``.
+        """
+        if (self.n_scenes <= 1 or self._bfio_tiling
+                or self._force_bioformats or self.reader is None):
+            await self.set_scene(scene_index)
+            return
+        # Native multi-scene bioio path: rebuild a fresh reader for this scene so
+        # its lazy dask graph closes over an immutable scene index.
+        self._series = scene_index
+        self.reader = await read_single_image(
+            self.root, aszarr=self._aszarr, as_mosaic=self._as_mosaic,
+            **self._reader_kwargs)
+        await self.set_scene(scene_index)
+        await self.set_tile(self._tile)
+        self.arraydata = await self.get_arraydata()
 
     async def set_tile(self, tile_index: int) -> None:
         self._tile = 0
@@ -650,6 +807,14 @@ class PFFImageMeta(ImageReader):
             pixels.model_fields_set.update(missing)
         except (AttributeError, IndexError) as e:
             raise ValueError(f"Failed to get pixels from {self.root} series {self._series}: {e}") from e
+        if isinstance(self.reader, CZIReader):
+            dims = self.reader.img.dims
+            if hasattr(dims, 'S') and dims.S > 1 and pixels.size_c == 1:
+                pixels.size_c = dims.S
+                pixels.channels = [
+                    Channel(id=f"Channel:{i}", samples_per_pixel=1)
+                    for i in range(dims.S)
+                ]
         return pixels
 
     @property
@@ -703,7 +868,12 @@ class PFFImageMeta(ImageReader):
         )
 
     async def read_dataset(self) -> None:
-        await asyncio.gather(self.read_omemeta(), self.read_img())
+        # Metadata must be loaded before the image reader, because get_arraydata
+        # reconciles dims against the OME pixels (self.pixels).  Run them in
+        # order rather than concurrently to avoid a race where get_arraydata
+        # reads omemeta before it is populated.
+        await self.read_omemeta()
+        await self.read_img()
         await self.set_scene(self._series)
         await self.set_tile(self._tile)
 
@@ -871,6 +1041,87 @@ class H5ImageMeta(PFFImageMeta):
 
     def get_channels(self) -> list:
         return []
+
+
+# ---------------------------------------------------------------------------
+# IMSImageMeta
+# ---------------------------------------------------------------------------
+
+class IMSImageMeta(PFFImageMeta):
+    """Native HDF5-based reader for Imaris (.ims) files.
+
+    Builds a synthetic single-``<Image>`` OME object so the inherited
+    ``get_pixels()``/``get_scaledict()``/``get_unitdict()``/``get_channels()``/
+    ``_bfio_shape_from_meta()`` work unchanged. Only ``read_img()`` /
+    ``get_arraydata()`` (and ``get_pyramid()`` for ``keep_existing_resolutions``)
+    need overriding since the native ``IMSReader`` has no ``.img.dims`` like
+    bioio readers do.
+
+    When ``force_bioformats=True``, or when the native HDF5 parse fails, falls
+    back to the generic ``PFFImageMeta`` (Bio-Formats) path — Track B's
+    resolution-pyramid collapse applies there.
+    """
+    essential_omexml_fields = PFFImageMeta.essential_omexml_fields
+
+    def __init__(self, path, meta_reader="bioio", **kwargs):
+        if not path.lower().endswith('.ims'):
+            raise ValueError(f"Not an Imaris file: {path}")
+        self._keep_existing_resolutions = bool(kwargs.pop('keep_existing_resolutions', False))
+        super().__init__(path, meta_reader, aszarr=False, **kwargs)
+
+    async def read_omemeta(self):
+        if self._force_bioformats:
+            await super().read_omemeta()   # Track B applies here
+            return
+        try:
+            self.omemeta = await asyncio.to_thread(_build_ims_omemeta, self.root)
+            self._n_scenes = 1
+            self._native_ims = True
+        except Exception as e:
+            logger.warning(f"Native IMS reader failed for {self.root} ({e}); "
+                            f"falling back to Bio-Formats.")
+            self._native_ims = False
+            await super().read_omemeta()
+
+    async def read_img(self):
+        if self._force_bioformats or not getattr(self, '_native_ims', True):
+            await super().read_img()
+            return
+        from eubi_bridge.core.ims_reader import read_ims
+        self.reader = await asyncio.to_thread(read_ims, self.root)
+        self.arraydata = await self.get_arraydata()
+
+    async def get_arraydata(self):
+        if self._force_bioformats or not getattr(self, '_native_ims', True):
+            return await super().get_arraydata()
+        return self.reader.get_image_dask_data()
+
+    async def get_pyramid(self, version='0.4') -> Pyramid:
+        if (self._force_bioformats or not getattr(self, '_native_ims', True)
+                or not self._keep_existing_resolutions):
+            return await super().get_pyramid(version)
+
+        if self.reader.n_resolution_levels <= 1:
+            return await super().get_pyramid(version)
+
+        arrays = [self.reader.get_resolution_level_dask_data(r)
+                  for r in range(self.reader.n_resolution_levels)]
+        base_shape = arrays[0].shape
+        base_scale = [
+            self.pixels.time_increment, 1.0,
+            self.pixels.physical_size_z,
+            self.pixels.physical_size_y,
+            self.pixels.physical_size_x,
+        ]
+        scales = [
+            [s * (b / a) for s, b, a in zip(base_scale, base_shape, arr.shape)]
+            for arr in arrays
+        ]
+        return Pyramid().from_arrays(
+            arrays=arrays, axis_order='tczyx',
+            unit_list=self.get_units(), scales=scales,
+            version=version, name="Series_0",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1211,7 +1462,8 @@ class SceneLoader:
     def __init__(self, path: str, metadata_reader: str = 'bfio', skip_dask: bool = False,
                  reader_tile_size_mb: float = 256.0, force_bioformats: bool = False,
                  as_mosaic: bool = False,
-                 reader_kwargs: Optional[dict] = None):
+                 reader_kwargs: Optional[dict] = None,
+                 keep_existing_resolutions: bool = False):
         self.path = path
         self._meta_reader = metadata_reader
         self._skip_dask = skip_dask
@@ -1219,8 +1471,10 @@ class SceneLoader:
         self._force_bioformats = bool(force_bioformats)
         self._as_mosaic = bool(as_mosaic)
         self._reader_kwargs: dict = reader_kwargs or {}
+        self._keep_existing_resolutions = bool(keep_existing_resolutions)
         self._img: Optional[ImageReader] = None
         self.n_scenes: int = 0
+        self.n_scenes_in_file: int = 0
         self.n_tiles: int = 0
         self.n_views: int = 1
         self.n_illuminations: int = 1
@@ -1234,6 +1488,14 @@ class SceneLoader:
             self.is_ngff = True
         elif path.endswith('.h5'):
             self._img = await asyncio.to_thread(H5ImageMeta, path, self._meta_reader)
+        elif path.lower().endswith('.ims'):
+            self._img = await asyncio.to_thread(
+                IMSImageMeta, path, self._meta_reader,
+                reader_tile_size_mb=self._tile_mb,
+                force_bioformats=self._force_bioformats,
+                reader_kwargs=self._reader_kwargs,
+                keep_existing_resolutions=self._keep_existing_resolutions,
+            )
         elif not self._skip_dask:
             self._img = await asyncio.to_thread(
                 PFFImageMeta, path, self._meta_reader, self._skip_dask,
@@ -1257,6 +1519,36 @@ class SceneLoader:
         self.n_tiles         = self._img.n_tiles
         self.n_views         = getattr(self._img, 'n_views', 1)
         self.n_illuminations = getattr(self._img, 'n_illuminations', 1)
+        # The number of scenes the file's index advertises (before any
+        # readability cap) — used to report partial conversions accurately.
+        self.n_scenes_in_file = self.n_scenes
+
+        # Graceful degradation for truncated / corrupt files.  A reader may
+        # advertise more scenes (from the on-disk index/directory) than are
+        # actually readable: the metadata reader probes the data and reports only
+        # the scenes it could resolve.  A smaller metadata scene count than the
+        # reader's directory count therefore signals a damaged file (e.g. a CZI
+        # whose subblock directory is inconsistent past some scene — confirmed in
+        # Fiji/Bio-Formats too).  We can only convert scenes whose pixel metadata
+        # exists, so cap to the readable count and warn loudly.
+        meta_n = getattr(self._img, '_n_scenes', None)
+        if isinstance(meta_n, int) and 0 < meta_n < self.n_scenes:
+            unreadable = self.n_scenes - meta_n
+            logger.warning(
+                "\n" + "=" * 78 + "\n"
+                f"PARTIAL READ — DAMAGED FILE: {path}\n"
+                f"Only {meta_n} of {self.n_scenes} scenes can be read. The file's "
+                f"index advertises {self.n_scenes} scenes, but its data is "
+                f"inconsistent/unreadable past scene {meta_n} (a truncated or "
+                f"corrupt acquisition — Fiji/Bio-Formats and the native readers all "
+                f"stop at the same point).\n"
+                f"Converting the {meta_n} readable scene(s). The remaining "
+                f"{unreadable} image(s) DO exist in the file but COULD NOT BE READ "
+                f"and will be missing from the output. If you need them, re-export "
+                f"or repair the source file (e.g. 'Save As' in Zeiss ZEN).\n"
+                + "=" * 78
+            )
+            self.n_scenes = meta_n
 
     async def _snapshot(self, series: int, tile: Optional[int] = None) -> "ArrayManager":
         """Capture the reader's current state into a fresh independent ArrayManager.
@@ -1327,7 +1619,7 @@ class SceneLoader:
                 valid_tiles = None
 
             for scene_idx in valid:
-                await self._img.set_scene(scene_idx)
+                await self._img.set_scene_isolated(scene_idx)
                 if valid_tiles is None:
                     managers.append(await self._snapshot(scene_idx))
                 else:
@@ -1378,11 +1670,13 @@ class ArrayManager:
         self._tile_mb            = float(kwargs.get('reader_tile_size_mb', 256.0))
         self._force_bioformats   = bool(kwargs.get('force_bioformats', False))
         self._as_mosaic          = bool(kwargs.get('as_mosaic', False))
+        self._keep_existing_resolutions = bool(kwargs.get('keep_existing_resolutions', False))
 
         self.loaded_scenes:  Optional[dict] = None
         self.loaded_tiles:   Optional[dict] = None
         self.loaded_views_illuminations: Optional[dict] = None
         self._n_scenes:       int  = 0
+        self._n_scenes_in_file: int = 0
         self._n_tiles:        int  = 0
         self._n_views:        int  = 1
         self._n_illuminations: int = 1
@@ -1491,7 +1785,8 @@ class ArrayManager:
         loader = SceneLoader(self.path, self._meta_reader, self._skip_dask,
                              reader_tile_size_mb=self._tile_mb,
                              force_bioformats=self._force_bioformats,
-                             as_mosaic=self._as_mosaic)
+                             as_mosaic=self._as_mosaic,
+                             keep_existing_resolutions=self._keep_existing_resolutions)
         await loader._open()
         self._n_scenes = loader.n_scenes
         self._n_tiles  = loader.n_tiles
@@ -1509,15 +1804,26 @@ class ArrayManager:
     def close_reader(self) -> None:
         """No-op: the reader is now owned and released by SceneLoader."""
 
-    async def load_scenes(self, scene_indices: Union[int, str, List[int]]):
+    async def load_scenes(self, scene_indices: Union[int, str, List[int]],
+                          mosaic_tile_index: Optional[Union[int, str, List[int]]] = None):
+        """Snapshot the requested scenes — and, when ``mosaic_tile_index`` is
+        given, every (scene, tile) combination — into independent managers.
+
+        Passing ``mosaic_tile_index`` produces one manager per (scene, tile)
+        pair (each carrying ``.series`` and ``.mosaic_tile_index``), enabling
+        the multi-scene × multi-tile case in a single file open.
+        """
         assert self.path is not None, "Cannot load scenes: path is None."
         loader = SceneLoader(self.path, self._meta_reader, self._skip_dask,
                              reader_tile_size_mb=self._tile_mb,
                              force_bioformats=self._force_bioformats,
-                             as_mosaic=self._as_mosaic)
-        managers = await loader.load(scene_indices=scene_indices)
-        self._n_scenes        = loader.n_scenes
-        self._n_tiles         = loader.n_tiles
+                             as_mosaic=self._as_mosaic,
+                             keep_existing_resolutions=self._keep_existing_resolutions)
+        managers = await loader.load(scene_indices=scene_indices,
+                                     mosaic_tile_index=mosaic_tile_index)
+        self._n_scenes         = loader.n_scenes
+        self._n_scenes_in_file = loader.n_scenes_in_file
+        self._n_tiles          = loader.n_tiles
         self._n_views         = loader.n_views
         self._n_illuminations = loader.n_illuminations
         self._is_ngff         = loader.is_ngff
@@ -1533,7 +1839,8 @@ class ArrayManager:
         loader = SceneLoader(self.path, self._meta_reader, self._skip_dask,
                              reader_tile_size_mb=self._tile_mb,
                              force_bioformats=self._force_bioformats,
-                             as_mosaic=self._as_mosaic)
+                             as_mosaic=self._as_mosaic,
+                             keep_existing_resolutions=self._keep_existing_resolutions)
         await loader._open()
         try:
             await loader._img.set_scene(scene_idx)  # type: ignore[union-attr]
@@ -1598,6 +1905,7 @@ class ArrayManager:
             reader_tile_size_mb=self._tile_mb,
             force_bioformats=self._force_bioformats,
             as_mosaic=self._as_mosaic,
+            keep_existing_resolutions=self._keep_existing_resolutions,
             reader_kwargs={'view_index': 'all', 'illumination_index': 'all'},
         )
         await loader._open()
@@ -1625,14 +1933,25 @@ class ArrayManager:
                 return {}
 
             # ── Inner helper — snapshot one (scene, view, illumination) ──
-            async def _snapshot_vi(scene_idx: int, v_idx: int, i_idx: int) -> "ArrayManager":
+            async def _snapshot_vi(scene_idx: int, v_idx: int, i_idx: int,
+                                   tile_idx: Optional[int] = None) -> "ArrayManager":
+                # Honour the mosaic tile this scene-manager represents so that
+                # multi-tile files compose with view/illumination iteration —
+                # otherwise every tile collapses to the reader's default tile.
+                tiled = (
+                    tile_idx is not None and reader.n_tiles > 1
+                    and getattr(reader, 'reader', None) is not None
+                    and hasattr(reader.reader, 'set_tile')
+                )
+                if tiled:
+                    reader.reader.set_tile(tile_idx)  # sync — updates CZI index_map['M']
                 reader.set_view(v_idx)           # sync — updates CZI index_map
                 reader.set_illumination(i_idx)   # sync — updates CZI index_map
                 # Re-read array with updated index_map so the snapshot holds
                 # the correct data slice.
                 if not getattr(reader, '_bfio_tiling', False):
                     reader.arraydata = await reader.get_arraydata()
-                mgr = await loader._snapshot(scene_idx)
+                mgr = await loader._snapshot(scene_idx, tile_idx if tiled else None)
                 # OME-XML may report channels for all illuminations while
                 # get_image_dask_data returns only the slice for the current
                 # illumination.  Select the per-illumination window.
@@ -1649,6 +1968,8 @@ class ArrayManager:
                     vi_parts.append(f'_view{v_idx}')
                 if n_total_illuminations > 1:
                     vi_parts.append(f'_illu{i_idx}')
+                if tiled:
+                    vi_parts.append(f'_tile{tile_idx}')
                 if vi_parts:
                     mgr.series_path = str(
                         p.parent / (p.stem + ''.join(vi_parts) + p.suffix)
@@ -1658,6 +1979,7 @@ class ArrayManager:
             # ── Process every loaded scene in the SAME file open ──────────
             for scene_key, scene_mgr in self.loaded_scenes.items():
                 scene_idx = scene_mgr.series
+                tile_idx = scene_mgr.mosaic_tile_index
                 await reader.set_scene(scene_idx)
 
                 # Resolve view list for this scene
@@ -1685,7 +2007,7 @@ class ArrayManager:
                 if not concat_views and not concat_illuminations:
                     # ── separate output per (view, illumination) ──────────
                     for v_idx, i_idx in combos:
-                        mgr = await _snapshot_vi(scene_idx, v_idx, i_idx)
+                        mgr = await _snapshot_vi(scene_idx, v_idx, i_idx, tile_idx)
                         result[mgr.series_path] = mgr
 
                 else:
@@ -1708,7 +2030,7 @@ class ArrayManager:
                         # unlabelled channels inherit names from illumination 0.
                         view_fallback_names: dict = {}
                         for v_idx, i_idx in group_combos:
-                            snap_mgr = await _snapshot_vi(scene_idx, v_idx, i_idx)
+                            snap_mgr = await _snapshot_vi(scene_idx, v_idx, i_idx, tile_idx)
                             arr = snap_mgr.array
                             if arr is None:
                                 continue

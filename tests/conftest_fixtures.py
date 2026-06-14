@@ -325,6 +325,30 @@ def aggregative_channel_categorical_files(tmp_test_data):
 
 
 @pytest.fixture
+def aggregative_channel_with_brightfield_files(tmp_test_data):
+    """Categorical channels (gfp, mcherry) plus an extra brightfield group.
+
+    Used to test ``--excludes``: excluding the brightfield files must still leave
+    two channel groups (gfp, mcherry) to concatenate.
+    """
+    files = []
+    channels = [
+        ('gfp', '00FF00'),          # Green
+        ('mcherry', 'FF0000'),      # Red
+        ('brightfield', 'FFFFFF'),  # excluded in the test
+    ]
+    for t in range(2):
+        for ch_name, ch_color in channels:
+            img = create_synthetic_image_zyx((128, 128), dtype=np.uint8,
+                                             seed=t * 10)
+            filename = f"exp_t{t:03d}_{ch_name}.tif"
+            path = tmp_test_data / filename
+            tifffile.imwrite(path, img, imagej=True, resolution=(3.03, 3.03))
+            files.append((path, ch_name, ch_color))
+    return tmp_test_data, files
+
+
+@pytest.fixture
 def aggregative_channel_numerical_files(tmp_test_data):
     """Create files for channel concatenation with numerical indices (channel1, channel2, channel3)."""
     files = []

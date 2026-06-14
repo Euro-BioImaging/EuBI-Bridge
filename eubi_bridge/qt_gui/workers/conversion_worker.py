@@ -94,7 +94,14 @@ def _build_kwargs(config: dict) -> dict:
     meta_config      = config.get("metadata", {})
     compression      = conv_config.get("compression", {})
 
-    zarr_format = conv_config.get("zarrFormat", 2)
+    # The GUI selects an OME-Zarr version; derive the zarr container format from
+    # it (kept for the compressor branch + backwards compatibility).  Falls back
+    # to the legacy zarrFormat field for old saved configs.
+    ome_zarr_version = conv_config.get("omeZarrVersion")
+    if ome_zarr_version:
+        zarr_format = 3 if str(ome_zarr_version) == "0.5" else 2
+    else:
+        zarr_format = conv_config.get("zarrFormat", 2)
     compressor  = compression.get("codec", "blosc")
     if compressor == "none":
         compressor = None
@@ -135,6 +142,7 @@ def _build_kwargs(config: dict) -> dict:
         "slurm_account":            cluster_config.get("slurmAccount") or None,
         "slurm_time":               cluster_config.get("slurmTime", "24:00:00"),
         "slurm_sif_path":           cluster_config.get("slurmSifPath") or None,
+        "slurm_worker_timeout":     cluster_config.get("slurmWorkerTimeout", 300),
         "scene_index":              scene_idx,
         "mosaic_tile_index":        mosaic_idx,
         "as_mosaic":                reader_config.get("readAsMosaic", False),
@@ -148,6 +156,7 @@ def _build_kwargs(config: dict) -> dict:
         "force_bioformats":         reader_config.get("forceBioformats", False),
         "verbose":                  conv_config.get("verbose", False),
         "zarr_format":              zarr_format,
+        "ome_zarr_version":         ome_zarr_version,
         "auto_chunk":               conv_config.get("autoChunk", True),
         "time_chunk":               conv_config.get("chunkTime", 1),
         "channel_chunk":            conv_config.get("chunkChannel", 1),
@@ -175,6 +184,7 @@ def _build_kwargs(config: dict) -> dict:
         "n_layers":                 None if downscale_config.get("autoDetectLayers", True) else downscale_config.get("numLayers", 4),
         "min_dimension_size":       downscale_config.get("minDimSize", 64),
         "downscale_method":         downscale_config.get("downscaleMethod", "simple"),
+        "keep_existing_resolutions": downscale_config.get("keepExistingResolutions", False),
         "time_scale_factor":        downscale_config.get("scaleTime", 1),
         "channel_scale_factor":     downscale_config.get("scaleChannel", 1),
         "z_scale_factor":           downscale_config.get("scaleZ", 1),

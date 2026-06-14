@@ -277,13 +277,24 @@ class ConvertPage(QWidget):
         self._memory_per_worker.setValue(4.0)
         self._memory_per_worker.setSingleStep(1.0)
         self._memory_per_worker.setDecimals(1)
-        lay.addLayout(_form_row("Memory/Worker (GB):", self._memory_per_worker))
+        # Memory/Worker only applies to the LocalCluster / SLURM backends, so the
+        # row is wrapped in a container and shown only when one of them is active.
+        self._memory_row = QWidget()
+        self._memory_row.setLayout(_form_row("Memory/Worker (GB):", self._memory_per_worker))
+        lay.addWidget(self._memory_row)
 
         self._use_local_dask = QCheckBox("Use Local Dask")
         lay.addWidget(self._use_local_dask)
 
         self._use_slurm = QCheckBox("Use SLURM")
         lay.addWidget(self._use_slurm)
+
+        def _update_memory_visibility(*_):
+            self._memory_row.setVisible(
+                self._use_local_dask.isChecked() or self._use_slurm.isChecked())
+        self._use_local_dask.toggled.connect(_update_memory_visibility)
+        self._use_slurm.toggled.connect(_update_memory_visibility)
+        _update_memory_visibility()
 
         # SLURM-specific fields — wrapped in containers so setVisible hides label too
         def _slurm_row(label: str, widget: QWidget) -> QWidget:
@@ -308,7 +319,15 @@ class ConvertPage(QWidget):
         self._slurm_sif_path.setPlaceholderText("e.g. /path/to/eubi-bridge.sif (leave blank to use host Python)")
         _slurm_row_sif = _slurm_row("Apptainer SIF:", self._slurm_sif_path)
 
-        self._slurm_rows = (_slurm_row_partition, _slurm_row_account, _slurm_row_time, _slurm_row_sif)
+        self._slurm_worker_timeout = QSpinBox()
+        self._slurm_worker_timeout.setRange(1, 100000)
+        self._slurm_worker_timeout.setValue(300)
+        self._slurm_worker_timeout.setSuffix(" s")
+        self._slurm_worker_timeout.setToolTip("Seconds to wait for SLURM workers to start.")
+        _slurm_row_timeout = _slurm_row("Worker Start Timeout:", self._slurm_worker_timeout)
+
+        self._slurm_rows = (_slurm_row_partition, _slurm_row_account, _slurm_row_time,
+                            _slurm_row_sif, _slurm_row_timeout)
 
         def _toggle_slurm(checked: bool):
             for w in self._slurm_rows:
@@ -323,9 +342,9 @@ class ConvertPage(QWidget):
 
         note = QLabel(
             "These settings apply only when the bfio/Bio-Formats fallback reader is "
-            "active (e.g. MRC, IMS, BMP, and other formats without a native plugin) "
+            "active (e.g. MRC, BMP, and other formats without a native plugin) "
             "or when the Force Bio-Formats option is enabled in the Reader tab. "
-            "They have no effect when a native reader (CZI, ND2, LIF, TIFF…) is used."
+            "They have no effect when a native reader (CZI, ND2, LIF, TIFF, IMS…) is used."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray; font-style: italic;")
@@ -540,14 +559,16 @@ class ConvertPage(QWidget):
         ))
         lay.addWidget(chunk_group)
 
-        # Zarr Format (+ v3-only shard coefficients)
-        fmt_group = QGroupBox("Zarr Format and Sharding")
+        # OME-Zarr version (the zarr container format, v2/v3, is derived from it
+        # and kept internally for compatibility).
+        fmt_group = QGroupBox("OME-Zarr Version and Sharding")
         fmt_layout = QVBoxLayout(fmt_group)
 
-        self._zarr_format = QComboBox()
-        self._zarr_format.addItem("v2", 2)
-        self._zarr_format.addItem("v3", 3)
-        fmt_layout.addLayout(_form_row("Format version:", self._zarr_format))
+        # Item text = OME-Zarr (NGFF) version; item data = required zarr format.
+        self._ome_zarr_version = QComboBox()
+        self._ome_zarr_version.addItem("0.4", 2)
+        self._ome_zarr_version.addItem("0.5", 3)
+        fmt_layout.addLayout(_form_row("OME-Zarr Version:", self._ome_zarr_version))
 
         self._shard_widget = QWidget()
         shard_widget_layout = QVBoxLayout(self._shard_widget)
@@ -566,7 +587,7 @@ class ConvertPage(QWidget):
         fmt_layout.addWidget(self._shard_widget)
         self._shard_widget.setVisible(False)
 
-        self._zarr_format.currentIndexChanged.connect(self._update_shard_state)
+        self._ome_zarr_version.currentIndexChanged.connect(self._update_shard_state)
         self._update_shard_state()
         lay.addWidget(fmt_group)
 
@@ -601,7 +622,7 @@ class ConvertPage(QWidget):
 
     def _update_shard_state(self):
         """Show shard coefficient controls only when Zarr v3 is selected."""
-        self._shard_widget.setVisible(self._zarr_format.currentData() == 3)
+        self._shard_widget.setVisible(self._ome_zarr_version.currentData() == 3)
 
     def _build_downscaling_tab(self):
         _, lay = self._scrolled_tab("Downscaling")
@@ -610,6 +631,14 @@ class ConvertPage(QWidget):
         for m in ("simple", "mean", "median", "min", "max", "mode"):
             self._downscale_method.addItem(m)
         lay.addLayout(_form_row("Method:", self._downscale_method))
+
+        self._keep_existing_resolutions = QCheckBox("Keep Existing Resolutions")
+        self._keep_existing_resolutions.setToolTip(
+            "If the input already carries its own multiscale pyramid (e.g. .ims, "
+            ".zarr), write its existing resolution levels straight to the output "
+            "instead of rebuilding the pyramid."
+        )
+        lay.addWidget(self._keep_existing_resolutions)
 
         self._auto_detect_layers = QCheckBox("Auto-detect Layers")
         self._auto_detect_layers.setChecked(True)
@@ -794,6 +823,7 @@ class ConvertPage(QWidget):
         self._slurm_account.setText(c.get("slurmAccount", ""))
         self._slurm_time.setText(c.get("slurmTime", "24:00:00"))
         self._slurm_sif_path.setText(c.get("slurmSifPath", ""))
+        self._slurm_worker_timeout.setValue(int(c.get("slurmWorkerTimeout", 300) or 300))
         self._bf_tile_size_mb.setValue(float(c.get("bfTileSizeMb", 512.0)))
         self._bf_read_concurrency.setValue(c.get("bfReadConcurrency", 4))
         self._jvm_memory.setValue(float(c.get("jvmMemory", 2.0)))
@@ -816,10 +846,15 @@ class ConvertPage(QWidget):
         self._force_bioformats.setChecked(r.get("forceBioformats", False))
 
         conv = cfg.get("conversion", {})
-        fmt = conv.get("zarrFormat", 2)
-        idx = self._zarr_format.findData(fmt)
+        # Prefer the OME-Zarr version; fall back to the (deprecated) zarrFormat
+        # for older saved configs (2 -> 0.4, 3 -> 0.5).
+        ozv = conv.get("omeZarrVersion")
+        if ozv:
+            idx = self._ome_zarr_version.findText(str(ozv))
+        else:
+            idx = self._ome_zarr_version.findData(conv.get("zarrFormat", 2))
         if idx >= 0:
-            self._zarr_format.setCurrentIndex(idx)
+            self._ome_zarr_version.setCurrentIndex(idx)
         dt = conv.get("dataType", "auto") or "auto"
         idx = self._data_type.findText(dt)
         if idx >= 0:
@@ -860,6 +895,7 @@ class ConvertPage(QWidget):
         idx = self._downscale_method.findText(method)
         if idx >= 0:
             self._downscale_method.setCurrentIndex(idx)
+        self._keep_existing_resolutions.setChecked(down.get("keepExistingResolutions", False))
         self._auto_detect_layers.setChecked(down.get("autoDetectLayers", True))
         self._num_layers.setValue(down.get("numLayers", 4))
         self._min_dim_size.setValue(down.get("minDimSize", 64))
@@ -915,6 +951,7 @@ class ConvertPage(QWidget):
                 "slurmAccount":        self._slurm_account.text().strip(),
                 "slurmTime":           self._slurm_time.text().strip() or "24:00:00",
                 "slurmSifPath":        self._slurm_sif_path.text().strip() or None,
+                "slurmWorkerTimeout":  self._slurm_worker_timeout.value(),
                 "bfTileSizeMb":        self._bf_tile_size_mb.value(),
                 "bfReadConcurrency":   self._bf_read_concurrency.value(),
                 "jvmMemory":           self._jvm_memory.value(),
@@ -937,7 +974,7 @@ class ConvertPage(QWidget):
                 "forceBioformats":   self._force_bioformats.isChecked(),
             },
             "conversion": {
-                "zarrFormat":           self._zarr_format.currentData(),
+                "omeZarrVersion":       self._ome_zarr_version.currentText(),
                 "dataType":             self._data_type.currentText(),
                 "verbose":              self._verbose.isChecked(),
                 "overwrite":            self._overwrite.isChecked(),
@@ -971,6 +1008,7 @@ class ConvertPage(QWidget):
             },
             "downscaling": {
                 "downscaleMethod":       self._downscale_method.currentText(),
+                "keepExistingResolutions": self._keep_existing_resolutions.isChecked(),
                 "autoDetectLayers":      self._auto_detect_layers.isChecked(),
                 "numLayers":             self._num_layers.value(),
                 "minDimSize":            self._min_dim_size.value(),

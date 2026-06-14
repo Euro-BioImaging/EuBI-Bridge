@@ -88,6 +88,8 @@ def _config_to_react(cfg: dict) -> dict:
         },
         "conversion": {
             "zarrFormat":           conv.get("zarr_format", 2),
+            "omeZarrVersion":       conv.get("ome_zarr_version")
+                                    or ("0.5" if conv.get("zarr_format", 2) == 3 else "0.4"),
             "dataType":             conv.get("dtype", "auto") or "auto",
             "verbose":              conv.get("verbose", False),
             "overwrite":            conv.get("overwrite", False),
@@ -207,7 +209,7 @@ def _react_to_config(data: dict) -> dict:
         "readers": {
             "as_mosaic":            reader_d.get("readAsMosaic", False),
             "scene_index":          "all" if reader_d.get("readAllScenes", True) else _parse_int(reader_d.get("sceneIndices", "0")),
-            "mosaic_tile_index":    None if reader_d.get("readAllTiles", True) else _parse_int(reader_d.get("mosaicTileIndices", "0")),
+            "mosaic_tile_index":    "all" if reader_d.get("readAllTiles", True) else _parse_int(reader_d.get("mosaicTileIndices", "0")),
             "view_index":           "all" if reader_d.get("readAllViews", True) else _parse_int(reader_d.get("viewIndices", "0")),
             "concat_views":         reader_d.get("concatViews", False),
             "phase_index":          _parse_int(reader_d.get("phaseIndex", "0")),
@@ -219,6 +221,7 @@ def _react_to_config(data: dict) -> dict:
         },
         "conversion": {
             "zarr_format":           conv_d.get("zarrFormat", 2),
+            "ome_zarr_version":      conv_d.get("omeZarrVersion"),
             "auto_chunk":            conv_d.get("autoChunk", True),
             "target_chunk_mb":       conv_d.get("targetChunkSizeMb", 1),
             "time_chunk":            conv_d.get("chunkTime", 1),
@@ -258,6 +261,7 @@ def _react_to_config(data: dict) -> dict:
             "n_layers":                 n_layers,
             "min_dimension_size":       down_d.get("minDimSize", 64),
             "downscale_method":         down_d.get("downscaleMethod", "simple"),
+            "keep_existing_resolutions": down_d.get("keepExistingResolutions", False),
             "apply_smart_downscaling":  down_d.get("applySmartDownscaling", False),
             "z_smart_scale_factor":     down_d.get("smartScaleZ") or None,
             "y_smart_scale_factor":     down_d.get("smartScaleY") or None,

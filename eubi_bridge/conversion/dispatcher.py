@@ -21,6 +21,7 @@ import asyncio
 import math
 import multiprocessing as mp
 import os
+import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Union
@@ -608,6 +609,19 @@ async def run_conversions_with_concatenation(
                     f"Tag '{tag_name}={tag_value}' does not match any files.\n"
                     f"Available: {[Path(p).name for p in filepaths]}"
                 )
+
+        # A single (non-list) channel tag is treated as a prefix followed by a
+        # number.  If it matches filenames but none carry a numeric suffix, the
+        # user almost certainly meant a categorical (comma-separated) tag — fail
+        # early with an actionable message instead of an opaque worker error.
+        if channel_tag is not None:
+            from eubi_bridge.conversion.fileset_io import channel_tag_format_error
+            parsed_channel = _parse_tag(channel_tag)
+            if isinstance(parsed_channel, str):
+                pat = re.compile(re.escape(parsed_channel) + r'[/\\]?\d+')
+                if not any(pat.search(fp) for fp in filepaths):
+                    raise ValueError(channel_tag_format_error(
+                        channel_tag, [Path(p).name for p in filepaths]))
 
         common_dir  = os.path.commonpath(filepaths_accepted)
         cluster_cfg = ClusterConfig(**{k: v for k, v in kwargs.items()

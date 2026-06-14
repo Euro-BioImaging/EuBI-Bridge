@@ -26,18 +26,22 @@ Convert each file in `input_dir` into an OME-Zarr container, saving the result i
 eubi to_zarr /path/to/input_dir /path/to/output_dir
 ```
 
-Convert to OME-Zarr **version 0.5** with zarr version 3:
+Convert to OME-Zarr **version 0.5** (backed by Zarr v3, which enables sharding):
 
 ```bash
-eubi to_zarr /path/to/input_dir /path/to/output_dir --zarr_format 3
+eubi to_zarr /path/to/input_dir /path/to/output_dir --ome_zarr_version 0.5
 ```
+
+The default is OME-Zarr **0.4** (Zarr v2). Pass `--ome_zarr_version 0.4` or `0.5` to choose
+explicitly. (The legacy `--zarr_format 2/3` flag still works but is deprecated in favour of
+`--ome_zarr_version`.)
 
 **Excluding files:**
 
 Exclude files with `thumbs` in the filename:
 
 ```bash
-eubi to_zarr /path/to/input_dir /path/to/output_dir --zarr_format 3 --excludes 'thumbs'
+eubi to_zarr /path/to/input_dir /path/to/output_dir --excludes 'thumbs'
 ```
 
 Note that this option is especially useful to filter out non-image files that may be present in the input directory.
@@ -158,7 +162,8 @@ These are stored in the configuration file but can also be supplied directly to 
 
 | Parameter              | Type   | Description                                              |
 |------------------------|--------|----------------------------------------------------------|
-| `--zar_format`         | `int`  | Zarr version (3 for OME-Zarr 0.5 and 2 for OME-Zarr 0.4) |
+| `--ome_zarr_version`   | `str`  | OME-Zarr (NGFF) version to write: `0.4` (Zarr v2) or `0.5` (Zarr v3). Preferred control. |
+| `--zarr_format`        | `int`  | **Deprecated** — Zarr container version (`2`=OME-Zarr 0.4, `3`=OME-Zarr 0.5). Use `--ome_zarr_version` instead. |
 | `--compressor`         | `str`  | Compression algorithm                                    |
 | `--compressor_params`  | `dict` | Compressor parameters                                    |
 | `--time_chunk`         | `int`  | Output Zarr chunk size in the time dimension             |
@@ -176,25 +181,24 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--z_range`            | `int`  | Range of pixels to crop in the z dimension               |
 | `--y_range`            | `int`  | Range of pixels to crop in the y dimension               |
 | `--x_range`            | `int`  | Range of pixels to crop in the x dimension               |
-| `--dimension_order`    | `bool` | Dimension order of the output dataset                    |
 | `--squeeze`            | `bool` | Drop the singlet dimensions from the output array        |
 | `--overwrite`          | `bool` | Overwrite existing Zarr data                             |
-| `--trim_memory`        | `bool` | Reduce memory usage                                      |
-| `--use_tensorstore`    | `bool` | Use TensorStore backend for writing                      |
-| `--use_gpu`            | `bool` | Run on GPU by using cupy arrays                          |
-| `--metadata_reader`    | `str`  | Metadata extraction method (`bfio` or `bioio`)           |
-| `--save_omexml`        | `bool` | Save OME-XML metadata                                    |
+| `--dtype`              | `str`  | `auto` keeps the source dtype; pass a NumPy dtype (e.g. `uint8`) to cast on write |
+| `--metadata_reader`    | `str`  | Metadata extraction backend (`bfio` or `bioformats`)     |
+| `--save_omexml`        | `bool` | Save a companion OME-XML sidecar file                    |
 
 #### Downscale Parameters
 
-| Parameter             | Type    | Description                                  |
-|-----------------------|---------|----------------------------------------------|
-| `--downscale_method`  | `str`   | Downscale algorithm (`simple`, `mean`, etc.) |
-| `--n_layers`          | `int`   | Number of downscaling layers                 |
-| `--time_scale_factor` | `int`   | Downscaling factor for the time dimension    |
-| `--z_scale_factor`    | `int`   | Downscaling factor for the z dimension       |
-| `--y_scale_factor`    | `int`   | Downscaling factor for the y dimension       |
-| `--x_scale_factor`    | `int`   | Downscaling factor for the x dimension       |
+| Parameter                    | Type    | Description                                  |
+|------------------------------|---------|----------------------------------------------|
+| `--downscale_method`         | `str`   | Downscale algorithm (`simple`, `mean`, `median`, `min`, `max`, `mode`) |
+| `--n_layers`                 | `int`   | Number of pyramid levels (omit for auto)     |
+| `--min_dimension_size`       | `int`   | Stop downscaling once the smallest axis reaches this size |
+| `--time_scale_factor`        | `int`   | Downscaling factor for the time dimension    |
+| `--z_scale_factor`           | `int`   | Downscaling factor for the z dimension       |
+| `--y_scale_factor`           | `int`   | Downscaling factor for the y dimension       |
+| `--x_scale_factor`           | `int`   | Downscaling factor for the x dimension       |
+| `--keep_existing_resolutions`| `bool`  | For inputs that already carry a pyramid (`.ims`, `.zarr`), copy existing levels instead of rebuilding |
 
 
 #### Examples
@@ -202,7 +206,7 @@ These are stored in the configuration file but can also be supplied directly to 
 **Run with 8 workers and limit memory per worker:**
 
 ```bash
-eubi to_zarr /path/to/input_dir /path/to/output_dir --n_jobs 8 --memory_limit 10GB
+eubi to_zarr /path/to/input_dir /path/to/output_dir --max_workers 8 --memory_per_worker 10GB
 ```
 
 **Specify output chunk size:**
@@ -211,13 +215,13 @@ eubi to_zarr /path/to/input_dir /path/to/output_dir --n_jobs 8 --memory_limit 10
 eubi to_zarr /path/to/input_dir /path/to/output_dir --z_chunk 128 --y_chunk 128 --x_chunk 128
 ```
 
-**Convert to zarr version 3 and specify the shard size:**
+**Convert to OME-Zarr 0.5 (Zarr v3) and specify the shard size:**
 
 ```bash
-eubi to_zarr /path/to/input_dir /path/to/output_dir --zarr_format 3 --y_shard_coef 4 --x_shard_coef 4 --y_chunk 128 --x_chunk 128
+eubi to_zarr /path/to/input_dir /path/to/output_dir --ome_zarr_version 0.5 --y_shard_coef 4 --x_shard_coef 4 --y_chunk 128 --x_chunk 128
 ```
 
-Note that this will create a zarr dataset with a chunk size of 128x128 and a shard size of 512x512 (by multiplying the chunk size by the shard coefficient).
+Note that this will create a zarr dataset with a chunk size of 128x128 and a shard size of 512x512 (by multiplying the chunk size by the shard coefficient). Sharding requires OME-Zarr 0.5 (Zarr v3).
 
 **Specify downscaling layers and scale factor:**
 
@@ -236,7 +240,7 @@ Note that supplying `False` to `--squeeze` will guarantee a 5-dimensional output
 **Crop a subset of the array:**
 
 ```bash
-eubi to_zarr /path/to/input_dir /path/to/output_dir --t_range 0,100 --z_range 15,125
+eubi to_zarr /path/to/input_dir /path/to/output_dir --time_range 0,100 --z_range 15,125
 ```
 
 This will convert a subset of the input datasets (0-100 in the time range and 15-125 in the z range) to OME-Zarr.
@@ -295,35 +299,52 @@ The command `show_pixel_meta` supports inputs with diverse file formats. Note th
 
 ---
 
-### `eubi configure_cluster`
+Configuration is managed through the `configure` command group. Run `eubi configure`
+with no subcommand to list the available sections:
+
+```bash
+eubi configure
+# COMMANDS: cluster · conversion · downscale · readers · concatenation
+```
+
+### `eubi configure cluster`
 
 Set cluster defaults using any of the [cluster parameters](#cluster-parameters).
 
 #### Example
 
 ```bash
-eubi configure_cluster --memory_limit 10GB
+eubi configure cluster --memory_per_worker 10GB
 ```
 
-### `eubi configure_conversion`
+### `eubi configure conversion`
 
 Set conversion defaults using any of the [conversion parameters](#conversion-parameters).
 
 #### Example
 
 ```bash
-eubi configure_conversion --rechunk_method p2p
+eubi configure conversion --ome_zarr_version 0.5
 ```
 
-### `eubi configure_downscale`
+### `eubi configure downscale`
 
 Set downscale defaults using any of the [downscale parameters](#downscale-parameters).
 
 #### Example
 
 ```bash
-eubi configure_downscale --scale_factor 1,1,2,2,2
+eubi configure downscale --z_scale_factor 1 --y_scale_factor 2 --x_scale_factor 2
 ```
+
+### `eubi configure readers`
+
+Set reader defaults (scene / view / illumination / mosaic selection) using any of the
+[reader parameters](#readers-parameters).
+
+### `eubi configure concatenation`
+
+Set aggregative defaults (concatenation axes and filename tags).
 
 ---
 
@@ -342,24 +363,16 @@ eubi configure_downscale --scale_factor 1,1,2,2,2
       <td>Reset cluster/conversion/downscale parameters to installation defaults</td>
     </tr>
     <tr>
-      <td><code><nobr>eubi reset_dask_config</nobr></code></td>
-      <td>Reset the <code>dask.distributed</code> settings</td>
-    </tr>
-    <tr>
       <td><code><nobr>eubi show_config</nobr></code></td>
       <td>Show current cluster/conversion/downscale settings</td>
-    </tr>
-    <tr>
-      <td><code><nobr>eubi show_dask_config</nobr></code></td>
-      <td>Show current Dask configuration</td>
     </tr>
     <tr>
       <td><code><nobr>eubi show_root_defaults</nobr></code></td>
       <td>Show installation defaults for cluster/conversion/downscale parameters</td>
     </tr>
     <tr>
-      <td><code><nobr>eubi show_root_dask_defaults</nobr></code></td>
-      <td>Show installation defaults for Dask parameters</td>
+      <td><code><nobr>eubi show_configs</nobr></code></td>
+      <td>List all saved named configuration profiles</td>
     </tr>
   </tbody>
 </table>
