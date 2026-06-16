@@ -1957,17 +1957,36 @@ class ArrayManager:
                 # illumination.  Select the per-illumination window.
                 if mgr.array is not None and mgr.state._channels and 'c' in mgr.state.axes:
                     c_size = mgr.array.shape[mgr.state.axes.index('c')]
-                    if len(mgr.state._channels) > c_size:
+                    all_channels = mgr.state._channels
+                    if len(all_channels) > c_size:
                         offset = i_idx * c_size
-                        mgr.state._channels = mgr.state._channels[offset:offset + c_size]
+                        window = [dict(ch) for ch in all_channels[offset:offset + c_size]]
+                        # Light-sheet acquisitions image the *same* physical
+                        # channels under every illumination/view, but the source
+                        # OME-XML usually labels only the first window and leaves
+                        # the rest blank (no name + default white colour).  When a
+                        # selected channel has no name, inherit the name and colour
+                        # from the corresponding channel of the first window so
+                        # e.g. illumination 1 keeps illumination 0's labels/colours
+                        # instead of coming out unnamed and white.
+                        base = all_channels[:c_size]
+                        for j, ch in enumerate(window):
+                            if j < len(base) and not (ch.get('label') or '').strip():
+                                ch['label'] = base[j].get('label')
+                                if base[j].get('color') is not None:
+                                    ch['color'] = base[j].get('color')
+                        mgr.state._channels = window
                 # Build a clean series_path with view/illumination suffix BEFORE
                 # the extension so _generate_output_path parses it correctly.
                 p = Path(loader.path)
                 vi_parts: list = []
+                # When a dimension is concatenated into the channel axis the
+                # output holds *all* of its indices, so name it "_view_concat" /
+                # "_illu_concat" rather than the (misleading) last index.
                 if n_total_views > 1:
-                    vi_parts.append(f'_view{v_idx}')
+                    vi_parts.append('_view_concat' if concat_views else f'_view{v_idx}')
                 if n_total_illuminations > 1:
-                    vi_parts.append(f'_illu{i_idx}')
+                    vi_parts.append('_illu_concat' if concat_illuminations else f'_illu{i_idx}')
                 if tiled:
                     vi_parts.append(f'_tile{tile_idx}')
                 if vi_parts:

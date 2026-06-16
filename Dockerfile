@@ -1,18 +1,18 @@
-# EuBI-Bridge 0.1.2b6 - CLI + GUI container
+# EuBI-Bridge 0.1.2b7 - CLI + GUI container
 #
 # GUI runs via a built-in VNC server - no X server needed on the host.
 # Access the GUI by opening http://localhost:6080/vnc.html in any browser.
 #
 # Build:
-#   docker build -t eubi-bridge:0.1.2b6 .
+#   docker build -t eubi-bridge:0.1.2b7 .
 #
 # Run GUI (Windows / macOS / Linux):
-#   docker run --rm -p 6080:6080 -v /path/to/data:/data eubi-bridge:0.1.2b6 eubi-gui
+#   docker run --rm -p 6080:6080 -v /path/to/data:/data eubi-bridge:0.1.2b7 eubi-gui
 #   -> open http://localhost:6080/vnc.html
 #   -> your files are accessible at /data inside the GUI
 #
 # Run CLI:
-#   docker run --rm -v /path/to/data:/data eubi-bridge:0.1.2b6 eubi to_zarr /data/input.tif /data/output.zarr
+#   docker run --rm -v /path/to/data:/data eubi-bridge:0.1.2b7 eubi to_zarr /data/input.tif /data/output.zarr
 #
 # HPC (Apptainer) with native display:
 #   apptainer exec --env DISPLAY=$DISPLAY -B /path/to/data:/data eubi-bridge.sif eubi-gui
@@ -24,7 +24,7 @@
 FROM python:3.12-slim-bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG EUBI_VERSION=0.1.2b6
+ARG EUBI_VERSION=0.1.2b7
 
 LABEL org.opencontainers.image.title="EuBI-Bridge" \
       org.opencontainers.image.version="${EUBI_VERSION}" \
@@ -78,7 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # -- Python packages -----------------------------------------------------------
 # Install from local source to pick up unreleased changes.
-# Switch back to PyPI once 0.1.2b6 is published:
+# Switch back to PyPI once 0.1.2b7 is published:
 #   RUN pip install --no-cache-dir --pre "eubi-bridge==${EUBI_VERSION}"
 COPY . /src
 RUN pip install --no-cache-dir /src
