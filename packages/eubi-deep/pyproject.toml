@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eubi-deep"
-version = "0.1.2b7"
+version = "0.1.2b8"
 description = "Deep learning features (DINOv2 embeddings) for EuBI-Bridge annotation."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -13,7 +13,7 @@ authors = [
 ]
 license = "MIT"
 dependencies = [
-    "eubi-annotate>=0.1.2b7",
+    "eubi-annotate>=0.1.2b8",
     "torch>=2.0",
 ]
 

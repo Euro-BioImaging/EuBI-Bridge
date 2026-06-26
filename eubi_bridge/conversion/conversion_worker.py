@@ -262,6 +262,16 @@ async def _prepare_manager(manager: ArrayManager, job: ConversionJob) -> None:
     manager.fix_bad_channels()
 
     cfg = job.conversion
+
+    # When preserving the source's own multiscale pyramid
+    # (keep_existing_resolutions), skip squeeze/crop entirely: both rebuild
+    # manager.pyr from the base array as a SINGLE layer, which would collapse
+    # the very pyramid we are trying to keep verbatim.
+    if (job.downscale.keep_existing_resolutions
+            and manager.pyr is not None
+            and len(manager.pyr.layers) > 1):
+        return
+
     if cfg.verbose:
         logger.info(f"The manager array shape before squeezing: {manager.array.shape}")
     if cfg.squeeze:
@@ -378,6 +388,17 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         ds   = job.downscale
         clus = job.cluster
 
+        # Fail fast on a name collision when not overwriting — BEFORE any data
+        # preparation or writing, and crucially WITHOUT touching the existing
+        # dataset.  (Otherwise the writer hits the existing array, errors, and
+        # the error-cleanup below would delete the pre-existing output.)
+        if not conv.overwrite and os.path.exists(output_path):
+            raise FileExistsError(
+                f"Output already exists: '{output_path}'. Refusing to convert "
+                f"with overwrite=False — the existing dataset was left untouched. "
+                f"Enable overwrite to replace it, or choose a different output."
+            )
+
         if conv.verbose:
             logger.info(f"The manager array shape before preparation: "
                         f"{manager.array.shape if manager.array is not None else 'N/A'}")
@@ -492,13 +513,21 @@ async def _process_single_scene_safe(manager: ArrayManager, output_path: str,
     """Run ``_process_single_scene``; on failure remove any partial output and
     re-raise so the caller can record/skip it (used for graceful degradation on
     damaged/corrupt inputs)."""
+    target = output_path if output_path.endswith('.zarr') else f"{output_path}.zarr"
+    # Whether the output already existed BEFORE this run.  A pre-existing
+    # dataset is never ours to delete — only partial output created by this run
+    # may be cleaned up on failure.
+    preexisting = os.path.exists(target)
     try:
         await _process_single_scene(manager, output_path, job, sem)
+    except FileExistsError:
+        # Name collision with overwrite=False: surface the error and leave the
+        # existing dataset completely untouched.
+        raise
     except Exception:
         import shutil
         try:
-            target = output_path if output_path.endswith('.zarr') else f"{output_path}.zarr"
-            if os.path.isdir(target):
+            if not preexisting and os.path.isdir(target):
                 shutil.rmtree(target, ignore_errors=True)
         except Exception:
             pass
