@@ -1,15 +1,15 @@
-name: Deploy Docs
+name: Docs
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  deploy:
+  docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +19,33 @@ jobs:
           python-version: '3.11'
 
       - name: Install project + docs dependencies
-        run: pip install -e ".[docs]" pydantic>=2.0
+        run: pip install -e ".[docs]" "pydantic>=2.0"
 
       - name: Regenerate CLI reference
         run: python docs/scripts/gen_cli_ref.py
 
-      - name: Build and deploy
+      # ── main → publish to the live GitHub Pages site (root) ──────────────────
+      - name: Build and deploy (production)
+        if: github.ref == 'refs/heads/main'
         env:
           DISABLE_MKDOCS_2_WARNING: "true"
-        run: mkdocs gh-deploy --force
+        run: mkdocs gh-deploy --force --config-file properdocs.yml
+
+      # ── dev → build strictly (fails the check if anything is broken) ─────────
+      - name: Build docs (strict)
+        if: github.ref == 'refs/heads/dev'
+        env:
+          DISABLE_MKDOCS_2_WARNING: "true"
+        run: mkdocs build --strict --config-file properdocs.yml --site-dir site
+
+      # ── dev → publish the build to the /dev/ preview subpath ─────────────────
+      # keep_files preserves the main site already in gh-pages; the preview is
+      # browsable at  https://euro-bioimaging.github.io/EuBI-Bridge/dev/
+      - name: Deploy dev preview to /dev/
+        if: github.ref == 'refs/heads/dev'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          destination_dir: dev
+          keep_files: true
