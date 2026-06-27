@@ -3,6 +3,23 @@
   top: 0 !important;
 }
 
+/* ── Header logo ───────────────────────────────────────────────
+   Material renders the logo as a tiny 1.2rem square by default,
+   which also squishes the (non-square) Euro-BioImaging logo.
+   Enlarge it to nearly fill the header height and keep its aspect
+   ratio.  Kept within the existing header height so the nav tabs
+   are unaffected. */
+.md-header__button.md-logo {
+  padding-top: 0.1rem;
+  padding-bottom: 0.1rem;
+}
+
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 2.2rem;
+  width: auto;
+}
+
 
 
 footer {
