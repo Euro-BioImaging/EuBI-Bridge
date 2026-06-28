@@ -12,8 +12,8 @@ Click any command card to expand its full parameter reference.
 | [Reset](reset.md) | `reset_config` |
 
 
-Note: All cards are auto-generated from `EuBIBridge` methods and Pydantic config models.
-Types, defaults, and valid ranges are extracted directly from the source.
+!!! note "" 
+    All cards are auto-generated from `EuBIBridge` methods and Pydantic config models.Types, defaults, and valid ranges are extracted directly from the source.
 
 
 !!! tip "Named-config chaining"
