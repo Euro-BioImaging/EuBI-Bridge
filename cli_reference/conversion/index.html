@@ -1,0 +1,2020 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://euro-bioimaging.github.io/EuBI-Bridge/cli_reference/conversion/">
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../metadata/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../eurobioimaging-logo.webp">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Conversion - EuBI-Bridge</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../css/custom.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#conversion" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="EuBI-Bridge" class="md-header__button md-logo" aria-label="EuBI-Bridge" data-md-component="logo">
+      
+  <img src="../../eurobioimaging-logo.webp" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            EuBI-Bridge
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Conversion
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-purple" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/Euro-BioImaging/EuBI-Bridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Euro-BioImaging/EuBI-Bridge
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+    
+  
+  CLI Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../conversion_tutorial/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Conversion Tutorial
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../conversion_examples/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Conversion Examples
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="EuBI-Bridge" class="md-nav__button md-logo" aria-label="EuBI-Bridge" data-md-component="logo">
+      
+  <img src="../../eurobioimaging-logo.webp" alt="logo">
+
+    </a>
+    EuBI-Bridge
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/Euro-BioImaging/EuBI-Bridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Euro-BioImaging/EuBI-Bridge
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CLI Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../named_configs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Named Configs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../display_info/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Display & Info
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reset/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reset
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../conversion_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversion Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../conversion_examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversion Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="conversion">Conversion<a class="headerlink" href="#conversion" title="Permanent link">&para;</a></h1>
+<p>Click any command card below to expand its full parameter reference.</p>
+<div class="admonition attention">
+<p class="admonition-title">Info</p>
+<p>Note that all cards below are auto-generated from <code>EuBIBridge</code> methods and Pydantic config models. Types, defaults, and valid ranges are extracted directly from the source.</p>
+</div>
+<div class="admonition tip">
+<p class="admonition-title">Tip: Named-config chaining</p>
+<p>Prefix any command with <code>with_config NAME</code> to use a saved config profile:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>eubi<span class="w"> </span>with_config<span class="w"> </span>hpc<span class="w"> </span>to_zarr<span class="w"> </span>/data/input<span class="w"> </span>/data/output<span class="w"> </span>--ome_zarr_version<span class="w"> </span><span class="m">0</span>.5
+</code></pre></div></p>
+</div>
+<details class="command">
+<summary><strong><code>to_zarr</code></strong>&ensp;—&ensp;Convert image data to OME-Zarr format</summary>
+<p><strong>Usage:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>eubi<span class="w"> </span>to_zarr<span class="w"> </span>INPUT_PATH<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>eubi<span class="w"> </span>with_config<span class="w"> </span>NAME<span class="w"> </span>to_zarr<span class="w"> </span>INPUT_PATH<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div></p>
+<p><details>
+<summary>Required arguments</summary></p>
+<p><details>
+<summary><code>--input_path</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>Path</code></p>
+<p><strong>Default:</strong>&nbsp; <em>required</em></p>
+<p>File path, directory, or table (.csv/.tsv/.xlsx) of paths.</p>
+<pre><code>eubi to_zarr /data/input /data/output
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>CLI-only options</summary></p>
+<p><details>
+<summary><code>--output_path</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>Path</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Destination directory.  Required unless input_path is a table that already contains an output_path column.</p>
+<pre><code>eubi to_zarr /data/input /data/output
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--includes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Comma-separated filename patterns to include (glob-style).</p>
+<pre><code># Include only files whose name contains "EMPIAR"
+eubi to_zarr /data/input /data/output --includes "EMPIAR"
+</code></pre>
+<pre><code># Multiple patterns — comma-separated, no spaces around commas
+eubi to_zarr /data/input /data/output --includes "EMPIAR,scan_001,confocal"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--excludes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Comma-separated filename patterns to exclude (glob-style).</p>
+<pre><code># Exclude all files in a subdirectory named 'backup'
+eubi to_zarr /data/input /data/output --excludes "backup"
+</code></pre>
+<pre><code># Exclude multiple patterns at once
+eubi to_zarr /data/input /data/output --excludes "backup,temp,preview"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--plan</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>AggregativePlan</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Pre-computed AggregativePlan from validate_aggregative().</p>
+<pre><code># Step 1 — validate without converting to inspect the plan
+eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask
+</code></pre>
+<pre><code># Step 2 — pass the plan object to skip re-planning on the actual run
+eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --plan &lt;plan&gt;
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>Cluster overrides</summary></p>
+<p><details>
+<summary><code>--on_local_cluster</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--on_local_cluster</code> to enable &nbsp;·&nbsp; <code>--on_local_cluster False</code> to disable</p>
+<p>Use a Dask LocalCluster.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_local_cluster
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--on_slurm</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--on_slurm</code> to enable &nbsp;·&nbsp; <code>--on_slurm False</code> to disable</p>
+<p>Submit jobs to a SLURM cluster.</p>
+<pre><code># Submit all file workers to SLURM
+eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount --slurm_partition gpu
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--use_threading</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--use_threading</code> to enable &nbsp;·&nbsp; <code>--use_threading False</code> to disable</p>
+<p>Use a ThreadPool instead of a ProcessPool.</p>
+<pre><code>eubi to_zarr /data/input /data/output --use_threading
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_workers</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1, ≤ 256</p>
+<p>Override the configured max_workers for this run.</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_workers 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--queue_size</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1, ≤ 4096</p>
+<p>Internal write-queue depth per worker.</p>
+<pre><code>eubi to_zarr /data/input /data/output --queue_size 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--region_size_mb</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>256</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>Region size in MB for spatial partitioning.</p>
+<pre><code>eubi to_zarr /data/input /data/output --region_size_mb 512
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_concurrency</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>TensorStore write concurrency per worker.</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_concurrency 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_concurrent_scenes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Parallel scenes per file (default 1).</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_concurrent_scenes 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--memory_per_worker</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>3GB</code></p>
+<p>Memory limit for SLURM / LocalCluster workers.</p>
+<pre><code>eubi to_zarr /data/input /data/output --memory_per_worker 8GB
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--tensorstore_data_copy_concurrency</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>TensorStore internal copy threads.</p>
+<pre><code>eubi to_zarr /data/input /data/output --tensorstore_data_copy_concurrency 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_retries</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>10</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 0, ≤ 100</p>
+<p>Override the configured max_retries.</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_retries 3
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--bf_read_concurrency</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--bf_tile_size_mb</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code></p>
+<p><strong>Default:</strong>&nbsp; <code>512.0</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0.0</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--jvm_memory</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1g</code></p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--slurm_time</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>24:00:00</code></p>
+<p>SLURM wall-clock limit, e.g. '24:00:00'.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_time 48:00:00
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_account</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>SLURM account name.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_partition</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>SLURM partition / queue.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_partition gpu
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_worker_timeout</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>300</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>Seconds to wait for SLURM workers to start.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_worker_timeout 600
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_sif_path</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Path to an Apptainer/Singularity <code>.sif</code> image to run SLURM workers inside (optional).</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_sif_path /apps/eubi.sif
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_concurrent_downscale_layers</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>3</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>How many pyramid levels are downscaled in parallel per file (default 1 = sequential, lowest memory).</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_concurrent_downscale_layers 2
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>Conversion overrides</summary></p>
+<p><details>
+<summary><code>--verbose</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--verbose</code> to enable &nbsp;·&nbsp; <code>--verbose False</code> to disable</p>
+<p>Log verbose per-chunk progress output.</p>
+<pre><code>eubi to_zarr /data/input /data/output --verbose
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--ome_zarr_version</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>OME-Zarr (NGFF) version to write: <code>0.4</code> (backed by Zarr v2) or <code>0.5</code> (backed by Zarr v3, which enables sharding). This is the preferred control and supersedes <code>zarr_format</code> — the underlying zarr container format is derived from it.</p>
+<pre><code># Write OME-Zarr 0.4 (Zarr v2, the default)
+eubi to_zarr /data/input /data/output --ome_zarr_version 0.4
+</code></pre>
+<pre><code># Write OME-Zarr 0.5 (Zarr v3 — required for sharding)
+eubi to_zarr /data/input /data/output --ome_zarr_version 0.5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--zarr_format</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>2</code> or <code>3</code></p>
+<p><strong>Default:</strong>&nbsp; <code>2</code></p>
+<p><strong>Deprecated</strong> — use <code>ome_zarr_version</code> instead. Zarr container version: <code>2</code> = OME-Zarr 0.4 (classic chunk-based); <code>3</code> = OME-Zarr 0.5 (sharding support).</p>
+<pre><code>eubi to_zarr /data/input /data/output --zarr_format 3
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--skip_dask</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--skip_dask</code> to enable &nbsp;·&nbsp; <code>--skip_dask False</code> to disable</p>
+<p>Read TIFF files via zarr's native aszarr backend instead of dask. Faster for large TIFFs; ignored for non-TIFF formats.</p>
+<pre><code>eubi to_zarr /data/input /data/output --skip_dask
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--auto_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>True</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--auto_chunk</code> to enable &nbsp;·&nbsp; <code>--auto_chunk False</code> to disable</p>
+<p>Auto-compute chunk shape to approximate <code>target_chunk_mb</code>. When <code>False</code>, the manual <code>*_chunk</code> values below are used.</p>
+<pre><code>eubi to_zarr /data/input /data/output --auto_chunk False --z_chunk 64 --y_chunk 256 --x_chunk 256
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--target_chunk_mb</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1.0</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0.0</p>
+<p>Target uncompressed chunk size in MB when <code>auto_chunk=True</code>.</p>
+<pre><code>eubi to_zarr /data/input /data/output --target_chunk_mb 4.0
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Chunk size along the time axis. Applies only when <code>auto_chunk=False</code>.</p>
+<pre><code>eubi to_zarr /data/input /data/output --auto_chunk False --time_chunk 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Chunk size along the channel axis. Applies only when <code>auto_chunk=False</code>.</p>
+<pre><code>eubi to_zarr /data/input /data/output --auto_chunk False --channel_chunk 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>96</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Chunk size along the z axis. Applies only when <code>auto_chunk=False</code>.</p>
+<pre><code>eubi to_zarr /data/input /data/output --auto_chunk False --z_chunk 64
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>96</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Chunk size along the y axis. Applies only when <code>auto_chunk=False</code>.</p>
+<pre><code>eubi to_zarr /data/input /data/output --auto_chunk False --y_chunk 256
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>96</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Chunk size along the x axis. Applies only when <code>auto_chunk=False</code>.</p>
+<pre><code>eubi to_zarr /data/input /data/output --auto_chunk False --x_chunk 256
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Shard size = chunk × coef for the time axis. Zarr v3 only — ignored for v2.</p>
+<pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --time_shard_coef 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Shard size = chunk × coef for the channel axis. Zarr v3 only — ignored for v2.</p>
+<pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --channel_shard_coef 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>3</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Shard size = chunk × coef for the z axis. Zarr v3 only — ignored for v2.</p>
+<pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --z_shard_coef 5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>3</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Shard size = chunk × coef for the y axis. Zarr v3 only — ignored for v2.</p>
+<pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --y_shard_coef 5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>3</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Shard size = chunk × coef for the x axis. Zarr v3 only — ignored for v2.</p>
+<pre><code>eubi to_zarr /data/input /data/output --ome_zarr_version 0.5 --x_shard_coef 5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>Any</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Crop the time axis before writing. Pass as a <code>"start,stop"</code> string (e.g. <code>"0,10"</code> to keep frames 0–9).</p>
+<pre><code>eubi to_zarr /data/input /data/output --time_range "0,10"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>Any</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Crop the channel axis. Same format as <code>time_range</code>, e.g. <code>"0,2"</code> keeps the first two channels.</p>
+<pre><code>eubi to_zarr /data/input /data/output --channel_range "0,2"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>Any</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Crop the z axis. Same format as <code>time_range</code>, e.g. <code>"5,50"</code> keeps z-slices 5–49.</p>
+<pre><code>eubi to_zarr /data/input /data/output --z_range "5,50"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>Any</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Crop the y axis. Same format as <code>time_range</code>.</p>
+<pre><code>eubi to_zarr /data/input /data/output --y_range "0,512"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>Any</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Crop the x axis. Same format as <code>time_range</code>.</p>
+<pre><code>eubi to_zarr /data/input /data/output --x_range "0,512"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--dimension_order</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>tczyx</code></p>
+<p>Axis order string for the output array (default <code>tczyx</code>).</p>
+</details></p>
+<p><details>
+<summary><code>--compressor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>blosc</code></p>
+<p><strong>Valid values:</strong>&nbsp; v2: <code>blosc</code>, <code>bz2</code>, <code>gzip</code>, <code>none</code>, <code>zstd</code>; v3: <code>blosc</code>, <code>crc32ccodec</code>, <code>gzip</code>, <code>none</code>, <code>sharding</code>, <code>zstd</code></p>
+<p>Compression codec.</p>
+<pre><code>eubi to_zarr /data/input /data/output --compressor zstd
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--compressor_params</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>dict</code></p>
+<p><strong>Default:</strong>&nbsp; <em>(auto)</em></p>
+<p>Codec-specific parameters dict. When omitted, sensible defaults are used (e.g. for blosc: <code>{'cname': 'lz4', 'clevel': 5, 'shuffle': 1}</code>).</p>
+<pre><code>eubi to_zarr /data/input /data/output --compressor blosc --compressor_params '{"cname": "lz4", "clevel": 9}'
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--overwrite</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--overwrite</code> to enable &nbsp;·&nbsp; <code>--overwrite False</code> to disable</p>
+<p>Overwrite existing output zarr if it already exists.</p>
+<pre><code>eubi to_zarr /data/input /data/output --overwrite
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--override_channel_names</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--override_channel_names</code> to enable &nbsp;·&nbsp; <code>--override_channel_names False</code> to disable</p>
+<p>Replace output channel labels with the <code>channel_tag</code> values. For aggregative conversions with a tuple <code>channel_tag</code> only.</p>
+<pre><code>eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --override_channel_names
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_intensity_limits</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>from_dtype</code> or <code>from_array</code> or <code>auto</code></p>
+<p><strong>Default:</strong>&nbsp; <code>from_dtype</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>from_dtype</code> · <code>from_array</code> · <code>auto</code></p>
+<p>Strategy for OMERO display-window limits.</p>
+<pre><code>eubi to_zarr /data/input /data/output --channel_intensity_limits from_array
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--metadata_reader</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>bfio</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>bfio</code> · <code>bioformats</code></p>
+<p>Backend used to read OME-XML pixel metadata.</p>
+<pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--save_omexml</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>True</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--save_omexml</code> to enable &nbsp;·&nbsp; <code>--save_omexml False</code> to disable</p>
+<p>Write a companion OME-XML sidecar file alongside the zarr.</p>
+<pre><code>eubi to_zarr /data/input /data/output --save_omexml False
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--squeeze</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>True</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--squeeze</code> to enable &nbsp;·&nbsp; <code>--squeeze False</code> to disable</p>
+<p>Remove length-1 dimensions before writing.</p>
+<pre><code>eubi to_zarr /data/input /data/output --squeeze False
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--dtype</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>auto</code></p>
+<p><code>auto</code> preserves the source dtype; pass any NumPy dtype string (e.g. <code>uint16</code>, <code>float32</code>) to cast on write.</p>
+<pre><code>eubi to_zarr /data/input /data/output --dtype uint8
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>Downscale overrides</summary></p>
+<p><details>
+<summary><code>--time_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Downscale factor for the time axis per pyramid level.</p>
+<pre><code>eubi to_zarr /data/input /data/output --time_scale_factor 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Downscale factor for the channel axis.</p>
+<pre><code>eubi to_zarr /data/input /data/output --channel_scale_factor 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>2</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Downscale factor for the z axis.</p>
+<pre><code># Isotropic downscaling on all spatial axes
+eubi to_zarr /data/input /data/output --z_scale_factor 2 --y_scale_factor 2 --x_scale_factor 2
+</code></pre>
+<pre><code># Anisotropic — skip z downscaling for thick sections
+eubi to_zarr /data/input /data/output --z_scale_factor 1 --y_scale_factor 2 --x_scale_factor 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>2</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Downscale factor for the y axis.</p>
+<pre><code>eubi to_zarr /data/input /data/output --y_scale_factor 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>2</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Downscale factor for the x axis.</p>
+<pre><code>eubi to_zarr /data/input /data/output --x_scale_factor 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--n_layers</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Number of pyramid levels (None = auto).</p>
+<pre><code>eubi to_zarr /data/input /data/output --n_layers 5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--min_dimension_size</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>64</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>Stop downscaling when smallest dimension reaches this size.</p>
+<pre><code>eubi to_zarr /data/input /data/output --min_dimension_size 32
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--downscale_method</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>simple</code> or <code>mean</code> or <code>median</code> or <code>min</code> or <code>max</code> or <code>mode</code></p>
+<p><strong>Default:</strong>&nbsp; <code>simple</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>simple</code> · <code>mean</code> · <code>median</code> · <code>min</code> · <code>max</code> · <code>mode</code></p>
+<p><code>simple</code> = stride/nearest (fastest). <code>mean</code> / <code>median</code> / <code>min</code> / <code>max</code> / <code>mode</code> = aggregation methods passed to TensorStore.</p>
+<pre><code># Use mean aggregation (recommended for fluorescence images)
+eubi to_zarr /data/input /data/output --downscale_method mean
+</code></pre>
+<pre><code># Use nearest-neighbour striding (fastest, recommended for label images)
+eubi to_zarr /data/input /data/output --downscale_method simple
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--keep_existing_resolutions</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--keep_existing_resolutions</code> to enable &nbsp;·&nbsp; <code>--keep_existing_resolutions False</code> to disable</p>
+<p>If the input already carries its own multiscale pyramid (e.g. <code>.ims</code>, <code>.zarr</code>), write each existing resolution level straight to the output OME-Zarr instead of rebuilding the pyramid (default False).</p>
+<pre><code># Copy an .ims / .zarr input's own pyramid levels instead of rebuilding them
+eubi to_zarr /data/input /data/output --keep_existing_resolutions
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--apply_smart_downscaling</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--apply_smart_downscaling</code> to enable &nbsp;·&nbsp; <code>--apply_smart_downscaling False</code> to disable</p>
+<p>Choose per-axis downscale factors automatically from the pixel anisotropy so the pyramid approaches isotropy, instead of using the fixed <code>*_scale_factor</code> values (default False).</p>
+<pre><code># Let EuBI-Bridge pick per-axis factors from the voxel anisotropy
+eubi to_zarr /data/input /data/output --apply_smart_downscaling
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_smart_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Override the smart-downscaling factor for the time axis (used when <code>apply_smart_downscaling=True</code>).</p>
+<pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --time_smart_scale_factor 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_smart_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Override the smart-downscaling factor for the z axis (used when <code>apply_smart_downscaling=True</code>).</p>
+<pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --z_smart_scale_factor 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_smart_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Override the smart-downscaling factor for the y axis (used when <code>apply_smart_downscaling=True</code>).</p>
+<pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --y_smart_scale_factor 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_smart_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Override the smart-downscaling factor for the x axis (used when <code>apply_smart_downscaling=True</code>).</p>
+<pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --x_smart_scale_factor 2
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>Reader overrides</summary></p>
+<p><details>
+<summary><code>--as_mosaic</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--as_mosaic</code> to enable &nbsp;·&nbsp; <code>--as_mosaic False</code> to disable</p>
+<p>Stitch all mosaic tiles into a single full field-of-view output (instead of one OME-Zarr per tile).</p>
+<pre><code># Stitch all mosaic tiles into a single full field-of-view output
+eubi to_zarr /data/input /data/output --as_mosaic
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--view_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p>View(s) to read. Pass an integer, <code>all</code>, or comma-separated integers; each selected view becomes a separate OME-Zarr (named <code>_view{N}</code>) unless <code>--concat_views</code> stacks them along the channel axis.</p>
+<pre><code># Write each view as its own OME-Zarr
+eubi to_zarr /data/input /data/output --view_index all
+</code></pre>
+<pre><code># Concatenate all views along the channel axis into one output
+eubi to_zarr /data/input /data/output --view_index all --concat_views
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--phase_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
+<p>Phase index.</p>
+<pre><code>eubi to_zarr /data/input /data/output --phase_index 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--illumination_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p>Illumination(s) to read. Pass an integer, <code>all</code>, or comma-separated integers; each selected illumination becomes a separate OME-Zarr (named <code>_illu{N}</code>) unless <code>--concat_illuminations</code> stacks them along the channel axis.</p>
+<pre><code># Write each illumination as its own OME-Zarr
+eubi to_zarr /data/input /data/output --illumination_index all
+</code></pre>
+<pre><code># Concatenate all illuminations along the channel axis into one output
+eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--scene_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p>Scene / series index to read. Pass an integer for a single scene, <code>all</code> to convert each scene to a separate zarr group, or comma-separated integers (e.g. <code>0,2,4</code>) for a subset of scenes.</p>
+<pre><code># Convert only scene 2 from a multi-scene file
+eubi to_zarr /data/input /data/output --scene_index 2
+</code></pre>
+<pre><code># Convert every scene to a separate OME-Zarr group
+eubi to_zarr /data/input /data/output --scene_index all
+</code></pre>
+<pre><code># Convert scenes 0, 2 and 4 only
+eubi to_zarr /data/input /data/output --scene_index 0,2,4
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--rotation_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
+<p>Rotation index.</p>
+<pre><code>eubi to_zarr /data/input /data/output --rotation_index 0
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--mosaic_tile_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Mosaic tile(s) to read when <strong>not</strong> stitching. Pass an integer, <code>all</code>, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named <code>_tile{N}</code>). Use <code>--as_mosaic</code> instead to stitch tiles into one output. Composes with scene / view / illumination selection (cartesian product).</p>
+<pre><code># Write every tile as its own OME-Zarr (default — each tile separate)
+eubi to_zarr /data/input /data/output --mosaic_tile_index all
+</code></pre>
+<pre><code># Write only tiles 0 and 2 (each as a separate output)
+eubi to_zarr /data/input /data/output --mosaic_tile_index 0,2
+</code></pre>
+<pre><code># Stitch all tiles into one mosaic instead of writing them separately
+eubi to_zarr /data/input /data/output --as_mosaic
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--sample_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
+<p>Sample index.</p>
+<pre><code>eubi to_zarr /data/input /data/output --sample_index 0
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--force_bioformats</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--force_bioformats</code> to enable &nbsp;·&nbsp; <code>--force_bioformats False</code> to disable</p>
+<p>Force the Java Bio-Formats reader even for formats EuBI-Bridge reads natively (CZI, ND2, LIF, IMS…). Useful as a fallback when a native read fails.</p>
+<pre><code>eubi to_zarr /data/input /data/output --force_bioformats
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--concat_views</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--concat_views</code> to enable &nbsp;·&nbsp; <code>--concat_views False</code> to disable</p>
+<p>When reading multiple views, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per view.</p>
+<pre><code># Stack every view onto the channel axis (cartesian with existing channels)
+eubi to_zarr /data/input /data/output --view_index all --concat_views
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--concat_illuminations</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--concat_illuminations</code> to enable &nbsp;·&nbsp; <code>--concat_illuminations False</code> to disable</p>
+<p>When reading multiple illuminations, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per illumination.</p>
+<pre><code># Stack every illumination onto the channel axis (cartesian with existing channels)
+eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>Concatenation overrides</summary></p>
+<p><details>
+<summary><code>--concatenation_axes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Axes to concatenate across files, e.g. <code>'tc'</code>. If omitted the config value is used; <code>None</code> means unary conversion.</p>
+<pre><code># Concatenate files along the channel axis
+eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask
+</code></pre>
+<pre><code># Concatenate along both z and channel axes simultaneously
+eubi to_zarr /data/input /data/output --concatenation_axes zc --z_tag slices --channel_tag raw,mask
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename tag identifying the time axis (aggregative only).</p>
+<pre><code># Three time points identified by substrings in each filename
+eubi to_zarr /data/input /data/output --concatenation_axes t --time_tag t001,t002,t003
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename tag identifying the channel axis.</p>
+<pre><code># Two channels — raw fluorescence and segmentation mask
+eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask
+</code></pre>
+<pre><code># Single channel — assign a label without concatenating
+eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag DAPI
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename tag identifying the z axis.</p>
+<pre><code># Multiple z-slices acquired as separate files
+eubi to_zarr /data/input /data/output --concatenation_axes z --z_tag slice001,slice002,slice003
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename tag identifying the y axis.</p>
+<pre><code>eubi to_zarr /data/input /data/output --concatenation_axes y --y_tag row_top,row_bottom
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename tag identifying the x axis.</p>
+<pre><code>eubi to_zarr /data/input /data/output --concatenation_axes x --x_tag col_left,col_right
+</code></pre>
+</details></p>
+</details>
+</details>
+<details class="command">
+<summary><strong><code>validate_aggregative</code></strong>&ensp;—&ensp;Dry-run an aggregative conversion and print the resource plan</summary>
+<p><strong>Usage:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>eubi<span class="w"> </span>validate_aggregative<span class="w"> </span>INPUT_PATH<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>eubi<span class="w"> </span>with_config<span class="w"> </span>NAME<span class="w"> </span>validate_aggregative<span class="w"> </span>INPUT_PATH<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div></p>
+<p>Determines output groups and worker allocation without reading any pixel data.  Prints a human-readable summary and returns the plan object so it can be passed to :meth:<code>to_zarr</code> to skip re-planning.</p>
+<p><details>
+<summary>Required arguments</summary></p>
+<p><details>
+<summary><code>--input_path</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>Path</code></p>
+<p><strong>Default:</strong>&nbsp; <em>required</em></p>
+<p>File path, directory, or table of paths.</p>
+<pre><code>eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>CLI-only options</summary></p>
+<p><details>
+<summary><code>--output_path</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>Path</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Destination directory.</p>
+<pre><code>eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--includes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Comma-separated filename patterns to include.</p>
+<pre><code># Plan the conversion but only include files matching "scan"
+eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask --includes "scan"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--excludes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Comma-separated filename patterns to exclude.</p>
+<pre><code># Exclude preview files from the plan
+eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask --excludes "preview"
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>Cluster overrides</summary></p>
+<p><details>
+<summary><code>--on_local_cluster</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--on_local_cluster</code> to enable &nbsp;·&nbsp; <code>--on_local_cluster False</code> to disable</p>
+<p>Use a Dask LocalCluster backend.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_local_cluster
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--on_slurm</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--on_slurm</code> to enable &nbsp;·&nbsp; <code>--on_slurm False</code> to disable</p>
+<p>Submit to a SLURM cluster.</p>
+<pre><code># Submit all file workers to SLURM
+eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount --slurm_partition gpu
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--use_threading</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--use_threading</code> to enable &nbsp;·&nbsp; <code>--use_threading False</code> to disable</p>
+<p>Use ThreadPool instead of ProcessPool.</p>
+<pre><code>eubi to_zarr /data/input /data/output --use_threading
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_workers</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1, ≤ 256</p>
+<p>Number of parallel file-level worker processes.</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_workers 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--queue_size</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1, ≤ 4096</p>
+<p>Internal write-queue depth per worker.</p>
+<pre><code>eubi to_zarr /data/input /data/output --queue_size 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--region_size_mb</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>256</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>Region size in MB for spatial partitioning.</p>
+<pre><code>eubi to_zarr /data/input /data/output --region_size_mb 512
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_concurrency</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>TensorStore write concurrency per worker.</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_concurrency 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_concurrent_scenes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>Parallel scenes per file (default 1).</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_concurrent_scenes 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--memory_per_worker</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>3GB</code></p>
+<p>Memory limit for SLURM / LocalCluster workers.</p>
+<pre><code>eubi to_zarr /data/input /data/output --memory_per_worker 8GB
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--tensorstore_data_copy_concurrency</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>TensorStore internal copy threads.</p>
+<pre><code>eubi to_zarr /data/input /data/output --tensorstore_data_copy_concurrency 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_retries</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>10</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 0, ≤ 100</p>
+<p>Retries on a broken worker process.</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_retries 3
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--bf_read_concurrency</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>4</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--bf_tile_size_mb</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code></p>
+<p><strong>Default:</strong>&nbsp; <code>512.0</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0.0</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--jvm_memory</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>1g</code></p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--slurm_time</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>24:00:00</code></p>
+<p>SLURM wall-clock limit, e.g. '24:00:00'.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_time 48:00:00
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_account</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>SLURM account name.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_partition</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>SLURM partition / queue.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_partition gpu
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_worker_timeout</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>300</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>Seconds to wait for SLURM workers to start.</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_worker_timeout 600
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_sif_path</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Path to an Apptainer/Singularity <code>.sif</code> image to run SLURM workers inside (optional).</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_sif_path /apps/eubi.sif
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_concurrent_downscale_layers</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>3</code></p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>How many pyramid levels are downscaled in parallel per file (default 1 = sequential, lowest memory).</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_concurrent_downscale_layers 2
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>Reader overrides</summary></p>
+<p><details>
+<summary><code>--as_mosaic</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--as_mosaic</code> to enable &nbsp;·&nbsp; <code>--as_mosaic False</code> to disable</p>
+<p>Stitch all mosaic tiles into a single full field-of-view output (instead of one OME-Zarr per tile).</p>
+<pre><code># Stitch all mosaic tiles into a single full field-of-view output
+eubi to_zarr /data/input /data/output --as_mosaic
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--view_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p>View(s) to read. Pass an integer, <code>all</code>, or comma-separated integers; each selected view becomes a separate OME-Zarr (named <code>_view{N}</code>) unless <code>--concat_views</code> stacks them along the channel axis.</p>
+<pre><code># Write each view as its own OME-Zarr
+eubi to_zarr /data/input /data/output --view_index all
+</code></pre>
+<pre><code># Concatenate all views along the channel axis into one output
+eubi to_zarr /data/input /data/output --view_index all --concat_views
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--phase_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
+<p>Phase index.</p>
+<pre><code>eubi to_zarr /data/input /data/output --phase_index 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--illumination_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p>Illumination(s) to read. Pass an integer, <code>all</code>, or comma-separated integers; each selected illumination becomes a separate OME-Zarr (named <code>_illu{N}</code>) unless <code>--concat_illuminations</code> stacks them along the channel axis.</p>
+<pre><code># Write each illumination as its own OME-Zarr
+eubi to_zarr /data/input /data/output --illumination_index all
+</code></pre>
+<pre><code># Concatenate all illuminations along the channel axis into one output
+eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--scene_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p>Scene / series index to read. Pass an integer for a single scene, <code>all</code> to convert each scene to a separate zarr group, or comma-separated integers (e.g. <code>0,2,4</code>) for a subset of scenes.</p>
+<pre><code># Convert only scene 2 from a multi-scene file
+eubi to_zarr /data/input /data/output --scene_index 2
+</code></pre>
+<pre><code># Convert every scene to a separate OME-Zarr group
+eubi to_zarr /data/input /data/output --scene_index all
+</code></pre>
+<pre><code># Convert scenes 0, 2 and 4 only
+eubi to_zarr /data/input /data/output --scene_index 0,2,4
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--rotation_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
+<p>Rotation index.</p>
+<pre><code>eubi to_zarr /data/input /data/output --rotation_index 0
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--mosaic_tile_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code> or <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Mosaic tile(s) to read when <strong>not</strong> stitching. Pass an integer, <code>all</code>, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named <code>_tile{N}</code>). Use <code>--as_mosaic</code> instead to stitch tiles into one output. Composes with scene / view / illumination selection (cartesian product).</p>
+<pre><code># Write every tile as its own OME-Zarr (default — each tile separate)
+eubi to_zarr /data/input /data/output --mosaic_tile_index all
+</code></pre>
+<pre><code># Write only tiles 0 and 2 (each as a separate output)
+eubi to_zarr /data/input /data/output --mosaic_tile_index 0,2
+</code></pre>
+<pre><code># Stitch all tiles into one mosaic instead of writing them separately
+eubi to_zarr /data/input /data/output --as_mosaic
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--sample_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>0</code></p>
+<p><strong>Valid values:</strong>&nbsp; ≥ 0</p>
+<p>Sample index.</p>
+<pre><code>eubi to_zarr /data/input /data/output --sample_index 0
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--force_bioformats</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--force_bioformats</code> to enable &nbsp;·&nbsp; <code>--force_bioformats False</code> to disable</p>
+<p>Force the Java Bio-Formats reader even for formats EuBI-Bridge reads natively (CZI, ND2, LIF, IMS…). Useful as a fallback when a native read fails.</p>
+<pre><code>eubi to_zarr /data/input /data/output --force_bioformats
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--concat_views</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--concat_views</code> to enable &nbsp;·&nbsp; <code>--concat_views False</code> to disable</p>
+<p>When reading multiple views, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per view.</p>
+<pre><code># Stack every view onto the channel axis (cartesian with existing channels)
+eubi to_zarr /data/input /data/output --view_index all --concat_views
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--concat_illuminations</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--concat_illuminations</code> to enable &nbsp;·&nbsp; <code>--concat_illuminations False</code> to disable</p>
+<p>When reading multiple illuminations, stack them along the channel axis into one output (cartesian product with existing channels) instead of writing one OME-Zarr per illumination.</p>
+<pre><code># Stack every illumination onto the channel axis (cartesian with existing channels)
+eubi to_zarr /data/input /data/output --illumination_index all --concat_illuminations
+</code></pre>
+</details></p>
+</details>
+<p><details>
+<summary>Concatenation overrides</summary></p>
+<p><details>
+<summary><code>--concatenation_axes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Axes to concatenate, e.g. <code>'c'</code>.</p>
+<pre><code># Plan a channel concatenation
+eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask
+</code></pre>
+<pre><code># Plan a z + channel concatenation
+eubi validate_aggregative /data/input /data/output --concatenation_axes zc --z_tag slices --channel_tag raw,mask
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename substring (or tuple of substrings) identifying the time axis.</p>
+<pre><code># Plan concatenation of three time points
+eubi validate_aggregative /data/input /data/output --concatenation_axes t --time_tag t001,t002,t003
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename substring (or tuple of substrings) identifying the channel axis.</p>
+<pre><code># Two channels — raw fluorescence and segmentation mask
+eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename substring (or tuple of substrings) identifying the z axis.</p>
+<pre><code># Multiple z-slices acquired as separate files
+eubi validate_aggregative /data/input /data/output --concatenation_axes z --z_tag slice001,slice002,slice003
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename substring (or tuple of substrings) identifying the y axis.</p>
+<pre><code>eubi validate_aggregative /data/input /data/output --concatenation_axes y --y_tag row_top,row_bottom
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>List</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>Filename substring (or tuple of substrings) identifying the x axis.</p>
+<pre><code>eubi validate_aggregative /data/input /data/output --concatenation_axes x --x_tag col_left,col_right
+</code></pre>
+</details></p>
+</details>
+</details>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.top", "navigation.indexes", "content.code.copy", "content.code.select", "search.highlight", "search.suggest", "toc.integrate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

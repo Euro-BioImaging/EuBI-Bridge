@@ -1,0 +1,1596 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://euro-bioimaging.github.io/EuBI-Bridge/cli_reference/configuration/">
+      
+      
+        <link rel="prev" href="../metadata/">
+      
+      
+        <link rel="next" href="../named_configs/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../eurobioimaging-logo.webp">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Configuration - EuBI-Bridge</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../css/custom.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#configuration" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="EuBI-Bridge" class="md-header__button md-logo" aria-label="EuBI-Bridge" data-md-component="logo">
+      
+  <img src="../../eurobioimaging-logo.webp" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            EuBI-Bridge
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Configuration
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-purple" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/Euro-BioImaging/EuBI-Bridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Euro-BioImaging/EuBI-Bridge
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+    
+  
+  CLI Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../conversion_tutorial/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Conversion Tutorial
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../conversion_examples/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Conversion Examples
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="EuBI-Bridge" class="md-nav__button md-logo" aria-label="EuBI-Bridge" data-md-component="logo">
+      
+  <img src="../../eurobioimaging-logo.webp" alt="logo">
+
+    </a>
+    EuBI-Bridge
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/Euro-BioImaging/EuBI-Bridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    Euro-BioImaging/EuBI-Bridge
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CLI Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../conversion/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../named_configs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Named Configs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../display_info/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Display & Info
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reset/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reset
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../conversion_tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversion Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../conversion_examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversion Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h1>
+<p>Click any command card below to expand its full parameter reference.</p>
+<div class="admonition attention">
+<p class="admonition-title">Info</p>
+<p>Note that all cards below are auto-generated from <code>EuBIBridge</code> methods and Pydantic config models. Types, defaults, and valid ranges are extracted directly from the source.</p>
+</div>
+<details class="command">
+<summary><strong><code>configure cluster</code></strong>&ensp;—&ensp;Update cluster / concurrency parameters. Omitted arguments keep their current values</summary>
+<p><strong>Usage:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>eubi<span class="w"> </span>configure<span class="w"> </span>cluster<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div></p>
+<p><details>
+<summary>Optional arguments</summary></p>
+<p><details>
+<summary><code>--max_workers</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Number of parallel file-level worker processes (default 4).</p>
+<pre><code># Set the default number of parallel worker processes
+eubi configure cluster --max_workers 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--queue_size</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Internal write-queue depth per worker (default 4).</p>
+<pre><code># Allow each worker to buffer more write tasks
+eubi configure cluster --queue_size 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--region_size_mb</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Region size in MB for spatial partitioning (default 256).</p>
+<pre><code># Process larger spatial regions per task (reduces overhead on large arrays)
+eubi configure cluster --region_size_mb 512
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--memory_per_worker</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Memory limit accepted by SLURM / LocalCluster, e.g. <code>'8GB'</code> (default <code>'1GB'</code>).</p>
+<pre><code># Allocate 8 GB per worker (relevant for SLURM / LocalCluster)
+eubi configure cluster --memory_per_worker 8GB
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_concurrency</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>TensorStore write concurrency per worker (default 4).</p>
+<pre><code># Allow TensorStore to issue 8 write operations concurrently per worker
+eubi configure cluster --max_concurrency 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_concurrent_scenes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Parallel scenes within one file (default 1). Increase only when writing a multi-scene file to a large store.</p>
+<pre><code># Convert 2 scenes within a single file simultaneously
+eubi configure cluster --max_concurrent_scenes 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_concurrent_downscale_layers</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Number of downscaled pyramid layers written concurrently per scene (default 3).</p>
+<pre><code>eubi to_zarr /data/input /data/output --max_concurrent_downscale_layers 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--on_local_cluster</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--on_local_cluster</code> to enable &nbsp;·&nbsp; <code>--on_local_cluster False</code> to disable</p>
+<p>Use a Dask LocalCluster backend (default False).</p>
+<pre><code># Use a Dask LocalCluster as the scheduler
+eubi configure cluster --on_local_cluster
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--on_slurm</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--on_slurm</code> to enable &nbsp;·&nbsp; <code>--on_slurm False</code> to disable</p>
+<p>Submit jobs to a SLURM cluster (default False).</p>
+<pre><code># Submit workers to SLURM and set partition + account
+eubi configure cluster --on_slurm --slurm_account myaccount --slurm_partition gpu
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--use_threading</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--use_threading</code> to enable &nbsp;·&nbsp; <code>--use_threading False</code> to disable</p>
+<p>Use ThreadPool instead of ProcessPool (default False).</p>
+<pre><code># Switch from ProcessPool to ThreadPool (useful when GIL is not a bottleneck)
+eubi configure cluster --use_threading
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--tensorstore_data_copy_concurrency</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>TensorStore internal copy threads (default 4).</p>
+<pre><code># Allow TensorStore to copy data with 8 internal threads
+eubi configure cluster --tensorstore_data_copy_concurrency 8
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--max_retries</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Retries on broken worker process (default 10).</p>
+<pre><code># Retry failed workers up to 5 times before aborting
+eubi configure cluster --max_retries 5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--bf_read_concurrency</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Dask thread count for parallel bfio tile reads (default 4).  <code>None</code> lets dask choose (cpu_count).</p>
+</details></p>
+<p><details>
+<summary><code>--bf_tile_size_mb</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Tile size budget in MB for bfio tiled reading (default 512).</p>
+</details></p>
+<p><details>
+<summary><code>--jvm_memory</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Maximum JVM heap for Bio-Formats, e.g. <code>'8GB'</code>, <code>'4GB'</code>. Accepts <code>'NGB'</code> / <code>'NMB'</code> (like memory_per_worker) and normalises internally to JVM format (<code>'Ng'</code> / <code>'Nm'</code>).  Default <code>'2g'</code>.</p>
+</details></p>
+<p><details>
+<summary><code>--slurm_time</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>SLURM job wall-clock limit, e.g. <code>'24:00:00'</code> (used only when on_slurm=True).</p>
+<pre><code># Set SLURM wall-clock limit to 48 hours
+eubi configure cluster --on_slurm --slurm_time 48:00:00
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_account</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>SLURM account/allocation to charge (default None).</p>
+<pre><code># Charge SLURM jobs to 'myproject'
+eubi configure cluster --on_slurm --slurm_account myproject
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_partition</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>SLURM partition/queue to submit to (default None).</p>
+<pre><code># Submit to the 'gpu' partition
+eubi configure cluster --on_slurm --slurm_partition gpu
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_worker_timeout</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Seconds to wait for SLURM workers to start (default 300).</p>
+<pre><code># Wait up to 10 minutes for SLURM workers to start
+eubi configure cluster --on_slurm --slurm_worker_timeout 600
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--slurm_sif_path</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Path to an Apptainer/Singularity SIF image to run workers in (default None).</p>
+<pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_sif_path /apps/eubi.sif
+</code></pre>
+</details></p>
+</details>
+</details>
+<details class="command">
+<summary><strong><code>configure conversion</code></strong>&ensp;—&ensp;Update Zarr conversion parameters. Omitted arguments keep their current values</summary>
+<p><strong>Usage:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>eubi<span class="w"> </span>configure<span class="w"> </span>conversion<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div></p>
+<p><details>
+<summary>Optional arguments</summary></p>
+<p><details>
+<summary><code>--ome_zarr_version</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>OME-Zarr (NGFF) version to write, e.g. <code>'0.4'</code> or <code>'0.5'</code>.  This is the preferred control and supersedes <code>zarr_format</code> (the zarr container format is derived from it).</p>
+<pre><code># Default to OME-Zarr 0.5 (Zarr v3, enables sharding)
+eubi configure conversion --ome_zarr_version 0.5
+</code></pre>
+<pre><code># Default to OME-Zarr 0.4 (Zarr v2)
+eubi configure conversion --ome_zarr_version 0.4
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--zarr_format</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>DEPRECATED zarr container version — <code>2</code> (default) or <code>3</code>.  Used only when <code>ome_zarr_version</code> is unset/unrecognised; prefer <code>ome_zarr_version</code>.</p>
+<pre><code># Deprecated — prefer 'ome_zarr_version'. Switch to Zarr v3 (supports sharding)
+eubi configure conversion --zarr_format 3
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--skip_dask</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--skip_dask</code> to enable &nbsp;·&nbsp; <code>--skip_dask False</code> to disable</p>
+<p>Read TIFF files via zarr's native aszarr backend instead of dask. Faster for large TIFFs; ignored for non-TIFF formats.</p>
+<pre><code># Use zarr's native TIFF backend instead of dask (faster for large TIFFs)
+eubi configure conversion --skip_dask
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--auto_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--auto_chunk</code> to enable &nbsp;·&nbsp; <code>--auto_chunk False</code> to disable</p>
+<p>Auto-compute chunk shape from array size (default True).</p>
+<pre><code># Disable auto-chunking and set chunk sizes manually
+eubi configure conversion --auto_chunk False --z_chunk 64 --y_chunk 256 --x_chunk 256
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--target_chunk_mb</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Target chunk size in MB when auto_chunk is True.</p>
+<pre><code># Target 4 MB uncompressed chunks when auto_chunk is on
+eubi configure conversion --target_chunk_mb 4.0
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p> Manual per-axis chunk sizes (used when auto_chunk is False).</p>
+<pre><code># Process one time point per chunk
+eubi configure conversion --auto_chunk False --time_chunk 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Chunk size along the channel axis. Applies only when <code>auto_chunk=False</code>.</p>
+<pre><code># Process one channel per chunk
+eubi configure conversion --auto_chunk False --channel_chunk 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Chunk size along the z axis. Applies only when <code>auto_chunk=False</code>.</p>
+<pre><code># Set manual z chunk size (requires auto_chunk False)
+eubi configure conversion --auto_chunk False --z_chunk 64
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Chunk size along the y axis. Applies only when <code>auto_chunk=False</code>.</p>
+<pre><code># Set manual y chunk size (requires auto_chunk False)
+eubi configure conversion --auto_chunk False --y_chunk 256
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_chunk</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Chunk size along the x axis. Applies only when <code>auto_chunk=False</code>.</p>
+<pre><code># Set manual x chunk size (requires auto_chunk False)
+eubi configure conversion --auto_chunk False --x_chunk 256
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p> Shard-to-chunk multipliers for Zarr v3 sharding (default 3 on spatial axes).</p>
+<pre><code># Shard = 1 × time chunk (no sharding on time axis)
+eubi configure conversion --ome_zarr_version 0.5 --time_shard_coef 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Shard size = chunk × coef for the channel axis. Zarr v3 only — ignored for v2.</p>
+<pre><code># Shard = 1 × channel chunk
+eubi configure conversion --ome_zarr_version 0.5 --channel_shard_coef 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Shard size = chunk × coef for the z axis. Zarr v3 only — ignored for v2.</p>
+<pre><code># Shard = 5 × z chunk on the z axis
+eubi configure conversion --ome_zarr_version 0.5 --z_shard_coef 5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Shard size = chunk × coef for the y axis. Zarr v3 only — ignored for v2.</p>
+<pre><code># Shard = 5 × y chunk on the y axis
+eubi configure conversion --ome_zarr_version 0.5 --y_shard_coef 5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_shard_coef</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Shard size = chunk × coef for the x axis. Zarr v3 only — ignored for v2.</p>
+<pre><code># Shard = 5 × x chunk on the x axis
+eubi configure conversion --ome_zarr_version 0.5 --x_shard_coef 5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p> Crop ranges as <code>"start,stop"</code> strings applied before writing.</p>
+<pre><code># Keep only time frames 0–9 (start inclusive, stop exclusive)
+eubi configure conversion --time_range "0,10"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Crop the channel axis. Same format as <code>time_range</code>, e.g. <code>"0,2"</code> keeps the first two channels.</p>
+<pre><code># Keep only the first two channels
+eubi configure conversion --channel_range "0,2"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Crop the z axis. Same format as <code>time_range</code>, e.g. <code>"5,50"</code> keeps z-slices 5–49.</p>
+<pre><code># Keep z-slices 5 through 49
+eubi configure conversion --z_range "5,50"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Crop the y axis. Same format as <code>time_range</code>.</p>
+<pre><code># Crop y to the first 512 pixels
+eubi configure conversion --y_range "0,512"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_range</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Crop the x axis. Same format as <code>time_range</code>.</p>
+<pre><code># Crop x to the first 512 pixels
+eubi configure conversion --x_range "0,512"
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--compressor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Compression codec — <code>'blosc'</code> (default), <code>'gzip'</code>, <code>'zstd'</code>, <code>'bz2'</code>, or <code>'none'</code>.</p>
+<pre><code># Use zstd compression (good balance of speed and ratio)
+eubi configure conversion --compressor zstd
+</code></pre>
+<pre><code># Disable compression entirely
+eubi configure conversion --compressor none
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--compressor_params</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>dict</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Dict of codec parameters, e.g. <code>{'cname': 'lz4', 'clevel': 5}</code>.</p>
+<pre><code># Use blosc with lz4 codec at compression level 9
+eubi configure conversion --compressor blosc --compressor_params '{"cname": "lz4", "clevel": 9}'
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--overwrite</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--overwrite</code> to enable &nbsp;·&nbsp; <code>--overwrite False</code> to disable</p>
+<p>Overwrite existing output zarr (default False).</p>
+<pre><code># Allow overwriting an existing OME-Zarr at the output path
+eubi configure conversion --overwrite
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--override_channel_names</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--override_channel_names</code> to enable &nbsp;·&nbsp; <code>--override_channel_names False</code> to disable</p>
+<p>Replace output channel labels with the <code>channel_tag</code> values. For aggregative conversions with a tuple <code>channel_tag</code> only.</p>
+<pre><code># Replace channel labels with the channel_tag values from filenames
+eubi configure conversion --override_channel_names
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_intensity_limits</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>Literal['from_dtype', 'from_array', 'auto']</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>How to set OMERO window limits — <code>'from_dtype'</code> (default) uses dtype min/max, <code>'from_array'</code> computes per-channel min/max from pixel data, <code>'auto'</code> lets the viewer decide.</p>
+<pre><code># Compute display window limits from actual pixel data
+eubi configure conversion --channel_intensity_limits from_array
+</code></pre>
+<pre><code># Let the viewer compute limits automatically
+eubi configure conversion --channel_intensity_limits auto
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--metadata_reader</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Metadata backend — <code>'bfio'</code> (default) or <code>'bioformats'</code>.</p>
+<pre><code># Use the Java BioFormats backend for metadata (more formats supported)
+eubi configure conversion --metadata_reader bioformats
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--save_omexml</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--save_omexml</code> to enable &nbsp;·&nbsp; <code>--save_omexml False</code> to disable</p>
+<p>Write a companion OME-XML file alongside the zarr (default True).</p>
+<pre><code># Disable OME-XML sidecar file generation
+eubi configure conversion --save_omexml False
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--squeeze</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--squeeze</code> to enable &nbsp;·&nbsp; <code>--squeeze False</code> to disable</p>
+<p>Remove singleton dimensions before writing (default True).</p>
+<pre><code># Keep length-1 dimensions instead of removing them
+eubi configure conversion --squeeze False
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--dtype</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Output dtype — <code>'auto'</code> keeps the source dtype, or any NumPy dtype string such as <code>'uint16'</code>.</p>
+<pre><code># Cast pixel values to uint8 on write (reduces file size)
+eubi configure conversion --dtype uint8
+</code></pre>
+<pre><code># Keep the source dtype
+eubi configure conversion --dtype auto
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--verbose</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--verbose</code> to enable &nbsp;·&nbsp; <code>--verbose False</code> to disable</p>
+<p>Log verbose progress output (default False).</p>
+<pre><code># Enable verbose per-chunk progress logging
+eubi configure conversion --verbose
+</code></pre>
+</details></p>
+</details>
+</details>
+<details class="command">
+<summary><strong><code>configure downscale</code></strong>&ensp;—&ensp;Update downscale parameters. Omitted arguments keep their current values</summary>
+<p><strong>Usage:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>eubi<span class="w"> </span>configure<span class="w"> </span>downscale<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div></p>
+<p><details>
+<summary>Optional arguments</summary></p>
+<p><details>
+<summary><code>--n_layers</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Number of downscale pyramid levels to generate. <code>None</code> (default) auto-derives the count from <code>min_dimension_size</code>.</p>
+<pre><code># Generate 5 pyramid levels
+eubi configure downscale --n_layers 5
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--min_dimension_size</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Stop adding levels when the smallest spatial dimension falls below this pixel count (default 64).</p>
+<pre><code># Stop downscaling when the smallest spatial dimension is below 32 px
+eubi configure downscale --min_dimension_size 32
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Downscale factor along the time axis (default 1, i.e. no downscaling).</p>
+<pre><code># Disable time-axis downscaling (value 1 = no downscaling)
+eubi configure downscale --time_scale_factor 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Downscale factor along the channel axis (default 1).</p>
+<pre><code># Disable channel-axis downscaling
+eubi configure downscale --channel_scale_factor 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Downscale factor along the z axis (default 2).</p>
+<pre><code># Isotropic downscaling on all spatial axes
+eubi configure downscale --z_scale_factor 2 --y_scale_factor 2 --x_scale_factor 2
+</code></pre>
+<pre><code># Anisotropic — skip z downscaling for thick sections
+eubi configure downscale --z_scale_factor 1 --y_scale_factor 2 --x_scale_factor 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Downscale factor along the y axis (default 2).</p>
+<pre><code>eubi configure downscale --y_scale_factor 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Downscale factor along the x axis (default 2).</p>
+<pre><code>eubi configure downscale --x_scale_factor 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--downscale_method</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Pixel aggregation method for downscaling — one of 'simple', 'mean', 'median', 'min', 'max', 'mode' (default 'simple').</p>
+<pre><code># Use mean aggregation (recommended for fluorescence images)
+eubi configure downscale --downscale_method mean
+</code></pre>
+<pre><code># Use nearest-neighbour striding (fastest, recommended for label images)
+eubi configure downscale --downscale_method simple
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--keep_existing_resolutions</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--keep_existing_resolutions</code> to enable &nbsp;·&nbsp; <code>--keep_existing_resolutions False</code> to disable</p>
+<p>If the input format already carries its own multiscale pyramid (e.g. <code>.ims</code>, <code>.zarr</code>), write each existing resolution level straight to the output OME-Zarr instead of rebuilding the pyramid with the above scale factors (default False).</p>
+<pre><code># Copy a source pyramid (.ims / .zarr) verbatim instead of rebuilding it
+eubi configure downscale --keep_existing_resolutions
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--apply_smart_downscaling</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--apply_smart_downscaling</code> to enable &nbsp;·&nbsp; <code>--apply_smart_downscaling False</code> to disable</p>
+<p>Make the first pyramid level use automatically-computed factors that drive the voxels toward isotropy (default False).</p>
+<pre><code># Pick per-axis downscale factors automatically from voxel anisotropy
+eubi configure downscale --apply_smart_downscaling
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_smart_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Per-axis override for smart downscaling on the time axis (default None = auto).</p>
+<pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --time_smart_scale_factor 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_smart_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Per-axis smart-downscaling override for z.</p>
+<pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --z_smart_scale_factor 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_smart_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Per-axis smart-downscaling override for y.</p>
+<pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --y_smart_scale_factor 2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_smart_scale_factor</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Per-axis smart-downscaling override for x.</p>
+<pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --x_smart_scale_factor 2
+</code></pre>
+</details></p>
+</details>
+</details>
+<details class="command">
+<summary><strong><code>configure readers</code></strong>&ensp;—&ensp;Update file-reader parameters. Omitted arguments keep their current values</summary>
+<p><strong>Usage:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>eubi<span class="w"> </span>configure<span class="w"> </span>readers<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div></p>
+<p><details>
+<summary>Optional arguments</summary></p>
+<p><details>
+<summary><code>--as_mosaic</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--as_mosaic</code> to enable &nbsp;·&nbsp; <code>--as_mosaic False</code> to disable</p>
+<p>Treat tiled acquisitions as a stitched mosaic (default False).</p>
+<pre><code># Stitch tiled acquisitions into a single mosaic array on read
+eubi configure readers --as_mosaic
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--view_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>View index for multi-view formats (default 0). Pass <code>'all'</code> or a comma-separated list (e.g. <code>'0,2'</code>) to expose multiple views.</p>
+<pre><code># Write each view separately
+eubi configure readers --view_index all
+</code></pre>
+<pre><code># Select only the second view
+eubi configure readers --view_index 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--phase_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Phase index (default 0).</p>
+<pre><code># Select phase index 1
+eubi configure readers --phase_index 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--illumination_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Illumination index (default 0). Pass <code>'all'</code> or a comma-separated list to expose multiple illuminations.</p>
+<pre><code># Write each illumination separately
+eubi configure readers --illumination_index all
+</code></pre>
+<pre><code># Select only the second illumination
+eubi configure readers --illumination_index 1
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--scene_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Scene / series index to read.  Pass an integer, <code>'all'</code>, or a comma-separated list such as <code>'0,2,4'</code> (default 0).</p>
+<pre><code># Always read scene 2 from multi-scene files
+eubi configure readers --scene_index 2
+</code></pre>
+<pre><code># Convert each scene to a separate OME-Zarr group
+eubi configure readers --scene_index all
+</code></pre>
+<pre><code># Convert only scenes 0, 2 and 4
+eubi configure readers --scene_index 0,2,4
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--rotation_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Rotation index (default 0).</p>
+<pre><code># Select rotation index 0
+eubi configure readers --rotation_index 0
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--mosaic_tile_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Mosaic tile index.  Pass an integer, <code>'all'</code>, or a comma-separated list (default None = all tiles).</p>
+<pre><code># Write every tile separately (default)
+eubi configure readers --mosaic_tile_index all
+</code></pre>
+<pre><code># Write only tiles 0 and 2
+eubi configure readers --mosaic_tile_index 0,2
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--sample_index</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>int</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Sample index (default 0).</p>
+<pre><code># Select sample index 0
+eubi configure readers --sample_index 0
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--force_bioformats</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--force_bioformats</code> to enable &nbsp;·&nbsp; <code>--force_bioformats False</code> to disable</p>
+<p>Force bfio tiled path even for natively-supported formats.</p>
+<pre><code># Always route reads through the Java Bio-Formats reader
+eubi configure readers --force_bioformats
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--concat_views</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--concat_views</code> to enable &nbsp;·&nbsp; <code>--concat_views False</code> to disable</p>
+<p>Stack multiple views along the channel axis instead of writing separate OME-Zarr outputs (default False).</p>
+<pre><code># Always stack views onto the channel axis
+eubi configure readers --concat_views
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--concat_illuminations</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--concat_illuminations</code> to enable &nbsp;·&nbsp; <code>--concat_illuminations False</code> to disable</p>
+<p>Stack multiple illuminations along the channel axis instead of writing separate OME-Zarr outputs (default False).</p>
+<pre><code># Always stack illuminations onto the channel axis
+eubi configure readers --concat_illuminations
+</code></pre>
+</details></p>
+</details>
+</details>
+<details class="command">
+<summary><strong><code>configure concatenation</code></strong>&ensp;—&ensp;Update aggregative (concatenation) parameters. Omitted arguments keep their current values</summary>
+<p><strong>Usage:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>eubi<span class="w"> </span>configure<span class="w"> </span>concatenation<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div></p>
+<p><details>
+<summary>Optional arguments</summary></p>
+<p><details>
+<summary><code>--concatenation_axes</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>int</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Axes along which to concatenate files.  Pass a string of axis letters such as <code>'tc'</code> or <code>'z'</code>, or an integer axis index.  <code>None</code> disables aggregative mode entirely.</p>
+<pre><code># Concatenate files along the channel axis
+eubi configure concatenation --concatenation_axes c --channel_tag raw,mask
+</code></pre>
+<pre><code># Concatenate along both z and channel axes simultaneously
+eubi configure concatenation --concatenation_axes zc --z_tag slices --channel_tag raw,mask
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--time_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>tuple</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Filename substring (or tuple of substrings) that identifies a file as contributing to the time axis.</p>
+<pre><code># Identify three time-point files by substrings in their names
+eubi configure concatenation --concatenation_axes t --time_tag t001,t002,t003
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>tuple</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Filename substring (or tuple of substrings) identifying the channel axis.</p>
+<pre><code># Two channels — raw fluorescence and segmentation mask
+eubi configure concatenation --concatenation_axes c --channel_tag raw,mask
+</code></pre>
+<pre><code># Single channel — DAPI only
+eubi configure concatenation --concatenation_axes c --channel_tag DAPI
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--z_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>tuple</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Filename substring (or tuple of substrings) identifying the z axis.</p>
+<pre><code># Multiple z-slices acquired as separate files
+eubi configure concatenation --concatenation_axes z --z_tag slice001,slice002,slice003
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--y_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>tuple</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Filename substring (or tuple of substrings) identifying the y axis.</p>
+<pre><code># Two rows of a tile scan
+eubi configure concatenation --concatenation_axes y --y_tag row_top,row_bottom
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--x_tag</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>tuple</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Filename substring (or tuple of substrings) identifying the x axis.</p>
+<pre><code># Two columns of a tile scan
+eubi configure concatenation --concatenation_axes x --x_tag col_left,col_right
+</code></pre>
+</details></p>
+</details>
+</details>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.top", "navigation.indexes", "content.code.copy", "content.code.select", "search.highlight", "search.suggest", "toc.integrate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
