@@ -1,8 +1,9 @@
 # Metadata
 
-Auto-generated from `EuBIBridge` methods and Pydantic config models.
-Types, defaults, and valid ranges are extracted directly from the source —
-click any command card to expand its full parameter reference.
+Click any command card below to expand its full parameter reference.
+
+!!! attention "Info"
+    Note that all cards below are auto-generated from `EuBIBridge` methods and Pydantic config models. Types, defaults, and valid ranges are extracted directly from the source.
 
 ??? command "**`show_pixel_meta`**&ensp;—&ensp;Display pixel-level and channel metadata for all files in input_path"
 

@@ -1400,18 +1400,20 @@ def _render_command(name: str, method: Any) -> str:
 # ---------------------------------------------------------------------------
 
 _SECTION_INTRO = """\
-Auto-generated from `EuBIBridge` methods and Pydantic config models.
-Types, defaults, and valid ranges are extracted directly from the source —
-click any command card to expand its full parameter reference.
+Click any command card below to expand its full parameter reference.
+
+!!! attention "Info"
+    Note that all cards below are auto-generated from `EuBIBridge` methods and Pydantic config models. Types, defaults, and valid ranges are extracted directly from the source.
 
 """
 
 _CONVERSION_INTRO = """\
-Auto-generated from `EuBIBridge` methods and Pydantic config models.
-Types, defaults, and valid ranges are extracted directly from the source —
-click any command card to expand its full parameter reference.
+Click any command card below to expand its full parameter reference.
 
-!!! tip "Named-config chaining"
+!!! attention "Info"
+    Note that all cards below are auto-generated from `EuBIBridge` methods and Pydantic config models. Types, defaults, and valid ranges are extracted directly from the source.
+
+!!! tip "Tip: Named-config chaining"
     Prefix any command with `with_config NAME` to use a saved config profile:
     ```shell
     eubi with_config hpc to_zarr /data/input /data/output --ome_zarr_version 0.5
