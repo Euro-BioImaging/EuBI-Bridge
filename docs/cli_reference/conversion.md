@@ -1,9 +1,9 @@
 # Conversion
 
-click any command card below to expand its full parameter reference.
+Click any command card below to expand its full parameter reference.
 
 !!! attention "Info" 
-    All cards are auto-generated from `EuBIBridge` methods and Pydantic config models.Types, defaults, and valid ranges are extracted directly from the source.
+    Note that all cards below are auto-generated from `EuBIBridge` methods and Pydantic config models. Types, defaults, and valid ranges are extracted directly from the source.
 
 
 !!! tip "Tip: Named-config chaining"
