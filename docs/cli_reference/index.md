@@ -1,6 +1,6 @@
 # CLI Reference
 
-Click any command card to expand its full parameter reference.
+Click any command category below to access its full list of commands.
 
 | Section | Commands |
 |---------|----------|
@@ -12,12 +12,3 @@ Click any command card to expand its full parameter reference.
 | [Reset](reset.md) | `reset_config` |
 
 
-!!! attention "Info" 
-    All cards are auto-generated from `EuBIBridge` methods and Pydantic config models.Types, defaults, and valid ranges are extracted directly from the source.
-
-
-!!! tip "Tip: Named-config chaining"
-    Prefix any command with `with_config NAME` to use a saved config profile:
-    ```shell
-    eubi with_config hpc to_zarr /data/input /data/output --ome_zarr_version 0.5
-    ```
