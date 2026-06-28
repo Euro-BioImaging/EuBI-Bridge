@@ -127,46 +127,59 @@ def read_pff(
         If the file cannot be opened.
     """
     logger.info(f"Reading file with format detection: {input_path}")
-    
+
+    # These kwargs are CZI-specific and must not be forwarded to other readers.
+    _CZI_ONLY_KWARGS = {
+        'as_mosaic', 'view_index', 'illumination_index', 'phase_index',
+        'rotation_index', 'mosaic_tile_index', 'sample_index',
+        'concat_views', 'concat_illuminations',
+    }
+
     # Route to specialized readers first
     if input_path.endswith(('.ome.tiff', '.ome.tif')):
         from bioio_ome_tiff.reader import Reader as reader
         logger.info("Using bioio-ome-tiff reader")
-        img = reader(input_path, **kwargs)
-        return BioIOReader(input_path, img, **kwargs)
-    
+        kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
+        img = reader(input_path, **kw)
+        return BioIOReader(input_path, img, **kw)
+
     elif input_path.endswith(('.tif', '.tiff')):
         from eubi_bridge.core.tiff_reader import read_tiff_image
         logger.info("Using native tifffile reader")
-        return read_tiff_image(input_path, aszarr=True, **kwargs)
-    
+        kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
+        return read_tiff_image(input_path, aszarr=True, **kw)
+
     elif input_path.endswith('.czi'):
         from eubi_bridge.core.czi_reader import read_czi
         logger.info("Using CZI-specific reader")
         return read_czi(input_path, **kwargs)
-    
+
     elif input_path.endswith('.lif'):
         from bioio_lif.reader import Reader as reader
         logger.info("Using bioio-lif reader")
-        img = reader(input_path, **kwargs)
-        return BioIOReader(input_path, img, **kwargs)
-    
+        kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
+        img = reader(input_path, **kw)
+        return BioIOReader(input_path, img, **kw)
+
     elif input_path.endswith('.nd2'):
         from bioio_nd2.reader import Reader as reader
         logger.info("Using bioio-nd2 reader")
-        img = reader(input_path, **kwargs)
-        return BioIOReader(input_path, img, **kwargs)
-    
+        kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
+        img = reader(input_path, **kw)
+        return BioIOReader(input_path, img, **kw)
+
     elif input_path.endswith(('.png', '.jpg', '.jpeg')):
         from bioio_imageio.reader import Reader as reader
         logger.info("Using bioio-imageio reader")
-        img = reader(input_path, **kwargs)
-        return BioIOReader(input_path, img, **kwargs)
-    
+        kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
+        img = reader(input_path, **kw)
+        return BioIOReader(input_path, img, **kw)
+
     else:
         # Default fallback: use bioformats
         from bioio_bioformats.reader import Reader as reader
         logger.info("Using bioio-bioformats reader (fallback)")
         img = reader(input_path)
-        return BioIOReader(input_path, img, **kwargs)
+        kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
+        return BioIOReader(input_path, img, **kw)
 # pff.get_image_dask_data()

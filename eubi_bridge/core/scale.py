@@ -17,95 +17,6 @@ from eubi_bridge.utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def simple_downscale(
-                     darr,
-                     scale_factor: Union[tuple, list, np.ndarray] = None,
-                     backend = 'numpy' # placeholder
-                     ):
-    """Downscale a Dask array using simple stride slicing.
-    
-    Parameters
-    ----------
-    darr : dask.array.Array
-        Input Dask array to downscale.
-    scale_factor : Union[tuple, list, np.ndarray]
-        Downsampling factors for each dimension.
-    backend : str, optional
-        Backend to use (placeholder for future use). Default is 'numpy'.
-        
-    Returns
-    -------
-    dask.array.Array
-        Downscaled Dask array.
-        
-    Raises
-    ------
-    ValueError
-        If scale_factor length doesn't match array dimensions.
-    """
-    if len(scale_factor) != darr.ndim:
-        raise ValueError("scale_factors must have the same length as the array's number of dimensions")
-    slices = tuple(slice(None, None, int(scale)) for scale in scale_factor)
-    downscaled_arr = darr[slices]
-    return downscaled_arr
-
-def mean_downscale(arr: da.Array,
-                   scale_factor: Union[tuple, list, np.ndarray] = None
-                   ):
-    """Downscale a Dask array using mean coarsening.
-    
-    Parameters
-    ----------
-    arr : dask.array.Array
-        Input Dask array to downscale.
-    scale_factor : Union[tuple, list, np.ndarray]
-        Downsampling factors for each dimension.
-        
-    Returns
-    -------
-    dask.array.Array
-        Downscaled Dask array with mean aggregation.
-        
-    Raises
-    ------
-    ValueError
-        If scale_factor length doesn't match array dimensions.
-    """
-    if len(scale_factor) != arr.ndim:
-        raise ValueError("scale_factors must have the same length as the array's number of dimensions")
-    axes = dict({idx: factor for idx, factor in enumerate(scale_factor)})
-    downscaled_arr = da.coarsen(da.mean, arr,
-                                axes = axes, trim_excess = True).astype(arr.dtype)
-    return downscaled_arr
-
-def median_downscale(arr: da.Array,
-                   scale_factor: Union[tuple, list, np.ndarray] = None
-                   ):
-    """Downscale a Dask array using median coarsening.
-    
-    Parameters
-    ----------
-    arr : dask.array.Array
-        Input Dask array to downscale.
-    scale_factor : Union[tuple, list, np.ndarray]
-        Downsampling factors for each dimension.
-        
-    Returns
-    -------
-    dask.array.Array
-        Downscaled Dask array with median aggregation.
-        
-    Raises
-    ------
-    ValueError
-        If scale_factor length doesn't match array dimensions.
-    """
-    if len(scale_factor) != arr.ndim:
-        raise ValueError("scale_factors must have the same length as the array's number of dimensions")
-    axes = dict({idx: factor for idx, factor in enumerate(scale_factor)})
-    downscaled_arr = da.coarsen(da.median, arr,
-                                axes = axes, trim_excess = True).astype(arr.dtype)
-    return downscaled_arr
 
 async def ts_downscale(arr: Union[zarr.Array, str],
                           scale_factor: Union[tuple, list, np.ndarray] = None,
@@ -343,22 +254,7 @@ class Downscaler:
         self.param_names = ['array', 'scale_factor', 'n_layers', 'scale', 'output_chunks', 'backend', 'downscale_method', 'smart_scale_factor']
         # self.update()
 
-    def get_method(self):
-        if self.base_array_root is None: # array is dask array
-            if self.downscale_method == 'simple':
-                method = simple_downscale
-            elif self.downscale_method == "mean":
-                method = mean_downscale
-            elif self.downscale_method == "median":
-                method = mean_downscale
-            else:
-                raise NotImplementedError(f"Currently, only 'simple', 'mean' and 'median' methods are implemented.")
-        else:
-            method = ts_downscale
-        return method
-
     async def run(self):
-        # self.method = self.get_method()
         self.method = ts_downscale
         # assert isinstance(self.array, da.Array)
         self.dm = DownscaleManager(self.array.shape,

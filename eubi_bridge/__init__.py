@@ -1,3 +1,7 @@
 """EuBI-Bridge: Distributed OME-Zarr image conversion toolkit."""
 
-__version__ = "0.1.0c1"
+try:
+    from importlib.metadata import version as _metadata_version
+    __version__ = _metadata_version("eubi_bridge")
+except Exception:
+    __version__ = "0.0.0+dev"

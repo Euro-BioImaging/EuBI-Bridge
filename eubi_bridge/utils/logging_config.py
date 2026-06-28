@@ -1,8 +1,12 @@
 import logging
+import os
+import shutil
 import sys
 
 from rich.console import Console
 from rich.logging import RichHandler
+
+_MIN_LOG_WIDTH = 120
 
 
 def setup_logging(level=logging.INFO):
@@ -17,10 +21,19 @@ def setup_logging(level=logging.INFO):
     # Respect the actual terminal state — don't force ANSI into non-terminal outputs
     # (e.g. subprocess workers write to a queue, not a real TTY).
     is_tty = getattr(sys.stdout, "isatty", lambda: False)()
+
+    # Detect terminal width; fall back to COLUMNS env var, then a safe minimum.
+    # VNC / remote-desktop sessions often report width=1 or 0, which causes Rich
+    # to wrap every character onto its own line.
+    detected = shutil.get_terminal_size(fallback=(0, 0)).columns
+    env_cols = int(os.environ.get("COLUMNS", "0"))
+    width = max(detected, env_cols, _MIN_LOG_WIDTH)
+
     console = Console(
         force_terminal=is_tty,
         color_system="auto" if is_tty else None,
         highlight=is_tty,
+        width=width,
     )
 
     # Set up RichHandler manually instead of via basicConfig

@@ -28,6 +28,7 @@ def _config_to_react(cfg: dict) -> dict:
     readers = cfg.get("readers", {})
     conv    = cfg.get("conversion", {})
     down    = cfg.get("downscale", {})
+    concat  = cfg.get("concatenation", {})
 
     # Reconstruct compression dict from compressor + compressor_params
     compressor = conv.get("compressor", "blosc")
@@ -56,29 +57,39 @@ def _config_to_react(cfg: dict) -> dict:
 
     return {
         "cluster": {
-            "maxWorkers":       cluster.get("max_workers", 4),
-            "queueSize":        cluster.get("queue_size", 4),
-            "maxConcurrency":   cluster.get("max_concurrency", 4),
-            "regionSizeMb":     cluster.get("region_size_mb", 256),
-            "memoryPerWorker":  cluster.get("memory_per_worker", "1GB"),
-            "useLocalDask":     cluster.get("on_local_cluster", False),
-            "useSlurm":         cluster.get("on_slurm", False),
+            "maxWorkers":           cluster.get("max_workers", 4),
+            "queueSize":            cluster.get("queue_size", 4),
+            "maxConcurrency":       cluster.get("max_concurrency", 4),
+            "maxConcurrentScenes":  cluster.get("max_concurrent_scenes", 1),
+            "regionSizeMb":         float(cluster.get("region_size_mb", 256)),
+            "memoryPerWorker":      _parse_memory_gb(cluster.get("memory_per_worker", "4GB"), 4.0),
+            "useLocalDask":         cluster.get("on_local_cluster", False),
+            "useSlurm":             cluster.get("on_slurm", False),
+            "bfTileSizeMb":         cluster.get("bf_tile_size_mb", 512.0),
+            "jvmMemory":            _parse_jvm_gb(cluster.get("jvm_memory", "2g"), 2.0),
+            "bfReadConcurrency":    cluster.get("bf_read_concurrency", 4),
         },
         "reader": {
-            "readAsMosaic":      readers.get("as_mosaic", False),
-            "viewIndex":         str(readers.get("view_index", 0)),
-            "phaseIndex":        str(readers.get("phase_index", 0)),
-            "illuminationIndex": str(readers.get("illumination_index", 0)),
-            "rotationIndex":     str(readers.get("rotation_index", 0)),
-            "sampleIndex":       str(readers.get("sample_index", 0)),
-            # scene / mosaic indices are represented differently in ebridge – leave as strings
-            "readAllScenes":    True,
-            "sceneIndices":     str(readers.get("scene_index", 0)) if readers.get("scene_index") not in (None, 0, "all") else "",
-            "readAllTiles":     True,
-            "mosaicTileIndices": str(readers.get("mosaic_tile_index", 0)) if readers.get("mosaic_tile_index") not in (None, 0, "all") else "",
+            "readAsMosaic":         readers.get("as_mosaic", False),
+            "readAllScenes":        True,
+            "sceneIndices":         str(readers.get("scene_index", 0)) if readers.get("scene_index") not in (None, 0, "all") else "",
+            "readAllTiles":         True,
+            "mosaicTileIndices":    str(readers.get("mosaic_tile_index", 0)) if readers.get("mosaic_tile_index") not in (None, 0, "all") else "",
+            "readAllViews":         True,
+            "viewIndices":          str(readers.get("view_index", 0)) if readers.get("view_index") not in (None, 0, "all") else "",
+            "concatViews":          readers.get("concat_views", False),
+            "phaseIndex":           str(readers.get("phase_index", 0)),
+            "readAllIlluminations": True,
+            "illuminationIndices":  str(readers.get("illumination_index", 0)) if readers.get("illumination_index") not in (None, 0, "all") else "",
+            "concatIlluminations":  readers.get("concat_illuminations", False),
+            "rotationIndex":        str(readers.get("rotation_index", 0)),
+            "sampleIndex":          str(readers.get("sample_index", 0)),
+            "forceBioformats":      readers.get("force_bioformats", False),
         },
         "conversion": {
             "zarrFormat":           conv.get("zarr_format", 2),
+            "omeZarrVersion":       conv.get("ome_zarr_version")
+                                    or ("0.5" if conv.get("zarr_format", 2) == 3 else "0.4"),
             "dataType":             conv.get("dtype", "auto") or "auto",
             "verbose":              conv.get("verbose", False),
             "overwrite":            conv.get("overwrite", False),
@@ -136,6 +147,14 @@ def _config_to_react(cfg: dict) -> dict:
             "scaleY": "",    "unitY": "micrometer",
             "scaleX": "",    "unitX": "micrometer",
         },
+        "concatenation": {
+            "concatenationAxes": concat.get("concatenation_axes", "") or "",
+            "timeTag":           concat.get("time_tag", "")    or "",
+            "channelTag":        concat.get("channel_tag", "") or "",
+            "zTag":              concat.get("z_tag", "")       or "",
+            "yTag":              concat.get("y_tag", "")       or "",
+            "xTag":              concat.get("x_tag", "")       or "",
+        },
     }
 
 
@@ -146,6 +165,7 @@ def _react_to_config(data: dict) -> dict:
     down_d     = data.get("downscaling", {})
     reader_d   = data.get("reader", {})
     meta_d     = data.get("metadata", {})
+    concat_d   = data.get("concatenation", {})
     comp_d     = conv_d.get("compression", {})
 
     # Compression
@@ -176,24 +196,32 @@ def _react_to_config(data: dict) -> dict:
             "use_threading":                   False,
             "max_workers":                     cluster_d.get("maxWorkers", 4),
             "queue_size":                      cluster_d.get("queueSize", 4),
-            "region_size_mb":                  cluster_d.get("regionSizeMb", 256),
+            "region_size_mb":                  float(cluster_d.get("regionSizeMb", 256)),
             "max_concurrency":                 cluster_d.get("maxConcurrency", 4),
-            "memory_per_worker":               cluster_d.get("memoryPerWorker", "1GB"),
+            "max_concurrent_scenes":           cluster_d.get("maxConcurrentScenes", 1),
+            "memory_per_worker":               _gb_to_memory_str(cluster_d.get("memoryPerWorker", 4)),
             "tensorstore_data_copy_concurrency": 4,
             "max_retries":                     10,
+            "bf_tile_size_mb":                 cluster_d.get("bfTileSizeMb", 512.0),
+            "jvm_memory":                      _gb_to_jvm_str(cluster_d.get("jvmMemory", 2)),
+            "bf_read_concurrency":             cluster_d.get("bfReadConcurrency", 4),
         },
         "readers": {
-            "as_mosaic":         reader_d.get("readAsMosaic", False),
-            "view_index":        _parse_int(reader_d.get("viewIndex", "0")),
-            "phase_index":       _parse_int(reader_d.get("phaseIndex", "0")),
-            "illumination_index": _parse_int(reader_d.get("illuminationIndex", "0")),
-            "scene_index":       0,
-            "rotation_index":    _parse_int(reader_d.get("rotationIndex", "0")),
-            "mosaic_tile_index": 0,
-            "sample_index":      _parse_int(reader_d.get("sampleIndex", "0")),
+            "as_mosaic":            reader_d.get("readAsMosaic", False),
+            "scene_index":          "all" if reader_d.get("readAllScenes", True) else _parse_int(reader_d.get("sceneIndices", "0")),
+            "mosaic_tile_index":    "all" if reader_d.get("readAllTiles", True) else _parse_int(reader_d.get("mosaicTileIndices", "0")),
+            "view_index":           "all" if reader_d.get("readAllViews", True) else _parse_int(reader_d.get("viewIndices", "0")),
+            "concat_views":         reader_d.get("concatViews", False),
+            "phase_index":          _parse_int(reader_d.get("phaseIndex", "0")),
+            "illumination_index":   "all" if reader_d.get("readAllIlluminations", True) else _parse_int(reader_d.get("illuminationIndices", "0")),
+            "concat_illuminations": reader_d.get("concatIlluminations", False),
+            "rotation_index":       _parse_int(reader_d.get("rotationIndex", "0")),
+            "sample_index":         _parse_int(reader_d.get("sampleIndex", "0")),
+            "force_bioformats":     reader_d.get("forceBioformats", False),
         },
         "conversion": {
             "zarr_format":           conv_d.get("zarrFormat", 2),
+            "ome_zarr_version":      conv_d.get("omeZarrVersion"),
             "auto_chunk":            conv_d.get("autoChunk", True),
             "target_chunk_mb":       conv_d.get("targetChunkSizeMb", 1),
             "time_chunk":            conv_d.get("chunkTime", 1),
@@ -233,11 +261,20 @@ def _react_to_config(data: dict) -> dict:
             "n_layers":                 n_layers,
             "min_dimension_size":       down_d.get("minDimSize", 64),
             "downscale_method":         down_d.get("downscaleMethod", "simple"),
+            "keep_existing_resolutions": down_d.get("keepExistingResolutions", False),
             "apply_smart_downscaling":  down_d.get("applySmartDownscaling", False),
             "z_smart_scale_factor":     down_d.get("smartScaleZ") or None,
             "y_smart_scale_factor":     down_d.get("smartScaleY") or None,
             "x_smart_scale_factor":     down_d.get("smartScaleX") or None,
             "time_smart_scale_factor":  down_d.get("smartScaleTime") or None,
+        },
+        "concatenation": {
+            "concatenation_axes": concat_d.get("concatenationAxes") or None,
+            "time_tag":           concat_d.get("timeTag")    or None,
+            "channel_tag":        concat_d.get("channelTag") or None,
+            "z_tag":              concat_d.get("zTag")       or None,
+            "y_tag":              concat_d.get("yTag")       or None,
+            "x_tag":              concat_d.get("xTag")       or None,
         },
     }
 
@@ -247,6 +284,64 @@ def _parse_int(value) -> int:
         return int(str(value).strip().split(",")[0])
     except (ValueError, TypeError):
         return 0
+
+
+def _parse_memory_gb(value, default: float = 4.0) -> float:
+    """Parse a memory string like '4GB', '4gb', '0.5GB', '512MB' → float GB.
+    If *value* is already numeric it is returned as-is (assumed GB)."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().lower()
+    for suffix, divisor in [("gb", 1), ("mb", 1024), ("g", 1), ("m", 1024), ("b", 1)]:
+        if s.endswith(suffix):
+            try:
+                return float(s[: -len(suffix)]) / divisor
+            except ValueError:
+                break
+    try:
+        return float(s)
+    except ValueError:
+        return default
+
+
+def _parse_jvm_gb(value, default: float = 2.0) -> float:
+    """Parse a JVM heap string like '2g', '4G', '2048m' → float GB.
+    If *value* is already numeric it is returned as-is (assumed GB)."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().lower()
+    if s.endswith("m"):
+        try:
+            return float(s[:-1]) / 1024
+        except ValueError:
+            return default
+    for suffix in ("gb", "g", "b"):
+        if s.endswith(suffix):
+            try:
+                return float(s[: -len(suffix)])
+            except ValueError:
+                break
+    try:
+        return float(s)
+    except ValueError:
+        return default
+
+
+def _gb_to_memory_str(val, default: str = "4GB") -> str:
+    """Float GB → '4GB' or '4.5GB' string for Dask memory_per_worker."""
+    try:
+        gb = float(val)
+        return f"{int(gb)}GB" if gb == int(gb) else f"{gb:.1f}GB"
+    except (TypeError, ValueError):
+        return str(val) if val else default
+
+
+def _gb_to_jvm_str(val, default: str = "2g") -> str:
+    """Float GB → '4g' string for JVM -Xmx (rounded to nearest integer GB)."""
+    try:
+        return f"{max(1, round(float(val)))}g"
+    except (TypeError, ValueError):
+        return str(val) if val else default
 
 
 # ---------------------------------------------------------------------------

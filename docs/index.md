@@ -43,7 +43,7 @@ Relying on `bioio` plugins for reading, EuBI-Bridge supports a wide range of inp
   <li>
     <p><strong>Activate the environment and install EuBI-Bridge via pip:</strong></p>
     <pre><code class="language-bash">conda activate eubizarr
-pip install --no-cache-dir eubi-bridge==0.0.7b3</code></pre>
+pip install --no-cache-dir eubi-bridge==0.1.2b8</code></pre>
   </li>
 </ol>
 <hr>

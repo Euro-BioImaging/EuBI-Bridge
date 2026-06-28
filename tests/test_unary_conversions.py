@@ -192,6 +192,51 @@ class TestZarrFormat:
         assert (actual_zarr / 'zarr.json').exists()
 
 
+class TestOverwriteSafety:
+    """overwrite=False must error on a name collision WITHOUT deleting data."""
+
+    def test_collision_errors_and_preserves_existing(self, imagej_tiff_zyx, tmp_path):
+        """A second conversion to an existing output with overwrite off must
+        raise AND leave the existing output (and unrelated siblings) intact."""
+        target = tmp_path / "out"
+        target.mkdir()
+
+        # An unrelated, pre-existing OME-Zarr that must never be touched.
+        sibling = target / "sibling.zarr"
+        run_eubi_command([str(imagej_tiff_zyx), str(sibling)])
+        assert validate_zarr_exists(sibling)
+
+        # First conversion of our input -> succeeds.
+        out = target / "thedata.zarr"
+        run_eubi_command([str(imagej_tiff_zyx), str(out)])
+        assert validate_zarr_exists(out)
+
+        # Snapshot the full directory tree (proves nothing is deleted/altered).
+        before = sorted(str(p.relative_to(target)) for p in target.rglob('*'))
+
+        # Second conversion to the SAME output with overwrite off -> must FAIL.
+        with pytest.raises(RuntimeError) as exc:
+            run_eubi_command([str(imagej_tiff_zyx), str(out)])  # overwrite defaults to False
+        # ...with a clear collision message, not some unrelated failure.
+        assert ("already exists" in str(exc.value).lower()
+                or "overwrite" in str(exc.value).lower())
+
+        # The existing output, the sibling, and every file must be untouched.
+        after = sorted(str(p.relative_to(target)) for p in target.rglob('*'))
+        assert after == before, f"directory changed by a failed overwrite=False run"
+        assert validate_zarr_exists(out), "existing output was destroyed"
+        assert validate_zarr_exists(sibling), "unrelated sibling was destroyed"
+
+    def test_overwrite_true_replaces(self, imagej_tiff_zyx, tmp_path):
+        """With overwrite enabled, re-converting to the same path succeeds."""
+        out = tmp_path / "out.zarr"
+        run_eubi_command([str(imagej_tiff_zyx), str(out)])
+        assert validate_zarr_exists(out)
+        # Re-run with overwrite -> no error, output still present.
+        run_eubi_command([str(imagej_tiff_zyx), str(out), '--overwrite', 'True'])
+        assert validate_zarr_exists(out)
+
+
 class TestChunking:
     """Tests for chunk size configuration."""
     

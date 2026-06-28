@@ -243,7 +243,20 @@ class ChannelPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        # Apply per-channel auto-contrast to every channel at once.
+        self._auto_all_btn = QPushButton("Auto (All Channels)")
+        self._auto_all_btn.setToolTip(
+            "Set the display min/max of every channel from the current view — "
+            "like clicking each channel's Auto button."
+        )
+        self._auto_all_btn.clicked.connect(self._emit_auto_all)
+        layout.addWidget(self._auto_all_btn)
         layout.addWidget(scroll)
+
+    def _emit_auto_all(self):
+        """Trigger auto-contrast for every channel (reuses the per-channel path)."""
+        for row in self._rows:
+            self.auto_requested.emit(row._idx)
 
     def set_channels(self, channels: list[dict]):
         """Rebuild the panel for a new list of channel dicts."""

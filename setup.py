@@ -8,6 +8,7 @@ PEP 517 build backend (_build_backend.py) and bundled in the wheel.
 """
 
 import os
+import tomllib
 from setuptools import setup, find_packages
 
 
@@ -20,9 +21,13 @@ def readme():
     return ""
 
 
+with open(os.path.join(os.path.dirname(__file__), "pyproject.toml"), "rb") as _f:
+    _version = tomllib.load(_f)["project"]["version"]
+
+
 setup(
     name='eubi_bridge',
-    version='0.1.0rc5',
+    version=_version,
     author='Bugra Özdemir',
     author_email='bugraa.ozdemir@gmail.com',
     description='A package for converting datasets to OME-Zarr format.',

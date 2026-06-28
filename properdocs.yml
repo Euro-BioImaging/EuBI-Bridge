@@ -1,0 +1,76 @@
+
+site_name: EuBI-Bridge
+repo_url: https://github.com/Euro-BioImaging/EuBI-Bridge
+repo_name: Euro-BioImaging/EuBI-Bridge
+site_url: https://euro-bioimaging.github.io/EuBI-Bridge/
+
+theme:
+  name: material
+  logo: eurobioimaging-logo.webp
+  favicon: eurobioimaging-logo.webp
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  font:
+    text: Roboto
+    code: JetBrains Mono
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.code.select
+    - search.highlight
+    - search.suggest
+    - toc.integrate
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - attr_list
+  - md_in_html
+  - tables
+
+# Internal audit/working docs that live under docs/ but must not ship in the site.
+exclude_docs: |
+  cli_audit_findings.md
+  cli.md
+  gui_tutorial.md
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - CLI Reference:
+      - cli_reference/index.md
+      - Conversion: cli_reference/conversion.md
+      - Metadata: cli_reference/metadata.md
+      - Configuration: cli_reference/configuration.md
+      - Named Configs: cli_reference/named_configs.md
+      - Display & Info: cli_reference/display_info.md
+      - Reset: cli_reference/reset.md
+  - Conversion Tutorial: conversion_tutorial.md
+  - Conversion Examples: conversion_examples.md
+
+extra_css:
+  - css/custom.css

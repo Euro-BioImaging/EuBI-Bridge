@@ -8,7 +8,9 @@ Two modes:
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -18,6 +20,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -40,6 +43,28 @@ _ICON_FOLDER  = "\U0001F4C1"   # 📁
 _ICON_ZARR    = "\U0001F52C"   # 🔬
 _ICON_FILE    = "\U0001F4C4"   # 📄
 _ICON_HOME    = "\U0001F3E0"   # 🏠
+
+_RECENTS_MAX = 3
+_RECENTS_FILE = Path.home() / ".eubi_bridge" / "gui_recents_cache" / "recent_dirs.json"
+
+
+def _load_recents() -> list[str]:
+    try:
+        return json.loads(_RECENTS_FILE.read_text())
+    except Exception:
+        return []
+
+
+def _push_recent(path: str) -> None:
+    recents = _load_recents()
+    if path in recents:
+        recents.remove(path)
+    recents.insert(0, path)
+    try:
+        _RECENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _RECENTS_FILE.write_text(json.dumps(recents[:_RECENTS_MAX], indent=2))
+    except Exception:
+        pass
 
 
 def _pat_match(name: str, pat: str) -> bool:
@@ -127,6 +152,13 @@ class SidebarBrowser(QWidget):
         home_btn.clicked.connect(self._on_home)
         top.addWidget(home_btn)
 
+        self._recent_btn = QPushButton("⏱")
+        self._recent_btn.setFixedSize(24, 24)
+        self._recent_btn.setToolTip("Recent directories")
+        self._recent_btn.clicked.connect(self._show_recents_menu)
+        self._recent_btn.setEnabled(bool(_load_recents()))
+        top.addWidget(self._recent_btn)
+
         layout.addLayout(top)
 
         # ── Extra action bar (mode-specific) ──
@@ -206,6 +238,9 @@ class SidebarBrowser(QWidget):
             self._entries     = page_entries
             self._total       = total
             self._current_path = path
+            if page == 0:
+                _push_recent(path)
+                self._recent_btn.setEnabled(True)
 
         self._path_edit.setText(self._current_path)
         self._refresh_list()
@@ -310,6 +345,16 @@ class SidebarBrowser(QWidget):
 
     def _on_home(self):
         self._navigate(os.path.expanduser("~"))
+
+    def _show_recents_menu(self):
+        recents = _load_recents()
+        if not recents:
+            return
+        menu = QMenu(self)
+        for path in recents:
+            action = menu.addAction(f"{_ICON_FOLDER}  {path}")
+            action.triggered.connect(lambda checked, p=path: self._navigate(p))
+        menu.exec(self._recent_btn.mapToGlobal(self._recent_btn.rect().bottomLeft()))
 
     def _on_prev_page(self):
         if self._recursive_mode:

@@ -34,7 +34,7 @@ eubi show_config
 
 **Unix/macOS & Windows (same for both):**
 ```bash
-eubi configure_conversion --channel_intensity_limits from_array
+eubi configure conversion --channel_intensity_limits from_array
 eubi show_config
 ```
 
@@ -115,12 +115,12 @@ eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_6_laye
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_v0.5 --auto_chunk False --y_chunk 64 --x_chunk 64 --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
+eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_v0.5 --auto_chunk False --y_chunk 64 --x_chunk 64 --ome_zarr_version 0.5 --y_shard_coef 5 --x_shard_coef 5
 ```
 
 **Windows:**
 ```cmd
-eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_v0.5 --auto_chunk False --y_chunk 64 --x_chunk 64 --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
+eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_v0.5 --auto_chunk False --y_chunk 64 --x_chunk 64 --ome_zarr_version 0.5 --y_shard_coef 5 --x_shard_coef 5
 ```
 
 ---
@@ -421,12 +421,12 @@ Re-chunk and reformat existing OME-Zarr files:
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr $HOME/codash_output/multidim_dataset_concat_filtered_zarr/PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr $HOME/codash_output/multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
+eubi to_zarr $HOME/codash_output/multidim_dataset_concat_filtered_zarr/PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr $HOME/codash_output/multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --ome_zarr_version 0.5 --y_shard_coef 5 --x_shard_coef 5
 ```
 
 **Windows:**
 ```cmd
-eubi to_zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr\PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --zarr_format 3 --y_shard_coef 5 --x_shard_coef 5
+eubi to_zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr\PK2_ATH_5to20_20240705_MID_01_ch_cset.ome.zarr %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr_newchunks_newshards_v0.5 --auto_chunk False --ome_zarr_version 0.5 --y_shard_coef 5 --x_shard_coef 5
 ```
 
 ---

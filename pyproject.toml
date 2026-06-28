@@ -5,12 +5,12 @@ backend-path = ["."]
 
 [project]
 name = "eubi_bridge"
-version = "0.1.1"
+version = "0.1.2b8"
 description = "A package for converting datasets to OME-Zarr format."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 authors = [
-    {name = "Bugra Özdemir", email = "bugraa.ozdemir@gmail.com"}
+    {name = "Bugra Ã–zdemir", email = "bugraa.ozdemir@gmail.com"}
 ]
 license = "MIT"
 dependencies = [
@@ -63,10 +63,22 @@ dependencies = [
     "h5py",
     "fire>=0.0.0",
 ]
+# PyTorch must be installed separately to match the local CUDA version.
+# CPU-only:  pip install torch
+# CUDA 12.x: pip install torch --index-url https://download.pytorch.org/whl/cu121
+# Or use the convenience extra (CPU-only fallback):
+#   pip install "eubi_bridge[deep]"
+
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
+
+[project.optional-dependencies]
+flow     = ["eubi-flow>=0.1.2b8"]
+annotate = ["eubi-annotate>=0.1.2b8"]
+deep     = ["eubi-deep>=0.1.2b8"]
+docs     = ["mkdocs-material>=9.5", "pymdown-extensions>=10.0"]
 
 [tool.setuptools.package-data]
 eubi_bridge = [

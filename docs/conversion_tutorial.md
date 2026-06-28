@@ -27,10 +27,11 @@ To convert each TIFF into a separate OME-Zarr container (unary conversion):
 eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr
 ```  
 
-To create OME-Zarr version 0.5 (with zarr version 3), add the `--zarr_format 3` argument to the command:
+By default EuBI-Bridge writes OME-Zarr **0.4** (backed by Zarr v2). To create OME-Zarr
+**0.5** (backed by Zarr v3, which enables sharding), add the `--ome_zarr_version 0.5` argument:
 
 ```bash
-eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr --zarr_format 3
+eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr --ome_zarr_version 0.5
 ```  
 
 This produces:  

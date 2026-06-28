@@ -3,7 +3,7 @@ Conversion worker — manages a spawned conversion subprocess from a QThread.
 
 The actual conversion (bridge.to_zarr) runs in a dedicated child process so
 that cancel() can reliably kill the entire process tree — including all
-ProcessPoolExecutor workers spawned by converter.py — without depending on
+ProcessPoolExecutor workers spawned by dispatcher.py — without depending on
 cooperation from asyncio.gather or concurrent.futures.
 """
 from __future__ import annotations
@@ -30,6 +30,23 @@ _ANSI_ESC = _re.compile(
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
+
+def _gb_to_memory_str(val) -> str:
+    """Float GB → '4GB' or '4.5GB' string for Dask memory_per_worker."""
+    try:
+        gb = float(val)
+        return f"{int(gb)}GB" if gb == int(gb) else f"{gb:.1f}GB"
+    except (TypeError, ValueError):
+        return str(val) if val else "4GB"
+
+
+def _gb_to_jvm_str(val) -> str:
+    """Float GB → '4g' string for JVM -Xmx (rounded to nearest integer GB)."""
+    try:
+        return f"{max(1, round(float(val)))}g"
+    except (TypeError, ValueError):
+        return str(val) if val else "2g"
+
 
 def _parse_range(range_str: str):
     if not range_str:
@@ -77,7 +94,14 @@ def _build_kwargs(config: dict) -> dict:
     meta_config      = config.get("metadata", {})
     compression      = conv_config.get("compression", {})
 
-    zarr_format = conv_config.get("zarrFormat", 2)
+    # The GUI selects an OME-Zarr version; derive the zarr container format from
+    # it (kept for the compressor branch + backwards compatibility).  Falls back
+    # to the legacy zarrFormat field for old saved configs.
+    ome_zarr_version = conv_config.get("omeZarrVersion")
+    if ome_zarr_version:
+        zarr_format = 3 if str(ome_zarr_version) == "0.5" else 2
+    else:
+        zarr_format = conv_config.get("zarrFormat", 2)
     compressor  = compression.get("codec", "blosc")
     if compressor == "none":
         compressor = None
@@ -96,31 +120,43 @@ def _build_kwargs(config: dict) -> dict:
     else:
         compressor_params = {"level": compression.get("level", 5)}
 
-    scene_idx  = "all" if reader_config.get("readAllScenes", True)  else _parse_index(reader_config.get("sceneIndices", "0"))
-    mosaic_idx = "all" if reader_config.get("readAllTiles", True)   else _parse_index(reader_config.get("mosaicTileIndices", "0"))
+    scene_idx  = "all" if reader_config.get("readAllScenes", True)        else _parse_index(reader_config.get("sceneIndices", "0"))
+    mosaic_idx = "all" if reader_config.get("readAllTiles", True)          else _parse_index(reader_config.get("mosaicTileIndices", "0"))
+    view_idx   = "all" if reader_config.get("readAllViews", True)          else _parse_index(reader_config.get("viewIndices", "0"))
+    illu_idx   = "all" if reader_config.get("readAllIlluminations", True)  else _parse_index(reader_config.get("illuminationIndices", "0"))
 
     kwargs: dict = {
         "max_workers":              cluster_config.get("maxWorkers", 4),
         "queue_size":               cluster_config.get("queueSize", 10),
         "region_size_mb":           cluster_config.get("regionSizeMb", 64),
         "max_concurrency":          cluster_config.get("maxConcurrency", 4),
+        "max_concurrent_downscale_layers": cluster_config.get("maxConcurrentDownscaleLayers", 3),
         "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 1),
-        "memory_per_worker":        cluster_config.get("memoryPerWorker", "4GB"),
+        "memory_per_worker":        _gb_to_memory_str(cluster_config.get("memoryPerWorker", 4)),
+        "bf_tile_size_mb":          cluster_config.get("bfTileSizeMb", 512.0),
+        "jvm_memory":               _gb_to_jvm_str(cluster_config.get("jvmMemory", 2)),
+        "bf_read_concurrency":      cluster_config.get("bfReadConcurrency", 4),
         "on_local_cluster":         cluster_config.get("useLocalDask", False),
         "on_slurm":                 cluster_config.get("useSlurm", False),
         "slurm_partition":          cluster_config.get("slurmPartition") or None,
         "slurm_account":            cluster_config.get("slurmAccount") or None,
         "slurm_time":               cluster_config.get("slurmTime", "24:00:00"),
+        "slurm_sif_path":           cluster_config.get("slurmSifPath") or None,
+        "slurm_worker_timeout":     cluster_config.get("slurmWorkerTimeout", 300),
         "scene_index":              scene_idx,
         "mosaic_tile_index":        mosaic_idx,
         "as_mosaic":                reader_config.get("readAsMosaic", False),
-        "view_index":               _parse_index(reader_config.get("viewIndex", "0")),
+        "view_index":               view_idx,
         "phase_index":              _parse_index(reader_config.get("phaseIndex", "0")),
-        "illumination_index":       _parse_index(reader_config.get("illuminationIndex", "0")),
+        "illumination_index":       illu_idx,
+        "concat_views":             reader_config.get("concatViews", False),
+        "concat_illuminations":     reader_config.get("concatIlluminations", False),
         "rotation_index":           _parse_index(reader_config.get("rotationIndex", "0")),
         "sample_index":             _parse_index(reader_config.get("sampleIndex", "0")),
+        "force_bioformats":         reader_config.get("forceBioformats", False),
         "verbose":                  conv_config.get("verbose", False),
         "zarr_format":              zarr_format,
+        "ome_zarr_version":         ome_zarr_version,
         "auto_chunk":               conv_config.get("autoChunk", True),
         "time_chunk":               conv_config.get("chunkTime", 1),
         "channel_chunk":            conv_config.get("chunkChannel", 1),
@@ -148,6 +184,7 @@ def _build_kwargs(config: dict) -> dict:
         "n_layers":                 None if downscale_config.get("autoDetectLayers", True) else downscale_config.get("numLayers", 4),
         "min_dimension_size":       downscale_config.get("minDimSize", 64),
         "downscale_method":         downscale_config.get("downscaleMethod", "simple"),
+        "keep_existing_resolutions": downscale_config.get("keepExistingResolutions", False),
         "time_scale_factor":        downscale_config.get("scaleTime", 1),
         "channel_scale_factor":     downscale_config.get("scaleChannel", 1),
         "z_scale_factor":           downscale_config.get("scaleZ", 1),

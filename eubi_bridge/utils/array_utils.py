@@ -122,30 +122,56 @@ def sizeof(array, unit: str = 'gb') -> float:
         return bytes_size
 
 
+def get_array_chunks(arr) -> Optional[Tuple[int, ...]]:
+    """Extract a flat chunk-shape tuple from any supported array type.
+
+    Handles:
+    - ``zarr.Array``       — ``.chunks`` is already a flat tuple.
+    - ``dask.Array``       — ``.chunksize`` returns the first-chunk sizes per dim.
+    - TensorStore spec     — ``.chunk_layout.read_chunk.shape``.
+    - ``DynamicArray``     — ``.chunks`` property (may itself delegate to zarr/ts).
+
+    Returns ``None`` when no chunk information can be retrieved so callers can
+    fall back gracefully.
+    """
+    # TensorStore has chunk_layout; check first to avoid ambiguity with .chunks
+    if hasattr(arr, 'chunk_layout'):
+        try:
+            return tuple(arr.chunk_layout.read_chunk.shape)
+        except Exception:
+            pass
+    # dask.Array: .chunksize gives first-chunk sizes per dim (flat tuple)
+    if hasattr(arr, 'chunksize'):
+        return tuple(arr.chunksize)
+    # zarr.Array and DynamicArray: .chunks is flat tuple of ints
+    if hasattr(arr, 'chunks'):
+        chunks = arr.chunks
+        if chunks is not None:
+            # Dask-style tuple-of-tuples? Flatten to first element per dim.
+            if chunks and isinstance(chunks[0], tuple):
+                return tuple(c[0] for c in chunks)
+            return tuple(chunks)
+    return None
+
+
 def get_chunk_shape(arr,
-                    default_chunks: Optional[Tuple[int, ...]] = None    
+                    default_chunks: Optional[Tuple[int, ...]] = None
                     ) -> Tuple[int, ...]:
     """Extract chunk shape from various array types.
-    
+
     Args:
         arr: Dask, Zarr, or array-like object
-    
+
     Returns:
         Tuple of chunk dimensions
     """
-    if hasattr(arr, 'chunk_layout'):
-        chunks = arr.chunk_layout.read_chunk.shape
-    elif hasattr(arr, 'chunksize'):
-        chunks = arr.chunksize
-    elif hasattr(arr, 'chunks'):
-        chunks = arr.chunks
-    else:
-        if default_chunks is not None:
-            chunks = default_chunks    
-        else:
-            logger.warning('Array has no chunk shape, using full shape')
-            chunks = arr.shape
-    return chunks
+    chunks = get_array_chunks(arr)
+    if chunks is not None:
+        return chunks
+    if default_chunks is not None:
+        return default_chunks
+    logger.warning('Array has no chunk shape, using full shape')
+    return tuple(arr.shape)
 
 
 def get_chunksize_from_array(arr) -> str:

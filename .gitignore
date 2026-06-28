@@ -28,6 +28,18 @@ conda-recipe/.cache/
 .DS_Store
 Thumbs.db
 
+# Legacy local-only extension locations (code migrating to packages/)
+eubi_bridge/workflows/
+eubi_bridge/extensions/
+
+# Sub-package build artefacts
+packages/eubi-flow/dist/
+packages/eubi-flow/*.egg-info/
+packages/eubi-annotate/dist/
+packages/eubi-annotate/*.egg-info/
+packages/eubi-deep/dist/
+packages/eubi-deep/*.egg-info/
+
 .vscode/
 .idea/
 *.swp
