@@ -2,16 +2,14 @@
 
 Click any command card below to expand its full parameter reference.
 
-!!! attention "Info" 
+!!! attention "Info"
     Note that all cards below are auto-generated from `EuBIBridge` methods and Pydantic config models. Types, defaults, and valid ranges are extracted directly from the source.
-
 
 !!! tip "Tip: Named-config chaining"
     Prefix any command with `with_config NAME` to use a saved config profile:
     ```shell
     eubi with_config hpc to_zarr /data/input /data/output --ome_zarr_version 0.5
     ```
-
 
 ??? command "**`to_zarr`**&ensp;—&ensp;Convert image data to OME-Zarr format"
 

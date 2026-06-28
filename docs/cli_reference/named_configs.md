@@ -1,8 +1,9 @@
 # Named Configs
 
-Auto-generated from `EuBIBridge` methods and Pydantic config models.
-Types, defaults, and valid ranges are extracted directly from the source —
-click any command card to expand its full parameter reference.
+Click any command card below to expand its full parameter reference.
+
+!!! attention "Info"
+    Note that all cards below are auto-generated from `EuBIBridge` methods and Pydantic config models. Types, defaults, and valid ranges are extracted directly from the source.
 
 ??? command "**`with_config`**&ensp;—&ensp;Return a new EuBIBridge backed by the named config file"
 
