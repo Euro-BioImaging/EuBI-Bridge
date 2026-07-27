@@ -1,0 +1,47 @@
+*.sif
+venv/
+testvenv/
+quarantine/
+.git/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+site/
+.tox/
+*.egg-info/
+dist/
+build/
+site/
+
+# Pre-bundled per-platform JDKs (e.g. the Windows jdk/win32, ~300 MB).
+# CONTAINER-ONLY exclusion: .dockerignore is read solely by `docker build`, so
+# this never affects native installs — the working tree keeps its JDK and a
+# native `pip install .` on Windows still uses jdk/win32 as usual.
+# Inside the (Linux) image the custom _build_backend re-downloads the correct
+# Linux JDK at build time during `pip install /src`, so shipping any host JDK
+# here would just be dead weight.
+eubi_bridge/bioformats/jdk/
+
+alternative_dockerfile/
+
+# Dev-/non-runtime material that must not bloat the image. None of this is
+# needed to build or run eubi-bridge (the build only needs pyproject.toml,
+# setup.py, _build_backend.py, README.md and the eubi_bridge/ package).
+# NOTE: .dockerignore has no inline comments — one pattern per line.
+# stale extracted package copy
+eubi_bridge-0.1.0rc5/
+# sub-packages installed from PyPI via extras, not from a local path
+packages/
+# incubating sub-packages kept locally for future work, not part of this build
+incubation/
+tests/
+docs/
+# abcdesktop-specific image, not this build
+alternative_dockerfile/
+test_docker.sh
+mkdocs.yml
+properdocs.yml
+environment.yml
+extras/

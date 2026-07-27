@@ -70,6 +70,8 @@ pytest_debug.log
 tests/_tmp/
 react_gui/
 
+alternative_dockerfile/
+
 *.prof
 *.lprof
 .cache/
@@ -92,3 +94,7 @@ build_log.txt
 
 # Quarantine
 quarantine/
+# Incubation: sub-packages split out of this repo (see commit 012b61e).
+# Kept locally for future work; not tracked and not shipped.
+incubation/
+extras/
