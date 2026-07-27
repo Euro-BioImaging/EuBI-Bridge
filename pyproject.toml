@@ -5,7 +5,7 @@ backend-path = ["."]
 
 [project]
 name = "eubi_bridge"
-version = "0.1.2b8"
+version = "0.1.2b9"
 description = "A package for converting datasets to OME-Zarr format."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"

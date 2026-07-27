@@ -1707,7 +1707,6 @@ class EuBIBridge:
 
     # ── workflow sub-namespace ────────────────────────────────────────────
 
-    @property
     def flow(self) -> "EuBIFlow":
         """Workflow operations — ``eubi flow create / run / select / list_waves``."""
         try:

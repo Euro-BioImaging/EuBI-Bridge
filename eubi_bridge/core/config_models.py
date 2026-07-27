@@ -192,6 +192,9 @@ class ReaderConfig(BaseModel):
     def _validate_scene_index(cls, v):
         if isinstance(v, int) or v == 'all':
             return v
+        if isinstance(v, (tuple, list)):
+            parts = [int(x) for x in v]
+            return parts[0] if len(parts) == 1 else ','.join(str(x) for x in parts)
         if isinstance(v, str):
             try:
                 parts = [int(x.strip()) for x in v.split(',')]
@@ -205,6 +208,9 @@ class ReaderConfig(BaseModel):
     def _validate_multi_index(cls, v):
         if isinstance(v, int) or v == 'all':
             return v
+        if isinstance(v, (tuple, list)):
+            parts = [int(x) for x in v]
+            return parts[0] if len(parts) == 1 else ','.join(str(x) for x in parts)
         if isinstance(v, str):
             try:
                 parts = [int(x.strip()) for x in v.split(',')]
@@ -221,6 +227,9 @@ class ReaderConfig(BaseModel):
     def _validate_mosaic_tile_index(cls, v):
         if v is None or isinstance(v, int) or v == 'all':
             return v
+        if isinstance(v, (tuple, list)):
+            parts = [int(x) for x in v]
+            return parts[0] if len(parts) == 1 else ','.join(str(x) for x in parts)
         if isinstance(v, str):
             try:
                 parts = [int(x.strip()) for x in v.split(',')]

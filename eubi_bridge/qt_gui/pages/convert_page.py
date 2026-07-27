@@ -247,12 +247,24 @@ class ConvertPage(QWidget):
         _, lay = self._scrolled_tab("Cluster")
 
         _, self._max_workers = _labeled_spin("Max Workers:", 1, 256, 4)
+        self._max_workers.setToolTip(
+            "Maximum number of parallel worker processes used for conversion.\n"
+            "Higher values speed up batch jobs but consume more CPU and RAM."
+        )
         lay.addLayout(_row(QLabel("Max Workers:"), self._max_workers))
 
         _, self._queue_size = _labeled_spin("Queue Size:", 1, 500, 4)
+        self._queue_size.setToolTip(
+            "Maximum number of conversion jobs that can be queued at once.\n"
+            "Jobs beyond this limit are held until a worker slot opens."
+        )
         lay.addLayout(_row(QLabel("Queue Size:"), self._queue_size))
 
         _, self._max_concurrency = _labeled_spin("Max Concurrency:", 1, 128, 4)
+        self._max_concurrency.setToolTip(
+            "Maximum number of chunk-write operations allowed to run concurrently\n"
+            "inside a single worker. Reduce if you hit memory or I/O bottlenecks."
+        )
         lay.addLayout(_row(QLabel("Max Concurrency:"), self._max_concurrency))
 
         _, self._max_concurrent_downscale_layers = _labeled_spin("Max Concurrent Downscale Layers:", 1, 16, 3)
@@ -263,6 +275,10 @@ class ConvertPage(QWidget):
         lay.addLayout(_row(QLabel("Max Concurrent Downscale Layers:"), self._max_concurrent_downscale_layers))
 
         _, self._max_concurrent_scenes = _labeled_spin("Max Concurrent Scenes:", 1, 64, 1)
+        self._max_concurrent_scenes.setToolTip(
+            "Maximum number of scenes (series) that are converted in parallel\n"
+            "within a single multi-scene file. Reduce for very large scenes."
+        )
         lay.addLayout(_row(QLabel("Max Concurrent Scenes:"), self._max_concurrent_scenes))
 
         self._region_size_mb = QDoubleSpinBox()
@@ -270,6 +286,10 @@ class ConvertPage(QWidget):
         self._region_size_mb.setValue(256.0)
         self._region_size_mb.setSingleStep(32.0)
         self._region_size_mb.setDecimals(1)
+        self._region_size_mb.setToolTip(
+            "Size (in MB) of each read region when streaming pixel data from disk.\n"
+            "Larger values can improve throughput at the cost of peak memory usage."
+        )
         lay.addLayout(_form_row("Region Size (MB):", self._region_size_mb))
 
         self._memory_per_worker = QDoubleSpinBox()
@@ -277,6 +297,10 @@ class ConvertPage(QWidget):
         self._memory_per_worker.setValue(4.0)
         self._memory_per_worker.setSingleStep(1.0)
         self._memory_per_worker.setDecimals(1)
+        self._memory_per_worker.setToolTip(
+            "Memory (GB) requested per worker when using a Local Dask cluster or SLURM.\n"
+            "Has no effect when running without a distributed cluster."
+        )
         # Memory/Worker only applies to the LocalCluster / SLURM backends, so the
         # row is wrapped in a container and shown only when one of them is active.
         self._memory_row = QWidget()
@@ -284,9 +308,17 @@ class ConvertPage(QWidget):
         lay.addWidget(self._memory_row)
 
         self._use_local_dask = QCheckBox("Use Local Dask")
+        self._use_local_dask.setToolTip(
+            "Spin up a Dask LocalCluster on this machine to parallelize conversion\n"
+            "across multiple CPU cores. Useful for large files on a workstation."
+        )
         lay.addWidget(self._use_local_dask)
 
         self._use_slurm = QCheckBox("Use SLURM")
+        self._use_slurm.setToolTip(
+            "Submit conversion workers to a SLURM HPC cluster.\n"
+            "Configure partition, account, and time limit in the fields below."
+        )
         lay.addWidget(self._use_slurm)
 
         def _update_memory_visibility(*_):
@@ -305,18 +337,35 @@ class ConvertPage(QWidget):
 
         self._slurm_partition = QLineEdit()
         self._slurm_partition.setPlaceholderText("e.g. gpu, cpu (leave blank for default)")
+        self._slurm_partition.setToolTip(
+            "SLURM partition (queue) to submit jobs to.\n"
+            "Leave blank to use the cluster's default partition."
+        )
         _slurm_row_partition = _slurm_row("SLURM Partition:", self._slurm_partition)
 
         self._slurm_account = QLineEdit()
         self._slurm_account.setPlaceholderText("e.g. myproject (leave blank for default)")
+        self._slurm_account.setToolTip(
+            "SLURM billing account to charge compute time to.\n"
+            "Leave blank if your cluster does not require an account."
+        )
         _slurm_row_account = _slurm_row("SLURM Account:", self._slurm_account)
 
         self._slurm_time = QLineEdit("24:00:00")
         self._slurm_time.setPlaceholderText("HH:MM:SS")
+        self._slurm_time.setToolTip(
+            "Maximum wall-clock time for each SLURM worker job (HH:MM:SS).\n"
+            "Jobs that exceed this limit are cancelled by the scheduler."
+        )
         _slurm_row_time = _slurm_row("SLURM Time Limit:", self._slurm_time)
 
         self._slurm_sif_path = QLineEdit()
         self._slurm_sif_path.setPlaceholderText("e.g. /path/to/eubi-bridge.sif (leave blank to use host Python)")
+        self._slurm_sif_path.setToolTip(
+            "Path to an Apptainer/Singularity SIF container image.\n"
+            "Workers will run inside this container on compute nodes.\n"
+            "Leave blank to use the Python environment available on the nodes."
+        )
         _slurm_row_sif = _slurm_row("Apptainer SIF:", self._slurm_sif_path)
 
         self._slurm_worker_timeout = QSpinBox()
@@ -354,9 +403,17 @@ class ConvertPage(QWidget):
         self._bf_tile_size_mb.setRange(1.0, 65536.0)
         self._bf_tile_size_mb.setValue(512.0)
         self._bf_tile_size_mb.setSingleStep(64.0)
+        self._bf_tile_size_mb.setToolTip(
+            "Size (MB) of each tile read by the Bio-Formats tiled reader.\n"
+            "Larger tiles improve throughput; smaller tiles reduce peak memory."
+        )
         bf_lay.addLayout(_form_row("BF Tile Size (MB):", self._bf_tile_size_mb))
 
         _, self._bf_read_concurrency = _labeled_spin("BF Read Concurrency:", 1, 64, 4)
+        self._bf_read_concurrency.setToolTip(
+            "Number of tile-read calls that Bio-Formats issues concurrently.\n"
+            "Increase for fast NVMe storage; keep low for network file systems."
+        )
         bf_lay.addLayout(_row(QLabel("BF Read Concurrency:"), self._bf_read_concurrency))
 
         self._jvm_memory = QDoubleSpinBox()
@@ -364,6 +421,10 @@ class ConvertPage(QWidget):
         self._jvm_memory.setValue(2.0)
         self._jvm_memory.setSingleStep(1.0)
         self._jvm_memory.setDecimals(1)
+        self._jvm_memory.setToolTip(
+            "Heap memory (GB) allocated to the Java Virtual Machine that\n"
+            "Bio-Formats runs inside. Increase for very large files (e.g. > 10 GB)."
+        )
         bf_lay.addLayout(_form_row("JVM Memory (GB):", self._jvm_memory))
 
         lay.addWidget(bf_group)
@@ -378,9 +439,17 @@ class ConvertPage(QWidget):
         scene_lay = QVBoxLayout(scene_group)
         self._read_all_scenes = QCheckBox("Read All")
         self._read_all_scenes.setChecked(True)
+        self._read_all_scenes.setToolTip(
+            "Convert every scene (series) found in the file.\n"
+            "Uncheck to specify a subset of scene indices below."
+        )
         scene_lay.addWidget(self._read_all_scenes)
         self._scene_indices = QLineEdit()
         self._scene_indices.setPlaceholderText("0,1,2  (blank = all)")
+        self._scene_indices.setToolTip(
+            "Comma-separated list of scene (series) indices to convert.\n"
+            "Only active when 'Read All' is unchecked. Example: 0,2,4"
+        )
         scene_lay.addLayout(_form_row("Indices:", self._scene_indices))
         self._read_all_scenes.toggled.connect(
             lambda c: self._scene_indices.setEnabled(not c)
@@ -393,15 +462,27 @@ class ConvertPage(QWidget):
         tile_lay = QVBoxLayout(tile_group)
         self._read_all_tiles = QCheckBox("Read All")
         self._read_all_tiles.setChecked(True)
+        self._read_all_tiles.setToolTip(
+            "Convert every tile in a tiled/mosaic acquisition.\n"
+            "Uncheck to specify individual tile indices below."
+        )
         tile_lay.addWidget(self._read_all_tiles)
         self._mosaic_tile_indices = QLineEdit()
         self._mosaic_tile_indices.setPlaceholderText("0,1  (blank = all)")
+        self._mosaic_tile_indices.setToolTip(
+            "Comma-separated list of tile (mosaic position) indices to convert.\n"
+            "Only active when 'Read All' is unchecked. Example: 0,1"
+        )
         tile_lay.addLayout(_form_row("Indices:", self._mosaic_tile_indices))
         self._read_all_tiles.toggled.connect(
             lambda c: self._mosaic_tile_indices.setEnabled(not c)
         )
         self._mosaic_tile_indices.setEnabled(False)
         self._read_as_mosaic = QCheckBox("Read as Mosaic (stitch tiles)")
+        self._read_as_mosaic.setToolTip(
+            "Stitch all tiles into a single continuous mosaic image at read time.\n"
+            "When unchecked, each tile is saved as a separate OME-Zarr output."
+        )
         tile_lay.addWidget(self._read_as_mosaic)
         lay.addWidget(tile_group)
 
@@ -410,15 +491,27 @@ class ConvertPage(QWidget):
         view_lay = QVBoxLayout(view_group)
         self._read_all_views = QCheckBox("Read All")
         self._read_all_views.setChecked(True)
+        self._read_all_views.setToolTip(
+            "Export every view (angle/camera position) in a multi-view acquisition.\n"
+            "Uncheck to convert only the view indices specified below."
+        )
         view_lay.addWidget(self._read_all_views)
         self._view_indices = QLineEdit()
         self._view_indices.setPlaceholderText("0,1  (blank = all)")
+        self._view_indices.setToolTip(
+            "Comma-separated list of view indices to convert.\n"
+            "Only active when 'Read All' is unchecked. Example: 0,1"
+        )
         view_lay.addLayout(_form_row("Indices:", self._view_indices))
         self._read_all_views.toggled.connect(
             lambda c: self._view_indices.setEnabled(not c)
         )
         self._view_indices.setEnabled(False)
         self._concat_views = QCheckBox("Concatenate along Channels")
+        self._concat_views.setToolTip(
+            "Merge multiple views into a single OME-Zarr output by stacking them\n"
+            "along the channel axis, instead of writing one file per view."
+        )
         view_lay.addWidget(self._concat_views)
         lay.addWidget(view_group)
 
@@ -427,15 +520,27 @@ class ConvertPage(QWidget):
         illu_lay = QVBoxLayout(illu_group)
         self._read_all_illuminations = QCheckBox("Read All")
         self._read_all_illuminations.setChecked(True)
+        self._read_all_illuminations.setToolTip(
+            "Export every illumination direction in the acquisition.\n"
+            "Uncheck to convert only the illumination indices specified below."
+        )
         illu_lay.addWidget(self._read_all_illuminations)
         self._illumination_indices = QLineEdit()
         self._illumination_indices.setPlaceholderText("0,1  (blank = all)")
+        self._illumination_indices.setToolTip(
+            "Comma-separated list of illumination indices to convert.\n"
+            "Only active when 'Read All' is unchecked. Example: 0,1"
+        )
         illu_lay.addLayout(_form_row("Indices:", self._illumination_indices))
         self._read_all_illuminations.toggled.connect(
             lambda c: self._illumination_indices.setEnabled(not c)
         )
         self._illumination_indices.setEnabled(False)
         self._concat_illuminations = QCheckBox("Concatenate along Channels")
+        self._concat_illuminations.setToolTip(
+            "Merge multiple illuminations into a single OME-Zarr output by stacking\n"
+            "them along the channel axis, instead of writing one file per illumination."
+        )
         illu_lay.addWidget(self._concat_illuminations)
         lay.addWidget(illu_group)
 
@@ -443,12 +548,27 @@ class ConvertPage(QWidget):
         other_group = QGroupBox("Other Indices (Experimental)")
         other_lay = QVBoxLayout(other_group)
         self._phase_index = QLineEdit("0")
+        self._phase_index.setToolTip(
+            "Phase index to read in formats that capture multiple\n"
+            "acquisition phases (e.g. structured illumination microscopy)."
+        )
         other_lay.addLayout(_form_row("Phase Index:", self._phase_index))
+        _other_tooltips = {
+            "_rotation_index": (
+                "Rotation index for light-sheet or multi-angle formats that\n"
+                "store each sample rotation as a separate dataset."
+            ),
+            "_sample_index": (
+                "Sample index in formats where multiple biological samples\n"
+                "are stored inside a single file."
+            ),
+        }
         for label, attr in [
             ("Rotation Index:", "_rotation_index"),
             ("Sample Index:",   "_sample_index"),
         ]:
             edit = QLineEdit("0")
+            edit.setToolTip(_other_tooltips[attr])
             setattr(self, attr, edit)
             other_lay.addLayout(_form_row(label, edit))
         lay.addWidget(other_group)
@@ -475,8 +595,36 @@ class ConvertPage(QWidget):
         self._data_type = QComboBox()
         for t in ("auto", "uint8", "uint16", "uint32", "float32", "float64"):
             self._data_type.addItem(t)
+        self._data_type.setToolTip(
+            "Output pixel data type.\n"
+            "'auto' preserves the source bit-depth (recommended).\n"
+            "Choose a specific type to cast pixel values during conversion."
+        )
         lay.addLayout(_form_row("Data Type:", self._data_type))
 
+        _cb_tooltips = {
+            "_verbose": (
+                "Print detailed progress messages for each chunk written.\n"
+                "Useful for debugging; disable for cleaner logs in production."
+            ),
+            "_overwrite": (
+                "Overwrite an existing OME-Zarr output at the destination path.\n"
+                "When unchecked, conversion is skipped if the output already exists."
+            ),
+            "_squeeze": (
+                "Remove size-1 dimensions from the output array.\n"
+                "For example, a single time-point dataset stored as T=1,C,Z,Y,X\n"
+                "becomes C,Z,Y,X when squeezed."
+            ),
+            "_save_omexml": (
+                "Write a copy of the source OME-XML metadata as a sidecar\n"
+                ".xml file alongside the OME-Zarr output."
+            ),
+            "_skip_dask": (
+                "Read and write data synchronously without Dask.\n"
+                "Useful for small files or when Dask overhead outweighs its benefit."
+            ),
+        }
         for attr, label in [
             ("_verbose",    "Verbose"),
             ("_overwrite",  "Overwrite"),
@@ -485,6 +633,7 @@ class ConvertPage(QWidget):
             ("_skip_dask",  "Skip Dask"),
         ]:
             cb = QCheckBox(label)
+            cb.setToolTip(_cb_tooltips[attr])
             setattr(self, attr, cb)
             lay.addWidget(cb)
         self._squeeze.setChecked(True)
@@ -497,11 +646,20 @@ class ConvertPage(QWidget):
         self._codec = QComboBox()
         for c in ("blosc", "gzip", "zstd", "lz4", "none"):
             self._codec.addItem(c)
+        self._codec.setToolTip(
+            "Compression codec applied to every Zarr chunk.\n"
+            "'blosc' is the fastest general-purpose choice (configurable below).\n"
+            "'none' stores raw uncompressed data."
+        )
         comp_layout.addLayout(_form_row("Codec:", self._codec))
 
         self._comp_level = QSpinBox()
         self._comp_level.setRange(0, 22)
         self._comp_level.setValue(5)
+        self._comp_level.setToolTip(
+            "Compression level (0 = fastest / least compressed, higher = smaller files).\n"
+            "For blosc/lz4: 0–9. For gzip/zstd: 0–9 (gzip) or 0–22 (zstd)."
+        )
         comp_layout.addLayout(_form_row("Level:", self._comp_level))
 
         self._blosc_group = QGroupBox("Blosc options")
@@ -510,12 +668,21 @@ class ConvertPage(QWidget):
         self._blosc_inner = QComboBox()
         for c in ("lz4", "lz4hc", "zstd", "zlib", "blosclz"):
             self._blosc_inner.addItem(c)
+        self._blosc_inner.setToolTip(
+            "Inner codec that Blosc uses to compress each chunk.\n"
+            "'lz4' is very fast; 'zstd' gives better ratios at moderate speed."
+        )
         blosc_layout.addLayout(_form_row("Inner codec:", self._blosc_inner))
 
         self._blosc_shuffle = QComboBox()
         for s in ("noshuffle", "shuffle", "bitshuffle"):
             self._blosc_shuffle.addItem(s)
         self._blosc_shuffle.setCurrentIndex(1)
+        self._blosc_shuffle.setToolTip(
+            "Byte/bit shuffle filter applied before compression.\n"
+            "'shuffle' improves compression of integer data.\n"
+            "'bitshuffle' works better for floating-point or noisy data."
+        )
         blosc_layout.addLayout(_form_row("Shuffle:", self._blosc_shuffle))
 
         comp_layout.addWidget(self._blosc_group)
@@ -530,6 +697,10 @@ class ConvertPage(QWidget):
 
         self._auto_chunk = QCheckBox("Auto Chunk")
         self._auto_chunk.setChecked(True)
+        self._auto_chunk.setToolTip(
+            "Automatically compute chunk sizes to hit the target chunk size (MB).\n"
+            "Uncheck to specify chunk dimensions manually."
+        )
         chunk_layout.addWidget(self._auto_chunk)
 
         self._target_chunk_mb = QDoubleSpinBox()
@@ -537,6 +708,10 @@ class ConvertPage(QWidget):
         self._target_chunk_mb.setDecimals(2)
         self._target_chunk_mb.setSingleStep(0.1)
         self._target_chunk_mb.setValue(1.0)
+        self._target_chunk_mb.setToolTip(
+            "Desired uncompressed size (MB) for each Zarr chunk when Auto Chunk\n"
+            "is enabled. Typically 0.5–4 MB gives good viewer performance."
+        )
         chunk_layout.addLayout(_form_row("Target Chunk MB:", self._target_chunk_mb))
 
         self._manual_chunk_widget = QWidget()
@@ -544,10 +719,18 @@ class ConvertPage(QWidget):
         mcw_layout.setContentsMargins(0, 0, 0, 0)
         mcw_layout.setSpacing(3)
         self._chunk_spins: dict[str, QSpinBox] = {}
+        _chunk_dim_tips = {
+            "T": "Number of time-points per chunk. Usually 1 for time-lapse data.",
+            "C": "Number of channels per chunk. Usually 1 to allow per-channel access.",
+            "Z": "Number of z-planes per chunk. Larger values help volumetric rendering.",
+            "Y": "Number of rows (pixels) per chunk in the Y direction.",
+            "X": "Number of columns (pixels) per chunk in the X direction.",
+        }
         for dim, default in [("T", 1), ("C", 1), ("Z", 96), ("Y", 96), ("X", 96)]:
             sp = QSpinBox()
             sp.setRange(1, 4096)
             sp.setValue(default)
+            sp.setToolTip(_chunk_dim_tips[dim])
             self._chunk_spins[dim.lower()] = sp
             mcw_layout.addLayout(_form_row(f"Chunk {dim}:", sp))
         chunk_layout.addWidget(self._manual_chunk_widget)
@@ -568,6 +751,11 @@ class ConvertPage(QWidget):
         self._ome_zarr_version = QComboBox()
         self._ome_zarr_version.addItem("0.4", 2)
         self._ome_zarr_version.addItem("0.5", 3)
+        self._ome_zarr_version.setToolTip(
+            "OME-Zarr (NGFF) specification version for the output.\n"
+            "v0.4 uses Zarr format 2 and is compatible with most viewers.\n"
+            "v0.5 uses Zarr format 3 with optional sharding support."
+        )
         fmt_layout.addLayout(_form_row("OME-Zarr Version:", self._ome_zarr_version))
 
         self._shard_widget = QWidget()
@@ -578,10 +766,22 @@ class ConvertPage(QWidget):
         shard_label.setStyleSheet("font-weight: bold; font-size: 12px; color: #aaa; margin-top: 4px;")
         shard_widget_layout.addWidget(shard_label)
         self._shard_spins: dict[str, QSpinBox] = {}
+        _shard_dim_tips = {
+            "T": "Number of chunks along T grouped into one shard file.",
+            "C": "Number of chunks along C grouped into one shard file.",
+            "Z": "Number of chunks along Z grouped into one shard file.",
+            "Y": "Number of chunks along Y grouped into one shard file.",
+            "X": "Number of chunks along X grouped into one shard file.",
+        }
         for dim, default in [("T", 1), ("C", 1), ("Z", 3), ("Y", 3), ("X", 3)]:
             sp = QSpinBox()
             sp.setRange(1, 256)
             sp.setValue(default)
+            sp.setToolTip(
+                f"{_shard_dim_tips[dim]}\n"
+                "Sharding reduces file-system object count at the cost of\n"
+                "requiring random-access reads within each shard file."
+            )
             self._shard_spins[dim.lower()] = sp
             shard_widget_layout.addLayout(_form_row(f"Shard {dim}:", sp))
         fmt_layout.addWidget(self._shard_widget)
@@ -595,9 +795,17 @@ class ConvertPage(QWidget):
         range_group = QGroupBox("Dimension Ranges (start,stop)")
         range_layout = QVBoxLayout(range_group)
         self._range_edits: dict[str, QLineEdit] = {}
+        _range_dim_labels = {
+            "T": "time-points", "C": "channels",
+            "Z": "z-planes", "Y": "rows", "X": "columns",
+        }
         for dim in ("T", "C", "Z", "Y", "X"):
             edit = QLineEdit()
             edit.setPlaceholderText("0,100")
+            edit.setToolTip(
+                f"Restrict conversion to a slice along {dim} ({_range_dim_labels[dim]}).\n"
+                "Format: start,stop (Python slice, stop is exclusive). Leave blank to convert all."
+            )
             self._range_edits[dim.lower()] = edit
             range_layout.addLayout(_form_row(f"{dim} range:", edit))
         lay.addWidget(range_group)
@@ -606,15 +814,36 @@ class ConvertPage(QWidget):
         concat_group = QGroupBox("Concatenation")
         concat_layout = QVBoxLayout(concat_group)
         self._concat_edits: dict[str, QLineEdit] = {}
+        _concat_ax_tips = {
+            "Time":    "Filename tag that identifies the time-point index in a file series (e.g. '_t').",
+            "Channel": "Filename tag that identifies the channel index in a file series (e.g. '_c').",
+            "Z":       "Filename tag that identifies the z-plane index in a file series (e.g. '_z').",
+            "Y":       "Filename tag that identifies the Y tile position in a file series.",
+            "X":       "Filename tag that identifies the X tile position in a file series.",
+        }
         for ax in ("Time", "Channel", "Z", "Y", "X"):
             edit = QLineEdit()
             edit.setPlaceholderText(f"e.g. _t for time tag")
+            edit.setToolTip(
+                f"{_concat_ax_tips[ax]}\n"
+                "Files whose names contain this tag are grouped and concatenated\n"
+                "along the corresponding axis into a single OME-Zarr output."
+            )
             self._concat_edits[ax.lower()] = edit
             concat_layout.addLayout(_form_row(f"{ax} tag:", edit))
         self._concat_axes = QLineEdit()
         self._concat_axes.setPlaceholderText("e.g. t,c")
+        self._concat_axes.setToolTip(
+            "Comma-separated list of axes along which to concatenate files.\n"
+            "Only axes that have a tag set above will be concatenated.\n"
+            "Example: 't,c' concatenates across time and channel."
+        )
         concat_layout.addLayout(_form_row("Concat axes:", self._concat_axes))
         self._override_channel_names = QCheckBox("Override Channel Names")
+        self._override_channel_names.setToolTip(
+            "Replace channel names in the OME-Zarr metadata with names\n"
+            "derived from the concatenation tag values (e.g. file-name fragments)."
+        )
         concat_layout.addWidget(self._override_channel_names)
         lay.addWidget(concat_group)
 
@@ -630,6 +859,12 @@ class ConvertPage(QWidget):
         self._downscale_method = QComboBox()
         for m in ("simple", "mean", "median", "min", "max", "mode"):
             self._downscale_method.addItem(m)
+        self._downscale_method.setToolTip(
+            "Algorithm used to downsample each pyramid level.\n"
+            "'simple' (nearest-neighbour) is fastest.\n"
+            "'mean' / 'median' are smoother but slower.\n"
+            "'min' / 'max' / 'mode' preserve extreme or most-frequent values."
+        )
         lay.addLayout(_form_row("Method:", self._downscale_method))
 
         self._keep_existing_resolutions = QCheckBox("Keep Existing Resolutions")
@@ -642,6 +877,11 @@ class ConvertPage(QWidget):
 
         self._auto_detect_layers = QCheckBox("Auto-detect Layers")
         self._auto_detect_layers.setChecked(True)
+        self._auto_detect_layers.setToolTip(
+            "Automatically determine the number of pyramid levels so that\n"
+            "the smallest level fits within the Min Dim Size threshold.\n"
+            "Uncheck to specify the number of levels manually."
+        )
         lay.addWidget(self._auto_detect_layers)
 
         self._layer_controls = QWidget()
@@ -652,6 +892,10 @@ class ConvertPage(QWidget):
         self._num_layers = QSpinBox()
         self._num_layers.setRange(1, 20)
         self._num_layers.setValue(4)
+        self._num_layers.setToolTip(
+            "Fixed number of downscaled pyramid levels to generate.\n"
+            "Only active when Auto-detect Layers is unchecked."
+        )
         lc_layout.addLayout(_form_row("Num Layers:", self._num_layers))
 
         lay.addWidget(self._layer_controls)
@@ -663,6 +907,10 @@ class ConvertPage(QWidget):
         self._min_dim_size = QSpinBox()
         self._min_dim_size.setRange(1, 1024)
         self._min_dim_size.setValue(64)
+        self._min_dim_size.setToolTip(
+            "Stop generating pyramid levels once the smallest spatial\n"
+            "dimension (Y or X) would fall below this size (pixels)."
+        )
         lay.addLayout(_form_row("Min Dim Size:", self._min_dim_size))
 
         # Scale factors
@@ -670,16 +918,29 @@ class ConvertPage(QWidget):
         scale_layout = QVBoxLayout(scale_group)
         self._scale_spins: dict[str, QSpinBox] = {}
         defaults = {"t": 1, "c": 1, "z": 2, "y": 2, "x": 2}
+        _scale_dim_tips = {
+            "T": "Downscale factor along T (time). Usually 1 — time is rarely downscaled.",
+            "C": "Downscale factor along C (channels). Usually 1.",
+            "Z": "Downscale factor along Z per level. 2 = halve the number of z-planes each level.",
+            "Y": "Downscale factor along Y per level. 2 = halve image height each level.",
+            "X": "Downscale factor along X per level. 2 = halve image width each level.",
+        }
         for dim in ("T", "C", "Z", "Y", "X"):
             sp = QSpinBox()
             sp.setRange(1, 16)
             sp.setValue(defaults[dim.lower()])
+            sp.setToolTip(_scale_dim_tips[dim])
             self._scale_spins[dim.lower()] = sp
             scale_layout.addLayout(_form_row(f"Scale {dim}:", sp))
         lay.addWidget(scale_group)
 
         # Smart downscaling
         self._apply_smart = QCheckBox("Apply Smart Downscaling")
+        self._apply_smart.setToolTip(
+            "Use anisotropy-aware downscaling: dimensions with coarser physical\n"
+            "spacing (e.g. a thick z-step) are downscaled more slowly so the\n"
+            "pyramid remains isotropic in physical space."
+        )
         lay.addWidget(self._apply_smart)
 
         self._smart_widget = QWidget()
@@ -687,11 +948,18 @@ class ConvertPage(QWidget):
         sw_layout.setContentsMargins(0, 0, 0, 0)
         sw_layout.setSpacing(3)
         self._smart_spins: dict[str, QSpinBox] = {}
+        _smart_dim_tips = {
+            "Z":    "Physical-space scale factor along Z used to compute anisotropy-aware downscaling.",
+            "Y":    "Physical-space scale factor along Y used to compute anisotropy-aware downscaling.",
+            "X":    "Physical-space scale factor along X used to compute anisotropy-aware downscaling.",
+            "Time": "Physical-space scale factor along time used to compute anisotropy-aware downscaling.",
+        }
         for dim in ("Z", "Y", "X", "Time"):
             sp = QSpinBox()
             sp.setRange(1, 32)
             sp.setValue(2)
             sp.setSpecialValueText("auto")
+            sp.setToolTip(_smart_dim_tips[dim])
             self._smart_spins[dim.lower() if dim != "Time" else "time"] = sp
             sw_layout.addLayout(_form_row(f"Smart {dim}:", sp))
         lay.addWidget(self._smart_widget)
@@ -707,13 +975,26 @@ class ConvertPage(QWidget):
 
         self._metadata_reader = QComboBox()
         self._metadata_reader.addItems(["bfio", "bioio"])
+        self._metadata_reader.setToolTip(
+            "Library used to extract OME metadata (channel names, physical scales, etc.).\n"
+            "'bfio' uses Bio-Formats via a Java bridge; 'bioio' is the pure-Python successor."
+        )
         lay.addLayout(_form_row("Metadata Reader:", self._metadata_reader))
 
         self._channel_intensity = QComboBox()
         self._channel_intensity.addItems(["from_datatype", "from_array"])
+        self._channel_intensity.setToolTip(
+            "Source for the display intensity range stored in OME-Zarr channel metadata.\n"
+            "'from_datatype' uses the full range of the pixel type (e.g. 0–65535 for uint16).\n"
+            "'from_array' samples actual pixel values to find the min/max."
+        )
         lay.addLayout(_form_row("Channel Intensity Limits:", self._channel_intensity))
 
         self._override_physical = QCheckBox("Override Physical Scale")
+        self._override_physical.setToolTip(
+            "Replace the physical pixel spacing read from file metadata with\n"
+            "the values entered below. Useful when source metadata is missing or incorrect."
+        )
         lay.addWidget(self._override_physical)
 
         self._physical_widget = QWidget()
@@ -724,12 +1005,20 @@ class ConvertPage(QWidget):
         self._phys_units: dict[str, QComboBox] = {}
         space_units = ["micrometer", "nanometer", "millimeter", "centimeter", "meter"]
         time_units = ["second", "millisecond", "microsecond", "minute", "hour"]
+        _phys_ax_tips = {
+            "Time": "Physical time interval between consecutive time-points (e.g. 1.0 for 1 second per frame).",
+            "Z":    "Physical distance between consecutive z-planes (e.g. 0.5 for 500 nm z-step).",
+            "Y":    "Physical pixel size along Y (e.g. 0.108 for 108 nm lateral pixel).",
+            "X":    "Physical pixel size along X (e.g. 0.108 for 108 nm lateral pixel).",
+        }
         for ax, units in [("Time", time_units), ("Z", space_units), ("Y", space_units), ("X", space_units)]:
             edit = QLineEdit()
             edit.setFixedWidth(70)
+            edit.setToolTip(_phys_ax_tips[ax])
             self._phys_edits[ax.lower()] = edit
             combo = QComboBox()
             combo.addItems(units)
+            combo.setToolTip(f"Unit for the {ax} physical scale value.")
             self._phys_units[ax.lower()] = combo
             pw_layout.addLayout(_form_row(f"{ax} scale:", edit, combo))
 
