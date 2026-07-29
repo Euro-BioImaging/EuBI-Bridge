@@ -40,6 +40,21 @@ _console = Console()
 TABLE_FORMATS = [".csv", ".tsv", ".txt", ".xls", ".xlsx"]
 
 
+def _normalise_row_overrides(overrides: dict) -> dict:
+    """Apply the runtime sentinel conversions that ``_collect_params`` performs.
+
+    Per-row values from a conversion table are merged *after* ``_collect_params``
+    and so never pass through it.  A cell holding an on-disk sentinel — notably
+    ``dtype='auto'``, which means "keep the source dtype" — would otherwise reach
+    ``np.dtype()`` verbatim and raise ``TypeError: data type 'auto' not
+    understood``.
+    """
+    normalised = dict(overrides)
+    if normalised.get('dtype') == 'auto':
+        normalised['dtype'] = None
+    return normalised
+
+
 # Heavy imports are deferred — config commands don't need zarr/dask/JVM.
 def _ensure_heavy_imports():
     """Lazy-load heavy modules only when needed for actual conversions."""
@@ -185,6 +200,7 @@ class ConfigManager:
             channel_intensity_limits='from_dtype',
             metadata_reader='bfio',
             save_omexml=True,
+            export_acquisition_metadata=None,
             squeeze=True,
             dtype='auto',
         ),
@@ -381,6 +397,7 @@ class ConfigManager:
                              channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
                              metadata_reader: str = 'default',
                              save_omexml: bool = 'default',
+                             export_acquisition_metadata: bool = 'default',
                              squeeze: bool = 'default',
                              dtype: str = 'default',
                              verbose: bool = 'default') -> None:
@@ -808,6 +825,7 @@ class ConfigureGroup:
                    channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
                    metadata_reader: str = 'default',
                    save_omexml: bool = 'default',
+                   export_acquisition_metadata: bool = 'default',
                    squeeze: bool = 'default',
                    dtype: str = 'default',
                    verbose: bool = 'default') -> None:
@@ -1054,6 +1072,7 @@ class ConversionManager:
                 # Drop NaN/None CSV cells so they don't shadow global values
                 row_overrides = {k: v for k, v in row_dict.items()
                                  if v is not None and v == v}  # v==v filters NaN
+                row_overrides = _normalise_row_overrides(row_overrides)
                 per_job = {**merged, **extra, **row_overrides}
                 jobs.append(ConversionJob.from_kwargs(ip, op, per_job))
 
