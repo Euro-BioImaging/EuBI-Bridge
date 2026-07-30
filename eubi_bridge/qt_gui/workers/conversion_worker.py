@@ -76,12 +76,19 @@ def _parse_index(value) -> int | list:
         return 0
 
 
-def _glob_to_substring(patterns_str: str):
+def _split_patterns(patterns_str: str):
+    """Split a comma-separated include/exclude field into a pattern list.
+
+    Patterns are passed through verbatim: path_utils treats anything containing
+    *, ? or [ as a glob and everything else as a substring.  Stripping the
+    asterisks here (as this used to) made the GUI and the CLI disagree — the GUI
+    silently turned '*.tif' into 'tif' while the same string on the CLI matched
+    nothing.
+    """
     if not patterns_str:
         return None
     parts = [p.strip() for p in patterns_str.split(",") if p.strip()]
-    result = [p.strip("*") for p in parts if p.strip("*")]
-    return result or None
+    return parts or None
 
 
 def _build_kwargs(config: dict) -> dict:
@@ -257,8 +264,8 @@ class ConversionWorker(QThread):
         call_args = {
             "input_path":         input_path,
             "output_path":        output_path or None,
-            "includes":           _glob_to_substring(config.get("includePattern", "")),
-            "excludes":           _glob_to_substring(config.get("excludePattern", "")),
+            "includes":           _split_patterns(config.get("includePattern", "")),
+            "excludes":           _split_patterns(config.get("excludePattern", "")),
             "time_tag":           concat.get("timeTag")           or None,
             "channel_tag":        concat.get("channelTag")        or None,
             "z_tag":              concat.get("zTag")              or None,

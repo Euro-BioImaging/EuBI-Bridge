@@ -1000,6 +1000,51 @@ class H5ImageMeta(PFFImageMeta):
         self._ds = ds
         self._attrs = dict(ds.attrs)
         self._n_scenes = len(list(f.keys()))
+        # A plain HDF5 dataset carries no OME-XML, but the inherited pixel
+        # accessors (get_pixels -> get_arraydata) require one.  Synthesise it
+        # from the dataset's own shape/dtype and its axistags, mirroring what
+        # IMSImageMeta does for Imaris.  Without this self.omemeta stays None and
+        # every .h5 conversion dies with "OME metadata not loaded".
+        self.omemeta = self._build_omemeta(ds)
+
+    def _build_omemeta(self, ds) -> OME:
+        """Synthetic single-``<Image>`` OME describing one HDF5 dataset."""
+        axes = self.get_axes()
+        sizes = dict(zip(axes, ds.shape))
+        scales = self.get_scaledict()
+
+        pixels = Pixels(
+            dimension_order=Pixels_DimensionOrder.XYZCT,
+            type=_ome_pixeltype_from_dtype(ds.dtype),
+            size_x=int(sizes.get('x', 1)),
+            size_y=int(sizes.get('y', 1)),
+            size_z=int(sizes.get('z', 1)),
+            size_c=int(sizes.get('c', 1)),
+            size_t=int(sizes.get('t', 1)),
+            physical_size_x=float(scales.get('x', 1.0) or 1.0),
+            physical_size_x_unit=UnitsLength.MICROMETER,
+            physical_size_y=float(scales.get('y', 1.0) or 1.0),
+            physical_size_y_unit=UnitsLength.MICROMETER,
+            physical_size_z=float(scales.get('z', 1.0) or 1.0),
+            physical_size_z_unit=UnitsLength.MICROMETER,
+            time_increment=float(scales.get('t', 1.0) or 1.0),
+            time_increment_unit=UnitsTime.SECOND,
+            channels=[Channel(id=f"Channel:{c}", name=f"Channel {c}",
+                              samples_per_pixel=1)
+                      for c in range(int(sizes.get('c', 1)))],
+        )
+        return OME(images=[Image(id="Image:0", name="Series_0", pixels=pixels)])
+
+    async def read_img(self):
+        from eubi_bridge.core.h5_reader import read_h5
+        self.reader = await asyncio.to_thread(read_h5, self.root)
+        self.reader.set_scene(self._series)
+        self.arraydata = await self.get_arraydata()
+
+    async def get_arraydata(self):
+        # H5Reader yields the dataset in its own axis order; the inherited
+        # implementation assumes a bioio reader with a .img.dims attribute.
+        return self.reader.get_image_dask_data()
 
     def _parse_axistags(self) -> dict:
         """Return the axistags dict from h5py attrs, handling str and non-dict forms."""
