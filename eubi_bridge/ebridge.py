@@ -862,6 +862,12 @@ class ConfigureGroup:
                 ``'bioformats'``.
             save_omexml: Write a companion OME-XML file alongside the zarr
                 (default True).
+            export_acquisition_metadata: Write acquisition metadata that NGFF has
+                no field for (view/illumination indices, objective NA,
+                per-channel emission) into the namespaced ``eubi_bridge`` attrs
+                block.  ``None``/unset means auto: enabled when the conversion
+                splits an acquisition into several containers, since that is when
+                the relationship between the pieces would otherwise be lost.
             verbose: Log verbose progress output (default False).
         """
         return self._cfg.configure_conversion(**{k: v for k, v in locals().items() if k != 'self'})
