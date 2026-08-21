@@ -229,7 +229,20 @@ def _write_ngff_metadata(store_path, pixel_sizes) -> None:
     handler = NGFFMetadataHandler()
     handler.connect_to_group(gr)
     handler.read_metadata()
-    handler.add_dataset(path=arrpath, scale=pixel_sizes, overwrite=True)
+    # Inherit the origin from a level that already carries one.  Each pyramid
+    # level is registered here with overwrite=True, which would otherwise drop
+    # the translation written for level 0; the offset is physical and therefore
+    # identical at every resolution.
+    translation = None
+    for dataset in (handler.multiscales.get('datasets') or []):
+        for ct in dataset.get('coordinateTransformations', []):
+            if ct.get('type') == 'translation':
+                translation = ct.get('translation')
+                break
+        if translation is not None:
+            break
+    handler.add_dataset(path=arrpath, scale=pixel_sizes,
+                        translation=translation, overwrite=True)
     handler.save_changes()
 
 
@@ -950,6 +963,14 @@ async def store_multiscale_async(
     axes: Sequence[str],
     scales: Sequence[float],  # per-axis physical pixel sizes (flat, e.g. [1.0, 1.0, 0.5, 0.25, 0.25])
     units: Sequence[str],
+    # Physical origin of this container, per axis, in the same units as *scales*.
+    # Emitted as an NGFF 'translation' transform alongside 'scale' so split
+    # mosaics/scenes keep their position.  None omits the field entirely.
+    translation: Optional[Sequence[float]] = None,
+    # Acquisition detail with no NGFF home (view/illumination index, objective
+    # NA, per-channel emission).  Merged into the namespaced 'eubi_bridge'
+    # attrs block; None writes nothing beyond the version stamp.
+    acquisition_metadata: Optional[dict] = None,
     zarr_format: int = 2,
     auto_chunk: bool = True,
     output_chunks: Optional[Dict[str, Tuple[int, ...]]] = None,
@@ -1085,7 +1106,9 @@ async def store_multiscale_async(
     logger.info(f"Base layer written in {base_elapsed:.2f} minutes")
 
     # Add base layer to metadata
-    meta.add_dataset(path='0', scale=scales)
+    meta.add_dataset(path='0', scale=scales, translation=translation)
+    if acquisition_metadata:
+        meta.update_eubi_bridge_metadata({'acquisition': acquisition_metadata})
     meta.save_changes()
 
     # Only proceed with downscaling if base layer was successful
@@ -1133,6 +1156,10 @@ async def store_existing_pyramid_async(
     output_chunks: Optional[Tuple[int, ...]] = None,
     output_shard_coefficients: Optional[Tuple[int, ...]] = None,
     overwrite: bool = False,
+    # Physical origin of this container, per axis, in the same units as the
+    # pyramid's scales.  Mirrors store_multiscale_async so a split mosaic keeps
+    # its position on the keep_existing_resolutions path too.
+    translation: Optional[Sequence[float]] = None,
     *,
     num_readers: Optional[int] = None,
     max_concurrency: Optional[int] = None,
@@ -1242,7 +1269,9 @@ async def store_existing_pyramid_async(
         level_elapsed = (time.time() - level_start_time) / 60
         logger.info(f"Resolution level '{key}' written in {level_elapsed:.2f} minutes")
 
-        meta.add_dataset(path=key, scale=scale)
+        # The origin is physical, so it is the same at every resolution level;
+        # only the voxel size changes.
+        meta.add_dataset(path=key, scale=scale, translation=translation)
         meta.save_changes()
 
     return Pyramid(gr)

@@ -325,6 +325,15 @@ class InspectPage(QWidget):
         except Exception:
             level_scales = {}
 
+        # Physical origin per level.  Present for split mosaics / scenes, absent
+        # for ordinary single-container datasets, so the row is only added when
+        # at least one level actually declares one.
+        try:
+            level_translations = {lp: pyr.meta.get_translation(lp) for lp in level_paths}
+        except Exception:
+            level_translations = {}
+        has_translation = any(v is not None for v in level_translations.values())
+
         for i, lp in enumerate(level_paths):
             layer = pyr.layers.get(lp)
             if layer is None:
@@ -336,12 +345,20 @@ class InspectPage(QWidget):
             ldtype  = str(layer.dtype)
             raw_scales = level_scales.get(lp)
 
-            root = QTreeWidgetItem(self._pyr_tree, [f"Level {i}  ({lp})", ""])
+            # The array path is only worth showing when it differs from the level
+            # index — which it does not for standard OME-Zarr ('0', '1', ...), so
+            # appending it there just renders as "Level 0  (0)".
+            level_label = f"Level {i}" if str(lp) == str(i) else f"Level {i}  ({lp})"
+            root = QTreeWidgetItem(self._pyr_tree, [level_label, ""])
             root.setExpanded(i == 0)
 
             shards = getattr(layer, "shards", None)
+            raw_translation = level_translations.get(lp)
             n_cols     = len(ax_list)
-            row_labels = ["chunk", "nchunks/shard", "shape", "pixel size", "unit"]
+            row_labels = ["chunk", "nchunks/shard", "shape", "pixel size"]
+            if has_translation:
+                row_labels.append("translation")
+            row_labels.append("unit")
             tbl = QTableWidget(len(row_labels), n_cols)
             tbl.setHorizontalHeaderLabels([ax.upper() for ax in ax_list])
             tbl.setVerticalHeaderLabels(row_labels)
@@ -365,7 +382,14 @@ class InspectPage(QWidget):
                 else:
                     ps_val   = "—"
                     unit_val = "—"
-                for row_i, val in enumerate([chunk_val, ncs_val, shape_val, ps_val, unit_val]):
+                row_vals = [chunk_val, ncs_val, shape_val, ps_val]
+                if has_translation:
+                    if raw_translation and len(raw_translation) == len(ax_list):
+                        row_vals.append(f"{raw_translation[j]:.6g}")
+                    else:
+                        row_vals.append("—")
+                row_vals.append(unit_val)
+                for row_i, val in enumerate(row_vals):
                     cell = QTableWidgetItem(val)
                     cell.setTextAlignment(_Qt2.AlignmentFlag.AlignCenter)
                     tbl.setItem(row_i, j, cell)

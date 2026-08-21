@@ -28,6 +28,28 @@ from zarr_plane_server import (  # type: ignore
 )
 
 
+def _subsample_to_target(plane: np.ndarray, target: int) -> np.ndarray:
+    """Nearest-neighbour subsample the trailing two axes down to *target*.
+
+    Compositing is per-pixel, so subsampling before it produces exactly the same
+    displayed image as subsampling after — but colour-maps only the pixels that
+    will actually be shown.  At full resolution the frame is ~4x larger than the
+    canvas, so this is where most of the render time was going.
+
+    Only ever shrinks; upsampling a coarse-level preview back to the canvas stays
+    in the worker loop, where it operates on cheap uint8 RGB.
+    """
+    if not target:
+        return plane
+    h, w = plane.shape[-2], plane.shape[-1]
+    if h <= target and w <= target:
+        return plane
+    rows = np.round(np.linspace(0, h - 1, min(h, target))).astype(np.intp)
+    cols = np.round(np.linspace(0, w - 1, min(w, target))).astype(np.intp)
+    # Indexing the last two axes keeps this valid for 2-D and (c, y, x) planes.
+    return plane[..., rows[:, None], cols]
+
+
 def do_render(params: dict, executor: ThreadPoolExecutor) -> np.ndarray:
     """Render a single 2-D plane and return an RGB uint8 array.
 
@@ -65,6 +87,7 @@ def do_render(params: dict, executor: ThreadPoolExecutor) -> np.ndarray:
         for f in futs:
             f.result()
         combined = results[0] if len(results) == 1 else np.stack(results, axis=0)
+        combined = _subsample_to_target(combined, params.get("target_fov_size", 0))
         return normalize_and_composite(combined, visible, percentile_key_base=pct_key)
 
     plane_data, _ = extract_plane(
@@ -76,6 +99,7 @@ def do_render(params: dict, executor: ThreadPoolExecutor) -> np.ndarray:
         params["fov_size"],
         zarr_path=params["path"],
     )
+    plane_data = _subsample_to_target(plane_data, params.get("target_fov_size", 0))
     return normalize_and_composite(plane_data, channels_config or [{"color": "#FFFFFF", "visible": True}],
                                    percentile_key_base=pct_key)
 

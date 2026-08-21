@@ -279,10 +279,43 @@ class ConversionConfig(BaseModel):
     channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = "from_dtype"
     metadata_reader: str = "bfio"
     save_omexml: bool = True
+    # Write acquisition metadata NGFF has no field for (view/illumination
+    # indices, objective NA, per-channel emission) into the namespaced
+    # 'eubi_bridge' attrs block.  None = auto: on when the conversion splits an
+    # acquisition into several containers, since that is when the relationship
+    # between the pieces would otherwise be lost.
+    export_acquisition_metadata: Optional[bool] = None
     squeeze: bool = True
     # 'auto' is the on-disk sentinel; _collect_params converts it to None at
     # runtime — we accept both here so JSON round-trips work unchanged.
     dtype: Optional[str] = "auto"
+
+    @field_validator("compressor_params", mode="before")
+    @classmethod
+    def _parse_compressor_params(cls, v):
+        """Accept a JSON object string as well as a dict.
+
+        A conversion table carries one value per cell, so ``compressor_params``
+        can only travel as text.  Accepting JSON here lets a CSV row override the
+        codec *and* its parameters together — they are meaningless apart, since
+        e.g. ``GZip(cname='lz4')`` raises TypeError.
+        """
+        if v is None or v == "":
+            return {}
+        if isinstance(v, str):
+            import json
+            try:
+                parsed = json.loads(v)
+            except ValueError as exc:
+                raise ValueError(
+                    f"compressor_params must be a JSON object, got {v!r} ({exc})"
+                ) from None
+            if not isinstance(parsed, dict):
+                raise ValueError(
+                    f"compressor_params must be a JSON object, got {type(parsed).__name__}"
+                )
+            return parsed
+        return v
 
     @field_validator("compressor")
     @classmethod

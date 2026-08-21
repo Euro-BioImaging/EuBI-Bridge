@@ -1,6 +1,7 @@
 """Path and file system utilities."""
 
 import glob
+import fnmatch
 import os
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -202,6 +203,35 @@ def sensitive_glob(
     return results
 
 
+def pattern_matches(path: str, pattern: str) -> bool:
+    """Match *path* against one include/exclude *pattern*.
+
+    A pattern containing glob metacharacters (``*``, ``?``, ``[``) is matched
+    with :mod:`fnmatch`, against both the full path and the basename so that
+    ``*.tif`` behaves as users expect on a nested directory.  A pattern without
+    them keeps the original substring behaviour, so ``.h5`` or ``Patient1``
+    still work.
+    """
+    if not pattern:
+        return True
+    if any(ch in pattern for ch in '*?['):
+        return (fnmatch.fnmatch(path, pattern)
+                or fnmatch.fnmatch(os.path.basename(path), pattern))
+    return pattern in path
+
+
+def _matches_any(path: str, patterns) -> bool:
+    """True when *patterns* is empty/None, or any of them matches *path*."""
+    if patterns is None:
+        return True
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    patterns = [p for p in patterns if p]
+    if not patterns:
+        return True
+    return any(pattern_matches(path, p) for p in patterns)
+
+
 def take_filepaths_from_path(
     input_path: str,
     includes: Union[str, tuple, list] = None,
@@ -249,22 +279,11 @@ def take_filepaths_from_path(
     paths = sensitive_glob(input_path_, recursive=False, sensitive_to='.zarr')
 
     # Filter by includes/excludes
-    paths = list(filter(
-        lambda path: (
-            (
-                any(inc in path for inc in includes)
-                if isinstance(includes, (tuple, list))
-                else (includes in path if includes is not None else True)
-            )
-            and
-            (
-                not any(exc in path for exc in excludes)
-                if isinstance(excludes, (tuple, list))
-                else (excludes not in path if excludes is not None else True)
-            )
-        ),
-        paths
-    ))
+    paths = [
+        p for p in paths
+        if _matches_any(p, includes)
+        and not (excludes is not None and _matches_any(p, excludes))
+    ]
 
     # Remove zarr.json files
     paths = list(filter(lambda path: not path.endswith('zarr.json'), paths))
@@ -406,21 +425,20 @@ def take_filepaths(
     if "input_path" not in df.columns:
         raise ValueError("Table must include an 'input_path' or 'filepath' column.")
     
-    # Filter by includes/excludes
-    def should_drop(row):
+    # Filter by includes/excludes.  Uses the same matcher as
+    # take_filepaths_from_path so a pattern behaves identically whether the input
+    # was a directory, an explicit file list, or a conversion table.
+    def _keep(row) -> bool:
         inp = row["input_path"]
-        includes = global_kwargs.get('includes', [None])
-        excludes = global_kwargs.get('excludes', [None])
-        if not isinstance(includes, (tuple, list)):
-            includes = [includes]
-        if not isinstance(excludes, (tuple, list)):
-            excludes = [excludes]
-        mask1 = any([inc in inp if inc is not None else True for inc in includes])
-        mask2 = any([exc not in inp if exc is not None else True for exc in excludes])
-        return mask1 and mask2
+        includes = global_kwargs.get('includes')
+        excludes = global_kwargs.get('excludes')
+        if not _matches_any(inp, includes):
+            return False
+        if excludes is not None and _matches_any(inp, excludes):
+            return False
+        return True
 
-    mask = df.apply(should_drop, axis=1)
-    df = df[mask]
+    df = df[df.apply(_keep, axis=1)]
     
     # Apply global defaults for missing parameters
     for k, v in global_kwargs.items():

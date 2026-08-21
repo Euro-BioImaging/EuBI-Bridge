@@ -96,6 +96,25 @@ def generate_channel_metadata(num_channels,
     }
 
 
+
+def _eubi_bridge_stamp() -> dict:
+    """Namespaced provenance block written into every OME-Zarr we create.
+
+    NGFF permits extra top-level keys, so this is where information the spec has
+    no home for can live.  ``version`` is always present; richer acquisition
+    metadata (view angles, illumination directions, objective NA, ...) is added
+    by the converter when available and export is enabled.
+
+    Namespaced rather than ``_creator`` so it cannot collide with a future
+    standard key, and versioned so readers can evolve with it.
+    """
+    try:
+        from eubi_bridge import __version__ as _v
+    except Exception:
+        _v = "unknown"
+    return {"version": _v}
+
+
 class NGFFMetadataHandler:
     """Class for handling NGFF metadata in zarr groups."""
 
@@ -220,18 +239,12 @@ class NGFFMetadataHandler:
                         'defaultZ': 0
                     }
                 },
-                '_creator': {
-                    'name': 'NGFFMetadataHandler',
-                    'version': '1.0'
-                }
+                'eubi_bridge': _eubi_bridge_stamp()
             }
         else:  # version == "0.4"
             multiscale_metadata['version'] = version
             self.metadata = {
-                '_creator': {
-                    'name': 'NGFFMetadataHandler',
-                    'version': '1.0'
-                },
+                'eubi_bridge': _eubi_bridge_stamp(),
                 'multiscales': [multiscale_metadata],
                 'omero': {
                     'channels': [],
@@ -288,6 +301,19 @@ class NGFFMetadataHandler:
         self._pending_changes = False
         return self
 
+    def update_eubi_bridge_metadata(self, extra: dict) -> None:
+        """Merge *extra* into the namespaced ``eubi_bridge`` attrs block.
+
+        ``version`` is preserved; callers add acquisition detail that NGFF has
+        no standard field for.
+        """
+        if not extra:
+            return
+        block = dict(self.metadata.get('eubi_bridge') or _eubi_bridge_stamp())
+        block.update(extra)
+        self.metadata['eubi_bridge'] = block
+        self._pending_changes = True
+
     def save_changes(self) -> None:
         """Save current metadata to connected zarr group."""
 
@@ -303,8 +329,8 @@ class NGFFMetadataHandler:
             self.zarr_group.attrs['multiscales'] = metadata['multiscales']
             if 'omero' in self.metadata:
                 self.zarr_group.attrs['omero'] = metadata['omero']
-            if '_creator' in self.metadata:
-                self.zarr_group.attrs['_creator'] = metadata['_creator']
+            if 'eubi_bridge' in self.metadata:
+                self.zarr_group.attrs['eubi_bridge'] = metadata['eubi_bridge']
 
         self._pending_changes = False
 
@@ -606,6 +632,25 @@ class NGFFMetadataHandler:
     def get_base_scaledict(self):
         basepath = self.resolution_paths[0]
         return self.get_scaledict(basepath)
+
+    def get_translation(self, pth: Union[str, int]) -> Optional[List[float]]:
+        """Physical origin of a resolution level, or None if it declares none.
+
+        Looked up by transform *type* rather than by position: ``translation`` is
+        optional and follows ``scale``, so its index is not fixed.
+        """
+        idx = self.resolution_paths.index(pth)
+        for ct in self.multiscales['datasets'][idx].get('coordinateTransformations', []):
+            if ct.get('type') == 'translation':
+                return list(ct['translation'])
+        return None
+
+    def get_translationdict(self, pth: Union[str, int]) -> Optional[Dict[str, float]]:
+        """:meth:`get_translation` keyed by axis name."""
+        translation = self.get_translation(pth)
+        if translation is None:
+            return None
+        return dict(zip(self.axis_order, translation))
 
     def get_scale(self,
                   pth: Union[str, int]

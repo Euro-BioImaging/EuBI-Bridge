@@ -1000,6 +1000,51 @@ class H5ImageMeta(PFFImageMeta):
         self._ds = ds
         self._attrs = dict(ds.attrs)
         self._n_scenes = len(list(f.keys()))
+        # A plain HDF5 dataset carries no OME-XML, but the inherited pixel
+        # accessors (get_pixels -> get_arraydata) require one.  Synthesise it
+        # from the dataset's own shape/dtype and its axistags, mirroring what
+        # IMSImageMeta does for Imaris.  Without this self.omemeta stays None and
+        # every .h5 conversion dies with "OME metadata not loaded".
+        self.omemeta = self._build_omemeta(ds)
+
+    def _build_omemeta(self, ds) -> OME:
+        """Synthetic single-``<Image>`` OME describing one HDF5 dataset."""
+        axes = self.get_axes()
+        sizes = dict(zip(axes, ds.shape))
+        scales = self.get_scaledict()
+
+        pixels = Pixels(
+            dimension_order=Pixels_DimensionOrder.XYZCT,
+            type=_ome_pixeltype_from_dtype(ds.dtype),
+            size_x=int(sizes.get('x', 1)),
+            size_y=int(sizes.get('y', 1)),
+            size_z=int(sizes.get('z', 1)),
+            size_c=int(sizes.get('c', 1)),
+            size_t=int(sizes.get('t', 1)),
+            physical_size_x=float(scales.get('x', 1.0) or 1.0),
+            physical_size_x_unit=UnitsLength.MICROMETER,
+            physical_size_y=float(scales.get('y', 1.0) or 1.0),
+            physical_size_y_unit=UnitsLength.MICROMETER,
+            physical_size_z=float(scales.get('z', 1.0) or 1.0),
+            physical_size_z_unit=UnitsLength.MICROMETER,
+            time_increment=float(scales.get('t', 1.0) or 1.0),
+            time_increment_unit=UnitsTime.SECOND,
+            channels=[Channel(id=f"Channel:{c}", name=f"Channel {c}",
+                              samples_per_pixel=1)
+                      for c in range(int(sizes.get('c', 1)))],
+        )
+        return OME(images=[Image(id="Image:0", name="Series_0", pixels=pixels)])
+
+    async def read_img(self):
+        from eubi_bridge.core.h5_reader import read_h5
+        self.reader = await asyncio.to_thread(read_h5, self.root)
+        self.reader.set_scene(self._series)
+        self.arraydata = await self.get_arraydata()
+
+    async def get_arraydata(self):
+        # H5Reader yields the dataset in its own axis order; the inherited
+        # implementation assumes a bioio reader with a .img.dims attribute.
+        return self.reader.get_image_dask_data()
 
     def _parse_axistags(self) -> dict:
         """Return the axistags dict from h5py attrs, handling str and non-dict forms."""
@@ -1635,6 +1680,39 @@ class SceneLoader:
 # ArrayManager — coordinator (loading + I/O + scene orchestration)
 # ---------------------------------------------------------------------------
 
+
+def czi_mosaic_tile_origins(path: str) -> dict:
+    """Map mosaic tile index -> {'y': px, 'x': px} origin, or {} if unavailable.
+
+    CZI stores each tile's position on the stage; splitting a mosaic into one
+    container per tile discards it unless it is carried over explicitly.  Origins
+    are returned in pixels and shifted so the minimum is zero, because NGFF
+    translations are offsets within a shared coordinate system and CZI centres
+    its mosaic on zero (giving negative coordinates).
+    """
+    try:
+        from aicspylibczi import CziFile
+        czi = CziFile(path)
+        if not czi.is_mosaic():
+            return {}
+        boxes = czi.get_all_mosaic_tile_bounding_boxes()
+    except Exception:
+        return {}
+
+    origins: dict = {}
+    for key, box in boxes.items():
+        m = getattr(key, 'm_index', None)
+        if m is None:
+            continue
+        origins.setdefault(int(m), {'y': float(box.y), 'x': float(box.x)})
+    if not origins:
+        return {}
+    min_y = min(o['y'] for o in origins.values())
+    min_x = min(o['x'] for o in origins.values())
+    return {m: {'y': o['y'] - min_y, 'x': o['x'] - min_x}
+            for m, o in origins.items()}
+
+
 class ArrayManager:
     """Coordinates image loading and exposes a unified interface for the
     conversion pipeline.
@@ -1664,6 +1742,12 @@ class ArrayManager:
         self.mosaic_tile_index = kwargs.get('mosaic_tile_index', None)
         if self.mosaic_tile_index is not None:
             self.series_path += f'_tile{self.mosaic_tile_index}'
+
+        # Physical origin of this container per axis, in the same units as
+        # scaledict.  Non-empty only when the input places this piece somewhere
+        # other than the origin — currently CZI mosaic tiles.  Written out as an
+        # NGFF 'translation' transform so a split mosaic stays reassemblable.
+        self.origindict: dict = {}
 
         self._meta_reader        = metadata_reader
         self._skip_dask          = skip_dask
@@ -1827,6 +1911,24 @@ class ArrayManager:
         self._n_views         = loader.n_views
         self._n_illuminations = loader.n_illuminations
         self._is_ngff         = loader.is_ngff
+
+        # Attach each tile's physical origin so it survives the split.  Done here
+        # rather than in a single caller because every conversion path funnels
+        # through load_scenes, and a tile without its position cannot be put back
+        # where it belongs.
+        if mosaic_tile_index is not None:
+            tile_origins = czi_mosaic_tile_origins(str(self.path))
+            if tile_origins:
+                for m in managers:
+                    o = tile_origins.get(int(m.mosaic_tile_index or 0))
+                    if not o:
+                        continue
+                    sd = getattr(m, 'scaledict', None) or {}
+                    m.origindict = {
+                        'y': o['y'] * float(sd.get('y', 1.0)),
+                        'x': o['x'] * float(sd.get('x', 1.0)),
+                    }
+
         self.loaded_scenes = {m.series_path: m for m in managers}
         return self.loaded_scenes
 
@@ -1989,6 +2091,16 @@ class ArrayManager:
                     vi_parts.append('_illu_concat' if concat_illuminations else f'_illu{i_idx}')
                 if tiled:
                     vi_parts.append(f'_tile{tile_idx}')
+                    # Carry the tile's stage position through as a physical
+                    # origin so the split mosaic can be reassembled downstream.
+                    tile_origins = czi_mosaic_tile_origins(str(loader.path))
+                    o = tile_origins.get(int(tile_idx)) if tile_origins else None
+                    if o:
+                        sd = getattr(mgr, 'scaledict', {}) or {}
+                        mgr.origindict = {
+                            'y': o['y'] * float(sd.get('y', 1.0)),
+                            'x': o['x'] * float(sd.get('x', 1.0)),
+                        }
                 if vi_parts:
                     mgr.series_path = str(
                         p.parent / (p.stem + ''.join(vi_parts) + p.suffix)

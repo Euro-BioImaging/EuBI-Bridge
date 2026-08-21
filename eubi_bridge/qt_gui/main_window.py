@@ -48,6 +48,34 @@ except ModuleNotFoundError:
 _LOGO_PATH = os.path.join(os.path.dirname(__file__), "eurobioimaging-logo.webp")
 
 
+def _app_version() -> str:
+    """Version of the eubi-bridge actually running.
+
+    A source checkout is identified by a pyproject.toml sitting next to the
+    package; there its declared version is authoritative, because installed
+    metadata goes stale the moment pyproject.toml is bumped without reinstalling
+    (an editable install keeps reporting whatever version it was created with).
+    For a real installation there is no adjacent pyproject.toml, so the packaged
+    ``__version__`` from importlib.metadata is used.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    pyproject = os.path.join(root, "pyproject.toml")
+    if os.path.exists(pyproject):
+        try:
+            import tomllib
+            with open(pyproject, "rb") as fh:
+                return tomllib.load(fh)["project"]["version"]
+        except Exception:
+            pass
+
+    try:
+        from eubi_bridge import __version__ as v
+        return v or "unknown"
+    except Exception:
+        return "unknown"
+
+
 class MainWindow(QMainWindow):
     """Top-level window with Convert and Inspect tabs."""
 
@@ -84,6 +112,7 @@ class MainWindow(QMainWindow):
         title_label = QLabel("")
         title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         header_layout.addWidget(title_label)
+
         header_layout.addStretch()
 
         settings_btn = QPushButton("\u2699 Settings")
@@ -107,6 +136,17 @@ class MainWindow(QMainWindow):
 
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
+
+        # Version sits bottom-right as a *permanent* status-bar widget: the
+        # bottom-left area is where showMessage() writes, and widgets added
+        # there are hidden for the duration of every status message.
+        version_label = QLabel(f"version {_app_version()}")
+        version_label.setStyleSheet("font-size: 11px; color: #999;")
+        version_label.setToolTip(
+            "eubi-bridge version currently running. Taken from pyproject.toml in "
+            "a source checkout, otherwise from the installed package metadata."
+        )
+        status_bar.addPermanentWidget(version_label)
         self._inspect_page.status_changed.connect(status_bar.showMessage)
 
         if _ANNOTATE_AVAILABLE:

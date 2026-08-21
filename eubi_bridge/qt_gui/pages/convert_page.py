@@ -9,8 +9,10 @@ Layout:
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,13 +30,24 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QSpinBox,
     QSplitter,
+    QTabBar,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from eubi_bridge.qt_gui.core.batch import (
+    CONFIG_SNAPSHOT_NAME,
+    DEFAULT_BATCH_NAME,
+    BatchModel,
+    can_batch,
+    make_baseline,
+    to_cell,
+)
 from eubi_bridge.qt_gui.core.config import (
     DEFAULT_CONFIG_DIR,
     load_config,
@@ -58,6 +71,12 @@ except Exception:
 
 # Fixed pixel width shared by all form-row labels so values align vertically.
 _LABEL_W = 256
+
+# Parameter tabs that are always present (Cluster … Metadata).  The final tab is
+# Run or Batch depending on the execution mode, so it always sits at _LAST_TAB.
+_N_PARAM_TABS = 5
+_LAST_TAB = _N_PARAM_TABS
+_MODE_RUN, _MODE_BATCH = 0, 1
 
 
 def _labeled_spin(label: str, minimum: int, maximum: int, value: int, step: int = 1) -> tuple[QLabel, QSpinBox]:
@@ -105,10 +124,15 @@ class ConvertPage(QWidget):
         super().__init__(parent)
         self._worker: ConversionWorker | None = None
         self._config_path: str = ""
+        self._batch = BatchModel()
         self._build_ui()
+        self._active_log = self._log
         self._load_config_to_ui(load_config())
         # Populate parameter tree now so it's visible before the first run
         self._populate_param_tree(self._ui_to_config())
+        self._sync_batch_comparison()
+        self._refresh_batch_table()
+        self._update_batch_availability()
         # Keep tree in sync whenever the user switches to the Run tab
         self._tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -202,8 +226,23 @@ class ConvertPage(QWidget):
         save_btn.clicked.connect(self._on_save_config)
         toolbar.addWidget(save_btn)
 
+        revert_btn = QPushButton("Revert")
+        revert_btn.setFixedHeight(24)
+        revert_btn.setToolTip(
+            "Discard unsaved edits and reload every parameter from the config "
+            "file currently in use.\n"
+            "Unlike Reset, this restores your saved settings rather than the "
+            "built-in defaults."
+        )
+        revert_btn.clicked.connect(self._on_revert_config)
+        toolbar.addWidget(revert_btn)
+
         reset_btn = QPushButton("Reset")
         reset_btn.setFixedHeight(24)
+        reset_btn.setToolTip(
+            "Reset every parameter to the built-in defaults and write them to "
+            "the config file. Use Revert to go back to your saved settings instead."
+        )
         reset_btn.clicked.connect(self._on_reset_config)
         toolbar.addWidget(reset_btn)
 
@@ -214,6 +253,20 @@ class ConvertPage(QWidget):
 
         right_layout.addLayout(toolbar)
 
+        # Execution mode — chooses what the final parameter tab is.  Run converts
+        # the current selection straight away; Batch queues conversions into a
+        # table that is executed later.
+        self._mode_bar = QTabBar()
+        self._mode_bar.addTab("Run")
+        self._mode_bar.addTab("Batch")
+        self._mode_bar.setExpanding(False)
+        self._mode_bar.setToolTip(
+            "Run: convert the selected files immediately.\n"
+            "Batch: queue conversions into a table and run them together later."
+        )
+        self._mode_bar.currentChanged.connect(self._on_mode_changed)
+        right_layout.addWidget(self._mode_bar)
+
         # Tabs
         self._tabs = QTabWidget()
         right_layout.addWidget(self._tabs)
@@ -223,7 +276,10 @@ class ConvertPage(QWidget):
         self._build_conversion_tab()
         self._build_downscaling_tab()
         self._build_metadata_tab()
+        # Both are built up front but only the one matching the mode is attached.
         self._build_run_tab()
+        self._build_batch_tab()
+        self._apply_mode()
 
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 0)
@@ -812,7 +868,22 @@ class ConvertPage(QWidget):
 
         # Concatenation
         concat_group = QGroupBox("Concatenation")
+        self._concat_group = concat_group
         concat_layout = QVBoxLayout(concat_group)
+
+        # Shown only in Batch mode.  Concatenation cannot be batched yet, and a
+        # silently-ignored setting is worse than a disabled one.
+        self._concat_batch_note = QLabel(
+            "Not available in Batch mode. A batch is a table with one row per "
+            "input file, so it can only describe one-to-one conversions — an "
+            "aggregative job spans several files and has no row to live on. "
+            "Switch to Run mode to concatenate, or clear these fields and batch "
+            "the files individually."
+        )
+        self._concat_batch_note.setWordWrap(True)
+        self._concat_batch_note.setStyleSheet(
+            "color: #ffb74d; font-style: italic; font-size: 10px;")
+        concat_layout.addWidget(self._concat_batch_note)
         self._concat_edits: dict[str, QLineEdit] = {}
         _concat_ax_tips = {
             "Time":    "Filename tag that identifies the time-point index in a file series (e.g. '_t').",
@@ -1062,6 +1133,10 @@ class ConvertPage(QWidget):
         btn_row.addWidget(refresh_params_btn)
         run_layout.addLayout(btn_row)
 
+        # Batching is unavailable for aggregative conversions — table input is
+        # one-to-one only.  Reflect that live rather than failing on click.
+        self._concat_axes.textChanged.connect(self._update_batch_availability)
+
 
         # Input summary
         self._input_summary = QLabel("No files selected")
@@ -1092,7 +1167,451 @@ class ConvertPage(QWidget):
         run_split.setStretchFactor(1, 2)
         run_layout.addWidget(run_split)
 
-        self._tabs.addTab(content, "Run")
+        self._run_tab = content
+
+    # ── Execution mode ────────────────────────────────────────────────────────
+
+    def _apply_mode(self):
+        """Attach the Run or Batch tab as the final parameter tab."""
+        batch = self._mode_bar.currentIndex() == _MODE_BATCH
+        was_last = self._tabs.currentIndex() == _LAST_TAB
+
+        while self._tabs.count() > _N_PARAM_TABS:
+            self._tabs.removeTab(_N_PARAM_TABS)   # widget survives; we hold a ref
+
+        self._tabs.addTab(self._batch_tab if batch else self._run_tab,
+                          "Batch" if batch else "Run")
+        if was_last:
+            self._tabs.setCurrentIndex(_LAST_TAB)
+
+        # Grey out concatenation in Batch mode so it cannot look supported.
+        # The values are left intact, so switching back to Run restores them.
+        if hasattr(self, '_concat_group'):
+            self._concat_group.setEnabled(not batch)
+            self._concat_batch_note.setVisible(batch)
+            self._concat_group.setToolTip(
+                self._concat_batch_note.text() if batch else "")
+
+    def _on_mode_changed(self, _index: int):
+        self._apply_mode()
+        self._tabs.setCurrentIndex(_LAST_TAB)
+
+    # ── Batch tab ─────────────────────────────────────────────────────────────
+
+    def _build_batch_tab(self):
+        content = QWidget()
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(6)
+
+        note = QLabel(
+            "A batch queues several one-to-one conversions and runs them later. "
+            "Configure a conversion on the other tabs, then press ‘Add to Batch’ "
+            "on the Run tab. Each row stores only the settings that differ from the "
+            "batch baseline — blank cells inherit it."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
+        lay.addWidget(note)
+
+        # Batch-wide settings that no row can override — shown explicitly, since
+        # they never appear as a table column and are otherwise unverifiable.
+        self._batch_baseline = QLabel("")
+        self._batch_baseline.setWordWrap(True)
+        self._batch_baseline.setStyleSheet("font-size: 10px; color: #4fc3f7;")
+        self._batch_baseline.setToolTip(
+            "Settings shared by every row in this batch. They are captured from "
+            "your settings when the first row is added and stored in "
+            f"{CONFIG_SNAPSHOT_NAME}. To change them, clear the batch and start again."
+        )
+        lay.addWidget(self._batch_baseline)
+
+        # Row-editing buttons — Add to Batch leads, since nothing else is usable
+        # until the table has rows.
+        edit_row = QHBoxLayout()
+        self._add_batch_btn = QPushButton("Add to Batch")
+        self._add_batch_btn.setStyleSheet("font-weight: bold;")
+        self._add_batch_btn.setToolTip(
+            "Queue the currently selected input files with the current settings.\n"
+            "Change settings and add again to build up a batch of variants."
+        )
+        self._add_batch_btn.clicked.connect(self._on_add_to_batch)
+        edit_row.addWidget(self._add_batch_btn)
+
+        for label, slot, tip in [
+            ("Remove",    self._on_batch_remove,    "Remove the selected row from the batch"),
+            ("Duplicate", self._on_batch_duplicate, "Copy the selected row — then edit one field to make a variant"),
+            ("Move Up",   lambda: self._on_batch_move(-1), "Move the selected row earlier in the run order"),
+            ("Move Down", lambda: self._on_batch_move(1),  "Move the selected row later in the run order"),
+            ("Clear",     self._on_batch_clear,     "Discard every row and reset the batch baseline"),
+        ]:
+            btn = QPushButton(label)
+            btn.setToolTip(tip)
+            btn.clicked.connect(slot)
+            edit_row.addWidget(btn)
+        edit_row.addStretch()
+        lay.addLayout(edit_row)
+
+        # View mode for the queue
+        self._batch_full_table = QCheckBox("Full table (all parameters)")
+        self._batch_full_table.setToolTip(
+            "Off: each row stores only what differs from the config file; blank "
+            "cells inherit it — narrow and readable.\n"
+            "On: every parameter is written on every row, so each row is fully "
+            "self-describing. Values differing from the config file stay highlighted."
+        )
+        self._batch_full_table.toggled.connect(self._on_batch_full_toggled)
+        lay.addWidget(self._batch_full_table)
+
+        # The queue itself
+        self._batch_table = QTableWidget(0, 0)
+        self._batch_table.setAlternatingRowColors(True)
+        self._batch_table.setStyleSheet("font-size: 10px;")
+        self._batch_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows)
+        self._batch_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers)
+        self._batch_table.setToolTip(
+            "Queued conversions. Blank cells inherit the value from the batch "
+            "baseline config saved alongside the CSV."
+        )
+
+        # Queue and log get their own sub-tabs.  In batch mode the Run tab is not
+        # even attached, so the batch needs its own log surface rather than
+        # writing into one the user cannot see.
+        self._batch_subtabs = QTabWidget()
+        self._batch_subtabs.addTab(self._batch_table, "Queue")
+
+        log_page = QWidget()
+        log_lay = QVBoxLayout(log_page)
+        log_lay.setContentsMargins(0, 4, 0, 0)
+        log_lay.setSpacing(4)
+
+        self._batch_run_status = QLabel("Ready")
+        self._batch_run_status.setStyleSheet("font-weight: bold; font-size: 11px;")
+        log_lay.addWidget(self._batch_run_status)
+
+        self._batch_log = LogWidget()
+        log_lay.addWidget(self._batch_log)
+
+        self._batch_subtabs.addTab(log_page, "Log")
+        lay.addWidget(self._batch_subtabs)
+
+        # Persistence + run
+        io_row = QHBoxLayout()
+        save_btn = QPushButton("Save Batch")
+        save_btn.setToolTip("Validate and write batch.csv plus its config snapshot")
+        save_btn.clicked.connect(self._on_batch_save)
+        io_row.addWidget(save_btn)
+
+        load_btn = QPushButton("Load Batch")
+        load_btn.setToolTip("Open an existing batch.csv (and its config snapshot, if present)")
+        load_btn.clicked.connect(self._on_batch_load)
+        io_row.addWidget(load_btn)
+
+        self._batch_run_btn = QPushButton("Run Batch")
+        self._batch_run_btn.setFixedHeight(30)
+        self._batch_run_btn.setStyleSheet("background: #2a7a3b; color: white; font-weight: bold;")
+        self._batch_run_btn.setToolTip(
+            "Save the batch, then convert every queued row.\n"
+            "Equivalent to:  eubi to_zarr <batch.csv>"
+        )
+        self._batch_run_btn.clicked.connect(self._on_batch_run)
+        io_row.addWidget(self._batch_run_btn)
+
+        self._batch_stop_btn = QPushButton("Stop Batch")
+        self._batch_stop_btn.setFixedHeight(30)
+        self._batch_stop_btn.setStyleSheet("background: #7a2a2a; color: white; font-weight: bold;")
+        self._batch_stop_btn.setEnabled(False)
+        self._batch_stop_btn.setToolTip(
+            "Cancel the running batch and kill its worker processes.\n"
+            "Conversions already finished are kept; the current one is aborted."
+        )
+        self._batch_stop_btn.clicked.connect(self._on_stop)
+        io_row.addWidget(self._batch_stop_btn)
+
+        io_row.addStretch()
+        lay.addLayout(io_row)
+
+        self._batch_status = QLabel("Batch is empty")
+        self._batch_status.setWordWrap(True)
+        self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
+        lay.addWidget(self._batch_status)
+
+        self._batch_tab = content
+
+    def _refresh_batch_table(self):
+        """Rebuild the queue view from the model."""
+        columns = self._batch.columns() if len(self._batch) else list(("input_path", "output_path"))
+        self._batch_table.setColumnCount(len(columns))
+        self._batch_table.setHorizontalHeaderLabels(columns)
+        self._batch_table.setRowCount(len(self._batch))
+
+        for r, row in enumerate(self._batch.rows):
+            for c, col in enumerate(columns):
+                # Render exactly as the CSV will, so the table previews the file
+                # rather than Python's repr.
+                text = to_cell(self._batch.cell(row, col))
+                item = QTableWidgetItem(text)
+                if col not in ("input_path", "output_path"):
+                    if self._batch.differs(row, col):
+                        # Stands out in full-table mode, where most cells simply
+                        # restate the config file.
+                        item.setBackground(QColor(74, 110, 60))
+                        item.setToolTip(
+                            f"Differs from the config file: {col} = {text}")
+                    elif text:
+                        item.setToolTip(f"Same as the config file: {col} = {text}")
+                self._batch_table.setItem(r, c, item)
+
+        self._batch_table.resizeColumnsToContents()
+
+        summary = self._batch.baseline_summary()
+        self._batch_baseline.setText(
+            f"Applies to every row — {summary}" if summary else "")
+
+        n = len(self._batch)
+        if n == 0:
+            self._batch_status.setText("Batch is empty")
+        else:
+            n_over = len(self._batch.columns()) - 2
+            self._batch_status.setText(
+                f"{n} conversion(s) queued — "
+                f"{n_over} per-row override column(s); blank cells inherit the baseline."
+            )
+
+    def _selected_batch_row(self) -> int:
+        rows = self._batch_table.selectionModel().selectedRows()
+        return rows[0].row() if rows else -1
+
+    def _batch_ui_config(self) -> dict:
+        """UI config as a batch should see it, with concatenation neutralised.
+
+        The Concatenation group is disabled in Batch mode but its values are
+        deliberately preserved so switching back to Run does not lose them.  They
+        must not leak into a batch, where they cannot be honoured.
+        """
+        cfg = self._ui_to_config()
+        cfg["concatenation"] = {k: "" for k in cfg.get("concatenation", {})}
+        return cfg
+
+    def _update_batch_availability(self, *_):
+        """Grey out 'Add to Batch' while an aggregative conversion is configured."""
+        ok, reason = can_batch(self._batch_ui_config())
+        self._add_batch_btn.setEnabled(ok)
+        self._add_batch_btn.setToolTip(reason if not ok else (
+            "Queue this conversion instead of running it now.\n"
+            "Configure, add, repeat — then run them all from the Batch tab."
+        ))
+
+    # ── Batch callbacks ───────────────────────────────────────────────────────
+
+    def _on_add_to_batch(self):
+        selected = self._browser.selected_paths()
+        output_path = self._output_edit.text().strip()
+
+        if not selected:
+            self._log.append_line("ERROR: No files selected — nothing to add to the batch.")
+            return
+        if not output_path:
+            self._log.append_line("ERROR: No output path specified.")
+            return
+
+        cfg = self._batch_ui_config()
+
+        ok, reason = can_batch(cfg)
+        if not ok:
+            self._log.append_line(f"ERROR: {reason}")
+            self._tabs.setCurrentIndex(_LAST_TAB)
+            return
+
+        # Anchor the batch to the config saved on disk, not to this first row.
+        # Diffing the first row against itself would hide every setting the user
+        # had already changed before pressing Add.
+        if self._batch.base_config is None:
+            try:
+                persisted = load_config(self._config_path or None)
+            except Exception as exc:
+                self._log.append_line(
+                    f"NOTE: could not read the saved config ({exc}); "
+                    "using the current settings as the batch baseline instead."
+                )
+                persisted = cfg
+            # Anchor on the saved config so this row's deliberate changes stay
+            # visible, but pin compression / ranges from the live UI — no row can
+            # carry those, so the baseline is the only place they can take effect.
+            self._batch.set_baseline(make_baseline(persisted, cfg))
+
+        blocked = self._batch.add(cfg, selected, output_path)
+
+        self._refresh_batch_table()
+        self._log.append_line(
+            f"Added {len(selected)} conversion(s) to the batch "
+            f"({len(self._batch)} queued)."
+        )
+        self._tabs.setCurrentIndex(_LAST_TAB)  # Batch tab
+
+        if blocked:
+            # Shown on the Batch tab itself — we just switched there, so a Run-tab
+            # log line alone would go unread, and silently inheriting these would
+            # produce output that does not match what the user configured.
+            names = ", ".join(sorted(blocked))
+            self._log.append_line(
+                f"WARNING: cannot vary per row — {names}. "
+                "The batch baseline applies to every row."
+            )
+            self._batch_status.setText(
+                f"⚠ {len(self._batch)} row(s) queued, but these settings cannot "
+                f"differ between rows and will use the batch baseline: {names}. "
+                "Put them in a separate batch, or press Save Config first to make "
+                "them the baseline."
+            )
+            self._batch_status.setStyleSheet("font-size: 10px; color: #ffb74d;")
+        else:
+            self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
+
+    def _on_batch_remove(self):
+        i = self._selected_batch_row()
+        if i < 0:
+            self._batch_status.setText("Select a row first.")
+            return
+        self._batch.remove(i)
+        self._refresh_batch_table()
+
+    def _on_batch_duplicate(self):
+        i = self._selected_batch_row()
+        if i < 0:
+            self._batch_status.setText("Select a row first.")
+            return
+        self._batch.duplicate(i)
+        self._refresh_batch_table()
+        self._batch_table.selectRow(i + 1)
+
+    def _on_batch_move(self, delta: int):
+        i = self._selected_batch_row()
+        if i < 0:
+            self._batch_status.setText("Select a row first.")
+            return
+        self._batch_table.selectRow(self._batch.move(i, delta))
+        self._refresh_batch_table()
+
+    def _on_batch_clear(self):
+        self._batch.clear()
+        self._refresh_batch_table()
+
+    def _sync_batch_comparison(self):
+        """Point batch highlighting at the currently selected config file."""
+        try:
+            self._batch.set_compare_config(load_config(self._config_path or None))
+        except Exception:
+            self._batch.set_compare_config(None)   # falls back to the baseline
+
+    def _on_batch_full_toggled(self, checked: bool):
+        # Rows always hold every parameter, so this only changes what is rendered
+        # and written — no data is lost either way.
+        self._batch.full = checked
+        self._refresh_batch_table()
+
+    def _batch_save_to(self, path: str) -> str | None:
+        """Validate then write the batch. Returns the CSV path, or None on failure."""
+        problems = self._batch.validate()
+        if problems:
+            self._batch_status.setText(
+                f"Cannot save — {len(problems)} problem(s); see the Run tab log."
+            )
+            self._log.append_line("Batch validation failed:")
+            for p in problems:
+                self._log.append_line(f"  • {p}")
+            return None
+        try:
+            written = self._batch.save(path)
+        except OSError as exc:
+            self._batch_status.setText(f"Save failed: {exc}")
+            return None
+        self._batch_status.setText(
+            f"Saved {len(self._batch)} row(s) to {os.path.basename(written)} "
+            f"(+ {CONFIG_SNAPSHOT_NAME}) in {os.path.dirname(written)}"
+        )
+        return written
+
+    def _on_batch_save(self):
+        if not len(self._batch):
+            self._batch_status.setText("Batch is empty — nothing to save.")
+            return
+        default_path = os.path.join(DEFAULT_CONFIG_DIR, "batches", DEFAULT_BATCH_NAME)
+        os.makedirs(os.path.dirname(default_path), exist_ok=True)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Batch", default_path, "CSV files (*.csv);;All files (*)")
+        if path:
+            self._batch_save_to(path)
+
+    def _on_batch_load(self):
+        start_dir = os.path.join(DEFAULT_CONFIG_DIR, "batches")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Batch", start_dir if os.path.isdir(start_dir) else DEFAULT_CONFIG_DIR,
+            "CSV files (*.csv);;All files (*)")
+        if not path:
+            return
+        try:
+            self._batch = BatchModel.load(path)
+        except Exception as exc:
+            self._batch_status.setText(f"Load failed: {exc}")
+            return
+        self._refresh_batch_table()
+        if self._batch.base_config is not None:
+            self._load_config_to_ui(self._batch.base_config)
+            self._batch_status.setText(
+                f"Loaded {len(self._batch)} row(s) from {os.path.basename(path)}; "
+                f"baseline config applied to the parameter tabs."
+            )
+        else:
+            self._batch_status.setText(
+                f"Loaded {len(self._batch)} row(s) from {os.path.basename(path)}. "
+                f"No {CONFIG_SNAPSHOT_NAME} found — rows will inherit the current UI settings."
+            )
+
+    def _on_batch_run(self):
+        if not len(self._batch):
+            self._batch_status.setText("Batch is empty — nothing to run.")
+            return
+
+        default_path = os.path.join(DEFAULT_CONFIG_DIR, "batches", DEFAULT_BATCH_NAME)
+        os.makedirs(os.path.dirname(default_path), exist_ok=True)
+        csv_path = self._batch_save_to(default_path)
+        if csv_path is None:
+            return
+
+        # The batch baseline is the global config for the run; each CSV row
+        # overrides it.  Pass the CSV as inputPath (a bare string) and leave
+        # inputPaths empty — take_filepaths() treats a list as explicit image
+        # paths and would never reach its table branch.
+        cfg = deepcopy(self._batch.base_config or self._ui_to_config())
+        cfg["inputPaths"]     = []
+        cfg["inputPath"]      = csv_path
+        cfg["outputPath"]     = ""      # each row carries its own output_path
+        cfg["includePattern"] = ""
+        cfg["excludePattern"] = ""
+
+        self._populate_param_tree(cfg)
+        self._active_log = self._batch_log        # batch output has its own screen
+        self._batch_log.clear()
+        self._batch_log.append_line(
+            f"Running batch: {csv_path} ({len(self._batch)} row(s))")
+
+        self._start_btn.setEnabled(False)
+        self._batch_run_btn.setEnabled(False)
+        self._batch_stop_btn.setEnabled(True)
+        self._stop_btn.setEnabled(True)
+        self._set_run_status("Running batch...", "#4fc3f7")
+
+        self._worker = ConversionWorker(cfg, self)
+        self._worker.log_line.connect(self._batch_log.append_line)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.start()
+
+        self._tabs.setCurrentIndex(_LAST_TAB)
+        self._batch_subtabs.setCurrentIndex(1)    # jump to the Log sub-tab
 
     # ── Config load/save ──────────────────────────────────────────────────────
 
@@ -1347,6 +1866,8 @@ class ConvertPage(QWidget):
                 self._load_config_to_ui(cfg)
                 self._config_path = path
                 self._config_path_label.setText(os.path.basename(path))
+                self._sync_batch_comparison()
+                self._refresh_batch_table()
             except Exception as exc:
                 self._log.append_line(f"ERROR loading config: {exc}")
 
@@ -1375,14 +1896,39 @@ class ConvertPage(QWidget):
             else:
                 self._config_path = path
             self._config_path_label.setText(os.path.basename(self._config_path))
+            self._sync_batch_comparison()
+            self._refresh_batch_table()
             self._log.append_line(f"Config saved to {os.path.basename(self._config_path)}")
         except Exception as exc:
             self._log.append_line(f"ERROR saving config: {exc}")
+
+    def _on_revert_config(self):
+        """Reload every parameter from the config file currently in use.
+
+        Distinct from Reset, which overwrites the file with the built-in
+        defaults.  This only discards unsaved UI edits, so it is the quick way
+        back to a known-good starting point without re-picking the file.
+        """
+        try:
+            cfg = load_config(self._config_path or None)
+        except Exception as exc:
+            self._log.append_line(f"ERROR reverting config: {exc}")
+            return
+
+        self._load_config_to_ui(cfg)
+        self._sync_batch_comparison()
+        self._refresh_batch_table()
+        self._update_batch_availability()
+        self._populate_param_tree(self._ui_to_config())
+        name = os.path.basename(self._config_path) if self._config_path else "the default config"
+        self._log.append_line(f"Parameters reverted to {name}.")
 
     def _on_reset_config(self):
         try:
             cfg = reset_config(self._config_path or None)
             self._load_config_to_ui(cfg)
+            self._sync_batch_comparison()
+            self._refresh_batch_table()
             self._log.append_line("Config reset to defaults.")
         except Exception as exc:
             self._log.append_line(f"ERROR resetting config: {exc}")
@@ -1460,8 +2006,8 @@ class ConvertPage(QWidget):
         self._param_tree.resizeColumnToContents(0)
 
     def _on_tab_changed(self, index: int):
-        """Refresh parameter tree whenever the Run tab (index 5) becomes active."""
-        if index == 5:
+        """Refresh the parameter tree whenever the final tab becomes active."""
+        if index == _LAST_TAB:
             self._on_refresh_params()
 
     def _on_refresh_params(self):
@@ -1522,6 +2068,7 @@ class ConvertPage(QWidget):
         cfg["excludePattern"]  = self._exclude_edit.text().strip()
 
         self._populate_param_tree(cfg)
+        self._active_log = self._log
         self._log.clear()
 
         self._start_btn.setEnabled(False)
@@ -1536,13 +2083,13 @@ class ConvertPage(QWidget):
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
 
-        self._tabs.setCurrentIndex(5)  # Switch to Run tab
+        self._tabs.setCurrentIndex(_LAST_TAB)  # Switch to Run tab
 
     def _on_stop(self):
         if self._worker:
             self._worker.cancel()
             QTimer.singleShot(3000, self._force_stop)
-        self._run_status.setText("Stopping...")
+        self._set_run_status("Stopping...")
         self._stop_btn.setEnabled(False)
 
     def _force_stop(self):
@@ -1555,15 +2102,25 @@ class ConvertPage(QWidget):
         self._reset_run_ui("Done", success=True)
 
     def _on_failed(self, tb: str):
-        self._log.append_line(f"ERROR: {tb}")
+        self._active_log.append_line(f"ERROR: {tb}")
         self._reset_run_ui("Failed")
+
+    def _set_run_status(self, text: str, color: str = ""):
+        """Update both status labels so either mode's surface stays accurate."""
+        style = "font-weight: bold; font-size: 11px;"
+        if color:
+            style += f" color: {color};"
+        for label in (self._run_status, self._batch_run_status):
+            label.setText(text)
+            label.setStyleSheet(style)
 
     def _reset_run_ui(self, status: str, success: bool = False):
         self._start_btn.setEnabled(True)
+        self._batch_run_btn.setEnabled(True)
+        self._batch_stop_btn.setEnabled(False)
         self._stop_btn.setEnabled(False)
-        self._run_status.setText(status)
         color = "#4caf50" if success else ("#ff6b6b" if status == "Failed" else "#aaa")
-        self._run_status.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {color};")
+        self._set_run_status(status, color)
         self._worker = None
 
     # ── Public API ────────────────────────────────────────────────────────────

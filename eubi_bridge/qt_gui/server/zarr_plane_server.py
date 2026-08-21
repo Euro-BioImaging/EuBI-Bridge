@@ -140,6 +140,22 @@ def _invalidate_orientation_cache(pyr_id: int) -> None:
             del _orientation_axes_cache[k]
 
 
+def _ngff_meta_mtime(path: str):
+    """Modification time of a dataset's NGFF metadata file, or None if remote.
+
+    Used to notice that a dataset was rewritten underneath us.  Only local
+    paths are stamped; remote stores fall back to plain path caching.
+    """
+    if not isinstance(path, str) or path.startswith(("http://", "https://", "s3://", "gs://")):
+        return None
+    for name in ("zarr.json", ".zattrs"):
+        try:
+            return os.path.getmtime(os.path.join(path, name))
+        except OSError:
+            continue
+    return None
+
+
 class PyramidCache:
     def __init__(self, max_size=MAX_CACHE_SIZE):
         self._cache = OrderedDict()
@@ -147,16 +163,32 @@ class PyramidCache:
         self._lock = threading.Lock()
 
     def get(self, path):
+        # Re-converting to an existing path changes shapes on disk while this
+        # cache still holds the old Pyramid; TensorStore then rejects the
+        # mismatch with "Propagated bounds ... incompatible with existing
+        # bounds".  Stamp entries with the metadata mtime so a rewrite is seen.
+        stamp = _ngff_meta_mtime(path)
         with self._lock:
-            if path in self._cache:
-                self._cache.move_to_end(path)
-                return self._cache[path]
+            entry = self._cache.get(path)
+            if entry is not None:
+                cached_stamp, cached_pyr = entry
+                if cached_stamp == stamp:
+                    self._cache.move_to_end(path)
+                    return cached_pyr
+                del self._cache[path]
+                _invalidate_orientation_cache(id(cached_pyr))
+                _stale = True
+            else:
+                _stale = False
+        if _stale:
+            # Arrays cached by TensorStore carry the old bounds too.
+            tensorstore_cache.invalidate(path)
         try:
             pyr = Pyramid(path)
             with self._lock:
-                self._cache[path] = pyr
+                self._cache[path] = (stamp, pyr)
                 if len(self._cache) > self._max_size:
-                    _evicted_path, evicted_pyr = self._cache.popitem(last=False)
+                    _evicted_path, (_evicted_stamp, evicted_pyr) = self._cache.popitem(last=False)
                     _invalidate_orientation_cache(id(evicted_pyr))
             return pyr
         except Exception as e:
@@ -297,6 +329,17 @@ class TensorStoreCache:
         self._failed: set = set()
         self._lock = threading.Lock()
         self._max_size = max_size
+
+    def invalidate(self, zarr_path: str) -> None:
+        """Drop every cached store for *zarr_path* (all levels).
+
+        Cached stores are opened with recheck_cached_data=False, so they keep
+        serving the bounds the dataset had when it was first opened.
+        """
+        with self._lock:
+            for key in [k for k in self._cache if k[0] == zarr_path]:
+                del self._cache[key]
+            self._failed -= {k for k in self._failed if k[0] == zarr_path}
 
     @staticmethod
     def _build_kvstore(zarr_path: str, level_path: str) -> dict:
@@ -1200,7 +1243,10 @@ def normalize_and_composite(plane_data, channels_config, percentile_key_base=Non
     elif plane_data.ndim == 3:
         n_ch = plane_data.shape[0]
         h, w = plane_data.shape[1], plane_data.shape[2]
-        rgb = np.zeros((h, w, 3), dtype=np.float32)
+        # Accumulate each colour component in its own contiguous array.  Writing
+        # into rgb[..., k] instead strides by 3 through the output and measured
+        # ~10x slower than the contiguous equivalent.
+        acc = [np.zeros((h, w), dtype=np.float32) for _ in range(3)]
 
         for i in range(n_ch):
             if i >= len(channels_config):
@@ -1209,7 +1255,6 @@ def normalize_and_composite(plane_data, channels_config, percentile_key_base=Non
             if not ch_cfg.get('visible', True):
                 continue
 
-            ch_data = plane_data[i].astype(np.float32)
             vmin = ch_cfg.get('intensityMin')
             vmax = ch_cfg.get('intensityMax')
 
@@ -1219,21 +1264,25 @@ def normalize_and_composite(plane_data, channels_config, percentile_key_base=Non
                 if cached:
                     vmin, vmax = cached
                 else:
-                    vmin = float(np.percentile(ch_data, 1))
-                    vmax = float(np.percentile(ch_data, 99))
+                    # Percentiles upcast to float64 internally, so computing them
+                    # on the raw plane matches the float32 copy exactly while
+                    # avoiding the conversion.
+                    vmin = float(np.percentile(plane_data[i], 1))
+                    vmax = float(np.percentile(plane_data[i], 99))
                     if pct_key:
                         percentile_cache.put(pct_key, vmin, vmax)
 
+            r, g, b = hex_to_rgb(ch_cfg.get('color', '#FFFFFF'))
+
+            ch_data = plane_data[i].astype(np.float32)
             if vmax > vmin:
                 ch_data = np.clip((ch_data - vmin) / (vmax - vmin), 0, 1)
             else:
                 ch_data = np.zeros_like(ch_data)
+            for k, c in enumerate((r, g, b)):
+                acc[k] += ch_data * (c / 255.0)
 
-            r, g, b = hex_to_rgb(ch_cfg.get('color', '#FFFFFF'))
-            rgb[..., 0] += ch_data * (r / 255.0)
-            rgb[..., 1] += ch_data * (g / 255.0)
-            rgb[..., 2] += ch_data * (b / 255.0)
-
+        rgb = np.stack(acc, axis=-1)
         rgb = np.clip(rgb, 0, 1)
         return (rgb * 255).astype(np.uint8)
 

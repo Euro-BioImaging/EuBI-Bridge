@@ -144,6 +144,71 @@ def parse_scales(manager: ArrayManager, job: ConversionJob) -> Tuple:
     return _parse_axis_params(manager, job.extra, 2, manager.scaledict)
 
 
+def parse_translation(manager: ArrayManager, job: ConversionJob) -> Optional[Tuple]:
+    """Per-axis physical origin of this output, or None when it is the default.
+
+    When a mosaic is split into one container per tile, each tile's stage
+    position is the only thing that says how the pieces fit back together.
+    ``translation`` is a standard NGFF coordinateTransformation, so writing it
+    keeps the layout in the spec rather than in a sidecar — any reader
+    (multiview-stitcher, napari, BigStitcher) can then place the tiles without
+    eubi-bridge-specific code.
+
+    Returns a tuple ordered like ``manager.axes``, or None if there is no
+    non-trivial origin (single-tile inputs, or formats that do not expose one).
+    """
+    origin = getattr(manager, 'origindict', None)
+    if not origin:
+        return None
+    # An all-zero origin is still written: the tile at (0, 0) belongs to the same
+    # coordinate system as its neighbours, and omitting the field there would
+    # leave the set inconsistent — some tiles placed, one not.
+    return tuple(float(origin.get(ax, 0.0)) for ax in manager.axes)
+
+
+def build_acquisition_metadata(manager: ArrayManager,
+                               job: ConversionJob) -> Optional[dict]:
+    """Acquisition detail that NGFF has no standard field for, or None.
+
+    Enabled by ``conversion.export_acquisition_metadata``.  ``None`` means auto:
+    on whenever the conversion splits one acquisition into several containers
+    (scenes / tiles / views / illuminations), because that is exactly when the
+    relationship between the outputs is lost and cannot be recovered from the
+    OME-Zarr alone.  Positions are NOT included here — those are standard NGFF
+    ``translation`` transforms (see :func:`parse_translation`).
+    """
+    flag = getattr(job.conversion, 'export_acquisition_metadata', None)
+    is_split = any(getattr(manager, attr, None) is not None
+                   for attr in ('mosaic_tile_index',)) or bool(
+                   getattr(manager, 'origindict', None))
+    series_path = str(getattr(manager, 'series_path', '') or '')
+    for marker in ('_view', '_illu', '_tile', '_scene'):
+        if marker in os.path.basename(series_path):
+            is_split = True
+            break
+    if flag is False or (flag is None and not is_split):
+        return None
+
+    meta: dict = {}
+    for key, attr in (('scene_index', 'series'),
+                      ('tile_index', 'mosaic_tile_index')):
+        val = getattr(manager, attr, None)
+        if val is not None:
+            meta[key] = val
+    # View / illumination indices are encoded in the series_path suffix, which is
+    # the only place they survive once the scene managers are split.
+    import re as _re
+    for key, pat in (('view_index', r'_view(\d+)'),
+                     ('illumination_index', r'_illu(\d+)')):
+        m = _re.search(pat, os.path.basename(series_path))
+        if m:
+            meta[key] = int(m.group(1))
+    if 'origindict' in dir(manager) and manager.origindict:
+        meta['origin_um'] = dict(manager.origindict)
+    meta['source_path'] = str(getattr(job, 'input_path', '') or '')
+    return meta or None
+
+
 def parse_scale_factors(manager: ArrayManager, job: ConversionJob) -> Tuple:
     """Parse pyramid scale factors from the job's DownscaleConfig."""
     ds = job.downscale
@@ -427,6 +492,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     pyr=manager.pyr,
                     output_path=output_path,
                     axes=manager.axes,
+                    translation=parse_translation(manager, job),
                     units=parse_units(manager, job),
                     channel_meta=channel_meta,
                     zarr_format=conv.zarr_format,
@@ -455,6 +521,8 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     ome_zarr_version=conv.ome_zarr_version,
                     axes=manager.axes,
                     scales=parse_scales(manager, job),
+                    translation=parse_translation(manager, job),
+                    acquisition_metadata=build_acquisition_metadata(manager, job),
                     units=parse_units(manager, job),
                     channel_meta=channel_meta,
                     auto_chunk=conv.auto_chunk,
