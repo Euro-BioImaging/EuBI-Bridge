@@ -1,9 +1,9 @@
 """
-Conversion worker — manages a spawned conversion subprocess from a QThread.
+Conversion worker: manages a spawned conversion subprocess from a QThread.
 
 The actual conversion (bridge.to_zarr) runs in a dedicated child process so
-that cancel() can reliably kill the entire process tree — including all
-ProcessPoolExecutor workers spawned by dispatcher.py — without depending on
+that cancel() can reliably kill the entire process tree, including all
+ProcessPoolExecutor workers spawned by dispatcher.py, without depending on
 cooperation from asyncio.gather or concurrent.futures.
 """
 from __future__ import annotations
@@ -81,7 +81,7 @@ def _split_patterns(patterns_str: str):
 
     Patterns are passed through verbatim: path_utils treats anything containing
     *, ? or [ as a glob and everything else as a substring.  Stripping the
-    asterisks here (as this used to) made the GUI and the CLI disagree — the GUI
+    asterisks here (as this used to) made the GUI and the CLI disagree: the GUI
     silently turned '*.tif' into 'tif' while the same string on the CLI matched
     nothing.
     """
@@ -184,6 +184,9 @@ def _build_kwargs(config: dict) -> dict:
         "override_channel_names":   conv_config.get("overrideChannelNames", False),
         "channel_intensity_limits": "from_dtype" if meta_config.get("channelIntensityLimits", "from_datatype") == "from_datatype" else "from_array",
         "metadata_reader":          meta_config.get("metadataReader", "bioio"),
+        # "idx,RRGGBB;..." as the CLI expects; empty means every channel is
+        # coloured automatically.
+        "channel_colors":           meta_config.get("channelColors", ""),
         "save_omexml":              conv_config.get("saveOmeXml", True),
         "squeeze":                  conv_config.get("squeezeDimensions", True),
         "skip_dask":                conv_config.get("skipDask", False),
@@ -231,10 +234,10 @@ class ConversionWorker(QThread):
     """Manages a spawned conversion subprocess.
 
     Signals:
-        log_line(str)   — structured log line (forwarded from child process)
-        progress(int)   — 0-100 progress placeholder
-        finished()      — conversion completed successfully
-        failed(str)     — conversion failed; argument is the traceback string
+        log_line(str)   : structured log line (forwarded from child process)
+        progress(int)   : 0-100 progress placeholder
+        finished()      : conversion completed successfully
+        failed(str)     : conversion failed; argument is the traceback string
     """
 
     log_line = pyqtSignal(str)
@@ -293,7 +296,7 @@ class ConversionWorker(QThread):
             self._conv_proc = ctx.Process(
                 target=_conversion_subprocess,
                 args=(call_args, log_queue, result_queue),
-                daemon=False,   # must be False — daemon processes cannot spawn children
+                daemon=False,   # must be False, daemon processes cannot spawn children
             )
             self._conv_proc.start()
         except Exception:

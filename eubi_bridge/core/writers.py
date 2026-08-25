@@ -20,6 +20,55 @@ import zarr
 from natsort import natsorted
 
 
+def cast_to_dtype(arr, dtype):
+    """Return *arr* as *dtype*, clipping instead of wrapping.
+
+    The output store is created with the requested dtype, so the data has to
+    match it.  A plain ``astype`` would wrap on a narrowing cast (uint16 4000
+    becomes uint8 160), silently corrupting the image; clipping to the target's
+    range saturates instead, which is what "convert to uint8" is understood to
+    mean.  Float targets are not clipped: their range already covers any integer
+    source.
+
+    Returns *arr* unchanged when the dtype already matches, so the widening
+    casts that previously worked by implicit conversion keep the same path.
+    """
+    dtype = np.dtype(dtype)
+    if arr.dtype == dtype:
+        return arr
+
+    if np.issubdtype(dtype, np.integer):
+        info = np.iinfo(dtype)
+        if np.issubdtype(arr.dtype, np.floating):
+            # NaN has no integer counterpart: it survives clip() and then casts
+            # to a platform-dependent value with a RuntimeWarning.  Map it to 0
+            # (the same "no signal" the surrounding background carries) so the
+            # result is defined.  +/-inf clamp to the target's bounds naturally.
+            # np.where rather than nan_to_num: dask's nan_to_num rejects the
+            # nan/posinf/neginf keywords, and +/-inf already clamp via clip().
+            arr = np.where(np.isnan(arr), 0, arr)
+            # Round before clipping so 254.7 -> 255 rather than 254.
+            arr = arr.round()
+        lo, hi = info.min, info.max
+        # Only clip where the source can actually exceed the target, so a
+        # widening cast stays a pure dtype change.
+        src_lo, src_hi = _dtype_range(arr.dtype)
+        if src_lo is None or src_lo < lo or src_hi > hi:
+            arr = arr.clip(lo, hi)
+    return arr.astype(dtype)
+
+
+def _dtype_range(dtype):
+    """(min, max) of *dtype*, or (None, None) when it is unbounded."""
+    dtype = np.dtype(dtype)
+    if np.issubdtype(dtype, np.integer):
+        info = np.iinfo(dtype)
+        return info.min, info.max
+    if np.issubdtype(dtype, np.floating):
+        return None, None
+    return None, None
+
+
 def _zarr_group(store, overwrite: bool, zarr_format: int) -> zarr.Group:
     """Create or open a zarr group, handling keyword differences across zarr versions."""
     try:
@@ -844,8 +893,13 @@ async def write_with_queue_async(
                     logger.info(f"arr shape: {arr.shape}, region shape: {[s.stop - s.start for s in region_slice]}")
 
                 try:
-                    # Read region using unified abstraction
+                    # Read region using unified abstraction.  The cast happens
+                    # per region, not on the whole array: regions are already
+                    # numpy, so this works for dask, DynamicArray and zarr alike
+                    # and adds no memory beyond the region already in hand.
                     data = _read_region(arr, region_slice)
+                    if dtype is not None and data.dtype != dtype:
+                        data = cast_to_dtype(data, dtype)
                     
                     # Enqueue
                     q.put((region_slice, data))
@@ -1066,7 +1120,9 @@ async def store_multiscale_async(
             size = arr.shape[idx]
         else:
             size = 1
-        meta.autocompute_omerometa(size, arr.dtype)
+        # The written dtype, not the source: display windows derived from a
+        # uint16 source would be 0-65535 for uint8 data, rendering it black.
+        meta.autocompute_omerometa(size, dtype)
     elif channels is not None:
         if verbose:
             logger.info(f"Adding channel metadata: {channels}")

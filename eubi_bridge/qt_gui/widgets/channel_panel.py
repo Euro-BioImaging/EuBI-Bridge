@@ -193,7 +193,7 @@ class _ChannelRow(QWidget):
         self.changed.emit()
 
     def set_range(self, vmin: float, vmax: float):
-        """Called by MinMaxWorker result — updates spinboxes without re-emitting."""
+        """Called by MinMaxWorker result: updates spinboxes without re-emitting."""
         self._building = True
         self._min_spin.setValue(vmin)
         self._max_spin.setValue(vmax)
@@ -219,8 +219,8 @@ class ChannelPanel(QWidget):
     """Scrollable list of per-channel collapsible controls.
 
     Signals:
-        channels_changed(list[dict])  — emitted (debounced) on any change
-        auto_requested(int)           — channel index whose Auto button was clicked
+        channels_changed(list[dict])  : emitted (debounced) on any change
+        auto_requested(int)           : channel index whose Auto button was clicked
     """
 
     channels_changed = pyqtSignal(list)
@@ -246,7 +246,7 @@ class ChannelPanel(QWidget):
         # Apply per-channel auto-contrast to every channel at once.
         self._auto_all_btn = QPushButton("Auto (All Channels)")
         self._auto_all_btn.setToolTip(
-            "Set the display min/max of every channel from the current view — "
+            "Set the display min/max of every channel from the current view, "
             "like clicking each channel's Auto button."
         )
         self._auto_all_btn.clicked.connect(self._emit_auto_all)

@@ -1,8 +1,8 @@
 """
-Convert page — full conversion config UI with sidebar browser and run panel.
+Convert page: full conversion config UI with sidebar browser and run panel.
 
 Layout:
-  Left : SidebarBrowser(mode="conversion") — select input files/folders
+  Left : SidebarBrowser(mode="conversion"), select input files/folders
   Right: QTabWidget (Cluster | Reader | Conversion | Downscaling | Metadata | Run)
          + Config management toolbar above tabs
 """
@@ -15,6 +15,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -40,6 +41,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from eubi_bridge.utils.metadata_utils import (
+    DEFAULT_CHANNEL_COLORS, auto_channel_color)
 from eubi_bridge.qt_gui.core.batch import (
     CONFIG_SNAPSHOT_NAME,
     DEFAULT_BATCH_NAME,
@@ -47,7 +50,15 @@ from eubi_bridge.qt_gui.core.batch import (
     can_batch,
     make_baseline,
     to_cell,
+    column_header,
+    parameter_tabs,
+    with_separators,
+    SEPARATOR,
+    uneditable_reason,
 )
+from eubi_bridge.qt_gui.widgets.batch_cell_editor import (
+    BatchCellEditor, _ADD_PARAMETER)
+from eubi_bridge.qt_gui.widgets.grouped_header import GroupedHeaderView
 from eubi_bridge.qt_gui.core.config import (
     DEFAULT_CONFIG_DIR,
     load_config,
@@ -89,7 +100,7 @@ def _labeled_spin(label: str, minimum: int, maximum: int, value: int, step: int 
 
 
 def _form_row(label: str, *widgets) -> QHBoxLayout:
-    """Fixed-width label followed by one or more widgets — values align across rows."""
+    """Fixed-width label followed by one or more widgets, so values align across rows."""
     h = QHBoxLayout()
     h.setSpacing(4)
     lbl = QLabel(label)
@@ -194,7 +205,7 @@ class ConvertPage(QWidget):
 
         self._output_edit = QLineEdit()
         self._output_edit.setPlaceholderText("Navigate below to set output path...")
-        self._output_edit.setToolTip("Output directory — edit directly or navigate the browser below")
+        self._output_edit.setToolTip("Output directory: edit directly or navigate the browser below")
         out_layout.addWidget(self._output_edit)
 
         self._output_browser = SidebarBrowser(mode="output")
@@ -226,22 +237,22 @@ class ConvertPage(QWidget):
         save_btn.clicked.connect(self._on_save_config)
         toolbar.addWidget(save_btn)
 
-        revert_btn = QPushButton("Revert")
+        revert_btn = QPushButton("Restore Current Config")
         revert_btn.setFixedHeight(24)
         revert_btn.setToolTip(
             "Discard unsaved edits and reload every parameter from the config "
             "file currently in use.\n"
-            "Unlike Reset, this restores your saved settings rather than the "
-            "built-in defaults."
+            "Leaves the file untouched, unlike Reset to Installation Defaults."
         )
         revert_btn.clicked.connect(self._on_revert_config)
         toolbar.addWidget(revert_btn)
 
-        reset_btn = QPushButton("Reset")
+        reset_btn = QPushButton("Reset to Installation Defaults")
         reset_btn.setFixedHeight(24)
         reset_btn.setToolTip(
-            "Reset every parameter to the built-in defaults and write them to "
-            "the config file. Use Revert to go back to your saved settings instead."
+            "Reset every parameter to the defaults shipped with EuBI-Bridge and "
+            "write them to the config file.\n"
+            "Use Restore Current Config to go back to your saved settings instead."
         )
         reset_btn.clicked.connect(self._on_reset_config)
         toolbar.addWidget(reset_btn)
@@ -253,7 +264,7 @@ class ConvertPage(QWidget):
 
         right_layout.addLayout(toolbar)
 
-        # Execution mode — chooses what the final parameter tab is.  Run converts
+        # Execution mode, which chooses what the final parameter tab is.  Run converts
         # the current selection straight away; Batch queues conversions into a
         # table that is executed later.
         self._mode_bar = QTabBar()
@@ -384,7 +395,7 @@ class ConvertPage(QWidget):
         self._use_slurm.toggled.connect(_update_memory_visibility)
         _update_memory_visibility()
 
-        # SLURM-specific fields — wrapped in containers so setVisible hides label too
+        # SLURM-specific fields, wrapped in containers so setVisible hides label too
         def _slurm_row(label: str, widget: QWidget) -> QWidget:
             container = QWidget()
             container.setLayout(_form_row(label, widget))
@@ -792,9 +803,13 @@ class ConvertPage(QWidget):
         chunk_layout.addWidget(self._manual_chunk_widget)
         self._manual_chunk_widget.setVisible(False)
 
+        # Turning auto-chunking on makes the manual sizes inert, so reset them
+        # to their defaults rather than carrying a value the writer ignores.
+        # The Batch dialog clears the same overrides for the same reason.
         self._auto_chunk.toggled.connect(lambda c: (
             self._target_chunk_mb.setEnabled(c),
             self._manual_chunk_widget.setVisible(not c),
+            self._reset_manual_chunks() if c else None,
         ))
         lay.addWidget(chunk_group)
 
@@ -875,7 +890,7 @@ class ConvertPage(QWidget):
         # silently-ignored setting is worse than a disabled one.
         self._concat_batch_note = QLabel(
             "Not available in Batch mode. A batch is a table with one row per "
-            "input file, so it can only describe one-to-one conversions — an "
+            "input file, so it can only describe one-to-one conversions. An "
             "aggregative job spans several files and has no row to live on. "
             "Switch to Run mode to concatenate, or clear these fields and batch "
             "the files individually."
@@ -885,6 +900,15 @@ class ConvertPage(QWidget):
             "color: #ffb74d; font-style: italic; font-size: 10px;")
         concat_layout.addWidget(self._concat_batch_note)
         self._concat_edits: dict[str, QLineEdit] = {}
+        # Placeholder per axis: a single hardcoded example would show the time
+        # tag in every field and read as though the others expected it too.
+        _concat_ax_hints = {
+            "Time":    "e.g. _t for the time tag",
+            "Channel": "e.g. _c for the channel tag",
+            "Z":       "e.g. _z for the z tag",
+            "Y":       "e.g. _y for the Y tile tag",
+            "X":       "e.g. _x for the X tile tag",
+        }
         _concat_ax_tips = {
             "Time":    "Filename tag that identifies the time-point index in a file series (e.g. '_t').",
             "Channel": "Filename tag that identifies the channel index in a file series (e.g. '_c').",
@@ -894,7 +918,7 @@ class ConvertPage(QWidget):
         }
         for ax in ("Time", "Channel", "Z", "Y", "X"):
             edit = QLineEdit()
-            edit.setPlaceholderText(f"e.g. _t for time tag")
+            edit.setPlaceholderText(_concat_ax_hints[ax])
             edit.setToolTip(
                 f"{_concat_ax_tips[ax]}\n"
                 "Files whose names contain this tag are grouped and concatenated\n"
@@ -971,8 +995,13 @@ class ConvertPage(QWidget):
 
         lay.addWidget(self._layer_controls)
         self._layer_controls.setVisible(False)
+        # Auto-detection makes an explicit layer count inert; reset it so the
+        # form never shows a number that will not be used.
         self._auto_detect_layers.toggled.connect(
-            lambda c: self._layer_controls.setVisible(not c)
+            lambda c: (
+                self._layer_controls.setVisible(not c),
+                self._num_layers.setValue(4) if c else None,
+            )
         )
 
         self._min_dim_size = QSpinBox()
@@ -990,7 +1019,7 @@ class ConvertPage(QWidget):
         self._scale_spins: dict[str, QSpinBox] = {}
         defaults = {"t": 1, "c": 1, "z": 2, "y": 2, "x": 2}
         _scale_dim_tips = {
-            "T": "Downscale factor along T (time). Usually 1 — time is rarely downscaled.",
+            "T": "Downscale factor along T (time). Usually 1, since time is rarely downscaled.",
             "C": "Downscale factor along C (channels). Usually 1.",
             "Z": "Downscale factor along Z per level. 2 = halve the number of z-planes each level.",
             "Y": "Downscale factor along Y per level. 2 = halve image height each level.",
@@ -1099,7 +1128,127 @@ class ConvertPage(QWidget):
             lambda c: self._physical_widget.setVisible(c)
         )
 
+        # ── Channel colours ───────────────────────────────────────────────────
+        colour_group = QGroupBox("Channel Colours")
+        cg_layout = QVBoxLayout(colour_group)
+        cg_layout.setSpacing(4)
+
+        colour_note = QLabel(
+            "Colours written into the OME-Zarr channel metadata. Leave a "
+            "channel unticked to keep the colour stored in the input file, or "
+            "an automatic one when the file specifies none. Tick a channel to "
+            "replace it with your own colour. Channels beyond the rows below "
+            "are always handled automatically."
+        )
+        colour_note.setWordWrap(True)
+        colour_note.setStyleSheet(
+            "color: gray; font-style: italic; font-size: 10px;")
+        cg_layout.addWidget(colour_note)
+
+        self._channel_colour_rows: list[dict] = []
+        self._channel_colour_box = QWidget()
+        self._channel_colour_layout = QVBoxLayout(self._channel_colour_box)
+        self._channel_colour_layout.setContentsMargins(0, 0, 0, 0)
+        self._channel_colour_layout.setSpacing(3)
+        cg_layout.addWidget(self._channel_colour_box)
+
+        # The form is built before any file is read, so the channel count is
+        # unknown; show the length of the default palette and let the user add
+        # more when their data has additional channels.
+        for _ in range(len(DEFAULT_CHANNEL_COLORS) + 1):
+            self._add_channel_colour_row()
+
+        add_btn = QPushButton("Add channel")
+        add_btn.setFixedWidth(110)
+        add_btn.setToolTip("Add a row for another channel index.")
+        add_btn.clicked.connect(lambda: self._add_channel_colour_row())
+        cg_layout.addWidget(add_btn)
+
+        lay.addWidget(colour_group)
+
         lay.addStretch()
+
+    def _add_channel_colour_row(self):
+        """Append one channel colour row: Override toggle plus a swatch.
+
+        Unticked (the default) leaves the channel alone: the reader's own colour
+        is used when the file carries one, and the automatic palette otherwise.
+        Ticked replaces whatever the source said with the chosen colour.
+        """
+        index = len(self._channel_colour_rows)
+
+        override = QCheckBox("Override existing")
+        override.setChecked(False)
+        override.setToolTip(
+            "Off: keep the colour stored in the input file, or assign one\n"
+            "automatically when the file does not specify one.\n"
+            "On: use the colour chosen here, replacing any source colour.")
+
+        swatch = QPushButton()
+        swatch.setFixedSize(40, 18)
+        swatch.setToolTip("Pick the colour to use for this channel.")
+        row = {"index": index, "override": override, "swatch": swatch,
+               "hex": auto_channel_color(index)}
+        self._channel_colour_rows.append(row)
+
+        def _paint():
+            enabled = override.isChecked()
+            # Greyed while inactive, so it is clear the swatch is only a preview
+            # of the automatic choice and not what will be written.
+            border = "#555" if enabled else "#3a3a3a"
+            swatch.setStyleSheet(
+                f"background-color: #{row['hex']}; border: 1px solid {border};")
+            swatch.setEnabled(enabled)
+
+        def _pick():
+            chosen = QColorDialog.getColor(
+                QColor(f"#{row['hex']}"), self,
+                f"Channel {row['index']} colour")
+            if chosen.isValid():
+                row["hex"] = chosen.name()[1:].upper()
+                _paint()
+
+        swatch.clicked.connect(_pick)
+        override.toggled.connect(lambda _=None: _paint())
+        _paint()
+
+        self._channel_colour_layout.addLayout(
+            _form_row(f"Channel {index}:", override, swatch))
+
+    def _channel_colours_to_string(self) -> str:
+        """Serialise the non-auto rows to the CLI's ``idx,RRGGBB;...`` format."""
+        parts = [f"{row['index']},{row['hex']}"
+                 for row in self._channel_colour_rows
+                 if row["override"].isChecked()]
+        return ";".join(parts)
+
+    def _load_channel_colours(self, value: str):
+        """Apply an ``idx,RRGGBB;...`` string back onto the rows."""
+        wanted: dict[int, str] = {}
+        for pair in (value or "").split(";"):
+            pair = pair.strip()
+            if not pair or "," not in pair:
+                continue
+            idx_text, hex_text = pair.split(",", 1)
+            try:
+                wanted[int(idx_text)] = hex_text.strip().lstrip("#").upper()
+            except ValueError:
+                continue
+
+        # A saved config may name channels beyond the rows currently shown.
+        while wanted and len(self._channel_colour_rows) <= max(wanted):
+            self._add_channel_colour_row()
+
+        for row in self._channel_colour_rows:
+            colour = wanted.get(row["index"])
+            if colour:
+                row["hex"] = colour
+            else:
+                # Preview the automatic choice rather than a stale pick.
+                row["hex"] = auto_channel_color(row["index"])
+            # Triggers the row's own repaint, keeping enabled/greyed consistent.
+            row["override"].setChecked(bool(colour))
+            row["override"].toggled.emit(bool(colour))
 
     def _build_run_tab(self):
         content = QWidget()
@@ -1133,7 +1282,7 @@ class ConvertPage(QWidget):
         btn_row.addWidget(refresh_params_btn)
         run_layout.addLayout(btn_row)
 
-        # Batching is unavailable for aggregative conversions — table input is
+        # Batching is unavailable for aggregative conversions, because table input is
         # one-to-one only.  Reflect that live rather than failing on click.
         self._concat_axes.textChanged.connect(self._update_batch_availability)
 
@@ -1206,27 +1355,28 @@ class ConvertPage(QWidget):
 
         note = QLabel(
             "A batch queues several one-to-one conversions and runs them later. "
-            "Configure a conversion on the other tabs, then press ‘Add to Batch’ "
-            "on the Run tab. Each row stores only the settings that differ from the "
-            "batch baseline — blank cells inherit it."
+            "Configure a conversion on the other tabs, select your input files, "
+            "then press ‘Add to Batch’ below. Each row stores only the settings "
+            "you changed; a blank cell uses the config value. "
+            "The table shows those changed settings by default, and the ‘Show’ "
+            "boxes add whole parameter groups or every parameter at once. "
+            "Select any cells and press ‘Edit Cells’ to change them, including "
+            "the input and output paths. "
+            "Aggregative (concatenation) conversions are not supported in batch "
+            "mode yet, so use Run mode for those."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
         lay.addWidget(note)
 
-        # Batch-wide settings that no row can override — shown explicitly, since
+        # Batch-wide settings that no row can override.  Shown explicitly, since
         # they never appear as a table column and are otherwise unverifiable.
         self._batch_baseline = QLabel("")
         self._batch_baseline.setWordWrap(True)
         self._batch_baseline.setStyleSheet("font-size: 10px; color: #4fc3f7;")
-        self._batch_baseline.setToolTip(
-            "Settings shared by every row in this batch. They are captured from "
-            "your settings when the first row is added and stored in "
-            f"{CONFIG_SNAPSHOT_NAME}. To change them, clear the batch and start again."
-        )
         lay.addWidget(self._batch_baseline)
 
-        # Row-editing buttons — Add to Batch leads, since nothing else is usable
+        # Row-editing buttons.  Add to Batch leads, since nothing else is usable
         # until the table has rows.
         edit_row = QHBoxLayout()
         self._add_batch_btn = QPushButton("Add to Batch")
@@ -1238,9 +1388,16 @@ class ConvertPage(QWidget):
         self._add_batch_btn.clicked.connect(self._on_add_to_batch)
         edit_row.addWidget(self._add_batch_btn)
 
+        self._edit_cells_btn = QPushButton("Edit Cells")
+        self._edit_cells_btn.setToolTip(
+            "Edit the selected cells' parameters across every row they touch.")
+        self._edit_cells_btn.setEnabled(False)
+        self._edit_cells_btn.clicked.connect(self._on_batch_edit_cells)
+        edit_row.addWidget(self._edit_cells_btn)
+
         for label, slot, tip in [
             ("Remove",    self._on_batch_remove,    "Remove the selected row from the batch"),
-            ("Duplicate", self._on_batch_duplicate, "Copy the selected row — then edit one field to make a variant"),
+            ("Duplicate", self._on_batch_duplicate, "Copy the selected row, then edit one field to make a variant"),
             ("Move Up",   lambda: self._on_batch_move(-1), "Move the selected row earlier in the run order"),
             ("Move Down", lambda: self._on_batch_move(1),  "Move the selected row later in the run order"),
             ("Clear",     self._on_batch_clear,     "Discard every row and reset the batch baseline"),
@@ -1256,24 +1413,58 @@ class ConvertPage(QWidget):
         self._batch_full_table = QCheckBox("Full table (all parameters)")
         self._batch_full_table.setToolTip(
             "Off: each row stores only what differs from the config file; blank "
-            "cells inherit it — narrow and readable.\n"
+            "cells use the config value, keeping the table narrow and readable.\n"
             "On: every parameter is written on every row, so each row is fully "
             "self-describing. Values differing from the config file stay highlighted."
         )
         self._batch_full_table.toggled.connect(self._on_batch_full_toggled)
-        lay.addWidget(self._batch_full_table)
+
+        # One toggle per category, with "all parameters" last: showing a whole
+        # group is the common case, and picking the group is more intuitive than
+        # hunting individual parameters.  A column whose value deviates from the
+        # config is shown regardless of these, so nothing can be toggled away.
+        show_row = QHBoxLayout()
+        show_row.setSpacing(6)
+        show_row.addWidget(QLabel("Show:"))
+        self._batch_tab_toggles: dict[str, QCheckBox] = {}
+        for tab in parameter_tabs():
+            box = QCheckBox(tab)
+            box.setToolTip(
+                f"Show every {tab} parameter as a column.\n"
+                "Parameters that differ from the config file are always shown.")
+            box.toggled.connect(
+                lambda checked, name=tab: self._on_batch_tab_toggled(
+                    name, checked))
+            self._batch_tab_toggles[tab] = box
+            show_row.addWidget(box)
+        show_row.addWidget(self._batch_full_table)
+        show_row.addStretch(1)
+        lay.addLayout(show_row)
 
         # The queue itself
         self._batch_table = QTableWidget(0, 0)
+        # Three-row header (tab / group / parameter) mirroring the conversion
+        # form's hierarchy; columns are already ordered so each group is one
+        # contiguous run, which is what lets the labels span.
+        self._batch_header = GroupedHeaderView(self._batch_table)
+        self._batch_table.setHorizontalHeader(self._batch_header)
         self._batch_table.setAlternatingRowColors(True)
         self._batch_table.setStyleSheet("font-size: 10px;")
+        # Cell-level multi-select drives Edit Cells; row operations still work
+        # because _selected_batch_row() reads whichever rows the cells span.
         self._batch_table.setSelectionBehavior(
-            QTableWidget.SelectionBehavior.SelectRows)
+            QTableWidget.SelectionBehavior.SelectItems)
+        self._batch_table.setSelectionMode(
+            QTableWidget.SelectionMode.ExtendedSelection)
         self._batch_table.setEditTriggers(
             QTableWidget.EditTrigger.NoEditTriggers)
+        self._batch_table.itemSelectionChanged.connect(
+            self._update_edit_cells_enabled)
         self._batch_table.setToolTip(
-            "Queued conversions. Blank cells inherit the value from the batch "
-            "baseline config saved alongside the CSV."
+            "Queued conversions. A blank cell uses the value from the config "
+            "snapshot saved alongside the CSV.\n"
+            "Select cells and press Edit Cells to change them in bulk. "
+            "Input and output paths can be edited the same way."
         )
 
         # Queue and log get their own sub-tabs.  In batch mode the Run tab is not
@@ -1340,21 +1531,65 @@ class ConvertPage(QWidget):
 
         self._batch_tab = content
 
+    # Defaults the manual chunk spins fall back to, matching the values
+    # _load_config_to_ui applies for a config that has never set them.
+    _MANUAL_CHUNK_DEFAULTS = {"t": 1, "c": 1, "z": 96, "y": 96, "x": 96}
+
+    def _reset_manual_chunks(self):
+        """Clear manual per-axis chunk sizes once auto-chunking owns them.
+
+        Without this the form keeps whatever the user typed, `_ui_to_config`
+        still reports it, and the Batch baseline captures a size that the writer
+        ignores: a value that looks applied but is not.
+        """
+        for dim, value in self._MANUAL_CHUNK_DEFAULTS.items():
+            spin = self._chunk_spins.get(dim)
+            if spin is not None:
+                spin.setValue(value)
+
     def _refresh_batch_table(self):
         """Rebuild the queue view from the model."""
         columns = self._batch.columns() if len(self._batch) else list(("input_path", "output_path"))
+        # Thin blank gutters between categories: with dozens of columns the
+        # header text alone does not make the boundaries readable.
+        columns = with_separators(columns)
         self._batch_table.setColumnCount(len(columns))
-        self._batch_table.setHorizontalHeaderLabels(columns)
         self._batch_table.setRowCount(len(self._batch))
+        self._batch_table.setHorizontalHeaderLabels(
+            ["" if key == SEPARATOR else column_header(key)[2]
+             for key in columns])
+        self._batch_header.set_hierarchy(
+            [("", "", "") if key == SEPARATOR else column_header(key)
+             for key in columns])
 
         for r, row in enumerate(self._batch.rows):
             for c, col in enumerate(columns):
+                if col == SEPARATOR:
+                    spacer = QTableWidgetItem("")
+                    spacer.setFlags(Qt.ItemFlag.NoItemFlags)
+                    self._batch_table.setItem(r, c, spacer)
+                    continue
                 # Render exactly as the CSV will, so the table previews the file
                 # rather than Python's repr.
                 text = to_cell(self._batch.cell(row, col))
                 item = QTableWidgetItem(text)
-                if col not in ("input_path", "output_path"):
-                    if self._batch.differs(row, col):
+                if col in ("input_path", "output_path"):
+                    item.setToolTip(
+                        f"{text}\nSelect and press Edit Cells to change it.")
+                else:
+                    # Inertness is per cell, not per column: one row switching
+                    # auto-chunking off makes the manual sizes meaningful for
+                    # that row alone, so the greying is applied cell by cell.
+                    inert = self._batch.is_inert(row, col)
+                    if inert:
+                        reason = self._batch.inert_reason(row, col)
+                        item.setForeground(QColor(120, 120, 120))
+                        item.setFlags(
+                            item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                        item.setToolTip(
+                            f"Not used for this row: {reason} makes {col} "
+                            f"inactive.")
+                    elif self._batch.differs(row, col):
                         # Stands out in full-table mode, where most cells simply
                         # restate the config file.
                         item.setBackground(QColor(74, 110, 60))
@@ -1365,10 +1600,16 @@ class ConvertPage(QWidget):
                 self._batch_table.setItem(r, c, item)
 
         self._batch_table.resizeColumnsToContents()
+        for index, key in enumerate(columns):
+            if key == SEPARATOR:
+                self._batch_table.setColumnWidth(index, 10)
+        # Rebuilding drops the selection, so re-evaluate rather than leaving
+        # Edit Cells enabled for cells that no longer exist.
+        self._update_edit_cells_enabled()
 
         summary = self._batch.baseline_summary()
         self._batch_baseline.setText(
-            f"Applies to every row — {summary}" if summary else "")
+            f"Applies to every row: {summary}" if summary else "")
 
         n = len(self._batch)
         if n == 0:
@@ -1376,13 +1617,90 @@ class ConvertPage(QWidget):
         else:
             n_over = len(self._batch.columns()) - 2
             self._batch_status.setText(
-                f"{n} conversion(s) queued — "
-                f"{n_over} per-row override column(s); blank cells inherit the baseline."
+                f"{n} conversion(s) queued, "
+                f"{n_over} per-row override column(s). "
+                f"Blank cells use the config value."
             )
 
     def _selected_batch_row(self) -> int:
-        rows = self._batch_table.selectionModel().selectedRows()
-        return rows[0].row() if rows else -1
+        """First row touched by the selection, or -1.
+
+        Selection is per-cell, so ``selectedRows()`` (which only reports fully
+        selected rows) would return nothing for a single-cell pick, so the row
+        buttons read the selected indexes instead.
+        """
+        indexes = self._batch_table.selectionModel().selectedIndexes()
+        return min((i.row() for i in indexes), default=-1)
+
+    def _selected_batch_cells(self) -> tuple[list[int], list[str]]:
+        """The rows and parameter columns the current selection spans."""
+        indexes = self._batch_table.selectionModel().selectedIndexes()
+        if not indexes:
+            return [], []
+        # Must mirror what _refresh_batch_table rendered, separators included,
+        # or every column after the first gutter maps to the wrong parameter.
+        columns = with_separators(self._batch.columns())
+        rows = sorted({i.row() for i in indexes})
+        keys: list[str] = []
+        for column in sorted({i.column() for i in indexes}):
+            if column < len(columns):
+                key = columns[column]
+                if key != SEPARATOR and key not in keys:
+                    keys.append(key)
+        return rows, keys
+
+    def _update_edit_cells_enabled(self):
+        """Edit Cells is live only when the selection holds an editable param."""
+        rows, keys = self._selected_batch_cells()
+        editable = [k for k in keys if uneditable_reason(k) is None]
+        self._edit_cells_btn.setEnabled(bool(rows and editable))
+
+    def _on_batch_edit_cells(self):
+        rows, keys = self._selected_batch_cells()
+        if not rows:
+            return
+
+        editable, blocked = [], []
+        for key in keys:
+            reason = uneditable_reason(key)
+            if reason is None:
+                editable.append(key)
+            else:
+                blocked.append(f"{key} ({reason})")
+
+        if blocked:
+            # Say why rather than dropping them silently: a column that ignores
+            # an edit looks like a bug unless the constraint is stated.
+            self._batch_log.append_line(
+                "NOTE: not editable per row: " + "; ".join(blocked))
+        if not editable:
+            self._batch_status.setText(
+                "Selected column(s) cannot be changed per row: "
+                + "; ".join(blocked))
+            self._batch_status.setStyleSheet("font-size: 10px; color: #ffb74d;")
+            return
+
+        # The dialog can ask to be re-opened with one more parameter, so the
+        # user can reach settings the queue shows no column for yet.
+        while True:
+            dlg = BatchCellEditor(self._batch, rows, editable, parent=self)
+            result = dlg.exec()
+            if result == _ADD_PARAMETER and getattr(dlg, "added_key", None):
+                editable = [*editable, dlg.added_key]
+                continue
+            break
+        if not result:
+            return
+        applied = dlg.apply()
+        if not applied:
+            return
+
+        self._refresh_batch_table()
+        self._batch_log.append_line(
+            f"Updated {', '.join(applied)} on {len(rows)} row(s).")
+        self._batch_status.setText(
+            f"Updated {len(applied)} parameter(s) on {len(rows)} row(s).")
+        self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
 
     def _batch_ui_config(self) -> dict:
         """UI config as a batch should see it, with concatenation neutralised.
@@ -1401,7 +1719,7 @@ class ConvertPage(QWidget):
         self._add_batch_btn.setEnabled(ok)
         self._add_batch_btn.setToolTip(reason if not ok else (
             "Queue this conversion instead of running it now.\n"
-            "Configure, add, repeat — then run them all from the Batch tab."
+            "Configure, add, repeat, then run them all from the Batch tab."
         ))
 
     # ── Batch callbacks ───────────────────────────────────────────────────────
@@ -1411,17 +1729,18 @@ class ConvertPage(QWidget):
         output_path = self._output_edit.text().strip()
 
         if not selected:
-            self._log.append_line("ERROR: No files selected — nothing to add to the batch.")
+            self._batch_log.append_line(
+                "ERROR: No files selected, so nothing was added to the batch.")
             return
         if not output_path:
-            self._log.append_line("ERROR: No output path specified.")
+            self._batch_log.append_line("ERROR: No output path specified.")
             return
 
         cfg = self._batch_ui_config()
 
         ok, reason = can_batch(cfg)
         if not ok:
-            self._log.append_line(f"ERROR: {reason}")
+            self._batch_log.append_line(f"ERROR: {reason}")
             self._tabs.setCurrentIndex(_LAST_TAB)
             return
 
@@ -1432,32 +1751,32 @@ class ConvertPage(QWidget):
             try:
                 persisted = load_config(self._config_path or None)
             except Exception as exc:
-                self._log.append_line(
+                self._batch_log.append_line(
                     f"NOTE: could not read the saved config ({exc}); "
                     "using the current settings as the batch baseline instead."
                 )
                 persisted = cfg
             # Anchor on the saved config so this row's deliberate changes stay
-            # visible, but pin compression / ranges from the live UI — no row can
+            # visible, but pin compression / ranges from the live UI.  No row can
             # carry those, so the baseline is the only place they can take effect.
             self._batch.set_baseline(make_baseline(persisted, cfg))
 
         blocked = self._batch.add(cfg, selected, output_path)
 
         self._refresh_batch_table()
-        self._log.append_line(
+        self._batch_log.append_line(
             f"Added {len(selected)} conversion(s) to the batch "
             f"({len(self._batch)} queued)."
         )
         self._tabs.setCurrentIndex(_LAST_TAB)  # Batch tab
 
         if blocked:
-            # Shown on the Batch tab itself — we just switched there, so a Run-tab
+            # Shown on the Batch tab itself.  We just switched there, so a Run-tab
             # log line alone would go unread, and silently inheriting these would
             # produce output that does not match what the user configured.
             names = ", ".join(sorted(blocked))
-            self._log.append_line(
-                f"WARNING: cannot vary per row — {names}. "
+            self._batch_log.append_line(
+                f"WARNING: these cannot vary per row: {names}. "
                 "The batch baseline applies to every row."
             )
             self._batch_status.setText(
@@ -1506,9 +1825,17 @@ class ConvertPage(QWidget):
         except Exception:
             self._batch.set_compare_config(None)   # falls back to the baseline
 
+    def _on_batch_tab_toggled(self, tab: str, checked: bool):
+        """Show or hide a whole parameter category."""
+        if checked:
+            self._batch.shown_tabs.add(tab)
+        else:
+            self._batch.shown_tabs.discard(tab)
+        self._refresh_batch_table()
+
     def _on_batch_full_toggled(self, checked: bool):
         # Rows always hold every parameter, so this only changes what is rendered
-        # and written — no data is lost either way.
+        # and written, so no data is lost either way.
         self._batch.full = checked
         self._refresh_batch_table()
 
@@ -1517,11 +1844,11 @@ class ConvertPage(QWidget):
         problems = self._batch.validate()
         if problems:
             self._batch_status.setText(
-                f"Cannot save — {len(problems)} problem(s); see the Run tab log."
+                f"Cannot save: {len(problems)} problem(s); see the Log sub-tab."
             )
-            self._log.append_line("Batch validation failed:")
+            self._batch_log.append_line("Batch validation failed:")
             for p in problems:
-                self._log.append_line(f"  • {p}")
+                self._batch_log.append_line(f"  • {p}")
             return None
         try:
             written = self._batch.save(path)
@@ -1536,7 +1863,7 @@ class ConvertPage(QWidget):
 
     def _on_batch_save(self):
         if not len(self._batch):
-            self._batch_status.setText("Batch is empty — nothing to save.")
+            self._batch_status.setText("Batch is empty, so there is nothing to save.")
             return
         default_path = os.path.join(DEFAULT_CONFIG_DIR, "batches", DEFAULT_BATCH_NAME)
         os.makedirs(os.path.dirname(default_path), exist_ok=True)
@@ -1562,17 +1889,17 @@ class ConvertPage(QWidget):
             self._load_config_to_ui(self._batch.base_config)
             self._batch_status.setText(
                 f"Loaded {len(self._batch)} row(s) from {os.path.basename(path)}; "
-                f"baseline config applied to the parameter tabs."
+                f"config snapshot applied to the parameter tabs."
             )
         else:
             self._batch_status.setText(
                 f"Loaded {len(self._batch)} row(s) from {os.path.basename(path)}. "
-                f"No {CONFIG_SNAPSHOT_NAME} found — rows will inherit the current UI settings."
+                f"No {CONFIG_SNAPSHOT_NAME} found, so rows will use the current UI settings."
             )
 
     def _on_batch_run(self):
         if not len(self._batch):
-            self._batch_status.setText("Batch is empty — nothing to run.")
+            self._batch_status.setText("Batch is empty, so there is nothing to run.")
             return
 
         default_path = os.path.join(DEFAULT_CONFIG_DIR, "batches", DEFAULT_BATCH_NAME)
@@ -1583,7 +1910,7 @@ class ConvertPage(QWidget):
 
         # The batch baseline is the global config for the run; each CSV row
         # overrides it.  Pass the CSV as inputPath (a bare string) and leave
-        # inputPaths empty — take_filepaths() treats a list as explicit image
+        # inputPaths empty, since take_filepaths() treats a list as explicit image
         # paths and would never reach its table branch.
         cfg = deepcopy(self._batch.base_config or self._ui_to_config())
         cfg["inputPaths"]     = []
@@ -1729,6 +2056,7 @@ class ConvertPage(QWidget):
             u_idx = unit_combo.findText(unit_val)
             if u_idx >= 0:
                 unit_combo.setCurrentIndex(u_idx)
+        self._load_channel_colours(meta.get("channelColors", ""))
 
         concat = cfg.get("concatenation", {})
         self._concat_edits["time"].setText(concat.get("timeTag", "") or "")
@@ -1843,6 +2171,7 @@ class ConvertPage(QWidget):
                 "unitY":     self._phys_units["y"].currentText(),
                 "scaleX":    self._phys_edits["x"].text().strip(),
                 "unitX":     self._phys_units["x"].currentText(),
+                "channelColors": self._channel_colours_to_string(),
             },
             "concatenation": {
                 "timeTag":             self._concat_edits["time"].text().strip(),
@@ -1929,7 +2258,7 @@ class ConvertPage(QWidget):
             self._load_config_to_ui(cfg)
             self._sync_batch_comparison()
             self._refresh_batch_table()
-            self._log.append_line("Config reset to defaults.")
+            self._log.append_line("Config reset to installation defaults.")
         except Exception as exc:
             self._log.append_line(f"ERROR resetting config: {exc}")
 

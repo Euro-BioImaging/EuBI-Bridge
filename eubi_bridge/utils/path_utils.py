@@ -3,6 +3,7 @@
 import glob
 import fnmatch
 import os
+from collections import Counter
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -230,6 +231,62 @@ def _matches_any(path: str, patterns) -> bool:
     if not patterns:
         return True
     return any(pattern_matches(path, p) for p in patterns)
+
+
+def disambiguate_output_names(input_paths: List[str]) -> dict:
+    """Map each input path to a unique output basename.
+
+    Outputs are named after the input's basename, so two inputs from different
+    folders that share a name would target one output — the first written, the
+    second either refused (``overwrite=False``) or silently destroying the first
+    (``overwrite=True``).  Neither is acceptable in a batch the user cannot split
+    by hand, and the Run tab offers only one output folder.
+
+    Colliding names take one parent directory at a time as a prefix, repeating
+    until every name is unique::
+
+        A/img.tif  ->  A_img
+        B/img.tif  ->  B_img
+
+    Only names that actually collide are changed, so a batch of distinct names
+    keeps exactly the output paths it had before.  Paths that remain identical
+    after exhausting their parents (the same file listed twice) fall back to a
+    numeric suffix, which always terminates.
+    """
+    def stem(path: str) -> str:
+        # Matches _generate_output_path: everything before the first dot, so
+        # 'image.ome.tiff' -> 'image'.
+        return os.path.basename(path.rstrip('/\\')).split('.')[0]
+
+    def parents(path: str) -> List[str]:
+        norm = os.path.normpath(path)
+        parts = norm.replace('\\', '/').split('/')[:-1]
+        return [p for p in parts if p not in ('', '.', '..')]
+
+    names = {path: stem(path) for path in input_paths}
+    depth = 0
+    while True:
+        clashing = {name for name, count in Counter(names.values()).items()
+                    if count > 1}
+        if not clashing:
+            break
+        depth += 1
+        progressed = False
+        for path, name in list(names.items()):
+            if name not in clashing:
+                continue
+            available = parents(path)
+            if depth <= len(available):
+                names[path] = f"{available[-depth]}_{stem(path)}"
+                progressed = True
+        if not progressed:
+            # Parents exhausted — distinct inputs cannot be told apart by path
+            # alone (or the same path was listed twice).  Numbering terminates.
+            for index, (path, name) in enumerate(
+                    (p, n) for p, n in names.items() if n in clashing):
+                names[path] = f"{name}_{index + 1}" if index else name
+            break
+    return names
 
 
 def take_filepaths_from_path(

@@ -1,5 +1,5 @@
 """
-Per-channel min/max worker — computes 1st/99th percentile for histogram auto-adjustment.
+Per-channel min/max worker: computes 1st/99th percentile for histogram auto-adjustment.
 
 Ports the /channel_minmax endpoint logic from zarr_plane_server directly.
 """

@@ -1,5 +1,5 @@
 """
-Subprocess entry point for conversion — no Qt imports.
+Subprocess entry point for conversion, with no Qt imports.
 
 Runs in a spawned child process.  All conversion logic lives here so that
 cancel() can reliably kill the whole process tree without needing cooperation

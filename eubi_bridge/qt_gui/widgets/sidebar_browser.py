@@ -2,8 +2,8 @@
 Persistent sidebar file/folder browser with pagination and OME-Zarr detection.
 
 Two modes:
-  mode="zarr"        — navigate filesystem; double-click an OME-Zarr → zarr_selected(path)
-  mode="conversion"  — navigate filesystem; check files/dirs → selection_changed(paths)
+  mode="zarr"        : navigate filesystem; double-click an OME-Zarr → zarr_selected(path)
+  mode="conversion"  : navigate filesystem; check files/dirs → selection_changed(paths)
 """
 from __future__ import annotations
 
@@ -83,13 +83,13 @@ class SidebarBrowser(QWidget):
     """Persistent sidebar file browser.
 
     Signals (zarr mode):
-        zarr_selected(str)          — user single-clicked an OME-Zarr store
+        zarr_selected(str)          : user single-clicked an OME-Zarr store
 
     Signals (conversion mode):
-        selection_changed(list[str])— checked paths changed
+        selection_changed(list[str]): checked paths changed
 
     Signals (all modes):
-        path_navigated(str)         — current directory changed (any navigation)
+        path_navigated(str)         : current directory changed (any navigation)
     """
 
     zarr_selected    = pyqtSignal(str)
@@ -298,7 +298,7 @@ class SidebarBrowser(QWidget):
                 n_found = len(self._recursive_entries)
                 n_found_selected = sum(1 for e in self._recursive_entries if e["path"] in self._checked_paths)
                 self._filter_info_label.setText(
-                    f"{n_found} found — {n_total_selected} selected total"
+                    f"{n_found} found, {n_total_selected} selected total"
                 )
             else:
                 if (self._include_filter or self._exclude_filter) and not self._s3_mode:
@@ -315,7 +315,7 @@ class SidebarBrowser(QWidget):
                     ]
                     n_found = len(matched)
                     self._filter_info_label.setText(
-                        f"{n_found} found — {n_total_selected} selected total"
+                        f"{n_found} found, {n_total_selected} selected total"
                     )
                 else:
                     label = f"{n_total_selected} selected" if n_total_selected else ""
@@ -388,7 +388,7 @@ class SidebarBrowser(QWidget):
             self._click_timer.start()
 
     def _on_double_click(self, item: QListWidgetItem):
-        # Cancel any pending single-click zarr load — double-click means "navigate into"
+        # Cancel any pending single-click zarr load, since double-click means "navigate into"
         self._click_timer.stop()
         self._pending_click_path = ""
         entry: FileEntry = item.data(Qt.ItemDataRole.UserRole)

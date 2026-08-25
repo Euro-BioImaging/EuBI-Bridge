@@ -52,6 +52,12 @@ def _normalise_row_overrides(overrides: dict) -> dict:
     normalised = dict(overrides)
     if normalised.get('dtype') == 'auto':
         normalised['dtype'] = None
+    # n_layers='auto' means "detect the layer count", which the config models
+    # spell as None.  Blank cells never reach here, so this cannot be confused
+    # with "fall back to the global value".
+    n_layers = normalised.get('n_layers')
+    if isinstance(n_layers, str) and n_layers.strip().lower() == 'auto':
+        normalised['n_layers'] = None
     return normalised
 
 
@@ -1070,6 +1076,14 @@ class ConversionManager:
                 includes=includes, excludes=excludes,
                 **merged, **extra,
             )
+            # Two inputs sharing a basename would target one output — the
+            # second either refused (overwrite=False) or destroying the first
+            # (overwrite=True).  Give the colliding ones a parent-directory
+            # prefix so every job writes somewhere distinct.
+            from eubi_bridge.utils.path_utils import disambiguate_output_names
+            unique_names = disambiguate_output_names(
+                [str(p) for p in df['input_path'].tolist()])
+
             jobs = []
             for _, row in df.iterrows():
                 row_dict = row.to_dict()
@@ -1080,7 +1094,9 @@ class ConversionManager:
                                  if v is not None and v == v}  # v==v filters NaN
                 row_overrides = _normalise_row_overrides(row_overrides)
                 per_job = {**merged, **extra, **row_overrides}
-                jobs.append(ConversionJob.from_kwargs(ip, op, per_job))
+                jobs.append(ConversionJob.from_kwargs(
+                    ip, op, per_job,
+                    resolved_basename=unique_names.get(str(ip))))
 
             from eubi_bridge.conversion.dispatcher import dispatch_unary_jobs
             dispatch_unary_jobs(jobs)

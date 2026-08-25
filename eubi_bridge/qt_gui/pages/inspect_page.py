@@ -1,11 +1,11 @@
 """
-Inspect page — OME-Zarr viewer + metadata editor.
+Inspect page: OME-Zarr viewer + metadata editor.
 
 Two-pane layout:
-  Left  : SidebarBrowser (zarr mode) — navigate filesystem, click OME-Zarr to load
+  Left  : SidebarBrowser (zarr mode), navigate filesystem, click OME-Zarr to load
   Right : QTabWidget
-            Metadata tab — dataset info, pixel sizes, pyramid layers (read-only tree)
-            Viewer tab   — ZarrViewer + status bar
+            Metadata tab : dataset info, pixel sizes, pyramid layers (read-only tree)
+            Viewer tab   : ZarrViewer + status bar
 """
 from __future__ import annotations
 
@@ -159,7 +159,7 @@ class InspectPage(QWidget):
 
         content_layout.addWidget(ps_group)
 
-        # Pyramid layers (read-only tree) — given most vertical space
+        # Pyramid layers (read-only tree), given most vertical space
         self._pyramid_group = QGroupBox("Pyramid Layers")
         pyr_layout = QVBoxLayout(self._pyramid_group)
         pyr_layout.setContentsMargins(6, 22, 6, 6)
@@ -346,7 +346,7 @@ class InspectPage(QWidget):
             raw_scales = level_scales.get(lp)
 
             # The array path is only worth showing when it differs from the level
-            # index — which it does not for standard OME-Zarr ('0', '1', ...), so
+            # index, which it does not for standard OME-Zarr ('0', '1', ...), so
             # appending it there just renders as "Level 0  (0)".
             level_label = f"Level {i}" if str(lp) == str(i) else f"Level {i}  ({lp})"
             root = QTreeWidgetItem(self._pyr_tree, [level_label, ""])

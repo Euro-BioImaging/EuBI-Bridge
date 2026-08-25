@@ -1,7 +1,7 @@
 """
 Async zarr plane rendering worker.
 
-Imports rendering functions directly from zarr_plane_server — no HTTP.
+Imports rendering functions directly from zarr_plane_server, with no HTTP.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def _subsample_to_target(plane: np.ndarray, target: int) -> np.ndarray:
     """Nearest-neighbour subsample the trailing two axes down to *target*.
 
     Compositing is per-pixel, so subsampling before it produces exactly the same
-    displayed image as subsampling after — but colour-maps only the pixels that
+    displayed image as subsampling after, but colour-maps only the pixels that
     will actually be shown.  At full resolution the frame is ~4x larger than the
     canvas, so this is where most of the render time was going.
 
@@ -62,7 +62,7 @@ def do_render(params: dict, executor: ThreadPoolExecutor) -> np.ndarray:
     axes = pyr.axes.lower()
     has_c = "c" in axes
     channels_config = params["channels"]
-    # Stable key for percentile caching — avoids recomputing np.percentile on every pan frame
+    # Stable key for percentile caching, avoiding a recompute of np.percentile on every pan frame
     pct_key = (params["path"], params["level_idx"], params["orientation"])
 
     if has_c and len(channels_config) > 1:

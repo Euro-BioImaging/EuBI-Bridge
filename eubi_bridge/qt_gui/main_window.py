@@ -1,5 +1,5 @@
 """
-Main window — QMainWindow with Convert and Inspect tabs.
+Main window: QMainWindow with Convert and Inspect tabs.
 """
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
 
-        # Header bar with logo + title — use palette colour so it blends with the theme
+        # Header bar with logo + title, using a palette colour so it blends with the theme
         header = QWidget()
         header.setFixedHeight(40)
         header.setStyleSheet("border-bottom: 1px solid #555;")

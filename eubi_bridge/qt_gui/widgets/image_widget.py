@@ -1,5 +1,5 @@
 """
-Image display widget — renders numpy RGB arrays with anisotropy correction,
+Image display widget: renders numpy RGB arrays with anisotropy correction,
 pan support, and a timing overlay.
 """
 from __future__ import annotations
@@ -14,9 +14,9 @@ class ImageWidget(QWidget):
     """Displays a rendered zarr plane.
 
     Signals:
-        pan_changed(delta_row, delta_col)  — full-resolution coordinate deltas
-        pan_released()                     — left mouse button released after drag
-        wheel_scrolled(delta)              — +1 / -1 from mouse wheel
+        pan_changed(delta_row, delta_col)  : full-resolution coordinate deltas
+        pan_released()                     : left mouse button released after drag
+        wheel_scrolled(delta)              : +1 / -1 from mouse wheel
     """
 
     pan_changed    = pyqtSignal(float, float)  # delta_row, delta_col
@@ -24,8 +24,8 @@ class ImageWidget(QWidget):
     wheel_scrolled = pyqtSignal(int)
     roi_selected   = pyqtSignal(float, float, float, float)  # x1,y1,x2,y2 widget-px (crop mode)
     box_selected   = pyqtSignal(float, float, float, float)  # x1,y1,x2,y2 widget-px (box mode)
-    annotate_at    = pyqtSignal(float, float)                # sx,sy widget-px — left btn (annotate mode)
-    erase_at       = pyqtSignal(float, float)                # sx,sy widget-px — right btn (annotate mode)
+    annotate_at    = pyqtSignal(float, float)                # sx,sy widget-px, left btn (annotate mode)
+    erase_at       = pyqtSignal(float, float)                # sx,sy widget-px, right btn (annotate mode)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -99,7 +99,7 @@ class ImageWidget(QWidget):
     def _display_rect(self) -> tuple[float, float, float, float]:
         """(x, y, display_w, display_h) of the pixmap in *logical* widget coordinates.
 
-        Pixels are shown 1:1 in *device* (physical) pixels — i.e. one data pixel
+        Pixels are shown 1:1 in *device* (physical) pixels, i.e. one data pixel
         maps to exactly one screen pixel regardless of QT_SCALE_FACTOR.  In
         logical coordinates the image therefore occupies pixmap_px / DPR pixels.
         The only additional transform is anisotropy correction on the y axis.
@@ -150,7 +150,7 @@ class ImageWidget(QWidget):
 
         dpr = self.devicePixelRatioF()
 
-        # Crop-box persistent overlay — cyan
+        # Crop-box persistent overlay, cyan
         if self._roi_rect is not None:
             dev_rect = QRect(
                 int(self._roi_rect.x()      * dpr),
@@ -162,7 +162,7 @@ class ImageWidget(QWidget):
             painter.setPen(QPen(QColor(0, 220, 255, 200), 2))
             painter.drawRect(dev_rect)
 
-        # Annotation-box persistent overlay — orange
+        # Annotation-box persistent overlay, orange
         if self._box_rect is not None:
             dev_rect = QRect(
                 int(self._box_rect.x()      * dpr),

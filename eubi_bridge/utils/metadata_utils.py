@@ -64,20 +64,50 @@ def print_printable(printable):
 #         print_printable(printable)
 
 
+# Conventional microscopy colours, used for the first channels because users
+# expect channel 0 to be red, 1 green and so on.
+DEFAULT_CHANNEL_COLORS = (
+    "FF0000",  # Red
+    "00FF00",  # Green
+    "0000FF",  # Blue
+    "FF00FF",  # Magenta
+    "00FFFF",  # Cyan
+    "FFFF00",  # Yellow
+    "FFFFFF",  # White
+)
+
+# Golden-angle hue stepping keeps successive hues far apart no matter how many
+# channels there are, and alternating saturation/value separates hues that do
+# eventually come close.  The offset was chosen so the generated colours also
+# stay clear of the fixed list above.
+_HUE_OFFSET = 0.625
+_GOLDEN_RATIO_CONJUGATE = 0.618033988749895
+_SATURATIONS = (0.85, 0.60)
+_VALUES = (1.0, 1.0, 0.75)
+
+
+def auto_channel_color(index: int) -> str:
+    """Return a distinct ``RRGGBB`` colour for channel *index*.
+
+    The first channels use :data:`DEFAULT_CHANNEL_COLORS`; beyond that colours
+    are generated rather than cycled, so a 20-channel image still has visually
+    separable channels.  The previous arithmetic fallback produced near
+    duplicates (channels 7 and 13 were both dark blue) and very dark colours.
+    """
+    if index < len(DEFAULT_CHANNEL_COLORS):
+        return DEFAULT_CHANNEL_COLORS[index]
+
+    import colorsys
+    n = index - len(DEFAULT_CHANNEL_COLORS)
+    hue = (_HUE_OFFSET + n * _GOLDEN_RATIO_CONJUGATE) % 1.0
+    r, g, b = colorsys.hsv_to_rgb(
+        hue, _SATURATIONS[n % len(_SATURATIONS)], _VALUES[n % len(_VALUES)])
+    return f"{int(r * 255):02X}{int(g * 255):02X}{int(b * 255):02X}"
+
+
 def generate_channel_metadata(num_channels,
                               dtype='np.uint16'
                               ):
-    # Standard distinct microscopy colors
-    default_colors = [
-        "FF0000",  # Red
-        "00FF00",  # Green
-        "0000FF",  # Blue
-        "FF00FF",  # Magenta
-        "00FFFF",  # Cyan
-        "FFFF00",  # Yellow
-        "FFFFFF",  # White
-    ]
-
     channels = []
     import numpy as np
 
@@ -89,8 +119,7 @@ def generate_channel_metadata(num_channels,
         raise ValueError(f"Unsupported dtype {dtype}")
 
     for i in range(num_channels):
-        color = default_colors[i] if i < len(
-            default_colors) else f"{i * 40 % 256:02X}{i * 85 % 256:02X}{i * 130 % 256:02X}"
+        color = auto_channel_color(i)
         channel = {
             "color": color,
             "coefficient": 1,
@@ -225,10 +254,17 @@ class ChannelParser:
         from_array = self.channel_intensity_limits == 'from_array'
         from_none = self.channel_intensity_limits == 'auto'
         
-        # Compute intensity values
+        # Compute intensity values.  The target dtype governs the window: after a
+        # uint16 -> uint8 conversion the data really is 0-255, and advertising
+        # the source range would render it black in viewers.  'from_array' still
+        # measures the actual data, so it is unaffected.
+        target_dtype = self.kwargs.get('dtype') or self.manager.array.dtype
         start_intensities, end_intensities = \
-            self.manager.compute_intensity_limits(from_array=from_array)
-        mins, maxes = self.manager.compute_intensity_extrema(dtype=self.manager.array.dtype)
+            self.manager.compute_intensity_limits(
+                from_array=from_array,
+                dtype=None if from_array else target_dtype,
+            )
+        mins, maxes = self.manager.compute_intensity_extrema(dtype=target_dtype)
         
         # Apply to each channel
         for idx in range(len(self.output)):
@@ -300,7 +336,7 @@ class ChannelParser:
         Raises:
             ValueError: If format is invalid
         """
-        if not formatted_str or formatted_str is (None, 'auto'):
+        if not formatted_str or formatted_str in (None, 'auto'):
             return {}
         
         result = {}

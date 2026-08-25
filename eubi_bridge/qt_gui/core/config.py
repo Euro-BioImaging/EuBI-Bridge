@@ -1,7 +1,7 @@
 """
 Config management for the Qt GUI.
 
-Wraps config_manager.py functions directly — no subprocess.
+Wraps config_manager.py functions directly, with no subprocess.
 """
 from __future__ import annotations
 
