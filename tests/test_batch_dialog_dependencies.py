@@ -17,7 +17,13 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-pytest.importorskip("PyQt6.QtWidgets")
+from tests.conftest import qt_available
+
+# Importing PyQt6 can raise ImportError for a missing system library on a
+# headless runner, which aborts collection; skip the module instead.
+pytestmark = pytest.mark.skipif(
+    not qt_available(),
+    reason="PyQt6 unavailable or no usable Qt platform plugin")
 
 from eubi_bridge.qt_gui.core.batch import BatchModel
 
@@ -27,11 +33,8 @@ _KEYS = ["auto_chunk", "target_chunk_mb", "z_chunk", "x_chunk"]
 @pytest.fixture(scope="module")
 def qapp():
     """Offscreen QApplication shared by the module."""
-    import os
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
-    yield app
+    yield QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

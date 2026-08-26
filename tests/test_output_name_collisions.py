@@ -68,6 +68,34 @@ class TestDisambiguation:
             [r"C:\data\A\img.tif", r"C:\data\B\img.tif"])
         assert sorted(result.values()) == ["A_img", "B_img"]
 
+    def test_windows_separators_on_a_posix_host(self, monkeypatch):
+        """A batch table written on Windows may be run on Linux.
+
+        ``os.path`` only treats ``\`` as a separator on Windows, so without
+        explicit handling the whole path became the name on Linux.  Simulating
+        posixpath catches that from any host.
+        """
+        import posixpath
+        from eubi_bridge.utils import path_utils
+        monkeypatch.setattr(path_utils.os, "path", posixpath)
+        result = disambiguate_output_names(
+            [r"C:\data\A\img.tif", r"C:\data\B\img.tif"])
+        assert sorted(result.values()) == ["A_img", "B_img"]
+
+    def test_posix_separators_on_a_posix_host(self, monkeypatch):
+        import posixpath
+        from eubi_bridge.utils import path_utils
+        monkeypatch.setattr(path_utils.os, "path", posixpath)
+        result = disambiguate_output_names(
+            ["/data/A/img.tif", "/data/B/img.tif"])
+        assert sorted(result.values()) == ["A_img", "B_img"]
+
+    def test_mixed_separators(self):
+        """CSV rows can mix separators after path joining."""
+        result = disambiguate_output_names(
+            [r"C:\data\A/img.tif", "/data/B/img.tif"])
+        assert sorted(result.values()) == ["A_img", "B_img"]
+
     def test_real_world_case(self):
         """The reported failure: two Study folders, one image name."""
         a = "/demo/S-BIAD1047/Images/Study_22/image_344_Mitochondria.ome.tiff"

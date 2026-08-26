@@ -13,7 +13,17 @@ import re as _re
 import sys
 import traceback
 
-from PyQt6.QtCore import QThread, pyqtSignal
+try:
+    from PyQt6.QtCore import QThread, pyqtSignal
+except ImportError:  # pragma: no cover - headless environment
+    # _build_kwargs() below is pure config translation and is imported by the
+    # batch model, which must work without a GUI stack.  On a headless runner
+    # PyQt6 is installed but fails to load its system libraries, so the Qt
+    # symbols are stubbed and only ConversionWorker becomes unusable.
+    QThread = object
+
+    def pyqtSignal(*_args, **_kwargs):
+        return None
 
 from eubi_bridge.qt_gui.workers._conv_subprocess import (
     _conversion_subprocess,

@@ -16,6 +16,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from tests.conftest import qt_available
 from eubi_bridge.utils.metadata_utils import (
     DEFAULT_CHANNEL_COLORS, auto_channel_color)
 
@@ -35,9 +36,8 @@ def page():
     ConvertPage spawns background helpers, so it is torn down after each test;
     creating one per test without cleanup crashes the interpreter.
     """
-    pytest.importorskip("PyQt6.QtWidgets")
-    import os
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if not qt_available():
+        pytest.skip("PyQt6 unavailable or no usable Qt platform plugin")
     from PyQt6.QtWidgets import QApplication
     from eubi_bridge.qt_gui.pages.convert_page import ConvertPage
     app = QApplication.instance() or QApplication([])

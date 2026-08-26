@@ -253,15 +253,26 @@ def disambiguate_output_names(input_paths: List[str]) -> dict:
     after exhausting their parents (the same file listed twice) fall back to a
     numeric suffix, which always terminates.
     """
+    def _segments(path: str) -> List[str]:
+        """Split *path* into components, treating both separators as separators.
+
+        ``os.path`` only recognises ``\\`` on Windows, so a Windows-style path
+        processed on Linux comes back as a single component and the whole string
+        is used as the name.  Batch tables travel between machines, so the
+        separator is handled explicitly rather than per-platform.
+        """
+        unified = path.replace('\\', '/').rstrip('/')
+        return [part for part in unified.split('/')
+                if part not in ('', '.', '..')]
+
     def stem(path: str) -> str:
         # Matches _generate_output_path: everything before the first dot, so
         # 'image.ome.tiff' -> 'image'.
-        return os.path.basename(path.rstrip('/\\')).split('.')[0]
+        segments = _segments(path)
+        return segments[-1].split('.')[0] if segments else ''
 
     def parents(path: str) -> List[str]:
-        norm = os.path.normpath(path)
-        parts = norm.replace('\\', '/').split('/')[:-1]
-        return [p for p in parts if p not in ('', '.', '..')]
+        return _segments(path)[:-1]
 
     names = {path: stem(path) for path in input_paths}
     depth = 0
