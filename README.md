@@ -14,22 +14,14 @@ Relying on `bioio` plugins for reading, EuBI-Bridge supports a wide range of inp
 
 ## Installation
 
-The recommended way to install EuBI-Bridge is via pip. Create a virtual environment with **Python 3.11 or 3.12** and use pip to install EuBI-Bridge as shown below:
-
-```bash
-python -m venv venv # Python must be either version 3.11 or 3.12.
-source venv/bin/activate
-pip install "eubi-bridge==0.1.2" # installs both GUI and CLI
-
-# If a previous version of eubi-bridge was installed before, reset the configuration:
-eubi reset_config
-```
-
-**Important: EuBI-Bridge is currently only compatible with Python 3.11 or 3.12 due to conflicting dependencies. 
+**Important: EuBI-Bridge is currently only compatible with Python 3.11 or 3.12 due to conflicting dependencies.
 We are working on supporting a wider range of Python versions in future releases.**
 
-If your default Python is different from version 3.11 or 3.12, create a conda environment with one of these
-Python versions:
+### Recommended: conda
+
+The recommended way to install EuBI-Bridge is in a conda environment. This
+route also installs Qt, so the graphical interface works without any further
+setup:
 
 ```bash
 mamba create -n eubizarr openjdk=11.* maven python=3.12 pyqt6=6.8.1
@@ -44,7 +36,53 @@ pip install --no-cache-dir "eubi-bridge==0.1.2"
 eubi reset_config
 ```
 
-#### Troubleshooting
+### Alternative: pip only
+
+Installing into a plain virtual environment also works, provided your Python is
+version 3.11 or 3.12:
+
+```bash
+python -m venv venv # Python must be either version 3.11 or 3.12.
+source venv/bin/activate
+pip install "eubi-bridge==0.1.2" # installs both GUI and CLI
+
+# If a previous version of eubi-bridge was installed before, reset the configuration:
+eubi reset_config
+```
+
+**On Linux this installs the graphical interface but not the Qt system
+libraries it needs at runtime**, so the graphical interface may fail to start. See
+[Linux: the GUI does not start](#linux-the-gui-does-not-start) below for the fix.
+The command-line interface is unaffected.
+
+### Troubleshooting
+
+#### Linux: the GUI does not start
+
+This applies to the pip-only route. On Linux, `pip` installs PyQt6 but not the
+system libraries it needs at runtime, so the `eubi-gui` command (which is run to launch the GUI) may stop with an error such
+as:
+
+```bash
+EuBI-Bridge could not start its graphical interface: libEGL.so.1: cannot open shared object file
+```
+
+Install the Qt system libraries with your package manager:
+
+```bash
+# Debian / Ubuntu
+sudo apt install libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
+
+# Fedora / RHEL
+sudo dnf install mesa-libEGL mesa-libGL libxkbcommon-x11 dbus-libs xcb-util-cursor
+```
+
+If you cannot install system packages, use the recommended conda route instead:
+`mamba create ... pyqt6=6.8.1` brings its own Qt libraries and avoids this
+problem entirely. The `eubi` command-line interface needs none of them and
+works either way.
+
+#### Building wheel errors
 
 If you receive a `Building wheel` error such as:
 

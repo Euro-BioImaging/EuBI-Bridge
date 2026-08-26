@@ -15,14 +15,25 @@ import traceback
 
 try:
     from PyQt6.QtCore import QThread, pyqtSignal
-except ImportError:  # pragma: no cover - headless environment
+except ImportError as _qt_error:  # pragma: no cover - headless environment
     # _build_kwargs() below is pure config translation and is imported by the
-    # batch model, which must work without a GUI stack.  On a headless runner
-    # PyQt6 is installed but fails to load its system libraries, so the Qt
-    # symbols are stubbed and only ConversionWorker becomes unusable.
-    QThread = object
+    # batch model, which must work without a GUI stack.  On a headless machine
+    # PyQt6 is installed but cannot load its system libraries (libEGL and
+    # friends), so the Qt symbols are stubbed: everything except
+    # ConversionWorker keeps working, and constructing that raises a message
+    # naming the real cause instead of a confusing TypeError from `object`.
+    _QT_IMPORT_ERROR = _qt_error
 
-    def pyqtSignal(*_args, **_kwargs):
+    class QThread:  # type: ignore[no-redef]
+        def __init__(self, *_args, **_kwargs):
+            raise ImportError(
+                "The conversion GUI needs Qt, which could not be loaded: "
+                f"{_QT_IMPORT_ERROR}. Install the Qt system libraries "
+                "(e.g. 'apt install libegl1 libgl1 libxkbcommon0'), or use "
+                "the 'eubi' command-line interface, which does not need them."
+            )
+
+    def pyqtSignal(*_args, **_kwargs):  # type: ignore[no-redef]
         return None
 
 from eubi_bridge.qt_gui.workers._conv_subprocess import (

@@ -7,14 +7,36 @@ from __future__ import annotations
 
 import sys
 
-from PyQt6.QtWidgets import QApplication
 
-from eubi_bridge.qt_gui.main_window import MainWindow
+def _import_qt():
+    """Import Qt, turning a missing-system-library failure into advice.
+
+    PyQt6 installs cleanly on a headless Linux box but cannot load its system
+    libraries there, so the bare ImportError names ``libEGL.so.1`` and nothing
+    else.  The CLI has no such dependency, which is worth saying.
+    """
+    try:
+        from PyQt6.QtWidgets import QApplication
+    except ImportError as exc:
+        raise SystemExit(
+            f"EuBI-Bridge could not start its graphical interface: {exc}\n"
+            "\n"
+            "Qt needs system libraries that are not installed. On Debian or "
+            "Ubuntu:\n"
+            "    sudo apt install libegl1 libgl1 libxkbcommon0 libdbus-1-3\n"
+            "\n"
+            "The 'eubi' command-line interface needs none of these and works "
+            "as normal."
+        ) from exc
+    return QApplication
 
 
 def main():
     import locale
     import os
+
+    QApplication = _import_qt()
+    from eubi_bridge.qt_gui.main_window import MainWindow
 
     # Ensure a UTF-8 locale is active so that Python's stdout encoding and
     # Rich's terminal detection both work correctly in VNC / remote-desktop

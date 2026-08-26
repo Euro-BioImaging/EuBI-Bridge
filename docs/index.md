@@ -46,6 +46,17 @@ Relying on `bioio` plugins for reading, EuBI-Bridge supports a wide range of inp
 pip install --no-cache-dir eubi-bridge==0.1.2</code></pre>
   </li>
 </ol>
+
+<blockquote>
+  <strong>ℹ️ Linux users:</strong> the graphical interface needs Qt's system
+  libraries, which <code>pip</code> does not install. If <code>eubi-gui</code>
+  stops with <code>libEGL.so.1: cannot open shared object file</code>, install
+  them with
+  <code>sudo apt install libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0</code>
+  (Debian/Ubuntu), or add <code>pyqt6</code> to the <code>mamba create</code>
+  command above so conda supplies them. The <code>eubi</code> command-line
+  interface works without them.
+</blockquote>
 <hr>
 
 
