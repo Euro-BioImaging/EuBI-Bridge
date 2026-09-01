@@ -104,3 +104,8 @@ extras/
 # installing the package does not pull tens of megabytes of documentation media.
 # Keep working files here; they stay local.
 docs/gifs/
+
+# Screenshots produced by docs/scripts/gen_gui_shots.py.  They are generated
+# from the running interface on demand, so committing them would only add
+# binaries that go stale whenever the GUI changes.
+docs/images/
