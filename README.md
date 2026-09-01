@@ -107,6 +107,21 @@ eubi reset_config
 
 Find the documentation for EuBI-Bridge [here](https://euro-bioimaging.github.io/EuBI-Bridge/)
 
+## Graphical interface
+
+Launch the graphical interface with `eubi-gui`. The short walkthroughs below
+cover a full conversion, from choosing files to following the log.
+
+| | |
+|---|---|
+| [Selecting input and output folders](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/download/v0.1.2-media/select-io-folders.mp4) | Pick the files to convert and where the OME-Zarr output should go. |
+| [Choosing conversion parameters](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/download/v0.1.2-media/parameter-selection.mp4) | Chunking, downscaling, compression and metadata, across the parameter tabs. |
+| [Running a conversion](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/download/v0.1.2-media/run-conversion.mp4) | Start the conversion and follow its progress in the log. |
+
+The recordings are attached to the
+[v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media),
+so they are not downloaded when you clone the repository or install the package.
+
 ## Basic Usage  
 
 ### Unary Conversion  
