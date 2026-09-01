@@ -130,6 +130,12 @@ Start the conversion and follow its progress in the log.
 
 https://github.com/user-attachments/assets/3492e69d-ea83-4363-b3c7-90a9c00be76c
 
+### 4. Inspecting the result
+
+Browse the converted OME-Zarr: pixel sizes, pyramid layers and the image itself.
+
+https://github.com/user-attachments/assets/08149eb8-1cb6-403b-81a9-668ce4637f24
+
 The same recordings are attached to the
 [v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media) for viewing outside GitHub. They
 are not part of the repository, so cloning or installing the package does not
