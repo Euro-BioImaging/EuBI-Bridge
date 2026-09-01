@@ -1,5 +1,5 @@
 """
-ZarrViewer — reusable OME-Zarr navigation + rendering widget.
+ZarrViewer: reusable OME-Zarr navigation + rendering widget.
 
 Encapsulates everything that InspectPage and ProcessPage share:
   - pyramid loading + channel reading
@@ -10,9 +10,9 @@ Encapsulates everything that InspectPage and ProcessPage share:
   - MinMaxWorker integration (opt-in, enabled=True by default)
 
 Pages that embed ZarrViewer connect to:
-    frame_ready(rgb_array, elapsed_ms, generation)   — handle compositing / status themselves
-    dataset_loaded(pyramid)                           — populate page-specific metadata
-    status_changed(str)                              — forwarded to main-window status bar
+    frame_ready(rgb_array, elapsed_ms, generation)   : handle compositing / status themselves
+    dataset_loaded(pyramid)                           : populate page-specific metadata
+    status_changed(str)                              : forwarded to main-window status bar
 
 Public accessors let ProcessPage's overlay compositing read viewer state without
 reaching into private attributes.
@@ -368,7 +368,7 @@ class ZarrViewer(QWidget):
         self._level_paths = list(pyr.meta.resolution_paths)
         self._channels    = self._read_channels(pyr)
 
-        # New dataset — clear pan-preview cache so performance is re-profiled
+        # New dataset, so clear the pan-preview cache and re-profile performance
         # for this dataset's chunk layout and channel count.
         self._pan_cache.clear()
 

@@ -5,20 +5,20 @@ Uses EuBI-Bridge's Pyramid class for efficient multi-resolution access.
 Keeps loaded datasets in an LRU cache for fast repeated access.
 
 Performance changes vs original:
-  1. ThreadPoolExecutor replaces ProcessPoolExecutor — eliminates pickling/IPC
+  1. ThreadPoolExecutor replaces ProcessPoolExecutor, eliminating pickling/IPC
      overhead and Python worker startup cost; works on Linux, macOS, Windows.
      zarr releases the GIL during network/disk reads so threads achieve real
      parallelism for I/O-bound workloads.
-  2. get_orientation_axes() is memoized — shape lookups and scale calculations
+  2. get_orientation_axes() is memoized, so shape lookups and scale calculations
      now happen once per (pyramid, level, orientation) combination.
-  3. percentile_cache is wired into normalize_and_composite() — per-slice
+  3. percentile_cache is wired into normalize_and_composite(), giving per-slice
      1st/99th percentile values are computed once and reused across tile
      requests that share the same z/t/channel position.
-  4. WebP encoding replaces PNG — ~3–4× faster encode than PNG compress_level=1
+  4. WebP encoding replaces PNG, ~3-4x faster to encode than PNG compress_level=1
      with smaller payloads at quality=85.  Lossless for all practical viewing.
      Content-Type updated to image/jpeg on all tile/plane endpoints.
   5. Client-disconnect errors (WinError 10053 / BrokenPipeError) are caught
-     and silently ignored — these are normal when the client cancels a
+     and silently ignored.  These are normal when the client cancels a
      request mid-flight and are not server errors.
   6. TensorStore replaces zarr for the actual array reads (extract_region and
      /channel_minmax).  eubi_bridge.Pyramid is still used for all metadata
@@ -27,7 +27,7 @@ Performance changes vs original:
      give 2–4× faster chunk reads vs zarr-python, particularly for blosc-
      compressed data.  A per-array fallback to zarr is used automatically
      when TensorStore cannot open a level (e.g. unusual codec).
-  7. Viewport prefetching — after serving a computed tile the 8 surrounding
+  7. Viewport prefetching: after serving a computed tile the 8 surrounding
      tiles (3×3 neighbourhood minus centre) are speculatively rendered on a
      dedicated background executor and stored in tile_cache.  An in-flight
      set prevents duplicate submissions.  Prefetch failures are always
@@ -38,7 +38,7 @@ Performance changes vs original:
   Fixes vs previous version:
   A. S3 kvstore was constructed with the full S3 URI as the bucket name, which
      caused ts.open() to fail silently and permanently blacklist the key in
-     _failed — meaning TensorStore was never actually used for any S3 data.
+     _failed, meaning TensorStore was never actually used for any S3 data.
      Now correctly splits bucket name from object prefix for all remote schemes.
   B. GCS kvstore had the same bug; fixed in the same way.
   C. TensorStore context now includes S3/GCS request concurrency hints so
@@ -106,7 +106,7 @@ try:
             'file_io_concurrency': {'limit': 64},
         })
         sys.stderr.write(
-            "TensorStore available — 512 MB shared chunk cache, "
+            "TensorStore available: 512 MB shared chunk cache, "
             "32-way S3/GCS concurrency enabled\n"
         )
     except Exception as _ctx_err:
@@ -116,7 +116,7 @@ try:
     sys.stderr.flush()
 except ImportError:
     _TS_AVAILABLE = False
-    sys.stderr.write("TensorStore not available — falling back to zarr reads\n")
+    sys.stderr.write("TensorStore not available, falling back to zarr reads\n")
     sys.stderr.flush()
 
 

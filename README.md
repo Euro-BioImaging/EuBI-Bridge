@@ -14,22 +14,14 @@ Relying on `bioio` plugins for reading, EuBI-Bridge supports a wide range of inp
 
 ## Installation
 
-The recommended way to install EuBI-Bridge is via pip. Create a virtual environment with **Python 3.11 or 3.12** and use pip to install EuBI-Bridge as shown below:
-
-```bash
-python -m venv venv # Python must be either version 3.11 or 3.12.
-source venv/bin/activate
-pip install --pre "eubi-bridge==0.1.2b9" # installs both GUI and CLI
-
-# If a previous version of eubi-bridge was installed before, reset the configuration:
-eubi reset_config
-```
-
-**Important: EuBI-Bridge is currently only compatible with Python 3.11 or 3.12 due to conflicting dependencies. 
+**Important: EuBI-Bridge is currently only compatible with Python 3.11 or 3.12 due to conflicting dependencies.
 We are working on supporting a wider range of Python versions in future releases.**
 
-If your default Python is different from version 3.11 or 3.12, create a conda environment with one of these
-Python versions:
+### Recommended: conda
+
+The recommended way to install EuBI-Bridge is in a conda environment. This
+route also installs Qt, so the graphical interface works without any further
+setup:
 
 ```bash
 mamba create -n eubizarr openjdk=11.* maven python=3.12 pyqt6=6.8.1
@@ -39,12 +31,58 @@ Then install EuBI-Bridge via pip in the conda environment:
 
 ```bash
 conda activate eubizarr
-pip install --no-cache-dir --pre "eubi-bridge==0.1.2b9"
+pip install --no-cache-dir "eubi-bridge==0.1.2"
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
 ```
 
-#### Troubleshooting
+### Alternative: pip only
+
+Installing into a plain virtual environment also works, provided your Python is
+version 3.11 or 3.12:
+
+```bash
+python -m venv venv # Python must be either version 3.11 or 3.12.
+source venv/bin/activate
+pip install "eubi-bridge==0.1.2" # installs both GUI and CLI
+
+# If a previous version of eubi-bridge was installed before, reset the configuration:
+eubi reset_config
+```
+
+**On Linux this installs the graphical interface but not the Qt system
+libraries it needs at runtime**, so the graphical interface may fail to start. See
+[Linux: the GUI does not start](#linux-the-gui-does-not-start) below for the fix.
+The command-line interface is unaffected.
+
+### Troubleshooting
+
+#### Linux: the GUI does not start
+
+This applies to the pip-only route. On Linux, `pip` installs PyQt6 but not the
+system libraries it needs at runtime, so the `eubi-gui` command (which is run to launch the GUI) may stop with an error such
+as:
+
+```bash
+EuBI-Bridge could not start its graphical interface: libEGL.so.1: cannot open shared object file
+```
+
+Install the Qt system libraries with your package manager:
+
+```bash
+# Debian / Ubuntu
+sudo apt install libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
+
+# Fedora / RHEL
+sudo dnf install mesa-libEGL mesa-libGL libxkbcommon-x11 dbus-libs xcb-util-cursor
+```
+
+If you cannot install system packages, use the recommended conda route instead:
+`mamba create ... pyqt6=6.8.1` brings its own Qt libraries and avoids this
+problem entirely. The `eubi` command-line interface needs none of them and
+works either way.
+
+#### Building wheel errors
 
 If you receive a `Building wheel` error such as:
 
@@ -60,7 +98,7 @@ then try the following:
 ```bash
 # In the `eubizarr` environment
 mamba install cmake zlib boost # preinstall dependencies that can help build from source
-pip install --no-cache-dir --pre "eubi-bridge==0.1.2b9" # try installing again with the dependencies available
+pip install --no-cache-dir "eubi-bridge==0.1.2" # try installing again with the dependencies available
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
 ````
@@ -68,6 +106,40 @@ eubi reset_config
 ## Documentation
 
 Find the documentation for EuBI-Bridge [here](https://euro-bioimaging.github.io/EuBI-Bridge/)
+
+## Graphical interface
+
+Launch the graphical interface by running `eubi-gui` in the terminal. The four short videos below walk you through one complete job: converting several images to OME-Zarr, and then inspecting one of the outputs.
+
+The videos cover the common scenario: one-to-one conversion from a collection of files. More advanced features such as aggregative conversions (concatenation of multiple files), editable batch tables, custom configuration files and editing output metadata are all supported by the interface but not yet demonstrated in the videos; demos for those will be provided soon. In the meantime the [documentation](https://euro-bioimaging.github.io/EuBI-Bridge/) describe the API, and every control in the interface carries a tooltip. 
+
+### 1. Selecting input and output folders
+
+Navigate to your images, filter them with include and exclude patterns (which accept star `*` expressions), tick the files to be converted, and choose where the OME-Zarr output should be written.
+
+https://github.com/user-attachments/assets/0a474606-d443-40f0-8f36-23053c61cc81
+
+### 2. Choosing conversion parameters
+
+Work through the parameter tabs. The tabs cover different parameter categories ranging from resource allocation, through reader options, chunking, sharding and compression, downscaling, channel and pixel metadata overrides, and more. Each field explains itself on hover, and settings can be saved to a configuration file for reuse.
+
+https://github.com/user-attachments/assets/c7e3ab3b-37cf-4565-a37a-f2b6fa985961
+
+### 3. Running a conversion
+
+Start the job and watch it progress. The log reports each file as it is read, converted and downscaled, so a failure points at the file that caused it.
+
+https://github.com/user-attachments/assets/3492e69d-ea83-4363-b3c7-90a9c00be76c
+
+### 4. Inspecting the result
+
+Switch to the Inspect tab to open one of the converted OME-Zarr stores from the list in the sidebar. In the Inspect/Metadata path, find full OME-Zarr metadata, including axis names, units, pixel sizes, the chunk and shard layout and compression per pyramid level. Pixel sizes and units can be corrected here and saved back into the OME-Zarr. Switch to the Inspect/Viewer path and visualise the OME-Zarr. Adjust a specific resolution layer via Zoom slider. Browse through the z slices or timepoints. Pan the frame of view using the left mouse button. Add or remove specific channels, and adjust the channel metadata such as colours, viewed pixel range and channel names. The updated visualisation metadata can also be saved back into the OME-Zarr.
+
+https://github.com/user-attachments/assets/08149eb8-1cb6-403b-81a9-668ce4637f24
+
+The same recordings are attached to the
+[v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media) for viewing outside GitHub. They are not part of
+the repository, so cloning or pip-installing the package does not download them.
 
 ## Basic Usage  
 

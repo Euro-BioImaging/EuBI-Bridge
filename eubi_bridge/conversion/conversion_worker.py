@@ -470,7 +470,18 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         await _prepare_manager(manager, job)
         _maybe_compute_bfio_array(manager, clus.max_concurrent_scenes, clus.bf_tile_size_mb)
 
-        channel_meta = parse_channels(manager, channel_intensity_limits='from_dtype')
+        # Windows must describe the dtype actually written, not the source: a
+        # uint16 -> uint8 conversion would otherwise advertise 0-65535 for uint8
+        # data and render black in viewers.
+        channel_meta = parse_channels(
+            manager,
+            channel_intensity_limits=conv.channel_intensity_limits,
+            dtype=conv.dtype or manager.array.dtype,
+            # Without these the unary path silently ignored --channel_colors and
+            # --channel_labels, which the aggregative path already honoured.
+            **{k: v for k, v in job.extra.items()
+               if k in ('channel_labels', 'channel_colors')},
+        )
 
         if conv.verbose:
             logger.info(f"The manager array shape before storing: "
@@ -604,7 +615,8 @@ async def _process_single_scene_safe(manager: ArrayManager, output_path: str,
 
 def _generate_output_path(base_path: str, series_path: str,
                           series_idx: Optional[int] = None,
-                          tile_idx: Optional[int] = None) -> str:
+                          tile_idx: Optional[int] = None,
+                          resolved_basename: Optional[str] = None) -> str:
     """
     Generate output path with optional scene/tile suffixes.
 
@@ -613,11 +625,15 @@ def _generate_output_path(base_path: str, series_path: str,
         series_path: Source series path
         series_idx: Optional scene index
         tile_idx: Optional tile index
+        resolved_basename: Pre-computed basename replacing the one derived from
+            *series_path*.  Set when two inputs share a filename and would
+            otherwise write to the same store.  Scene/tile suffixes still apply
+            on top of it, so multi-scene naming is unaffected.
 
     Returns:
         Complete output path
     """
-    basename = os.path.basename(series_path).split('.')[0]
+    basename = resolved_basename or os.path.basename(series_path).split('.')[0]
     suffix = ""
 
     if series_idx is not None:
@@ -743,6 +759,7 @@ async def unary_worker(job: ConversionJob) -> None:
             out_path = _generate_output_path(
                 job.output_path, man.series_path,
                 man.series if add_scene else None,
+                resolved_basename=job.resolved_basename,
             )
             tasks.append(asyncio.create_task(
                 _process_single_scene_safe(man, out_path, job, sem)
@@ -757,6 +774,7 @@ async def unary_worker(job: ConversionJob) -> None:
                 job.output_path, man.series_path,
                 man.series if add_scene else None,
                 man.mosaic_tile_index if (add_tile and man.mosaic_tile_index is not None) else None,
+                resolved_basename=job.resolved_basename,
             )
             tasks.append(asyncio.create_task(
                 _process_single_scene_safe(man, out_path, job, sem)
@@ -770,6 +788,7 @@ async def unary_worker(job: ConversionJob) -> None:
                 job.output_path, tile.series_path,
                 None,
                 tile.mosaic_tile_index if add_tile else None,
+                resolved_basename=job.resolved_basename,
             )
             tasks.append(asyncio.create_task(
                 _process_single_scene_safe(tile, out_path, job, sem)

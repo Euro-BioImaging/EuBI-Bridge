@@ -98,3 +98,14 @@ quarantine/
 # Kept locally for future work; not tracked and not shipped.
 incubation/
 extras/
+
+# Screen recordings and their exports.  The published videos live on the
+# v0.1.2-media GitHub release rather than in the repository, so that cloning or
+# installing the package does not pull tens of megabytes of documentation media.
+# Keep working files here; they stay local.
+docs/gifs/
+
+# Screenshots produced by docs/scripts/gen_gui_shots.py.  They are generated
+# from the running interface on demand, so committing them would only add
+# binaries that go stale whenever the GUI changes.
+docs/images/

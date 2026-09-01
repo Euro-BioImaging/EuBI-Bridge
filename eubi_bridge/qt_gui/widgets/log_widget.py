@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 
 _SEP = "\x01"
 
-# Colours for each severity level — foreground
+# Colours for each severity level, foreground
 _LEVEL_FG: dict[str, str] = {
     "DEBUG":    "#7c7c7c",
     "INFO":     "#4ec994",   # Rich green
@@ -143,7 +143,7 @@ class LogWidget(QWidget):
         cursor.insertText(" ", _fmt(_COLOR_MESSAGE))
         # message
         cursor.insertText(message, _fmt(_COLOR_MESSAGE))
-        # right-hand module:line — padded with spaces
+        # right-hand module:line, padded with spaces
         padding = max(1, 60 - len(message))
         cursor.insertText(" " * padding, _fmt(_COLOR_MESSAGE))
         cursor.insertText(module, _fmt(_COLOR_MODULE))

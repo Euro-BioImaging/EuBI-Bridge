@@ -1,5 +1,5 @@
 """
-Settings dialog — font size, colour palette, and UI scale.
+Settings dialog: font size, colour palette, and UI scale.
 
 Usage:
     dlg = SettingsDialog(parent=window)
@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
 # ── Palette definitions ────────────────────────────────────────────────────────
 
 def _make_dark_palette(accent_hex: str = "#3ca0ff") -> QPalette:
-    """Bright dark palette — the default EuBI-Bridge theme."""
+    """Bright dark palette: the default EuBI-Bridge theme."""
     p = QPalette()
     accent = QColor(accent_hex)
     p.setColor(QPalette.ColorRole.Window,          QColor(40,  40,  42))
@@ -314,7 +314,7 @@ class SettingsDialog(QDialog):
 
         outer.addLayout(btn_row)
 
-        # Snapshot of state at dialog open — used to revert on Cancel
+        # Snapshot of state at dialog open, used to revert on Cancel
         self._snapshot_theme = _current_theme
         self._snapshot_font  = _current_font_size
         self._snapshot_scale = _current_ui_scale

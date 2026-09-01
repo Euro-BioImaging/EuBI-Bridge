@@ -82,7 +82,7 @@ def list_local_recursive(
     """Recursively walk *root* and return file entries that pass the filters.
 
     Each entry's ``name`` is the path relative to *root* (using forward slashes),
-    and ``path`` is the absolute path.  Directories are never returned — only files.
+    and ``path`` is the absolute path.  Directories are never returned, only files.
     """
     import fnmatch
 
@@ -90,10 +90,41 @@ def list_local_recursive(
     if not os.path.isdir(resolved):
         return []
 
+    def _passes(name: str, rel: str) -> bool:
+        if include_patterns and not any(
+            fnmatch.fnmatch(name, p) or fnmatch.fnmatch(rel, p)
+            for p in include_patterns
+        ):
+            return False
+        if exclude_patterns and any(
+            fnmatch.fnmatch(name, p) or fnmatch.fnmatch(rel, p)
+            for p in exclude_patterns
+        ):
+            return False
+        return True
+
     entries: list[FileEntry] = []
     for dirpath, dirnames, filenames in os.walk(resolved):
         # Skip hidden directories
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+
+        # An OME-Zarr store is one image, not a tree of files.  Yield the store
+        # itself and do not descend.  Otherwise every chunk ('0/0/0/4') is
+        # offered as a separate input and fails as an unknown format.
+        zarr_dirs = [d for d in dirnames
+                     if _is_ome_zarr_local(os.path.join(dirpath, d))]
+        for d in zarr_dirs:
+            abs_zarr = os.path.join(dirpath, d)
+            rel_zarr = os.path.relpath(abs_zarr, resolved).replace("\\", "/")
+            if _passes(d, rel_zarr):
+                entries.append(FileEntry(
+                    name=rel_zarr,
+                    path=abs_zarr,
+                    isDirectory=True,
+                    isOmeZarr=True,
+                ))
+        dirnames[:] = [d for d in dirnames if d not in set(zarr_dirs)]
+
         for fname in sorted(filenames):
             if fname.startswith("."):
                 continue

@@ -588,6 +588,10 @@ class ConversionJob(BaseModel):
 
     input_path: str
     output_path: str
+    # Computed, never user-supplied: the basename for the output store without
+    # its '.zarr' suffix.  Set only when two inputs would otherwise produce the
+    # same store name; None keeps the default of naming it after the input file.
+    resolved_basename: Optional[str] = None
     cluster: ClusterConfig    = Field(default_factory=ClusterConfig)
     readers: ReaderConfig     = Field(default_factory=ReaderConfig)
     conversion: ConversionConfig = Field(default_factory=ConversionConfig)
@@ -600,6 +604,7 @@ class ConversionJob(BaseModel):
         input_path: str,
         output_path: str,
         kwargs: dict,
+        resolved_basename: Optional[str] = None,
     ) -> "ConversionJob":
         """Build a validated ``ConversionJob`` from a flat merged-kwargs dict.
 
@@ -610,6 +615,7 @@ class ConversionJob(BaseModel):
         return cls(
             input_path=input_path,
             output_path=output_path,
+            resolved_basename=resolved_basename,
             cluster=ClusterConfig(**kwargs),
             readers=ReaderConfig(**kwargs),
             conversion=ConversionConfig(**kwargs),

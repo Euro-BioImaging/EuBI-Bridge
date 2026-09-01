@@ -61,6 +61,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - Graphical Interface: gui.md
   - CLI Reference:
       - cli_reference/index.md
       - Conversion: cli_reference/conversion.md

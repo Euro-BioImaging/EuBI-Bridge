@@ -1,11 +1,14 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "packaging"]
+# setuptools >= 77 is required for the PEP 639 `license = "MIT"` form below;
+# older versions reject it with "project.license must be valid exactly by one
+# definition", which fails the build rather than degrading gracefully.
+requires = ["setuptools>=77", "wheel", "packaging"]
 build-backend = "_build_backend"
 backend-path = ["."]
 
 [project]
 name = "eubi_bridge"
-version = "0.1.2b9"
+version = "0.1.2"
 description = "A package for converting datasets to OME-Zarr format."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"

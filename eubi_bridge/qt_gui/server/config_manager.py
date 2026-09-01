@@ -140,6 +140,10 @@ def _config_to_react(cfg: dict) -> dict:
         "metadata": {
             "metadataReader":         conv.get("metadata_reader", "bfio"),
             "channelIntensityLimits": "from_datatype" if conv.get("channel_intensity_limits", "from_dtype") == "from_dtype" else "from_array",
+            # Per-channel colour overrides, "idx,RRGGBB;..." as the CLI takes
+            # them.  Empty means every channel keeps its source colour or gets
+            # an automatic one.
+            "channelColors":          conv.get("channel_colors", "") or "",
             # Physical scale overrides cannot be stored in the config file
             "overridePhysicalScale": False,
             "scaleTime": "", "unitTime": "second",
@@ -240,6 +244,7 @@ def _react_to_config(data: dict) -> dict:
             "override_channel_names": conv_d.get("overrideChannelNames", False),
             "channel_intensity_limits": ci_limits,
             "metadata_reader":       meta_d.get("metadataReader", "bfio"),
+            "channel_colors":        meta_d.get("channelColors", "") or "",
             "save_omexml":           conv_d.get("saveOmeXml", True),
             "squeeze":               conv_d.get("squeezeDimensions", True),
             "skip_dask":             conv_d.get("skipDask", False),
