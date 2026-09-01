@@ -109,18 +109,31 @@ Find the documentation for EuBI-Bridge [here](https://euro-bioimaging.github.io/
 
 ## Graphical interface
 
-Launch the graphical interface with `eubi-gui`. The short walkthroughs below
-cover a full conversion, from choosing files to following the log.
+Launch the graphical interface with `eubi-gui`. The walkthroughs below cover a
+full conversion, from choosing files to following the log.
 
-| | |
-|---|---|
-| [Selecting input and output folders](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/download/v0.1.2-media/select-io-folders.mp4) | Pick the files to convert and where the OME-Zarr output should go. |
-| [Choosing conversion parameters](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/download/v0.1.2-media/parameter-selection.mp4) | Chunking, downscaling, compression and metadata, across the parameter tabs. |
-| [Running a conversion](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/download/v0.1.2-media/run-conversion.mp4) | Start the conversion and follow its progress in the log. |
+### 1. Selecting input and output folders
 
-The recordings are attached to the
-[v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media),
-so they are not downloaded when you clone the repository or install the package.
+Pick the files to convert and where the OME-Zarr output should go.
+
+https://github.com/user-attachments/assets/58abaceb-e358-48b3-8f37-a32f2f3a8acc
+
+### 2. Choosing conversion parameters
+
+Chunking, downscaling, compression and metadata, across the parameter tabs.
+
+https://github.com/user-attachments/assets/ccb6ebab-1f6f-4260-983e-f963c64224d8
+
+### 3. Running a conversion
+
+Start the conversion and follow its progress in the log.
+
+https://github.com/user-attachments/assets/9ae4fd19-22f1-40b1-b890-315c842a2e38
+
+The same recordings are attached to the
+[v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media) for viewing outside GitHub. They
+are not part of the repository, so cloning or installing the package does not
+download them.
 
 ## Basic Usage  
 
