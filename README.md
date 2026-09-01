@@ -109,11 +109,9 @@ Find the documentation for EuBI-Bridge [here](https://euro-bioimaging.github.io/
 
 ## Graphical interface
 
-Launch the graphical interface with `eubi-gui`. The four short walkthroughs
-below follow one complete job: converting several images to OME-Zarr, then
-inspecting one of the outputs.
+Launch the graphical interface by running `eubi-gui` in the terminal. The four short videos below walk you through one complete job: converting several images to OME-Zarr, and then inspecting one of the outputs.
 
-The videos cover the common scenario: one-to-one conversion from a collection of files. More advanced features such as aggregative conversions (concatenation of multiple files), batch tables, custom configuration files and editing output metadata are all supported by the interface but not yet demonstrated in the videos; demos for those will be provided soon. In the meantime the [documentation](https://euro-bioimaging.github.io/EuBI-Bridge/) describe the API, and every control in the interface carries a tooltip. 
+The videos cover the common scenario: one-to-one conversion from a collection of files. More advanced features such as aggregative conversions (concatenation of multiple files), editable batch tables, custom configuration files and editing output metadata are all supported by the interface but not yet demonstrated in the videos; demos for those will be provided soon. In the meantime the [documentation](https://euro-bioimaging.github.io/EuBI-Bridge/) describe the API, and every control in the interface carries a tooltip. 
 
 ### 1. Selecting input and output folders
 
