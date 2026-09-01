@@ -109,37 +109,39 @@ Find the documentation for EuBI-Bridge [here](https://euro-bioimaging.github.io/
 
 ## Graphical interface
 
-Launch the graphical interface with `eubi-gui`. The walkthroughs below cover a
-full conversion, from choosing files to following the log.
+Launch the graphical interface with `eubi-gui`. The four short walkthroughs
+below follow one complete job: converting several images to OME-Zarr, then
+inspecting one of the outputs.
+
+The videos cover the common scenario: one-to-one conversion from a collection of files. More advanced features such as aggregative conversions (concatenation of multiple files), batch tables, custom configuration files and editing output metadata are all supported by the interface but not yet demonstrated in the videos; demos for those will be provided soon. In the meantime the [documentation](https://euro-bioimaging.github.io/EuBI-Bridge/) describe the API, and every control in the interface carries a tooltip. 
 
 ### 1. Selecting input and output folders
 
-Pick the files to convert and where the OME-Zarr output should go.
+Navigate to your images, filter them with include and exclude patterns (which accept star `*` expressions), tick the files to be converted, and choose where the OME-Zarr output should be written.
 
 https://github.com/user-attachments/assets/0a474606-d443-40f0-8f36-23053c61cc81
 
 ### 2. Choosing conversion parameters
 
-Chunking, downscaling, compression and metadata, across the parameter tabs.
+Work through the parameter tabs. The tabs cover different parameter categories ranging from resource allocation, through reader options, chunking, sharding and compression, downscaling, channel and pixel metadata overrides, and more. Each field explains itself on hover, and settings can be saved to a configuration file for reuse.
 
 https://github.com/user-attachments/assets/c7e3ab3b-37cf-4565-a37a-f2b6fa985961
 
 ### 3. Running a conversion
 
-Start the conversion and follow its progress in the log.
+Start the job and watch it progress. The log reports each file as it is read, converted and downscaled, so a failure points at the file that caused it.
 
 https://github.com/user-attachments/assets/3492e69d-ea83-4363-b3c7-90a9c00be76c
 
 ### 4. Inspecting the result
 
-Browse the converted OME-Zarr: pixel sizes, pyramid layers and the image itself.
+Switch to the Inspect tab to open one of the converted OME-Zarr stores from the list in the sidebar. In the Inspect/Metadata path, find full OME-Zarr metadata, including axis names, units, pixel sizes, the chunk and shard layout and compression per pyramid level. Pixel sizes and units can be corrected here and saved back into the OME-Zarr. Switch to the Inspect/Viewer path and visualise the OME-Zarr. Adjust a specific resolution layer via Zoom slider. Browse through the z slices or timepoints. Pan the frame of view using the left mouse button. Add or remove specific channels, and adjust the channel metadata such as colours, viewed pixel range and channel names. The updated visualisation metadata can also be saved back into the OME-Zarr.
 
 https://github.com/user-attachments/assets/08149eb8-1cb6-403b-81a9-668ce4637f24
 
 The same recordings are attached to the
-[v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media) for viewing outside GitHub. They
-are not part of the repository, so cloning or installing the package does not
-download them.
+[v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media) for viewing outside GitHub. They are not part of
+the repository, so cloning or pip-installing the package does not download them.
 
 ## Basic Usage  
 
