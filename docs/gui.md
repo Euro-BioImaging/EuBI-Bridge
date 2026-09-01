@@ -9,8 +9,8 @@ files. More advanced features such as aggregative conversions (concatenation of
 multiple files), editable batch tables, custom configuration files and editing
 output metadata are all supported by the interface but not yet demonstrated in
 the videos; demos for those will be provided soon. In the meantime the
-[CLI reference](cli_reference/index.md) describes every parameter the interface
-exposes, and each control carries a tooltip explaining what it does.
+[CLI reference](cli_reference/index.md) describes the API, and every control in
+the interface carries a tooltip.
 
 !!! tip "Linux users"
 
@@ -34,10 +34,11 @@ the OME-Zarr output should be written.
 
 ## 2. Choosing conversion parameters
 
-Work through the parameter tabs: reader options, chunking and compression,
-downscaling into a resolution pyramid, and the metadata written alongside the
-pixels. Each field explains itself on hover, and the settings can be saved to a
-configuration file for reuse.
+Work through the parameter tabs. The tabs cover different parameter categories
+ranging from resource allocation, through reader options, chunking, sharding and
+compression, downscaling, channel and pixel metadata overrides, and more. Each
+field explains itself on hover, and settings can be saved to a configuration
+file for reuse.
 
 <video controls muted playsinline width="100%"
        src="https://github.com/Euro-BioImaging/EuBI-Bridge/releases/download/v0.1.2-media/parameter-selection.mp4">
@@ -58,9 +59,16 @@ converted and downscaled, so a failure points at the file that caused it.
 
 ## 4. Inspecting the result
 
-Switch to the Inspect tab to open a converted store: axis units and pixel sizes,
-the chunk and shard layout of each pyramid level, and the image itself in the
-viewer. Pixel sizes can be corrected here and saved back into the OME-Zarr.
+Switch to the Inspect tab to open one of the converted OME-Zarr stores from the
+list in the sidebar. In the Inspect/Metadata path, find full OME-Zarr metadata,
+including axis names, units, pixel sizes, the chunk and shard layout and
+compression per pyramid level. Pixel sizes and units can be corrected here and
+saved back into the OME-Zarr. Switch to the Inspect/Viewer path and visualise
+the OME-Zarr. Adjust a specific resolution layer via Zoom slider. Browse through
+the z slices or timepoints. Pan the frame of view using the left mouse button.
+Add or remove specific channels, and adjust the channel metadata such as
+colours, viewed pixel range and channel names. The updated visualisation
+metadata can also be saved back into the OME-Zarr.
 
 <video controls muted playsinline width="100%"
        src="https://github.com/Euro-BioImaging/EuBI-Bridge/releases/download/v0.1.2-media/inspection.mp4">
@@ -72,5 +80,5 @@ viewer. Pixel sizes can be corrected here and saved back into the OME-Zarr.
 
 The recordings are attached to the
 [v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media).
-They are not part of the repository, so cloning or installing the package does
-not download them.
+They are not part of the repository, so cloning or pip-installing the package
+does not download them.
