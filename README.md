@@ -116,19 +116,19 @@ full conversion, from choosing files to following the log.
 
 Pick the files to convert and where the OME-Zarr output should go.
 
-https://github.com/user-attachments/assets/58abaceb-e358-48b3-8f37-a32f2f3a8acc
+https://github.com/user-attachments/assets/0a474606-d443-40f0-8f36-23053c61cc81
 
 ### 2. Choosing conversion parameters
 
 Chunking, downscaling, compression and metadata, across the parameter tabs.
 
-https://github.com/user-attachments/assets/ccb6ebab-1f6f-4260-983e-f963c64224d8
+https://github.com/user-attachments/assets/c7e3ab3b-37cf-4565-a37a-f2b6fa985961
 
 ### 3. Running a conversion
 
 Start the conversion and follow its progress in the log.
 
-https://github.com/user-attachments/assets/9ae4fd19-22f1-40b1-b890-315c842a2e38
+https://github.com/user-attachments/assets/3492e69d-ea83-4363-b3c7-90a9c00be76c
 
 The same recordings are attached to the
 [v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media) for viewing outside GitHub. They
