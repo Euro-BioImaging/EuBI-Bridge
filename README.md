@@ -141,7 +141,7 @@ The same recordings are attached to the
 [v0.1.2-media release](https://github.com/Euro-BioImaging/EuBI-Bridge/releases/tag/v0.1.2-media) for viewing outside GitHub. They are not part of
 the repository, so cloning or pip-installing the package does not download them.
 
-## Basic Usage  
+## Command line interface  
 
 ### Unary Conversion  
 
