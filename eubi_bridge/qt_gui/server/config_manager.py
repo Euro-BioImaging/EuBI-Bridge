@@ -28,6 +28,7 @@ def _config_to_react(cfg: dict) -> dict:
     readers = cfg.get("readers", {})
     conv    = cfg.get("conversion", {})
     down    = cfg.get("downscale", {})
+    meta    = cfg.get("metadata", {})
     concat  = cfg.get("concatenation", {})
 
     # Reconstruct compression dict from compressor + compressor_params
@@ -138,18 +139,33 @@ def _config_to_react(cfg: dict) -> dict:
             "smartScaleTime":       down.get("time_smart_scale_factor", None),
         },
         "metadata": {
-            "metadataReader":         conv.get("metadata_reader", "bfio"),
-            "channelIntensityLimits": "from_datatype" if conv.get("channel_intensity_limits", "from_dtype") == "from_dtype" else "from_array",
+            # Read from the 'metadata' section, falling back to 'conversion'
+            # only so a config written before the move still populates the form.
+            "metadataReader":         meta.get("metadata_reader", conv.get("metadata_reader", "bfio")),
+            "channelIntensityLimits": "from_datatype" if meta.get("channel_intensity_limits", conv.get("channel_intensity_limits", "from_dtype")) == "from_dtype" else "from_array",
             # Per-channel colour overrides, "idx,RRGGBB;..." as the CLI takes
             # them.  Empty means every channel keeps its source colour or gets
             # an automatic one.
-            "channelColors":          conv.get("channel_colors", "") or "",
-            # Physical scale overrides cannot be stored in the config file
-            "overridePhysicalScale": False,
-            "scaleTime": "", "unitTime": "second",
-            "scaleZ": "",    "unitZ": "micrometer",
-            "scaleY": "",    "unitY": "micrometer",
-            "scaleX": "",    "unitX": "micrometer",
+            "channelColors":          meta.get("channel_colors", conv.get("channel_colors", "")) or "",
+            "channelLabels":          meta.get("channel_labels", conv.get("channel_labels", "")) or "",
+            # A stored scale or unit has to come back ticked, or the form would
+            # show the value while the toggle said it was not being applied.
+            "overridePhysicalScale": any(
+                meta.get(f"{axis}_scale") is not None
+                or meta.get(f"{axis}_unit") is not None
+                for axis in ("time", "z", "y", "x")),
+            **{
+                f"scale{axis.capitalize()}": (
+                    "" if meta.get(f"{axis}_scale") is None
+                    else str(meta[f"{axis}_scale"]))
+                for axis in ("time", "z", "y", "x")
+            },
+            **{
+                f"unit{axis.capitalize()}": (
+                    meta.get(f"{axis}_unit")
+                    or ("second" if axis == "time" else "micrometer"))
+                for axis in ("time", "z", "y", "x")
+            },
         },
         "concatenation": {
             "concatenationAxes": concat.get("concatenation_axes", "") or "",
@@ -158,6 +174,7 @@ def _config_to_react(cfg: dict) -> dict:
             "zTag":              concat.get("z_tag", "")       or "",
             "yTag":              concat.get("y_tag", "")       or "",
             "xTag":              concat.get("x_tag", "")       or "",
+            "aggregativeGroup":  concat.get("aggregative_group", "") or "",
         },
     }
 
@@ -241,10 +258,6 @@ def _react_to_config(data: dict) -> dict:
             "compressor":            compressor,
             "compressor_params":     compressor_params,
             "overwrite":             conv_d.get("overwrite", False),
-            "override_channel_names": conv_d.get("overrideChannelNames", False),
-            "channel_intensity_limits": ci_limits,
-            "metadata_reader":       meta_d.get("metadataReader", "bfio"),
-            "channel_colors":        meta_d.get("channelColors", "") or "",
             "save_omexml":           conv_d.get("saveOmeXml", True),
             "squeeze":               conv_d.get("squeezeDimensions", True),
             "skip_dask":             conv_d.get("skipDask", False),
@@ -273,6 +286,29 @@ def _react_to_config(data: dict) -> dict:
             "x_smart_scale_factor":     down_d.get("smartScaleX") or None,
             "time_smart_scale_factor":  down_d.get("smartScaleTime") or None,
         },
+        "metadata": {
+            "metadata_reader":          meta_d.get("metadataReader", "bfio"),
+            "override_channel_names":   conv_d.get("overrideChannelNames", False),
+            "channel_intensity_limits": ci_limits,
+            "channel_colors":           meta_d.get("channelColors", "") or "",
+            "channel_labels":           meta_d.get("channelLabels", "") or "",
+            # Physical overrides only count when the form's toggle is on; blank
+            # or unticked means "keep what the source file says".
+            **{
+                f"{axis}_scale": (
+                    float(meta_d[f"scale{axis.capitalize()}"])
+                    if meta_d.get("overridePhysicalScale", False)
+                    and str(meta_d.get(f"scale{axis.capitalize()}", "")).strip()
+                    else None)
+                for axis in ("time", "z", "y", "x")
+            },
+            **{
+                f"{axis}_unit": (
+                    meta_d.get(f"unit{axis.capitalize()}") or None
+                    if meta_d.get("overridePhysicalScale", False) else None)
+                for axis in ("time", "z", "y", "x")
+            },
+        },
         "concatenation": {
             "concatenation_axes": concat_d.get("concatenationAxes") or None,
             "time_tag":           concat_d.get("timeTag")    or None,
@@ -280,6 +316,7 @@ def _react_to_config(data: dict) -> dict:
             "z_tag":              concat_d.get("zTag")       or None,
             "y_tag":              concat_d.get("yTag")       or None,
             "x_tag":              concat_d.get("xTag")       or None,
+            "aggregative_group":  concat_d.get("aggregativeGroup") or None,
         },
     }
 

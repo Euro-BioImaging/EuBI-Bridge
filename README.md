@@ -2,10 +2,9 @@
 
 [![Documentation](https://img.shields.io/badge/documentation-online-green)](https://euro-bioimaging.github.io/EuBI-Bridge/)
 
-EuBI-Bridge is a tool for distributed conversion of microscopic image collections into the OME-Zarr format. 
-It can run on the command line or as part of a Python script.  
+EuBI-Bridge is a tool for **distributed conversion of microscopy image collections to OME-Zarr**. Conversion can be performed through either a command-line interface (CLI) or a graphical user interface (GUI). The installation described below provides access to both interfaces.
 
-A key feature of EuBI-Bridge is **aggregative conversion**, which concatenates multiple images along specified dimensions—particularly useful for handling large datasets stored as TIFF file collections.  
+A key feature of EuBI-Bridge is **aggregative conversion**, which combines multiple input images along user-specified axes into a single OME-Zarr container. This is particularly useful when images belong to the same multidimensional dataset but are stored as separate, unlinked files. By aggregating these files during conversion, EuBI-Bridge can reconstruct the intended multidimensional dataset.
 
 EuBI-Bridge is built on several powerful libraries, including `zarr`, `bioio`, `dask` and `tensorstore`, among others. 
 
@@ -31,7 +30,7 @@ Then install EuBI-Bridge via pip in the conda environment:
 
 ```bash
 conda activate eubizarr
-pip install --no-cache-dir "eubi-bridge==0.1.2"
+pip install --no-cache-dir "eubi-bridge==0.1.3"
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
 ```
@@ -44,7 +43,7 @@ version 3.11 or 3.12:
 ```bash
 python -m venv venv # Python must be either version 3.11 or 3.12.
 source venv/bin/activate
-pip install "eubi-bridge==0.1.2" # installs both GUI and CLI
+pip install "eubi-bridge==0.1.3" # installs both GUI and CLI
 
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
@@ -98,7 +97,7 @@ then try the following:
 ```bash
 # In the `eubizarr` environment
 mamba install cmake zlib boost # preinstall dependencies that can help build from source
-pip install --no-cache-dir "eubi-bridge==0.1.2" # try installing again with the dependencies available
+pip install --no-cache-dir "eubi-bridge==0.1.3" # try installing again with the dependencies available
 # If a previous version of eubi-bridge was installed before, reset the configuration:
 eubi reset_config
 ````

@@ -171,11 +171,11 @@ def shot_parameter_tabs(app, save):
 
 def shot_batch_queue(app, save):
     """The batch queue with rows, overrides, and the grouped header."""
-    from eubi_bridge.qt_gui.pages.convert_page import ConvertPage, _MODE_BATCH, _LAST_TAB
+    from eubi_bridge.qt_gui.pages.convert_page import ConvertPage, _LAST_TAB
     page = ConvertPage()
     page.resize(*WINDOW_SIZE)
     page.show()
-    page._mode_bar.setCurrentIndex(_MODE_BATCH)
+    page._batch_mode.setChecked(True)
     page._tabs.setCurrentIndex(_LAST_TAB)
     _sample_batch(page)
     app.processEvents()
@@ -200,12 +200,12 @@ def shot_batch_queue(app, save):
 
 def shot_edit_cells(app, save):
     """The Edit Cells dialog, including a greyed-out dependent parameter."""
-    from eubi_bridge.qt_gui.pages.convert_page import ConvertPage, _MODE_BATCH, _LAST_TAB
+    from eubi_bridge.qt_gui.pages.convert_page import ConvertPage, _LAST_TAB
     from eubi_bridge.qt_gui.widgets.batch_cell_editor import BatchCellEditor
 
     page = ConvertPage()
     page.resize(*WINDOW_SIZE)
-    page._mode_bar.setCurrentIndex(_MODE_BATCH)
+    page._batch_mode.setChecked(True)
     page._tabs.setCurrentIndex(_LAST_TAB)
     _sample_batch(page)
     app.processEvents()

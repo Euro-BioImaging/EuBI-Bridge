@@ -52,8 +52,8 @@ def _conversion_subprocess(call_args: dict, log_queue, result_queue) -> None:
     *call_args* keys
     ----------------
     input_path, output_path, includes, excludes,
-    time_tag, channel_tag, z_tag, y_tag, x_tag, concatenation_axes,
-    to_zarr_kwargs  (dict of keyword args for bridge.to_zarr)
+    to_zarr_kwargs  (dict of keyword args for bridge.to_zarr, including the
+                     concatenation settings)
 
     Log messages are pushed to *log_queue* as structured strings.
     ("ok", None) or ("err", traceback_str) is pushed to *result_queue*.
@@ -117,17 +117,14 @@ def _conversion_subprocess(call_args: dict, log_queue, result_queue) -> None:
 
         from eubi_bridge.ebridge import EuBIBridge
         bridge = EuBIBridge()
+        # The concatenation settings are not named here: to_zarr_kwargs already
+        # carries them (and, for a batch, the per-row values), so naming them
+        # again would pass each one twice.
         bridge.to_zarr(
             input_path        = call_args["input_path"],
             output_path       = call_args["output_path"],
             includes          = call_args.get("includes"),
             excludes          = call_args.get("excludes"),
-            time_tag          = call_args.get("time_tag"),
-            channel_tag       = call_args.get("channel_tag"),
-            z_tag             = call_args.get("z_tag"),
-            y_tag             = call_args.get("y_tag"),
-            x_tag             = call_args.get("x_tag"),
-            concatenation_axes= call_args.get("concatenation_axes"),
             **call_args["to_zarr_kwargs"],
         )
         result_queue.put(("ok", None))

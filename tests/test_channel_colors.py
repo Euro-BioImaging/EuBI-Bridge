@@ -135,25 +135,32 @@ class TestUnaryForwarding:
 
     def test_intensity_limits_are_not_hardcoded(self):
         call = self._unary_call_source()
-        assert "conv.channel_intensity_limits" in call,             "unary path ignores the user's channel_intensity_limits setting"
+        assert "meta.channel_intensity_limits" in call,             "unary path ignores the user's channel_intensity_limits setting"
         assert "'from_dtype'" not in call.split("dtype=")[0],             "channel_intensity_limits is hardcoded"
 
-    def test_job_extra_carries_the_parameters(self):
-        """The forwarding reads job.extra, so they must survive job building."""
+    def test_the_job_carries_the_parameters(self):
+        """They must survive job building, wherever they are stored.
+
+        They now belong to MetadataConfig rather than riding in ``extra`` as
+        unrecognised keys, so the typed field is the address; a per-row value
+        from a conversion table still arrives via ``extra`` and wins.
+        """
         from eubi_bridge.core.config_models import ConversionJob
         job = ConversionJob.from_kwargs(
             "/in.tif", "/out",
             {"channel_colors": "0,FF0000", "channel_labels": "0,Red"})
-        assert job.extra["channel_colors"] == "0,FF0000"
-        assert job.extra["channel_labels"] == "0,Red"
+        assert job.metadata.channel_colors == "0,FF0000"
+        assert job.metadata.channel_labels == "0,Red"
 
     def test_both_paths_forward_the_same_keys(self):
         """Aggregative already worked; the two must not diverge again."""
         import inspect
         from eubi_bridge.conversion import conversion_worker
         source = inspect.getsource(conversion_worker)
-        assert source.count(
-            "if k in ('channel_labels', 'channel_colors')") == 2
+        # Both parse_channels call sites pass each key explicitly, preferring a
+        # per-row override from job.extra over the configured default.
+        assert source.count("channel_labels=job.extra.get(") == 2
+        assert source.count("channel_colors=job.extra.get(") == 2
 
 
 class TestGuiSerialisation:
@@ -232,14 +239,14 @@ class TestConfigPersistence:
     def test_mapping_round_trips(self):
         from eubi_bridge.qt_gui.core.config import react_to_snake, snake_to_react
         snake = react_to_snake(self._react("0,FF0000;2,00FF00"))
-        assert snake["conversion"]["channel_colors"] == "0,FF0000;2,00FF00"
+        assert snake["metadata"]["channel_colors"] == "0,FF0000;2,00FF00"
         back = snake_to_react(snake)
         assert back["metadata"]["channelColors"] == "0,FF0000;2,00FF00"
 
     def test_empty_stays_empty(self):
         from eubi_bridge.qt_gui.core.config import react_to_snake, snake_to_react
         snake = react_to_snake(self._react(""))
-        assert snake["conversion"]["channel_colors"] == ""
+        assert snake["metadata"]["channel_colors"] == ""
         assert snake_to_react(snake)["metadata"]["channelColors"] == ""
 
     def test_written_to_disk_and_reloaded(self, tmp_path):
@@ -248,7 +255,7 @@ class TestConfigPersistence:
         saved = save_config(self._react("0,FF8800;3,00AAFF"),
                             str(tmp_path / "config.json"))
         on_disk = json.loads(Path(saved["_configPath"]).read_text())
-        assert on_disk["conversion"]["channel_colors"] == "0,FF8800;3,00AAFF"
+        assert on_disk["metadata"]["channel_colors"] == "0,FF8800;3,00AAFF"
         reloaded = load_config(saved["_configPath"])
         assert reloaded["metadata"]["channelColors"] == "0,FF8800;3,00AAFF"
 
@@ -269,3 +276,157 @@ class TestConfigPersistence:
         assert page._channel_colours_to_string() == expected
         assert page._channel_colour_rows[0]["override"].isChecked()
         assert not page._channel_colour_rows[1]["override"].isChecked()
+
+
+class TestPhysicalScaleConfig:
+    """Pixel sizes and units are config parameters, not loose kwargs.
+
+    They reached the worker through ``job.extra`` as unrecognised keys, so the
+    config file -- which users read to learn the exact key spellings -- never
+    mentioned them.  They are typed fields now; ``extra`` still wins so a
+    per-row override from a conversion table is not overruled by the default.
+    """
+
+    _AXES = ("time", "z", "y", "x")
+
+    def test_every_axis_has_a_scale_and_unit(self):
+        from eubi_bridge.core.config_models import MetadataConfig
+        fields = set(MetadataConfig.model_fields)
+        for axis in self._AXES:
+            assert f"{axis}_scale" in fields
+            assert f"{axis}_unit" in fields
+
+    def test_channels_have_neither(self):
+        """A channel has no physical extent, so the keys would be meaningless."""
+        from eubi_bridge.core.config_models import MetadataConfig
+        fields = set(MetadataConfig.model_fields)
+        assert "channel_scale" not in fields
+        assert "channel_unit" not in fields
+
+    def test_they_default_to_none(self):
+        """None means "keep what the file says" -- no 'auto' sentinel needed,
+        since a blank cell inheriting the config resolves to the same thing."""
+        from eubi_bridge.core.config_models import MetadataConfig
+        dumped = MetadataConfig().model_dump()
+        for axis in self._AXES:
+            assert dumped[f"{axis}_scale"] is None
+            assert dumped[f"{axis}_unit"] is None
+
+    def test_the_config_file_carries_them(self):
+        """The config doubles as the parameter reference, so absent = invisible."""
+        from eubi_bridge.ebridge import ConfigManager
+        section = ConfigManager._ROOT_DEFAULTS["metadata"]
+        for axis in self._AXES:
+            assert f"{axis}_scale" in section
+            assert f"{axis}_unit" in section
+
+    def test_the_job_carries_them_typed(self):
+        from eubi_bridge.core.config_models import ConversionJob
+        job = ConversionJob.from_kwargs(
+            "/in.tif", "/out", {"z_scale": 0.25, "z_unit": "nanometer"})
+        assert job.metadata.z_scale == 0.25
+        assert job.metadata.z_unit == "nanometer"
+        assert "z_scale" not in job.extra
+
+    def test_the_parser_reads_the_configured_value(self):
+        """The parser fed the writer from job.extra alone, so once these became
+        typed fields a configured scale reached it as nothing at all."""
+        from eubi_bridge.conversion.conversion_worker import _axis_metadata_kwargs
+        from eubi_bridge.core.config_models import ConversionJob
+        job = ConversionJob.from_kwargs(
+            "/in.tif", "/out", {"z_scale": 0.25, "z_unit": "nanometer"})
+        parsed = _axis_metadata_kwargs(job)
+        assert parsed["z_scale"] == 0.25
+        assert parsed["z_unit"] == "nanometer"
+
+    def test_unset_axes_stay_out_of_the_parsed_kwargs(self):
+        """Absent means "keep the file's value"; a None would override it."""
+        from eubi_bridge.conversion.conversion_worker import _axis_metadata_kwargs
+        from eubi_bridge.core.config_models import ConversionJob
+        job = ConversionJob.from_kwargs("/in.tif", "/out", {"z_scale": 0.25})
+        assert "y_scale" not in _axis_metadata_kwargs(job)
+
+    def test_a_row_override_still_wins(self):
+        """job.extra is where a conversion table's per-row value arrives."""
+        from eubi_bridge.conversion.conversion_worker import _axis_metadata_kwargs
+        from eubi_bridge.core.config_models import ConversionJob
+        job = ConversionJob.from_kwargs("/in.tif", "/out", {"z_scale": 0.5})
+        job.extra["z_scale"] = 0.125
+        assert _axis_metadata_kwargs(job)["z_scale"] == 0.125
+
+    def test_the_channel_axis_is_not_dropped_from_scales(self):
+        """Regression: making channel_scale unsettable removed 'c' from the
+        scales tuple entirely, leaving it shorter than the axes it describes
+        and raising KeyError('x') deep in the writer."""
+        from eubi_bridge.conversion.conversion_worker import _parse_axis_params
+
+        class _M:
+            axes = "tczyx"
+            scaledict = {"t": 1.0, "c": 1.0, "z": 2.0, "y": 3.0, "x": 4.0}
+
+        manager = _M()
+        scales = _parse_axis_params(manager, {}, 2, manager.scaledict)
+        assert len(scales) == len(manager.axes)
+        assert scales == (1.0, 1.0, 2.0, 3.0, 4.0)
+
+
+class TestPhysicalScaleGuiMapping:
+    """Both mapping directions must know the keys, or a saved value vanishes."""
+
+    def _snake(self, **overrides):
+        base = {"metadata": {"metadata_reader": "bfio",
+                             "channel_intensity_limits": "from_dtype",
+                             "channel_colors": "", "channel_labels": ""}}
+        base["metadata"].update(overrides)
+        return base
+
+    def test_a_stored_scale_comes_back_ticked(self):
+        """Otherwise the form shows a value while claiming it is not applied."""
+        from eubi_bridge.qt_gui.server.config_manager import _config_to_react
+        react = _config_to_react(self._snake(z_scale=0.5))["metadata"]
+        assert react["overridePhysicalScale"] is True
+        assert react["scaleZ"] == "0.5"
+
+    def test_nothing_stored_stays_unticked(self):
+        from eubi_bridge.qt_gui.server.config_manager import _config_to_react
+        react = _config_to_react(self._snake())["metadata"]
+        assert react["overridePhysicalScale"] is False
+        assert react["scaleZ"] == ""
+
+    def _react(self, **overrides):
+        """A form payload, as the GUI hands it over on Save Config."""
+        meta = {"metadataReader": "bfio", "channelIntensityLimits": "from_datatype",
+                "channelColors": "", "channelLabels": "",
+                "overridePhysicalScale": False,
+                "scaleTime": "", "scaleZ": "", "scaleY": "", "scaleX": "",
+                "unitTime": "second", "unitZ": "micrometer",
+                "unitY": "micrometer", "unitX": "micrometer"}
+        meta.update(overrides)
+        return {"cluster": {}, "reader": {}, "conversion": {},
+                "downscaling": {}, "concatenation": {}, "metadata": meta}
+
+    def test_a_form_scale_is_written_to_the_config(self):
+        """Starts from the form, so it binds the react -> snake direction; a
+        round trip that starts from snake would pass without it."""
+        from eubi_bridge.qt_gui.server.config_manager import _react_to_config
+        snake = _react_to_config(self._react(
+            overridePhysicalScale=True, scaleZ="0.5", unitZ="nanometer"))
+        assert snake["metadata"]["z_scale"] == 0.5
+        assert snake["metadata"]["z_unit"] == "nanometer"
+        assert snake["metadata"]["y_scale"] is None
+
+    def test_the_round_trip_preserves_a_scale(self):
+        from eubi_bridge.qt_gui.server.config_manager import (
+            _config_to_react, _react_to_config)
+        back = _react_to_config(
+            _config_to_react(self._snake(z_scale=0.5, z_unit="micrometer")))
+        assert back["metadata"]["z_scale"] == 0.5
+        assert back["metadata"]["z_unit"] == "micrometer"
+        assert back["metadata"]["y_scale"] is None
+
+    def test_an_unticked_override_stores_nothing(self):
+        """The toggle is the authority: a stale number must not leak through."""
+        from eubi_bridge.qt_gui.server.config_manager import _react_to_config
+        snake = _react_to_config(self._react(
+            overridePhysicalScale=False, scaleZ="0.5"))
+        assert snake["metadata"]["z_scale"] is None

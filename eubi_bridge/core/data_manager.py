@@ -1643,10 +1643,18 @@ class SceneLoader:
                 indices = [int(scene_indices)]
             else:
                 indices = list(scene_indices)
-            valid = [i for i in indices if i < self.n_scenes]
+            valid = [i for i in indices if 0 <= i < self.n_scenes]
             if len(valid) < len(indices):
                 logger.warning(
                     f"Skipping out-of-range scene indices: {set(indices) - set(valid)}")
+            # Selecting nothing must not look like success: with no scene the
+            # conversion writes no output at all, and silently doing nothing is
+            # far harder to diagnose than a message naming the valid range.
+            if not valid:
+                raise ValueError(
+                    f"No valid scene index in {sorted(set(indices))}: "
+                    f"{os.path.basename(str(self.path))} has {self.n_scenes} "
+                    f"scene(s), so valid indices are 0..{self.n_scenes - 1}.")
 
             if mosaic_tile_index is not None:
                 if mosaic_tile_index == 'all':
@@ -1655,11 +1663,18 @@ class SceneLoader:
                     tile_indices = [int(mosaic_tile_index)]
                 else:
                     tile_indices = list(mosaic_tile_index)
-                valid_tiles = [t for t in tile_indices if t < self.n_tiles]
+                valid_tiles = [t for t in tile_indices if 0 <= t < self.n_tiles]
                 if len(valid_tiles) < len(tile_indices):
                     logger.warning(
                         f"Skipping out-of-range tile indices: "
                         f"{set(tile_indices) - set(valid_tiles)}")
+                if not valid_tiles:
+                    raise ValueError(
+                        f"No valid mosaic tile index in {sorted(set(tile_indices))}: "
+                        f"{os.path.basename(str(self.path))} has {self.n_tiles} "
+                        f"tile(s), so valid indices are 0..{self.n_tiles - 1}. "
+                        f"Note that tiles only exist when reading an unstitched "
+                        f"mosaic (as_mosaic=False).")
             else:
                 valid_tiles = None
 
@@ -2302,19 +2317,51 @@ class ArrayManager:
         await self.create_omemeta()
         assert self.state.omemeta is not None
         gr = await asyncio.to_thread(zarr.group, base_path)
-        try:
-            path = os.path.join(gr.store.root, 'OME', 'METADATA.ome.xml')
-        except AttributeError as e:
-            logger.warning(f"OME-XML can only be written to local stores: {e}")
-            return
         await asyncio.to_thread(gr.create_group, 'OME', overwrite=overwrite)
+        xml = self.state.omemeta.to_xml()
 
-        def _write(p, text):
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, 'w', encoding='utf-8') as f:
-                f.write(text)
+        root = getattr(gr.store, 'root', None)
+        if root is not None:
+            # Local store: write the file directly, as before.
+            def _write_local():
+                path = os.path.join(root, 'OME', 'METADATA.ome.xml')
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(xml)
 
-        await asyncio.to_thread(_write, path, self.state.omemeta.to_xml())
+            await asyncio.to_thread(_write_local)
+        else:
+            # Remote store (S3 and friends): no filesystem path to join, so the
+            # XML is written as an ordinary object.  Previously this branch just
+            # warned and returned, leaving every remote output without its
+            # companion OME-XML.
+            #
+            # Deliberately sync s3fs in a thread rather than zarr's async
+            # FsspecStore.set: that path goes through aiohttp, which requires a
+            # running task, and this coroutine is driven by run_until_complete
+            # inside a worker thread -- raising "Timeout context manager should
+            # be used inside a task".  The local branch above already writes
+            # from a thread, so this keeps both halves symmetrical.
+            def _write_remote():
+                import s3fs
+                text = str(base_path)
+                endpoint = 'https://' + text.replace('https://', '').split('/')[0]
+                relpath = text[len(endpoint):].lstrip('/')
+                fs = s3fs.S3FileSystem(
+                    anon=True,
+                    client_kwargs={'endpoint_url': endpoint},
+                    endpoint_url=endpoint,
+                )
+                with fs.open(f"{relpath.rstrip('/')}/OME/METADATA.ome.xml",
+                             'wb') as handle:
+                    handle.write(xml.encode('utf-8'))
+
+            try:
+                await asyncio.to_thread(_write_remote)
+            except Exception as exc:                       # noqa: BLE001
+                # The pyramid itself is already written; losing the companion
+                # XML must not fail the conversion.
+                logger.warning(f"Could not write OME-XML to {base_path}: {exc}")
         if gr.info._zarr_format == 2:
             gr['OME'].attrs["series"] = [self.series]
         else:

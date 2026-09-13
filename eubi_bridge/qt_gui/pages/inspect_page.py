@@ -418,11 +418,9 @@ class InspectPage(QWidget):
     def _read_pixel_sizes(self, path: str) -> list[dict]:
         try:
             for fname in [".zattrs", "zarr.json"]:
-                fpath = os.path.join(path, fname)
-                if not os.path.exists(fpath):
+                data = _read_store_json(path, fname)
+                if data is None:
                     continue
-                with open(fpath, encoding="utf-8") as f:
-                    data = json.load(f)
                 attrs = data.get("attributes", data)
                 ome   = attrs.get("ome", attrs)
                 ms_list = ome.get("multiscales", attrs.get("multiscales", []))
@@ -554,6 +552,46 @@ class InspectPage(QWidget):
 
 
 # ── Metadata file-write helpers ───────────────────────────────────────────────
+
+def _read_store_json(path: str, fname: str) -> dict | None:
+    """Read one metadata file from a store, local or remote; None if absent.
+
+    ``os.path.join`` + ``open`` silently fail for an ``https://`` store -- the
+    join produces a path no local filesystem has -- so remote stores read back
+    no pixel sizes at all and the Inspect tab showed nothing.
+    """
+    if not str(path).startswith(("https://", "http://", "s3://")):
+        fpath = os.path.join(path, fname)
+        if not os.path.exists(fpath):
+            return None
+        with open(fpath, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    try:
+        import s3fs
+    except ImportError:
+        return None
+    text = str(path).rstrip("/")
+    if text.startswith("s3://"):
+        endpoint, relpath = "", text[5:]
+    else:
+        scheme, _, rest = text.partition("://")
+        host = rest.split("/")[0]
+        endpoint = f"{scheme}://{host}"
+        relpath = rest[len(host):].lstrip("/")
+    try:
+        kwargs = {"anon": True}
+        if endpoint:
+            kwargs.update(endpoint_url=endpoint,
+                          client_kwargs={"endpoint_url": endpoint})
+        fs = s3fs.S3FileSystem(**kwargs)
+        key = f"{relpath}/{fname}"
+        if not fs.exists(key):
+            return None
+        return json.loads(fs.cat(key).decode("utf-8"))
+    except Exception:
+        return None
+
 
 def _load_zattrs(path: str) -> tuple[dict, str]:
     """Load the metadata file and return (data, filepath)."""

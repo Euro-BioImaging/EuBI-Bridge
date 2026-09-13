@@ -12,11 +12,8 @@ own directory, and ``ebridge.to_zarr`` merges each row over the global config
 (blank cells fall through to the global value).  This module only has to produce
 a table that obeys those rules. It adds no new format.
 
-Two constraints come from that CLI path and are enforced here:
+One constraint comes from that CLI path and is enforced here:
 
-* Table input is unary-only.  ``take_filepaths`` raises outright when
-  ``concatenation_axes`` is set, so aggregative jobs cannot be batched
-  (see :func:`can_batch`).
 * Only scalar values survive a CSV round-trip.  Dicts (``compressor_params``)
   and range tuples cannot be per-row overrides; they stay in the snapshot and a
   row that would need to change one is reported via :meth:`BatchModel.add`.
@@ -29,10 +26,16 @@ import os
 from copy import deepcopy
 from typing import Any, Iterable, NamedTuple
 
+from eubi_bridge.core.config_models import (
+    ConversionConfig, DownscaleConfig, MetadataConfig)
 from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
+from eubi_bridge.utils.path_utils import (
+    AGGREGATIVE_GROUP_COLUMN, concat_without_group_problems,
+    sanitise_group_name)
 
 # Columns that are addressed positionally rather than as parameter overrides.
 _PATH_COLUMNS = ("input_path", "output_path")
+
 
 # Parameters that cannot be expressed in a single CSV cell.  They are carried by
 # the config snapshot instead; a row is never allowed to override them.
@@ -77,6 +80,17 @@ _CLUSTER_KEYS = frozenset({
 })
 
 
+def _literal_options(model, field: str) -> tuple[str, ...]:
+    """The values a Literal-typed config field accepts.
+
+    Read from the model rather than restated here: a hand-copied list silently
+    drifts, and the mismatch only surfaces as a pydantic ValidationError at
+    conversion time, long after the user picked the value.
+    """
+    import typing
+    return tuple(typing.get_args(model.model_fields[field].annotation))
+
+
 class ParamSpec(NamedTuple):
     """How to render an editor for one row-overridable parameter.
 
@@ -110,6 +124,12 @@ class ParamSpec(NamedTuple):
     active_when: Any = True
 
 
+#: ``active_when`` for a parameter governed by a free-text parent, where any
+#: non-blank value activates it: the concatenation settings mean something only
+#: once a row names an aggregative group, whatever that name happens to be.
+NON_BLANK = "__non_blank__"
+
+
 _INDEX_TIP = ("'all', a single index, or a comma-separated list such as '0,2,3'.")
 
 # The parameters an Edit Cells dialog may offer.  Anything absent is either
@@ -123,6 +143,38 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
     # too, since an OME-Zarr store is one); 'directory' picks the output folder.
     ParamSpec("input_path", "Input path", "file", tab="Paths"),
     ParamSpec("output_path", "Output path", "directory", tab="Paths"),
+
+    # ---- Concatenation tab ----
+    # Rows sharing a group become one concatenated output; a blank cell means
+    # the row converts on its own.  The remaining settings describe how a group
+    # is assembled, so they may differ between groups but must agree within one
+    # (enforced by ``resolve_group_concat_params`` when the table is run).
+    ParamSpec("aggregative_group", "Aggregative group", "text",
+              tooltip="Rows sharing a name are concatenated into one output. "
+                      "Leave blank to convert the row on its own. The name is "
+                      "prefixed to the output, so prefer short labels such as "
+                      "gr1 or A.",
+              tab="Concatenation", group="Grouping"),
+    ParamSpec("concatenation_axes", "Concat axes", "text",
+              tooltip="Axes to concatenate along, e.g. 'z' or 'tz'. Each axis "
+                      "needs its matching tag below.",
+              tab="Concatenation", group="Grouping",
+              depends_on="aggregative_group", active_when=NON_BLANK),
+    ParamSpec("time_tag", "Time tag", "text",
+              tab="Concatenation", group="Tags",
+              depends_on="aggregative_group", active_when=NON_BLANK),
+    ParamSpec("channel_tag", "Channel tag", "text",
+              tab="Concatenation", group="Tags",
+              depends_on="aggregative_group", active_when=NON_BLANK),
+    ParamSpec("z_tag", "Z tag", "text",
+              tab="Concatenation", group="Tags",
+              depends_on="aggregative_group", active_when=NON_BLANK),
+    ParamSpec("y_tag", "Y tag", "text",
+              tab="Concatenation", group="Tags",
+              depends_on="aggregative_group", active_when=NON_BLANK),
+    ParamSpec("x_tag", "X tag", "text",
+              tab="Concatenation", group="Tags",
+              depends_on="aggregative_group", active_when=NON_BLANK),
 
     # ---- Reader tab ----
     ParamSpec("scene_index", "Scene index", "text", tooltip=_INDEX_TIP,
@@ -200,7 +252,8 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
               maximum=1_000_000, tab="Downscaling",
               depends_on="n_layers", active_when="auto"),
     ParamSpec("downscale_method", "Downscale method", "choice",
-              ("simple", "mean", "median", "gaussian"), tab="Downscaling",
+              _literal_options(DownscaleConfig, "downscale_method"),
+              tab="Downscaling",
               depends_on="keep_existing_resolutions", active_when=False),
     ParamSpec("keep_existing_resolutions", "Keep existing resolutions", "bool",
               tab="Downscaling"),
@@ -221,7 +274,8 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
 
     # ---- Metadata tab ----
     ParamSpec("channel_intensity_limits", "Channel intensity limits", "choice",
-              ("from_dtype", "from_array"), tab="Metadata"),
+              _literal_options(MetadataConfig, "channel_intensity_limits"),
+              tab="Metadata"),
     ParamSpec("metadata_reader", "Metadata reader", "choice",
               ("bioio", "bfio", "bioformats"), tab="Metadata"),
     # Edited as raw text here rather than with a colour picker: a batch row is
@@ -579,8 +633,44 @@ class BatchModel:
         if not self._rows:
             self._base_config = None
 
+    def remove_many(self, indices: Iterable[int]) -> int:
+        """Drop every row in *indices*; returns how many went.
+
+        Deleting in descending order so that each removal cannot shift the
+        positions of the ones still to come -- the reason this belongs here
+        rather than in a caller's loop.  Indices need not be contiguous or
+        sorted, and unknown ones are ignored so a stale selection cannot raise.
+        """
+        wanted = sorted({i for i in indices if 0 <= i < len(self._rows)},
+                        reverse=True)
+        for index in wanted:
+            del self._rows[index]
+        if not self._rows:
+            self._base_config = None
+        return len(wanted)
+
     def duplicate(self, index: int) -> None:
         self._rows.insert(index + 1, deepcopy(self._rows[index]))
+
+    def duplicate_many(self, indices: Iterable[int]) -> list[int]:
+        """Copy every row in *indices*; returns where the copies landed.
+
+        Each copy goes directly after its own original rather than in a block
+        at the end, so it stays next to what it was copied from -- which is
+        what makes the usual next step, editing one field on the copy, readable.
+
+        Inserting in descending order keeps the not-yet-copied indices valid,
+        the same reason :meth:`remove_many` deletes that way.
+        """
+        wanted = sorted({i for i in indices if 0 <= i < len(self._rows)},
+                        reverse=True)
+        for index in wanted:
+            self._rows.insert(index + 1, deepcopy(self._rows[index]))
+        # Each copy sits one past its original, shifted by the copies made
+        # before it in the final list.
+        ascending = sorted(wanted)
+        return [index + offset + 1
+                for offset, index in enumerate(ascending)]
 
     def move(self, index: int, delta: int) -> int:
         """Move a row by *delta* positions; returns its new index."""
@@ -657,6 +747,18 @@ class BatchModel:
         storable = {k: _to_sentinel(k, v) for k, v in row_kwargs.items()
                     if k not in _NON_ROW_OVERRIDABLE and _overridable(v)
                     and (k in _COUPLED_ALL or uneditable_reason(k) is None)}
+
+        # Anything with an editor but no value in row_kwargs starts blank.
+        # _build_kwargs describes a conversion call rather than a row, so it
+        # leaves out settings that travel separately (concatenation) and ones
+        # emitted only when a form toggle is on (the physical scales).  Without
+        # this the parameter has an editor the queue can never show, because a
+        # column exists only where some row carries the key.  None is exactly
+        # what a blank cell means: inherit.
+        for spec in _PARAM_SPECS:
+            if (spec.key not in storable and spec.key not in _PATH_COLUMNS
+                    and uneditable_reason(spec.key) is None):
+                storable.setdefault(spec.key, None)
 
         for path in input_paths:
             self._rows.append({
@@ -805,6 +907,8 @@ class BatchModel:
         # (which depends on n_layers) is ignored too.
         if self.is_inert(row, spec.depends_on, _seen | {key}):
             return True
+        if spec.active_when == NON_BLANK:
+            return str(parent).strip() == "" or parent != parent
         if isinstance(spec.active_when, bool):
             return bool(parent) != spec.active_when
         return not values_equal(parent, spec.active_when)
@@ -842,6 +946,8 @@ class BatchModel:
         # this one, so the message names the setting the user has to change.
         if self.is_inert(row, parent):
             return self.inert_reason(row, parent)
+        if spec.active_when == NON_BLANK:
+            return f"{parent} is empty"
         if isinstance(spec.active_when, bool):
             return f"{parent}={not spec.active_when}"
         return f"{parent}!={spec.active_when}"
@@ -857,20 +963,37 @@ class BatchModel:
         their own. ``compressor_params`` rides along with ``compressor`` and
         would break the written batch if it were dropped.
         """
-        extra: set[str] = set()
+        # Every row carries the same keys, so each column is one question --
+        # "is this shown?" -- not one question per row.  Asking it per row made
+        # this rows x keys deviation checks (1.3M for 20k rows) to produce ~65
+        # answers, seconds of stall on every queue edit.  Keys are collected
+        # once, then each is decided with a scan that stops at the first
+        # deviating row.
+        candidates: dict[str, None] = {}          # insertion-ordered set
         for row in self._rows:
             for key in row:
                 if key in _PATH_COLUMNS:
                     continue
                 if not for_csv and key in _COUPLED_RIDERS:
                     continue
-                # A column always appears once some row deviates from the
-                # config: shown_tabs only *adds* categories, it never hides a
-                # deviation the user needs to see.
-                if (self.full
-                        or self.differs(row, key)
-                        or column_header(key)[0] in self.shown_tabs):
-                    extra.add(key)
+                candidates.setdefault(key)
+
+        baseline = self._comparison_kwargs()
+        extra: set[str] = set()
+        for key in candidates:
+            # A column always appears once some row deviates from the config:
+            # shown_tabs only *adds* categories, it never hides a deviation the
+            # user needs to see.  The cheap, row-independent tests come first so
+            # a shown category skips the row scan entirely.
+            if self.full or column_header(key)[0] in self.shown_tabs:
+                extra.add(key)
+                continue
+            # Hoisted out of the loop: ``differs`` would otherwise rebuild this
+            # comparison value for every row.
+            want = _to_sentinel(key, baseline.get(key))
+            if any(key in row and not values_equal(want, row[key])
+                   for row in self._rows):
+                extra.add(key)
         return [*_PATH_COLUMNS, *sort_keys(extra)]
 
     # -- validation ------------------------------------------------------
@@ -892,10 +1015,28 @@ class BatchModel:
             if not row.get("output_path"):
                 problems.append(f"Row {i}: no output path.")
 
+        # Concatenation settings that will not take effect.  Checked here rather
+        # than when a row is added because the queue can reach this state later
+        # too -- clearing the group column in Edit Cells gets there just as
+        # readily -- and validate() sees the rows as they finally are.
+        import pandas as pd
+        frame = pd.DataFrame([
+            {AGGREGATIVE_GROUP_COLUMN: row.get(AGGREGATIVE_GROUP_COLUMN),
+             "concatenation_axes": row.get("concatenation_axes")}
+            for row in self._rows
+        ])
+        problems.extend(concat_without_group_problems(
+            frame, self._effective_kwargs()))
+
         # A duplicated output path means one conversion silently overwrites
-        # another; easy to create by adding the same file twice.
+        # another; easy to create by adding the same file twice.  Rows in the
+        # same aggregative group are exempt: they are meant to share an output,
+        # and their group name prefixes it, so two groups holding a file of the
+        # same name no longer collide.
         seen: dict[tuple[str, str], int] = {}
         for i, row in enumerate(self._rows, 1):
+            if sanitise_group_name(row.get(AGGREGATIVE_GROUP_COLUMN, "")):
+                continue
             key = (str(row.get("output_path", "")),
                    os.path.basename(str(row.get("input_path", ""))))
             if key in seen:
@@ -909,6 +1050,34 @@ class BatchModel:
         return problems
 
     # -- persistence -----------------------------------------------------
+
+    def to_table(self):
+        """Return the queue as a DataFrame, the same rows :meth:`save` writes.
+
+        ``ebridge.to_zarr`` accepts a table directly, so a batch can be run
+        without writing a CSV first.  Saving stays a deliberate act ("keep this
+        batch"), rather than a step every run has to perform.
+
+        Absolute paths are kept: unlike the CSV, an in-memory table has no
+        directory to be relative to.  Cells follow the current view mode, so a
+        blank cell means "use the config snapshot", exactly as in the file.
+
+        Sentinels such as ``n_layers='auto'`` are left as they are.  Converting
+        them here would make "compute it automatically" indistinguishable from
+        an empty cell, which means "use the config value"; ``to_zarr`` resolves
+        them per row, the same way it does for a table read from disk.
+        """
+        import pandas as pd
+
+        columns = self.columns(for_csv=True)
+        records = []
+        for row in self._rows:
+            records.append({
+                column: (row.get(column) if column in _PATH_COLUMNS
+                         else self.cell(row, column))
+                for column in columns
+            })
+        return pd.DataFrame(records, columns=columns)
 
     def save(self, csv_path: str) -> str:
         """Write ``batch.csv`` plus its config snapshot; returns the CSV path.
@@ -993,18 +1162,9 @@ def _absolutise(path: str, base_dir: str) -> str:
 def can_batch(ui_config: dict) -> tuple[bool, str]:
     """Whether the current GUI settings describe a batchable conversion.
 
-    ``take_filepaths`` rejects a table whenever ``concatenation_axes`` is set,
-    and ``ebridge.to_zarr`` picks the unary/aggregative branch globally before
-    the table is ever read, so an aggregative job cannot be represented as a
-    CSV row.  Better to refuse up front than to write a batch that dies on the
-    first run.
+    Everything is batchable now that a table carries ``aggregative_group``:
+    rows sharing a group are concatenated, blank ones convert on their own.
+    Kept as a seam so a future non-batchable setting has somewhere to report
+    itself, rather than the callers having to grow a new check.
     """
-    axes = (ui_config.get("concatenation", {}) or {}).get("concatenationAxes", "")
-    if str(axes).strip():
-        return False, (
-            "Aggregative conversions cannot be batched.\n\n"
-            "Batches are CSV tables, and table input supports one-to-one "
-            "conversions only. Clear 'Concat axes' on the Conversion tab to "
-            "add this conversion to a batch, or run it directly with Start."
-        )
     return True, ""

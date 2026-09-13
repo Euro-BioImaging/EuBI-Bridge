@@ -42,7 +42,8 @@ from eubi_bridge.core.config_models import (AggregativeConversionJob,
 from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
-                                          sensitive_glob, take_filepaths)
+                                          prefix_with_group, sensitive_glob,
+                                          take_filepaths)
 
 logger = get_logger(__name__)
 
@@ -253,6 +254,7 @@ def _build_aggregative_plan(
     z_tag=None,
     y_tag=None,
     x_tag=None,
+    aggregative_group=None,
 ) -> AggregativePlan:
     """Determine output groups and allocate ``file_workers``.
 
@@ -290,6 +292,10 @@ def _build_aggregative_plan(
         rel      = os.path.relpath(output_key, common_dir)
         rel      = os.sep.join(p for p in rel.split(os.sep) if p != '..')
         name     = os.path.splitext(rel)[0].replace(os.sep, '-')
+        # The derived name says which axes were concatenated (img_t0_zset), and
+        # that is what keeps sibling outputs apart when one run produces several
+        # groups.  The group is therefore prefixed rather than replacing it.
+        name     = prefix_with_group(name, aggregative_group)
         full_out = os.path.join(output_path, name)
         if full_out not in file_groups:
             file_groups[full_out] = {'source_files': []}
@@ -344,6 +350,34 @@ def dispatch_aggregative_job(
         plan=plan,
         **job.to_conversion_kwargs(),
     ))
+
+
+def dispatch_aggregative_jobs(jobs: list) -> list:
+    """Dispatch several aggregative jobs, one after another.
+
+    Each job concatenates its own set of files, so they are run sequentially
+    rather than concurrently: every one already parallelises internally across
+    its inputs, and overlapping them would multiply the peak memory by the
+    number of groups.
+
+    A failure is reported with the group it came from and does not abandon the
+    remaining groups, since one bad group should not discard a long batch.
+    """
+    results = []
+    failures = []
+    for index, job in enumerate(jobs):
+        label = getattr(job, "aggregative_group", None) or f"group {index + 1}"
+        try:
+            results.append(dispatch_aggregative_job(job))
+        except Exception as exc:                       # noqa: BLE001
+            logger.error(f"Aggregative {label} failed: {exc}")
+            failures.append((label, exc))
+
+    if failures:
+        summary = "\n".join(f"  {label}: {exc}" for label, exc in failures)
+        raise RuntimeError(
+            f"{len(failures)}/{len(jobs)} aggregative group(s) failed:\n{summary}")
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -635,6 +669,7 @@ async def run_conversions_with_concatenation(
 
             time_tag=time_tag, channel_tag=channel_tag,
             z_tag=z_tag, y_tag=y_tag, x_tag=x_tag,
+            aggregative_group=kwargs.get('aggregative_group'),
         )
         groups       = {out.output_path: out.source_files for out in inner_plan.outputs}
         file_workers = inner_plan.file_workers

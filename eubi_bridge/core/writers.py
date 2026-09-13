@@ -211,7 +211,9 @@ def _create_zarr_array(
                 adjusted_shards.append(shard_size)
         shards = tuple(adjusted_shards)
     
-    store = LocalStore(store_path)
+    # A remote URL is passed through: zarr resolves it via fsspec, whereas
+    # LocalStore would treat it as a filename on disk.
+    store = store_path if _is_remote_path(store_path) else LocalStore(store_path)
 
     if zarr_format not in (ZARR_V2, ZARR_V3):
         raise ValueError(f"Unsupported Zarr format: {zarr_format}")
@@ -379,72 +381,66 @@ async def downscale_with_tensorstore_async(
     downscale_region_size_mb = region_size_mb
     logger.info(f"Downscaling with region_size_mb={downscale_region_size_mb} MB")
     
-    coros = []
-    layer_count = 0
-    total_layers = len([k for k in pyr.downscaler.downscaled_arrays.keys() if k != '0'])
-    
-    for key, arr in pyr.downscaler.downscaled_arrays.items():
-        if key != '0':
-            layer_count += 1
-            try:
-                logger.info(f"Preparing layer {key} ({layer_count}/{total_layers}) for writing...")
-                logger.info(f"Layer {key} shape: {arr.shape}, dtype: {arr.dtype}")
-                shards = tuple(base_layer.shards) if base_layer.shards is not None else base_layer.chunks
-                
-                params = dict(
-                    arr = arr,
-                    output_path=os.path.join(grpath, key),
-                    output_chunks = tuple(base_layer.chunks),
-                    output_shards = shards,
-                    compressor = compressor_name,
-                    compressor_params = compressor_params,
-                    zarr_format = zarr_format,
-                    dimension_names = list(pyr.axes),
-                    pixel_sizes = tuple(pyr.downscaler.dm.scales[int(key)]),
-                    dtype = np.dtype(arr.dtype.name),
-                    region_size_mb = downscale_region_size_mb,
-                    max_concurrency = max_concurrency,
-                    **{k: v for k, v in kwargs.items() if k not in (
-                        'max_concurrency', 'dtype', 'compressor', 'compressor_params',
-                        'zarr_format', 'region_size_mb',
-                    )}
-                )
-                
-                coro = write_with_queue_async(**params)
-                coros.append((key, coro))
-                
-            except Exception as e:
-                logger.error(f"Failed to prepare layer {key} for writing: {e}", exc_info=True)
-                raise
-    
-    n_concurrent = max(1, min(max_concurrent_downscale_layers, len(coros)))
-    logger.info(
-        f"Starting concurrent writes for {len(coros)} downscaled layers "
-        f"(max {n_concurrent} at a time)..."
-    )
+    # One streaming pass over level 0 writes every downscaled level.  Deriving
+    # each level from its own view of level 0 and writing the levels
+    # concurrently re-read the base once per level: free on local disk thanks
+    # to the page cache, but n_layers full downloads from an object store.
+    # Regions are independent, so this parallelises exactly as before -- across
+    # regions rather than levels -- and needs no ordering between levels.
+    keys = [k for k in pyr.downscaler.downscaled_arrays.keys() if k != '0']
+    total_layers = len(keys)
+    shards = (tuple(base_layer.shards) if base_layer.shards is not None
+              else tuple(base_layer.chunks))
+    dm = pyr.downscaler.dm
 
-    semaphore = asyncio.Semaphore(n_concurrent)
+    # Level 0 is already on disk; only the downscaled levels are created here,
+    # so every per-level input is indexed by the level's own key.
+    layer_paths = [store_join(grpath, key) for key in keys]
+    layer_shapes = [tuple(int(v) for v in dm.output_shapes[int(key)])
+                    for key in keys]
+    cumulative_factors = [tuple(int(np.round(v)) for v in dm.scale_factors[int(key)])
+                          for key in keys]
+    layer_pixel_sizes = [tuple(dm.scales[int(key)]) for key in keys]
 
-    async def _bounded(coro):
-        async with semaphore:
-            return await coro
+    # An image small enough to need no extra levels leaves nothing to write.
+    # The previous fan-out degenerated harmlessly here (an empty gather), so
+    # this stays a no-op rather than an error.
+    if not keys:
+        logger.info("No downscaled layers to write; pyramid is a single level")
+        return Pyramid(gr_path)
+
+    logger.info(f"Writing {total_layers} downscaled layer(s) in a single pass "
+                f"over the base array")
 
     try:
-        results = await asyncio.gather(
-            *[_bounded(coro) for _, coro in coros],
-            return_exceptions=True,
+        await write_pyramid_single_pass_async(
+            base_arr=pyr.downscaler.array,
+            layer_paths=layer_paths,
+            layer_shapes=layer_shapes,
+            cumulative_factors=cumulative_factors,
+            downscale_method=downscale_method,
+            output_chunks=tuple(base_layer.chunks),
+            output_shards=shards,
+            compressor=compressor_name,
+            compressor_params=compressor_params,
+            zarr_format=zarr_format,
+            dimension_names=list(pyr.axes),
+            layer_pixel_sizes=layer_pixel_sizes,
+            dtype=np.dtype(base_layer.dtype.name),
+            region_size_mb=downscale_region_size_mb,
+            max_concurrency=max_concurrency,
+            **{k: v for k, v in kwargs.items() if k not in (
+                'max_concurrency', 'dtype', 'compressor', 'compressor_params',
+                'zarr_format', 'region_size_mb', 'output_chunks',
+                'output_shards', 'dimension_names', 'pixel_sizes', 'arr',
+                'output_path',
+            )}
         )
-
-        for (key, _), result in zip(coros, results):
-            if isinstance(result, Exception):
-                logger.error(f"Failed to write layer {key}: {result}", exc_info=result)
-                raise result
-
         logger.info("All downscaled layers written successfully")
     except Exception as e:
-        logger.error(f"Error during concurrent downscale writes: {e}", exc_info=True)
+        logger.error(f"Error during single-pass downscale write: {e}", exc_info=True)
         raise
-    
+
     return Pyramid(gr_path)
 
 
@@ -664,18 +660,71 @@ def _compute_region_shape(input_shape, final_chunks, region_size_mb, dtype=None,
     return tuple(region_arr.tolist())
 
 
-def wrap_output_path(output_path):
-    if output_path.startswith('https://'):
-        endpoint_url = 'https://' + output_path.replace('https://', '').split('/')[0]
-        relpath = output_path.replace(endpoint_url, '')
+def _is_remote_path(path) -> bool:
+    """True for an object-store URL rather than a local filesystem path."""
+    return isinstance(path, str) and path.startswith(("https://", "s3://"))
+
+
+def store_exists(path) -> bool:
+    """True when a store already exists at *path*, local or remote.
+
+    ``os.path.exists`` silently answers False for an ``https://`` URL -- it
+    looks for a local directory literally named ``https:`` -- so a caller
+    guarding against clobbering an existing dataset would sail straight past a
+    populated bucket.  Remote paths are therefore asked of the object store.
+    """
+    if not _is_remote_path(path):
+        return os.path.exists(path)
+    try:
+        import s3fs
+    except ImportError:
+        return False
+    text = str(path)
+    endpoint = 'https://' + text.replace('https://', '').split('/')[0]
+    relpath = text[len(endpoint):].lstrip('/')
+    try:
         fs = s3fs.S3FileSystem(
-            client_kwargs={
-                'endpoint_url': endpoint_url,
-            },
-            endpoint_url=endpoint_url
+            anon=True,
+            client_kwargs={'endpoint_url': endpoint},
+            endpoint_url=endpoint,
         )
-        fs.makedirs(relpath, exist_ok=True)
-        mapped = fs.get_mapper(relpath)
+        fs.invalidate_cache()
+        # A zarr store is a key prefix, not an object: exists() alone is False
+        # for a prefix on some backends, so a non-empty listing counts too.
+        return bool(fs.exists(relpath)) or bool(fs.ls(relpath, detail=False))
+    except Exception:
+        # Never let a probe failure masquerade as "already exists" and block a
+        # legitimate conversion; the writer still raises if it truly collides.
+        return False
+
+
+def store_join(base, key: str) -> str:
+    """Join a store path with a child key.
+
+    ``os.path.join`` is wrong for a URL on Windows -- it inserts a backslash,
+    which is not a key separator -- so remote paths are joined with '/'.
+    """
+    if _is_remote_path(base):
+        return f"{str(base).rstrip('/')}/{key}"
+    return os.path.join(base, key)
+
+
+def wrap_output_path(output_path):
+    """Return a store zarr can write to: a mapper for S3, a path for local disk.
+
+    Only anonymous access is supported for now, which covers public buckets;
+    credentialed endpoints are a separate piece of work.
+    """
+    if _is_remote_path(output_path):
+        # Returned unchanged.  zarr 3 accepts a URL as a store directly and
+        # resolves it through fsspec, so the URL is the single representation
+        # every layer can use -- a mapper would have to be special-cased by the
+        # TensorStore writer and by every path join.
+        #
+        # No makedirs either: S3 keys are flat, so there is no directory to
+        # create, and asking s3fs for one makes it try to create the *bucket*,
+        # a write that is refused even when the objects themselves are writable.
+        return output_path
     else:
         os.makedirs(output_path, exist_ok=True)
         mapped = os.path.abspath(output_path)
@@ -787,11 +836,15 @@ async def write_with_queue_async(
     if compressor_params is None:
         compressor_params = {}
     
-    # Clean the output path
+    # Clean the output path.  Only meaningful on local disk: an S3 URL has no
+    # directory to make, and os.makedirs would create a literal 'https:' folder
+    # beside the working directory instead.
     output_path_str = str(output_path)
-    if overwrite and os.path.exists(output_path_str):
-        shutil.rmtree(output_path_str)
-    os.makedirs(output_path_str, exist_ok=True)
+    _is_remote = _is_remote_path(output_path_str)
+    if not _is_remote:
+        if overwrite and os.path.exists(output_path_str):
+            shutil.rmtree(output_path_str)
+        os.makedirs(output_path_str, exist_ok=True)
     
     compressor_config = CompressorConfig(
         name=compressor,
@@ -824,13 +877,12 @@ async def write_with_queue_async(
         arr = arr.rechunk(region_shape)
     
     # === OPEN WITH TENSORSTORE FOR WRITING ===
-    # TensorStore will use the metadata already written by zarr library
+    # TensorStore will use the metadata already written by zarr library.
+    # make_kvstore picks the driver from the path, so an https:// output goes to
+    # the s3 driver rather than being written to a local file of that name.
     spec_dict = {
         'driver': 'zarr' if zarr_format == 2 else 'zarr3',
-        'kvstore': {
-            'driver': 'file',
-            'path': output_path_str
-        },
+        'kvstore': make_kvstore(output_path_str),
         'open': True  # Open existing array instead of creating
     }
     
@@ -1010,6 +1062,238 @@ async def write_with_queue_async(
     return ts_store
 
 
+def _align_region_to_factors(region_shape, cumulative_factors, base_shape):
+    """Grow *region_shape* so each axis is a multiple of the deepest factor.
+
+    Every output pixel of every level must come from a block lying wholly
+    inside one region; a block straddling two regions would be computed from
+    partial data and would not match whole-array processing.  Rounding *up*
+    keeps the region at least as large as the caller's memory budget implied,
+    and an axis never exceeds the base extent.
+    """
+    aligned = []
+    for size, factor, extent in zip(region_shape, cumulative_factors, base_shape):
+        factor = max(1, int(factor))
+        if factor == 1:
+            aligned.append(int(min(size, extent)))
+            continue
+        grown = int(np.ceil(size / factor) * factor)
+        aligned.append(int(min(max(grown, factor), extent)))
+    return tuple(aligned)
+
+
+async def write_pyramid_single_pass_async(
+        base_arr,
+        layer_paths,
+        layer_shapes,
+        cumulative_factors,
+        downscale_method,
+        output_chunks,
+        output_shards,
+        compressor,
+        compressor_params,
+        zarr_format,
+        dimension_names,
+        layer_pixel_sizes,
+        dtype,
+        region_size_mb=8.0,
+        max_concurrency=None,
+        num_readers=None,
+        queue_size=None,
+        gc_interval=30.0,
+        verbose=False,
+        **_ignored,
+):
+    """Write every pyramid level from a single streaming pass over level 0.
+
+    Previously each level was derived from its own ``ts.downsample`` view of
+    level 0 and the levels were written concurrently, so level 0 was read once
+    *per level* -- free on local disk thanks to the page cache, but seven full
+    downloads over S3.
+
+    Here each base region is read once and contributes its slice to every
+    level, cutting reads from ~n_layers x the base to ~1x.  Parallelism is
+    unchanged in kind, it merely moves from levels to regions -- which are
+    mutually independent and need no ordering, unlike a cascade where a level
+    must wait for its parent.
+
+    Output is bit-identical to the per-level writer for every downscale method:
+    each level is still derived from level 0, never from an already downscaled
+    level, and regions are aligned so no block is ever split.
+    """
+    if max_concurrency is None:
+        max_concurrency = 4
+    if num_readers is None:
+        num_readers = 2 * max_concurrency
+    if queue_size is None:
+        queue_size = min(128, max(8, num_readers))
+
+    ts_method = "stride" if downscale_method == "simple" else downscale_method
+
+    # Nothing to do for a single-level pyramid.  Guarded here as well as at the
+    # call site so the function is safe for any caller: without it the deepest
+    # factor below is a max() over an empty sequence.
+    if not layer_paths:
+        return None
+
+    stores = []
+    for path, shape, sizes in zip(layer_paths, layer_shapes, layer_pixel_sizes):
+        chunks = tuple(int(min(c, s)) for c, s in zip(output_chunks, shape))
+        shards = None
+        if output_shards is not None:
+            shards = tuple(int(max(c, min(v, s)))
+                           for v, c, s in zip(output_shards, chunks, shape))
+        _create_zarr_array(
+            store_path=str(path),
+            shape=tuple(int(v) for v in shape),
+            chunks=chunks,
+            shards=shards,
+            dtype=dtype,
+            compressor_config=CompressorConfig(name=compressor,
+                                               params=compressor_params or {}),
+            zarr_format=zarr_format,
+            dimension_names=dimension_names,
+            overwrite=False,
+        )
+        stores.append(await ts.open({
+            "driver": "zarr" if zarr_format == 2 else "zarr3",
+            "kvstore": make_kvstore(str(path)),
+            "open": True,
+        }))
+        _write_ngff_metadata(path, tuple(sizes))
+
+    base_shape = tuple(int(v) for v in base_arr.shape)
+    deepest = [max(int(f[i]) for f in cumulative_factors)
+               for i in range(len(base_shape))]
+    region_shape = _compute_region_shape(
+        input_shape=base_shape,
+        final_chunks=tuple(output_chunks),
+        region_size_mb=region_size_mb,
+        dtype=dtype,
+        input_chunks=get_array_chunks(base_arr),
+    )
+    region_shape = _align_region_to_factors(region_shape, deepest, base_shape)
+    logger.info(f"Single-pass downscale: region_shape={region_shape}, "
+                f"alignment={tuple(deepest)}, levels={len(stores)}")
+
+    def _run_threaded_write():
+        state = {"completed": 0, "failed": 0, "total": 0,
+                 "lock": threading.Lock(), "error": None, "done_reading": False}
+        ranges = [range(0, dim, step)
+                  for dim, step in zip(base_shape, region_shape)]
+        region_indices = [
+            tuple(slice(start, min(start + step, dim))
+                  for start, step, dim in zip(idx, region_shape, base_shape))
+            for idx in itertools.product(*ranges)
+        ]
+        state["total"] = len(region_indices)
+        q = Queue(maxsize=queue_size)
+        index_lock = threading.Lock()
+        index_counter = [0]
+
+        def reader_thread():
+            last_gc = time.time()
+            while True:
+                with index_lock:
+                    if index_counter[0] >= len(region_indices):
+                        break
+                    idx = index_counter[0]
+                    index_counter[0] += 1
+                region_slice = region_indices[idx]
+                try:
+                    data = _read_region(base_arr, region_slice)
+                    if dtype is not None and data.dtype != dtype:
+                        data = cast_to_dtype(data, dtype)
+                    q.put((region_slice, data))
+                    if time.time() - last_gc > gc_interval:
+                        gc.collect()
+                        last_gc = time.time()
+                except Exception as e:
+                    with state["lock"]:
+                        if state["error"] is None:
+                            state["error"] = e
+                    logger.error(f"Reader error at {region_slice}: {e}")
+                    break
+
+        def writer_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            async def _async_writer():
+                while True:
+                    try:
+                        region_slice, data = q.get(timeout=1.0)
+                    except Exception:
+                        if state["done_reading"] and q.empty():
+                            break
+                        continue
+                    try:
+                        source = ts.array(np.ascontiguousarray(data))
+                        for store, factors, level_shape in zip(
+                                stores, cumulative_factors, layer_shapes):
+                            f = [max(1, int(v)) for v in factors]
+                            # Keyed on the factor, not on position: the caller
+                            # may pass level 0 (all factors 1, written
+                            # verbatim) or only the downscaled levels.  Keying
+                            # on position wrote full-size data into the first
+                            # downscaled level.
+                            if all(v == 1 for v in f):
+                                await store[region_slice].write(data)
+                                continue
+                            dest = tuple(
+                                slice(sl.start // fv,
+                                      min(sl.start // fv
+                                          + int(np.ceil((sl.stop - sl.start) / fv)),
+                                          int(extent)))
+                                for sl, fv, extent in zip(region_slice, f,
+                                                          level_shape)
+                            )
+                            if any(d.stop <= d.start for d in dest):
+                                continue
+                            block = await ts.downsample(
+                                source, f, method=ts_method)[...].read()
+                            wanted = tuple(d.stop - d.start for d in dest)
+                            trimmed = block[tuple(slice(0, w) for w in wanted)]
+                            await store[dest].write(trimmed)
+                        with state["lock"]:
+                            state["completed"] += 1
+                        q.task_done()
+                    except Exception as e:
+                        with state["lock"]:
+                            state["failed"] += 1
+                            if state["error"] is None:
+                                state["error"] = e
+                        logger.error(f"Writer error at {region_slice}: {e}")
+                        q.task_done()
+
+            loop.run_until_complete(_async_writer())
+            loop.close()
+
+        readers = [threading.Thread(target=reader_thread, daemon=True)
+                   for _ in range(num_readers)]
+        writers = [threading.Thread(target=writer_thread, daemon=True)
+                   for _ in range(max_concurrency)]
+        for t in readers:
+            t.start()
+        for t in writers:
+            t.start()
+        for t in readers:
+            t.join()
+        state["done_reading"] = True
+        q.join()
+        for t in writers:
+            t.join()
+        if state["error"] is not None:
+            raise state["error"]
+        if verbose:
+            logger.info(f"Single-pass write complete: {state['completed']}"
+                        f"/{state['total']} regions")
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _run_threaded_write)
+    return stores[0]
+
+
 async def store_multiscale_async(
     ### base write params
     arr: Union[da.Array, zarr.Array],
@@ -1102,7 +1386,7 @@ async def store_multiscale_async(
     gr = _zarr_group(outpath, overwrite=overwrite, zarr_format=zarr_format)
 
     ### Make the base path (use outpath which is the wrapped/resolved path)
-    base_store_path = os.path.join(outpath, '0')
+    base_store_path = store_join(outpath, '0')
     ### Add multiscales metadata
     # Prefer an explicit OME-Zarr version (future-proof); fall back to deriving it
     # from the zarr container format for the current 0.4<->2 / 0.5<->3 mapping.
@@ -1295,7 +1579,7 @@ async def store_existing_pyramid_async(
             shards = chunks
         shards = tuple(int(item) for item in shards)
 
-        store_path = os.path.join(outpath, key)
+        store_path = store_join(outpath, key)
         scale = pyr.meta.get_scale(key)
 
         if verbose:

@@ -262,7 +262,7 @@ class AggregativeConverter:
             'z_unit': 'z', 'y_unit': 'y', 'x_unit': 'x'
         }
         scale_mapping = {
-            'time_scale': 't', 'channel_scale': 'c',
+            'time_scale': 't',
             'z_scale': 'z', 'y_scale': 'y', 'x_scale': 'x'
         }
 

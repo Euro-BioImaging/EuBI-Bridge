@@ -233,6 +233,18 @@ def _build_kwargs(config: dict) -> dict:
     if conv_config.get("autoChunk", True):
         kwargs["target_chunk_mb"] = conv_config.get("targetChunkSizeMb", 32)
 
+    # Concatenation settings ride along so a batch row can carry them: a table
+    # groups rows with 'aggregative_group' and each group may concatenate along
+    # its own axes.  Blank means "inherit", which is what a one-to-one row wants.
+    for _key, _src in (("aggregative_group", "aggregativeGroup"),
+                       ("concatenation_axes", "concatenationAxes"),
+                       ("time_tag", "timeTag"),
+                       ("channel_tag", "channelTag"),
+                       ("z_tag", "zTag"),
+                       ("y_tag", "yTag"),
+                       ("x_tag", "xTag")):
+        kwargs[_key] = concat_config.get(_src) or None
+
     if meta_config.get("overridePhysicalScale", False):
         for ax in ("time", "z", "y", "x"):
             key  = f"scale{ax.capitalize()}"
@@ -280,22 +292,27 @@ class ConversionWorker(QThread):
 
     def run(self):
         config = self._config
+        # A queue can hand over its rows directly, so a batch does not have to be
+        # written to a CSV purely to be run.  The table wins when present; it
+        # already carries the per-row overrides a path list cannot express.
+        input_table = config.get("inputTable")
         input_paths_list = config.get("inputPaths", [])
-        input_path  = input_paths_list if input_paths_list else config.get("inputPath", "")
+        if input_table is not None:
+            input_path = input_table
+        elif input_paths_list:
+            input_path = input_paths_list
+        else:
+            input_path = config.get("inputPath", "")
         output_path = config.get("outputPath", "")
-        concat      = config.get("concatenation", {})
 
         call_args = {
             "input_path":         input_path,
             "output_path":        output_path or None,
             "includes":           _split_patterns(config.get("includePattern", "")),
             "excludes":           _split_patterns(config.get("excludePattern", "")),
-            "time_tag":           concat.get("timeTag")           or None,
-            "channel_tag":        concat.get("channelTag")        or None,
-            "z_tag":              concat.get("zTag")              or None,
-            "y_tag":              concat.get("yTag")              or None,
-            "x_tag":              concat.get("xTag")              or None,
-            "concatenation_axes": concat.get("concatenationAxes") or None,
+            # The concatenation settings live in to_zarr_kwargs, which is also
+            # where a batch row's own values arrive; duplicating them here
+            # would pass each one to to_zarr twice.
             "to_zarr_kwargs":     _build_kwargs(config),
         }
 

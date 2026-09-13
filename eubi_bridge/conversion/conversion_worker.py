@@ -18,7 +18,8 @@ import psutil
 from eubi_bridge.conversion.worker_init import safe_worker_wrapper
 from eubi_bridge.core.config_models import ChunkConfig, ConversionJob
 from eubi_bridge.core.data_manager import ArrayManager, _compute_tile_shape
-from eubi_bridge.core.writers import (store_existing_pyramid_async,
+from eubi_bridge.core.writers import (store_exists,
+                                      store_existing_pyramid_async,
                                        store_multiscale_async)
 from eubi_bridge.utils.array_utils import autocompute_chunk_shape
 from eubi_bridge.utils.jvm_manager import soft_start_jvm
@@ -53,7 +54,8 @@ DEFAULT_SCALE_FACTORS = {
 
 AXIS_PARAM_MAP = {
     't': ('time_chunk', 'time_shard_coef', 'time_scale', 'time_scale_factor', 'time_unit'),
-    'c': ('channel_chunk', 'channel_shard_coef', 'channel_scale', 'channel_scale_factor', None),
+    # No scale or unit for channels: a channel has no physical extent.
+    'c': ('channel_chunk', 'channel_shard_coef', None, 'channel_scale_factor', None),
     'z': ('z_chunk', 'z_shard_coef', 'z_scale', 'z_scale_factor', 'z_unit'),
     'y': ('y_chunk', 'y_shard_coef', 'y_scale', 'y_scale_factor', 'y_unit'),
     'x': ('x_chunk', 'x_shard_coef', 'x_scale', 'x_scale_factor', 'x_unit'),
@@ -109,7 +111,13 @@ def _parse_axis_params(manager: ArrayManager, kwargs: Dict,
             continue
 
         param_name = AXIS_PARAM_MAP[axis][param_idx]
-        if param_name is None:  # Skip channel unit
+        if param_name is None:
+            # No user-settable parameter for this axis (a channel has no
+            # physical scale or unit).  The axis still belongs in the result,
+            # carrying whatever the file itself says -- dropping it would leave
+            # the scales tuple shorter than the axes it describes.
+            if param_idx in (2, 4):
+                output[axis] = default_dict.get(axis)
             continue
 
         output[axis] = _get_param_value(kwargs, param_name, axis, default_dict)
@@ -139,9 +147,24 @@ def parse_shard_coefs(manager: ArrayManager, job: ConversionJob) -> Tuple:
     return tuple(shard_map[ax] for ax in manager.axes if ax in shard_map)
 
 
+def _axis_metadata_kwargs(job: ConversionJob) -> Dict:
+    """Scale/unit overrides from the metadata config, overlaid with job.extra.
+
+    These are typed fields on MetadataConfig now, so they no longer arrive as
+    unrecognised keys in ``extra``.  ``extra`` is still consulted and still
+    wins, because that is where a per-row override from a conversion table
+    arrives -- the config value is only the batch-wide default.
+    """
+    stored = {k: v for k, v in job.metadata.model_dump().items()
+              if (k.endswith(('_scale', '_unit')) and v is not None)}
+    stored.update(job.extra)
+    return stored
+
+
 def parse_scales(manager: ArrayManager, job: ConversionJob) -> Tuple:
-    """Parse per-axis scale overrides from job.extra, falling back to manager.scaledict."""
-    return _parse_axis_params(manager, job.extra, 2, manager.scaledict)
+    """Parse per-axis scale overrides, falling back to manager.scaledict."""
+    return _parse_axis_params(
+        manager, _axis_metadata_kwargs(job), 2, manager.scaledict)
 
 
 def parse_translation(manager: ArrayManager, job: ConversionJob) -> Optional[Tuple]:
@@ -267,8 +290,9 @@ def parse_smart_scale_factors(manager: ArrayManager, job: ConversionJob) -> Opti
 
 
 def parse_units(manager: ArrayManager, job: ConversionJob) -> Tuple:
-    """Parse per-axis unit overrides from job.extra, falling back to manager.unitdict."""
-    return _parse_axis_params(manager, job.extra, 4, manager.unitdict)
+    """Parse per-axis unit overrides, falling back to manager.unitdict."""
+    return _parse_axis_params(
+        manager, _axis_metadata_kwargs(job), 4, manager.unitdict)
 
 
 def _extract_cropping_slices(kwargs: Dict) -> Dict:
@@ -452,12 +476,13 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         conv = job.conversion
         ds   = job.downscale
         clus = job.cluster
+        meta = job.metadata
 
         # Fail fast on a name collision when not overwriting — BEFORE any data
         # preparation or writing, and crucially WITHOUT touching the existing
         # dataset.  (Otherwise the writer hits the existing array, errors, and
         # the error-cleanup below would delete the pre-existing output.)
-        if not conv.overwrite and os.path.exists(output_path):
+        if not conv.overwrite and store_exists(output_path):
             raise FileExistsError(
                 f"Output already exists: '{output_path}'. Refusing to convert "
                 f"with overwrite=False — the existing dataset was left untouched. "
@@ -475,12 +500,14 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         # data and render black in viewers.
         channel_meta = parse_channels(
             manager,
-            channel_intensity_limits=conv.channel_intensity_limits,
+            channel_intensity_limits=meta.channel_intensity_limits,
             dtype=conv.dtype or manager.array.dtype,
             # Without these the unary path silently ignored --channel_colors and
             # --channel_labels, which the aggregative path already honoured.
-            **{k: v for k, v in job.extra.items()
-               if k in ('channel_labels', 'channel_colors')},
+            # They have their own config section now; job.extra still wins so a
+            # per-row override from a conversion table is not overruled.
+            channel_labels=job.extra.get('channel_labels', meta.channel_labels),
+            channel_colors=job.extra.get('channel_colors', meta.channel_colors),
         )
 
         if conv.verbose:
@@ -556,7 +583,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     downscale_method=ds.downscale_method,
                 )
 
-        update_channels = conv.channel_intensity_limits == 'from_array'
+        update_channels = meta.channel_intensity_limits == 'from_array'
 
         if conv.save_omexml or update_channels:
             out_mgr = ArrayManager(output_path, skip_dask=conv.skip_dask)
@@ -569,10 +596,12 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     out_mgr.squeeze()
                 channels = parse_channels(
                     out_mgr,
-                    channel_intensity_limits=conv.channel_intensity_limits,
+                    channel_intensity_limits=meta.channel_intensity_limits,
                     dtype=conv.dtype,
-                    **{k: v for k, v in job.extra.items()
-                       if k in ('channel_labels', 'channel_colors')},
+                    channel_labels=job.extra.get(
+                        'channel_labels', meta.channel_labels),
+                    channel_colors=job.extra.get(
+                        'channel_colors', meta.channel_colors),
                 )
                 assert out_mgr.pyr is not None
                 meta = out_mgr.pyr.meta
@@ -596,7 +625,10 @@ async def _process_single_scene_safe(manager: ArrayManager, output_path: str,
     # Whether the output already existed BEFORE this run.  A pre-existing
     # dataset is never ours to delete — only partial output created by this run
     # may be cleaned up on failure.
-    preexisting = os.path.exists(target)
+    # Remote-aware: os.path.exists is always False for a URL, which
+    # would make a pre-existing remote store look like our own partial
+    # output and hand it to the cleanup below.
+    preexisting = store_exists(target)
     try:
         await _process_single_scene(manager, output_path, job, sem)
     except FileExistsError:
@@ -648,7 +680,7 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
     """Open the input file, load all requested scenes/tiles/views/illuminations."""
     manager = ArrayManager(
         job.input_path,
-        metadata_reader=job.conversion.metadata_reader,
+        metadata_reader=job.metadata.metadata_reader,
         skip_dask=job.conversion.skip_dask,
         reader_tile_size_mb=job.cluster.bf_tile_size_mb,
         force_bioformats=job.readers.force_bioformats,

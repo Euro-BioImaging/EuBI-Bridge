@@ -18,7 +18,7 @@ if str(_ROOT) not in sys.path:
 
 from eubi_bridge.qt_gui.core.batch import (
     BatchModel, spec_for, uneditable_reason, sort_keys, grouped_specs,
-    column_header, parameter_tabs, with_separators, SEPARATOR,
+    column_header, parameter_tabs, with_separators, SEPARATOR, NON_BLANK,
     _PARAM_SPECS, _PATH_COLUMNS, _CLUSTER_KEYS,
 )
 from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
@@ -455,6 +455,10 @@ class TestDependentParams:
                 # Only the 'auto' state is meaningful as a condition; an exact
                 # layer count would be an arbitrary trigger.
                 assert spec.active_when == "auto", spec.key
+            elif parent.kind == "text":
+                # Free text has no enumerable values, so the only sensible
+                # condition is "the user filled it in".
+                assert spec.active_when == NON_BLANK, spec.key
             else:
                 raise AssertionError(
                     f"{spec.key} depends on {parent.key} of unsupported "
@@ -830,7 +834,7 @@ class TestCategoryToggles:
 
     def test_tabs_follow_form_order(self):
         assert parameter_tabs() == [
-            "Reader", "Conversion", "Downscaling", "Metadata"]
+            "Concatenation", "Reader", "Conversion", "Downscaling", "Metadata"]
 
     def test_showing_a_tab_adds_its_columns(self):
         model = self._model()
@@ -870,3 +874,322 @@ class TestCategoryToggles:
         with_tab = set(model.columns())
         model.shown_tabs = {"Reader"}
         assert set(model.columns()) == with_tab
+
+
+class TestChoicesMatchTheConfigModels:
+    """Every offered choice must be one the config models actually accept.
+
+    A hand-copied option list drifts: ``downscale_method`` once offered
+    'gaussian', which no model accepts, and the mismatch only surfaced as a
+    pydantic ValidationError at conversion time, long after the user picked it.
+    Literal-typed fields are therefore read from the model.
+    """
+
+    def _literal_field(self, key):
+        """The (model, allowed values) for *key*, or None when not a Literal."""
+        import typing
+        from eubi_bridge.core import config_models
+        for name in ("ClusterConfig", "ReaderConfig",
+                     "ConversionConfig", "DownscaleConfig"):
+            model = getattr(config_models, name)
+            field = model.model_fields.get(key)
+            if field is None:
+                continue
+            options = typing.get_args(field.annotation)
+            literals = tuple(o for o in options if isinstance(o, str))
+            # A Literal yields only strings; Optional[str] yields a type.
+            if literals and len(literals) == len(options):
+                return model, literals
+            return None
+        return None
+
+    def test_no_choice_is_rejected_by_its_model(self):
+        for spec in _PARAM_SPECS:
+            if spec.kind != "choice":
+                continue
+            found = self._literal_field(spec.key)
+            if found is None:
+                continue           # free-form field, validated elsewhere
+            _, allowed = found
+            invalid = [c for c in spec.choices if c not in allowed]
+            assert not invalid, f"{spec.key} offers {invalid}, not in {allowed}"
+
+    def test_no_valid_option_is_hidden_from_the_user(self):
+        for spec in _PARAM_SPECS:
+            if spec.kind != "choice":
+                continue
+            found = self._literal_field(spec.key)
+            if found is None:
+                continue
+            _, allowed = found
+            missing = [a for a in allowed if a not in spec.choices]
+            assert not missing, f"{spec.key} hides valid options {missing}"
+
+    def test_every_choice_builds_a_valid_job(self):
+        """The end-to-end guard: each option must survive model validation."""
+        from eubi_bridge.core.config_models import ConversionJob
+        for spec in _PARAM_SPECS:
+            if spec.kind != "choice":
+                continue
+            for choice in spec.choices:
+                ConversionJob.from_kwargs("/in.tif", "/out", {spec.key: choice})
+
+
+class TestEveryParameterIsReachable:
+    """A parameter with an editor must be able to appear in the queue table.
+
+    Columns are offered only for keys some row carries, and rows used to be
+    built purely from ``_build_kwargs`` -- which describes a conversion call,
+    not a row.  Settings passed separately (concatenation) or emitted only
+    behind a form toggle (physical scales) were therefore absent from every
+    row, leaving 15 parameters with an editor nothing could ever reach.
+    """
+
+    def _model(self):
+        model = BatchModel()
+        config = _config()
+        model.set_baseline(deepcopy(config))
+        model.add(config, ["/data/a.tif", "/data/b.tif"], "/out")
+        return model
+
+    def _editable_keys(self):
+        return [spec.key for spec in _PARAM_SPECS
+                if spec.key not in _PATH_COLUMNS
+                and uneditable_reason(spec.key) is None]
+
+    def test_every_editable_parameter_is_in_the_row(self):
+        model = self._model()
+        row = model._rows[0]
+        missing = [k for k in self._editable_keys() if k not in row]
+        assert missing == [], f"absent from the row: {missing}"
+
+    def test_full_table_mode_shows_every_parameter(self):
+        model = self._model()
+        model.full = True
+        columns = set(model.columns())
+        missing = [k for k in self._editable_keys() if k not in columns]
+        assert missing == [], f"never shown in full mode: {missing}"
+
+    def test_each_category_shows_exactly_its_own_parameters(self):
+        model = self._model()
+        expected: dict[str, set[str]] = {}
+        for key in self._editable_keys():
+            expected.setdefault(column_header(key)[0], set()).add(key)
+
+        for tab in parameter_tabs():
+            model.shown_tabs = {tab}
+            shown = {c for c in model.columns() if c not in _PATH_COLUMNS}
+            assert shown == expected.get(tab, set()), tab
+
+    def test_the_concatenation_parameters_are_reachable(self):
+        """They were passed outside _build_kwargs, so no row ever had them."""
+        model = self._model()
+        model.shown_tabs = {"Concatenation"}
+        columns = model.columns()
+        for key in ("aggregative_group", "concatenation_axes", "time_tag",
+                    "channel_tag", "z_tag", "y_tag", "x_tag"):
+            assert key in columns, key
+
+    def test_the_group_column_travels_with_concatenation(self):
+        """It is a concatenation setting, not a permanent fixture."""
+        model = self._model()
+        assert "aggregative_group" not in model.columns()
+        model.shown_tabs = {"Concatenation"}
+        assert "aggregative_group" in model.columns()
+
+    def test_the_physical_scales_are_reachable(self):
+        """Emitted only behind 'Override physical scale', so absent by default."""
+        model = self._model()
+        model.shown_tabs = {"Metadata"}
+        columns = model.columns()
+        for axis in ("time", "z", "y", "x"):
+            assert f"{axis}_scale" in columns
+            assert f"{axis}_unit" in columns
+
+    def test_auto_detect_layers_is_reachable(self):
+        model = self._model()
+        model.shown_tabs = {"Downscaling"}
+        assert "n_layers" in model.columns()
+
+    def test_a_blank_added_parameter_is_not_an_override(self):
+        """Starting them blank must not make every row look deviating."""
+        model = self._model()
+        row = model._rows[0]
+        for key in ("concatenation_axes", "time_scale", "aggregative_group"):
+            assert not model.differs(row, key), key
+
+
+class TestFormValuesReachTheRow:
+    """A column existing is not enough: it must carry the value the user set.
+
+    The earlier coverage checked only that a column could appear, which an
+    all-blank row satisfies.  So a parameter whose value never reached the row
+    still looked fixed: the column was there, permanently empty.
+    """
+
+    def _added(self, **conversion):
+        """A batch whose row was added with settings differing from baseline."""
+        model = BatchModel()
+        model.set_baseline(deepcopy(_config()))
+        model.add(_config(**conversion), ["/data/a.tif"], "/out")
+        return model, model._rows[0]
+
+    def test_concatenation_values_reach_the_row(self):
+        config = _config()
+        config["concatenation"] = {
+            "timeTag": "", "channelTag": "", "zTag": "_z", "yTag": "",
+            "xTag": "", "concatenationAxes": "z", "aggregativeGroup": "A",
+        }
+        model = BatchModel()
+        model.set_baseline(deepcopy(_config()))
+        model.add(config, ["/data/a.tif"], "/out")
+        row = model._rows[0]
+        assert row["aggregative_group"] == "A"
+        assert row["concatenation_axes"] == "z"
+        assert row["z_tag"] == "_z"
+
+    def test_those_values_show_as_deviations(self):
+        """So they appear without the user hunting for the category toggle."""
+        config = _config()
+        config["concatenation"] = {
+            "timeTag": "", "channelTag": "", "zTag": "_z", "yTag": "",
+            "xTag": "", "concatenationAxes": "z", "aggregativeGroup": "A",
+        }
+        model = BatchModel()
+        model.set_baseline(deepcopy(_config()))
+        model.add(config, ["/data/a.tif"], "/out")
+        columns = model.columns()
+        for key in ("aggregative_group", "concatenation_axes", "z_tag"):
+            assert key in columns, key
+            assert model.differs(model._rows[0], key), key
+
+    def test_unset_concatenation_stays_blank(self):
+        """Only what the user actually set counts as an override."""
+        model = BatchModel()
+        model.set_baseline(deepcopy(_config()))
+        model.add(_config(), ["/data/a.tif"], "/out")
+        row = model._rows[0]
+        for key in ("aggregative_group", "concatenation_axes", "z_tag"):
+            assert row[key] is None, key
+            assert not model.differs(row, key), key
+
+    def test_physical_scale_values_reach_the_row(self):
+        """Emitted only behind the override toggle, so easily dropped."""
+        config = _config()
+        config["metadata"] = {
+            **config.get("metadata", {}),
+            "overridePhysicalScale": True,
+            "scaleZ": "0.5",
+        }
+        model = BatchModel()
+        model.set_baseline(deepcopy(_config()))
+        model.add(config, ["/data/a.tif"], "/out")
+        assert model._rows[0]["z_scale"] == 0.5
+
+
+class TestRemoveMany:
+    """Removing a scattered selection has to take exactly the rows picked.
+
+    Deleting ascending would shift every later index, so the row after each
+    removal would be taken instead -- silently, and only for multi-row picks.
+    """
+
+    def _model(self, count=6):
+        model = BatchModel()
+        config = _config()
+        model.set_baseline(deepcopy(config))
+        model.add(config, [f"/data/f{i}.tif" for i in range(count)], "/out")
+        return model
+
+    def _names(self, model):
+        return [r["input_path"].rsplit("/", 1)[-1] for r in model.rows]
+
+    def test_discontiguous_rows_are_removed(self):
+        model = self._model()
+        assert model.remove_many([0, 2, 5]) == 3
+        assert self._names(model) == ["f1.tif", "f3.tif", "f4.tif"]
+
+    def test_unsorted_input_is_handled(self):
+        """The selection arrives in click order, not row order."""
+        model = self._model()
+        model.remove_many([5, 0, 2])
+        assert self._names(model) == ["f1.tif", "f3.tif", "f4.tif"]
+
+    def test_repeated_indices_count_once(self):
+        """Several cells selected in one row still remove that row once."""
+        model = self._model()
+        assert model.remove_many([1, 1, 1]) == 1
+        assert len(model) == 5
+
+    def test_out_of_range_indices_are_ignored(self):
+        """A stale selection must not raise."""
+        model = self._model(3)
+        assert model.remove_many([0, 99, -4]) == 1
+        assert len(model) == 2
+
+    def test_removing_every_row_resets_the_baseline(self):
+        """Matches remove(): an empty batch has no config to diff against."""
+        model = self._model(3)
+        model.remove_many([0, 1, 2])
+        assert len(model) == 0
+        assert model.base_config is None
+
+    def test_removing_nothing_changes_nothing(self):
+        model = self._model(3)
+        assert model.remove_many([]) == 0
+        assert len(model) == 3
+
+
+class TestDuplicateMany:
+    """Each copy lands beside its own original, not in a block at the end."""
+
+    def _model(self, count=6):
+        model = BatchModel()
+        config = _config()
+        model.set_baseline(deepcopy(config))
+        model.add(config, [f"/data/f{i}.tif" for i in range(count)], "/out")
+        return model
+
+    def _names(self, model):
+        return [r["input_path"].rsplit("/", 1)[-1] for r in model.rows]
+
+    def test_each_copy_follows_its_original(self):
+        model = self._model(3)
+        model.duplicate_many([0, 2])
+        assert self._names(model) == [
+            "f0.tif", "f0.tif", "f1.tif", "f2.tif", "f2.tif"]
+
+    def test_returned_indices_point_at_the_copies(self):
+        """The caller selects them, so a wrong index selects the wrong row."""
+        model = self._model(6)
+        copies = model.duplicate_many([0, 2, 5])
+        names = self._names(model)
+        assert copies == [1, 4, 8]
+        assert [names[i] for i in copies] == ["f0.tif", "f2.tif", "f5.tif"]
+
+    def test_copies_are_independent(self):
+        """A deep copy, so editing one must not change the other."""
+        model = self._model(2)
+        copies = model.duplicate_many([0])
+        model.update_cells(copies, "dtype", "uint8")
+        assert model.rows[0].get("dtype") != "uint8"
+        assert model.rows[copies[0]]["dtype"] == "uint8"
+
+    def test_unsorted_input_is_handled(self):
+        model = self._model(3)
+        assert model.duplicate_many([2, 0]) == [1, 4]
+
+    def test_repeated_indices_copy_once(self):
+        model = self._model(3)
+        assert model.duplicate_many([1, 1]) == [2]
+        assert len(model) == 4
+
+    def test_out_of_range_indices_are_ignored(self):
+        model = self._model(2)
+        assert model.duplicate_many([0, 99, -3]) == [1]
+        assert len(model) == 3
+
+    def test_duplicating_nothing_changes_nothing(self):
+        model = self._model(3)
+        assert model.duplicate_many([]) == []
+        assert len(model) == 3
