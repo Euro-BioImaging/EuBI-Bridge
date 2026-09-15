@@ -1271,7 +1271,8 @@ class ConversionManager:
                 _table, output_path=output_path,
                 cluster_p=cluster_p, readers_p=readers_p,
                 conversion_p=conversion_p, downscale_p=downscale_p,
-                concat_p=concat_p, merged=merged, extra=extra,
+                metadata_p=metadata_p, concat_p=concat_p,
+                merged=merged, extra=extra,
                 includes=includes, excludes=excludes,
             )
         elif effective_concatenation_axes is not None:
@@ -1283,6 +1284,7 @@ class ConversionManager:
                 readers=ReaderConfig(**readers_p),
                 conversion=ConversionConfig(**conversion_p),
                 downscale=DownscaleConfig(**downscale_p),
+                metadata=MetadataConfig(**metadata_p),
                 concatenation_axes=effective_concatenation_axes,
                 time_tag=effective_time_tag,
                 channel_tag=effective_channel_tag,
@@ -1335,8 +1337,8 @@ class ConversionManager:
         logger.info(f"Elapsed for conversion + downscaling: {(time.time() - t0) / 60:.2f} min.")
 
     def _run_mixed_table(self, table, *, output_path, cluster_p, readers_p,
-                         conversion_p, downscale_p, concat_p, merged, extra,
-                         includes, excludes) -> None:
+                         conversion_p, downscale_p, metadata_p, concat_p,
+                         merged, extra, includes, excludes) -> None:
         """Run a conversion table that may contain both kinds of job.
 
         Rows sharing an ``aggregative_group`` become one concatenated output;
@@ -1407,6 +1409,7 @@ class ConversionManager:
                 readers=ReaderConfig(**{**readers_p, **overrides}),
                 conversion=ConversionConfig(**{**conversion_p, **overrides}),
                 downscale=DownscaleConfig(**{**downscale_p, **overrides}),
+                metadata=MetadataConfig(**{**metadata_p, **overrides}),
                 concatenation_axes=concat["concatenation_axes"],
                 time_tag=concat["time_tag"],
                 channel_tag=concat["channel_tag"],
