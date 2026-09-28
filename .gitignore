@@ -23,6 +23,7 @@ conda-recipe/.cache/
 .ipynb_checkpoints/
 
 *.log
+*.claude
 *.out
 *.err
 .DS_Store

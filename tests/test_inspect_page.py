@@ -182,6 +182,21 @@ class TestInspectPageBuilds:
         app.processEvents()
         page.deleteLater()
 
+    def test_dropping_a_store_loads_it(self, app, store):
+        """A drop onto the sidebar reaches the page exactly as a click does."""
+        from PyQt6.QtCore import QMimeData, QPointF, Qt, QUrl
+        from PyQt6.QtGui import QDropEvent
+        from eubi_bridge.qt_gui.pages.inspect_page import InspectPage
+        page = InspectPage()
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(Path(store).as_posix())])
+        page._browser.dropEvent(QDropEvent(
+            QPointF(5, 5), Qt.DropAction.CopyAction, mime,
+            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        app.processEvents()
+        assert page._path == str(store)
+        page.deleteLater()
+
     def test_a_missing_path_does_not_raise(self, app, tmp_path):
         from eubi_bridge.qt_gui.pages.inspect_page import InspectPage
         page = InspectPage()

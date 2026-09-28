@@ -2,7 +2,7 @@
 Convert page: full conversion config UI with sidebar browser and run panel.
 
 Layout:
-  Left : SidebarBrowser(mode="conversion"), select input files/folders
+  Left : SidebarBrowser(mode="conversion"), select input files/OME-Zarr stores
   Right: QTabWidget (Cluster | Reader | Conversion | Downscaling | Metadata | Run)
          + Config management toolbar above tabs
 """

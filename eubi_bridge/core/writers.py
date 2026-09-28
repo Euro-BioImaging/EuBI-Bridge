@@ -1141,8 +1141,13 @@ async def write_pyramid_single_pass_async(
         chunks = tuple(int(min(c, s)) for c, s in zip(output_chunks, shape))
         shards = None
         if output_shards is not None:
-            shards = tuple(int(max(c, min(v, s)))
-                           for v, c, s in zip(output_shards, chunks, shape))
+            # A shard must hold a whole number of inner chunks.  Clamping it to
+            # the level extent (e.g. 553 with 112-px chunks) breaks that, so
+            # cap it at the chunk count needed to cover the level instead; an
+            # edge shard may overhang the array, as edge chunks do.
+            shards = tuple(
+                int(c * max(1, min(int(v) // c, -(-int(s) // c))))
+                for v, c, s in zip(output_shards, chunks, shape))
         _create_zarr_array(
             store_path=str(path),
             shape=tuple(int(v) for v in shape),

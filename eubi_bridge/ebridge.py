@@ -763,7 +763,7 @@ class ConfigManager:
         _console.print(header_text)
         _console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
         sections = {k: v for k, v in config.items()
-                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'concatenation')}
+                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'metadata', 'concatenation')}
         self._print_config_unified(title, sections)
         _console.print()
 
@@ -773,7 +773,7 @@ class ConfigManager:
         _console.print("[bold yellow]Installation Defaults[/bold yellow]")
         _console.print("[bold yellow]═══════════════════════════════════════════════════════[/bold yellow]\n")
         sections = {k: v for k, v in self._ROOT_DEFAULTS.items()
-                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'concatenation')}
+                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'metadata', 'concatenation')}
         self._print_config_unified("Defaults", sections)
         _console.print()
 
@@ -1677,6 +1677,10 @@ class MetadataManager:
             **self._config._collect_params('conversion', **kwargs),
         }
         combined['channel_intensity_limits'] = 'auto'
+        # metadata_reader moved to the 'metadata' section, which is not
+        # collected wholesale here: its scales/units are the arguments above.
+        combined['metadata_reader'] = self._config._collect_params(
+            'metadata', **kwargs)['metadata_reader']
         extra = {k: v for k, v in kwargs.items() if k not in combined}
         pixel_meta = {k: v for k, v in dict(
             time_scale=time_scale, z_scale=z_scale, y_scale=y_scale, x_scale=x_scale,
@@ -1698,9 +1702,14 @@ class MetadataManager:
         combined = {
             **self._config._collect_params('cluster',    **kwargs),
             **self._config._collect_params('readers',    **kwargs),
-            **self._config._collect_params(
-                'conversion', channel_intensity_limits=channel_intensity_limits, **kwargs),
+            **self._config._collect_params('conversion', **kwargs),
         }
+        # Both keys live in the 'metadata' section now, so collecting
+        # 'conversion' silently dropped them.  The section is not merged
+        # wholesale: its channel_labels/colors are this method's own arguments.
+        combined['channel_intensity_limits'] = channel_intensity_limits
+        combined['metadata_reader'] = self._config._collect_params(
+            'metadata', **kwargs)['metadata_reader']
         extra = {k: v for k, v in kwargs.items() if k not in combined}
         channel_meta = {k: v for k, v in dict(
             channel_labels=channel_labels, channel_colors=channel_colors,

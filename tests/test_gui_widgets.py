@@ -171,6 +171,184 @@ class TestSidebarBrowser:
         assert Path(browser.current_path()).exists()
 
 
+class TestSidebarBrowserDrop:
+    """Dropping files is a second way to tick them, feeding the same selection."""
+
+    @pytest.fixture
+    def browser(self, app, tmp_path):
+        from eubi_bridge.qt_gui.widgets.sidebar_browser import SidebarBrowser
+        (tmp_path / "sub").mkdir()
+        for name in ("a.tif", "b.czi"):
+            (tmp_path / "sub" / name).write_bytes(b"")
+        (tmp_path / "sub" / "plain").mkdir()
+        (tmp_path / "sub" / "img.zarr").mkdir()
+        (tmp_path / "sub" / "img.zarr" / "zarr.json").write_text("{}")
+        widget = SidebarBrowser(mode="conversion", initial_path=str(tmp_path))
+        app.processEvents()
+        yield widget
+        widget.deleteLater()
+        app.processEvents()
+
+    @staticmethod
+    def _drop(widget, *paths):
+        """Deliver a drop as Qt does, with forward-slash URLs as Explorer sends."""
+        from PyQt6.QtCore import QMimeData, QPointF, Qt, QUrl
+        from PyQt6.QtGui import QDropEvent
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(Path(p).as_posix())
+                      if not str(p).startswith("http") else QUrl(str(p))
+                      for p in paths])
+        event = QDropEvent(QPointF(5, 5), Qt.DropAction.CopyAction, mime,
+                           Qt.MouseButton.LeftButton,
+                           Qt.KeyboardModifier.NoModifier)
+        widget.dropEvent(event)
+        return event
+
+    @staticmethod
+    def _check_state(widget, name):
+        for row in range(widget._list.count()):
+            item = widget._list.item(row)
+            if item.text().endswith(name):
+                return item.checkState()
+        raise AssertionError(f"{name} not listed")
+
+    def test_dropped_files_are_selected_and_shown_ticked(self, browser, tmp_path):
+        from PyQt6.QtCore import Qt
+        emitted = []
+        browser.selection_changed.connect(emitted.append)
+        target = tmp_path / "sub" / "a.tif"
+
+        self._drop(browser, target)
+
+        assert browser.selected_paths() == [str(target)]
+        assert emitted and emitted[-1] == [str(target)]
+        # The browser opens the folder the drop came from, with the tick shown.
+        assert Path(browser.current_path()) == tmp_path / "sub"
+        assert self._check_state(browser, "a.tif") == Qt.CheckState.Checked
+        assert self._check_state(browser, "b.czi") == Qt.CheckState.Unchecked
+
+    def test_a_file_ticked_by_hand_is_not_added_twice(self, browser, tmp_path):
+        """Qt's C:/x form must match the listing's C:\\x form, or it duplicates."""
+        from PyQt6.QtCore import Qt
+        browser.navigate_to(str(tmp_path / "sub"))
+        for row in range(browser._list.count()):
+            item = browser._list.item(row)
+            if item.text().endswith("a.tif"):
+                item.setCheckState(Qt.CheckState.Checked)
+
+        self._drop(browser, tmp_path / "sub" / "a.tif")
+
+        assert len(browser.selected_paths()) == 1
+
+    def test_drops_are_refused_while_filters_are_set(self, browser, tmp_path,
+                                                     monkeypatch):
+        from eubi_bridge.qt_gui.widgets import sidebar_browser
+        warnings = []
+        monkeypatch.setattr(sidebar_browser.QMessageBox, "warning",
+                            lambda *args: warnings.append(args))
+        browser.set_filters("*.tif", "")
+
+        self._drop(browser, tmp_path / "sub" / "a.tif")
+
+        assert browser.selected_paths() == []
+        assert len(warnings) == 1
+
+    def test_non_local_urls_are_ignored(self, browser):
+        event = self._drop(browser, "https://example.org/a.tif")
+        assert not event.isAccepted()
+        assert browser.selected_paths() == []
+
+    def test_only_input_and_inspect_browsers_take_drops(self, app, browser):
+        """The list must not swallow drops itself, or they never reach the
+        handler; the output browser has nothing to drop into."""
+        from eubi_bridge.qt_gui.widgets.sidebar_browser import SidebarBrowser
+        assert browser.acceptDrops()
+        assert not browser._list.viewport().acceptDrops()
+        output_browser = SidebarBrowser(mode="output")
+        assert not output_browser.acceptDrops()
+        output_browser.deleteLater()
+
+    def test_a_plain_folder_cannot_be_ticked(self, browser, tmp_path):
+        """Ticking one used to hand the folder to the reader, which failed."""
+        from PyQt6.QtCore import Qt
+        browser.navigate_to(str(tmp_path / "sub"))
+        checkable = {}
+        for row in range(browser._list.count()):
+            item = browser._list.item(row)
+            name = item.text().split(" ", 1)[1]
+            checkable[name] = bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+        assert checkable == {"plain": False, "img.zarr": True,
+                             "a.tif": True, "b.czi": True}
+
+    def test_select_all_skips_plain_folders(self, browser, tmp_path):
+        browser.navigate_to(str(tmp_path / "sub"))
+        browser._on_select_all()
+        assert sorted(Path(p).name for p in browser.selected_paths()) == [
+            "a.tif", "b.czi", "img.zarr"]
+
+    def test_dropped_folders_are_skipped_but_files_kept(self, browser, tmp_path,
+                                                        monkeypatch):
+        from eubi_bridge.qt_gui.widgets import sidebar_browser
+        warnings = []
+        monkeypatch.setattr(sidebar_browser.QMessageBox, "warning",
+                            lambda *args: warnings.append(args))
+
+        self._drop(browser, tmp_path / "sub" / "plain",
+                   tmp_path / "sub" / "a.tif")
+
+        assert browser.selected_paths() == [str(tmp_path / "sub" / "a.tif")]
+        assert len(warnings) == 1 and "plain" in warnings[0][2]
+
+    def test_a_dropped_store_is_selected(self, browser, tmp_path):
+        """An OME-Zarr store is a folder on disk but a dataset to convert."""
+        self._drop(browser, tmp_path / "sub" / "img.zarr")
+        assert browser.selected_paths() == [str(tmp_path / "sub" / "img.zarr")]
+
+
+class TestInspectBrowserDrop:
+    """On the Inspect page a drop opens one store, as clicking it does."""
+
+    @pytest.fixture
+    def browser(self, app, tmp_path):
+        from eubi_bridge.qt_gui.widgets.sidebar_browser import SidebarBrowser
+        for name in ("one.zarr", "two.zarr"):
+            (tmp_path / name).mkdir()
+            (tmp_path / name / "zarr.json").write_text("{}")
+        (tmp_path / "a.tif").write_bytes(b"")
+        widget = SidebarBrowser(mode="zarr", initial_path=str(Path.home()))
+        opened = []
+        widget.zarr_selected.connect(opened.append)
+        widget.opened = opened
+        yield widget
+        widget.deleteLater()
+        app.processEvents()
+
+    @pytest.fixture
+    def warnings(self, monkeypatch):
+        from eubi_bridge.qt_gui.widgets import sidebar_browser
+        seen = []
+        monkeypatch.setattr(sidebar_browser.QMessageBox, "warning",
+                            lambda *args: seen.append(args))
+        return seen
+
+    def test_a_dropped_store_is_opened(self, browser, tmp_path, warnings):
+        TestSidebarBrowserDrop._drop(browser, tmp_path / "one.zarr")
+        assert browser.opened == [str(tmp_path / "one.zarr")]
+        assert Path(browser.current_path()) == tmp_path
+        assert not warnings
+
+    def test_a_plain_file_is_refused(self, browser, tmp_path, warnings):
+        TestSidebarBrowserDrop._drop(browser, tmp_path / "a.tif")
+        assert browser.opened == []
+        assert len(warnings) == 1
+
+    def test_several_stores_are_refused(self, browser, tmp_path, warnings):
+        TestSidebarBrowserDrop._drop(browser, tmp_path / "one.zarr",
+                                     tmp_path / "two.zarr")
+        assert browser.opened == []
+        assert len(warnings) == 1
+
+
 class TestSettingsModule:
     """Theme and font settings, used by the docs screenshot script too."""
 

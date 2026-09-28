@@ -430,3 +430,30 @@ class TestPhysicalScaleGuiMapping:
         snake = _react_to_config(self._react(
             overridePhysicalScale=False, scaleZ="0.5"))
         assert snake["metadata"]["z_scale"] is None
+
+
+class TestRelocatedMetadataKeysInGui:
+    """Keys that moved from 'conversion' to 'metadata' in 0.1.3.
+
+    The GUI mapping has to read them from their new home, and a GUI save must
+    not wipe a metadata key the form has no field for.
+    """
+
+    def test_override_channel_names_loads_from_metadata(self):
+        from eubi_bridge.qt_gui.server.config_manager import _config_to_react
+        react = _config_to_react(
+            {"metadata": {"override_channel_names": True}})
+        assert react["conversion"]["overrideChannelNames"] is True
+
+    def test_gui_save_keeps_channel_labels_set_elsewhere(self, page, tmp_path):
+        """The form has no labels field, so saving must leave them alone."""
+        import json
+        from eubi_bridge.qt_gui.core.config import save_config
+        path = str(tmp_path / "config.json")
+        react = page._ui_to_config()
+        react["metadata"]["channelLabels"] = "0,DAPI;1,GFP"
+        saved = save_config(react, path)
+
+        saved = save_config(page._ui_to_config(), saved["_configPath"])
+        on_disk = json.loads(Path(saved["_configPath"]).read_text())
+        assert on_disk["metadata"]["channel_labels"] == "0,DAPI;1,GFP"

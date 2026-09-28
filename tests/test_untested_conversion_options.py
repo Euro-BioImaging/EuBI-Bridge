@@ -143,3 +143,86 @@ class TestExportAcquisitionMetadata:
         out = tmp_path / "out"
         EuBIBridge().to_zarr(str(single_tiff), str(out), verbose=False)
         assert _only_store(out).exists()
+
+
+class TestJobsCarryEveryConfigSection:
+    """A job built field-by-field must be given every config section.
+
+    ``AggregativeConversionJob`` is constructed with explicit keywords rather
+    than ``from_kwargs``, and the model ignores unknown keys -- so omitting
+    ``metadata=`` silently produced a default MetadataConfig and
+    ``override_channel_names`` was always False.  That shipped, and CI caught
+    it on every OS because it is pure object construction with no platform
+    component.
+    """
+
+    _SECTIONS = ("cluster", "readers", "conversion", "downscale", "metadata")
+
+    def test_every_section_is_a_field(self):
+        from eubi_bridge.core.config_models import (AggregativeConversionJob,
+                                                    ConversionJob)
+        for model in (ConversionJob, AggregativeConversionJob):
+            for section in self._SECTIONS:
+                assert section in model.model_fields, f"{model.__name__}.{section}"
+
+    def test_from_kwargs_populates_metadata(self):
+        """The unary path; it worked, and must keep working."""
+        from eubi_bridge.core.config_models import ConversionJob
+        job = ConversionJob.from_kwargs(
+            "/in.tif", "/out", {"override_channel_names": True})
+        assert job.metadata.override_channel_names is True
+
+    def test_an_explicit_metadata_section_survives_flattening(self):
+        """The aggregative path: the value has to reach the worker kwargs."""
+        from eubi_bridge.core.config_models import (AggregativeConversionJob,
+                                                    MetadataConfig)
+        job = AggregativeConversionJob(
+            input_path=["/a.tif"], output_path="/out",
+            metadata=MetadataConfig(override_channel_names=True))
+        assert job.to_conversion_kwargs()["override_channel_names"] is True
+
+    def test_a_stray_keyword_does_not_silently_vanish_unnoticed(self):
+        """Documents the trap: extra="ignore" drops a misplaced section key.
+
+        Passing override_channel_names at the top level looks reasonable and is
+        silently discarded -- which is exactly how the regression happened.  If
+        this ever starts raising instead, the trap is gone and the test should
+        be updated to match.
+        """
+        from eubi_bridge.core.config_models import AggregativeConversionJob
+        job = AggregativeConversionJob(
+            input_path=["/a.tif"], output_path="/out",
+            override_channel_names=True)          # wrong level, ignored
+        assert job.metadata.override_channel_names is False
+
+    def test_every_construction_site_passes_all_sections(self):
+        """Catch the omission where it actually happens: at the call site.
+
+        The behavioural tests above prove a correctly built job works.  This
+        one proves nobody builds one incorrectly -- which is the mistake that
+        shipped, since a missing section is silently accepted.
+        """
+        import re
+        from pathlib import Path
+
+        pattern = re.compile(
+            r"(?:Aggregative)?ConversionJob\(\s*\n(.*?)\n\s*\)", re.S)
+        root = Path(__file__).resolve().parents[1] / "eubi_bridge"
+        offenders = []
+        for path in root.rglob("*.py"):
+            if "__pycache__" in str(path):
+                continue
+            text = path.read_text(encoding="utf-8")
+            for match in pattern.finditer(text):
+                block = match.group(1)
+                if "from_kwargs" in block:
+                    continue
+                present = {name for name in self._SECTIONS
+                           if re.search(r"\b" + name + r"\s*=", block)}
+                if present and present != set(self._SECTIONS):
+                    missing = sorted(set(self._SECTIONS) - present)
+                    line = text[:match.start()].count("\n") + 1
+                    offenders.append(f"{path.name}:{line} missing {missing}")
+        assert not offenders, (
+            "job constructed without every config section: "
+            + "; ".join(offenders))

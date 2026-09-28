@@ -3,7 +3,8 @@ Persistent sidebar file/folder browser with pagination and OME-Zarr detection.
 
 Two modes:
   mode="zarr"        : navigate filesystem; double-click an OME-Zarr → zarr_selected(path)
-  mode="conversion"  : navigate filesystem; check files/dirs → selection_changed(paths)
+  mode="conversion"  : navigate filesystem; check files/OME-Zarr stores → selection_changed(paths)
+  Both modes also accept drag-and-drop: files to select, or one store to open.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -30,6 +32,7 @@ from PyQt6.QtWidgets import (
 from eubi_bridge.qt_gui.core.file_service import (
     PAGE_SIZE,
     FileEntry,
+    _is_ome_zarr_local,
     get_parent,
     is_remote,
     list_local,
@@ -43,6 +46,23 @@ _ICON_FOLDER  = "\U0001F4C1"   # 📁
 _ICON_ZARR    = "\U0001F52C"   # 🔬
 _ICON_FILE    = "\U0001F4C4"   # 📄
 _ICON_HOME    = "\U0001F3E0"   # 🏠
+
+_DROP_HINTS = {
+    # mode: (idle text, text while a drag hovers)
+    "conversion": ("Select input files in the browser below, or drag files here",
+                   "Drop to select"),
+    "zarr":       ("Click an OME-Zarr below to inspect it, or drag one here",
+                   "Drop to inspect"),
+}
+_DROP_HINT_STYLE = (
+    "font-size: 11px; color: #888; padding: 4px;"
+    "border: 1px dashed #888; border-radius: 3px;"
+)
+_DROP_HINT_STYLE_ACTIVE = (
+    "font-size: 11px; color: #4a9eff; padding: 4px;"
+    "border: 1px dashed #4a9eff; border-radius: 3px;"
+)
+_LIST_STYLE_DROP_ACTIVE = "QListWidget { border: 2px dashed #4a9eff; }"
 
 _RECENTS_MAX = 3
 _RECENTS_FILE = Path.home() / ".eubi_bridge" / "gui_recents_cache" / "recent_dirs.json"
@@ -77,6 +97,16 @@ def _pat_match(name: str, pat: str) -> bool:
     if any(c in pat for c in "*?["):
         return fnmatch.fnmatch(name, pat)
     return pat.lower() in name.lower()
+
+
+def _is_selectable(entry: FileEntry) -> bool:
+    """Files and OME-Zarr stores are conversion inputs; a plain folder is not.
+
+    A ticked folder used to reach the reader as if it were an image and fail
+    with an unsupported-format error.  Picking a folder's files is what
+    Select All is for, and it shows exactly which files that means.
+    """
+    return entry["isOmeZarr"] or not entry["isDirectory"]
 
 
 class SidebarBrowser(QWidget):
@@ -187,6 +217,18 @@ class SidebarBrowser(QWidget):
             sel_bar.addWidget(self._filter_info_label, 1)
             layout.addLayout(sel_bar)
 
+        if self._mode in _DROP_HINTS:
+            # Drag-and-drop is an alternative to ticking (conversion) or
+            # clicking a store (zarr), with the same effect.  The whole browser
+            # accepts drops (the list has no drop handling of its own, so Qt
+            # hands its drops up to this widget); this row announces it.
+            self._drop_hint = QLabel(_DROP_HINTS[self._mode][0])
+            self._drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._drop_hint.setWordWrap(True)
+            self._drop_hint.setStyleSheet(_DROP_HINT_STYLE)
+            layout.addWidget(self._drop_hint)
+            self.setAcceptDrops(True)
+
         # ── List ──
         self._list = QListWidget()
         self._list.setAlternatingRowColors(True)
@@ -276,10 +318,14 @@ class SidebarBrowser(QWidget):
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, entry)
 
-            if self._mode == "conversion":
+            if self._mode == "conversion" and _is_selectable(entry):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 state = Qt.CheckState.Checked if entry["path"] in self._checked_paths else Qt.CheckState.Unchecked
                 item.setCheckState(state)
+            elif self._mode == "conversion":
+                # Items are user-checkable by default; a plain folder must not
+                # be, or the S3 Select All (which goes by this flag) ticks it.
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
 
             if self._mode == "zarr" and not entry["isDirectory"] and not entry["isOmeZarr"]:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
@@ -403,6 +449,8 @@ class SidebarBrowser(QWidget):
         elif not self._s3_mode:
             all_entries = list_local(self._current_path)
             for entry in all_entries:
+                if not _is_selectable(entry):
+                    continue
                 if self._include_filter or self._exclude_filter:
                     name = entry["name"]
                     if self._include_filter and not any(
@@ -457,6 +505,121 @@ class SidebarBrowser(QWidget):
         else:
             self._checked_paths.discard(entry["path"])
         self.selection_changed.emit(list(self._checked_paths))
+
+    # ── Drag and drop (conversion and zarr modes) ─────────────────────────────
+
+    @staticmethod
+    def _local_drop_paths(mime) -> list[str]:
+        """Local paths carried by a drag, in order and without duplicates.
+
+        Normalised because Qt hands over ``C:/dir/f.nd2`` while the listing
+        holds ``C:\\dir\\f.nd2``: selection is matched by string, so an
+        unnormalised drop would neither show as ticked nor be deduplicated
+        against the same file ticked by hand.
+        """
+        if not mime.hasUrls():
+            return []
+        paths = [os.path.normpath(url.toLocalFile())
+                 for url in mime.urls() if url.isLocalFile()]
+        return list(dict.fromkeys(paths))
+
+    def _set_drop_highlight(self, active: bool):
+        idle, hover = _DROP_HINTS[self._mode]
+        self._drop_hint.setText(hover if active else idle)
+        self._drop_hint.setStyleSheet(
+            _DROP_HINT_STYLE_ACTIVE if active else _DROP_HINT_STYLE)
+        self._list.setStyleSheet(_LIST_STYLE_DROP_ACTIVE if active else "")
+
+    def dragEnterEvent(self, event):
+        if self._local_drop_paths(event.mimeData()):
+            event.acceptProposedAction()
+            self._set_drop_highlight(True)
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._local_drop_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._set_drop_highlight(False)
+
+    def dropEvent(self, event):
+        self._set_drop_highlight(False)
+        paths = self._local_drop_paths(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        if self._mode == "zarr":
+            self.open_dropped_store(paths)
+        else:
+            self.add_dropped_paths(paths)
+
+    def add_dropped_paths(self, paths: list[str]) -> bool:
+        """Add dropped files to the selection, as if ticked by hand.
+
+        Refused while a filter is active: the browser then lists only matching
+        entries, so a dropped file could be selected yet invisible, and a later
+        filter change prunes the selection to the filtered listing.  Plain
+        folders are skipped, as they cannot be ticked either; OME-Zarr stores
+        are datasets and are kept.  Afterwards the browser opens the folder the
+        drop came from, so the new ticks are on screen.
+        """
+        if self._include_filter or self._exclude_filter:
+            QMessageBox.warning(
+                self, "Filters are active",
+                "Files cannot be dropped while include/exclude filters are "
+                "set, because the browser only lists entries matching them and "
+                "dropped files could end up selected but hidden.\n\n"
+                "Clear the filters and drop the files again.")
+            return False
+
+        folders = [p for p in paths
+                   if os.path.isdir(p) and not _is_ome_zarr_local(p)]
+        inputs = [p for p in paths if p not in folders]
+        if folders:
+            names = "\n".join(f"  {os.path.basename(p)}" for p in folders)
+            QMessageBox.warning(
+                self, "Folders skipped",
+                f"Folders cannot be selected as inputs, so these were "
+                f"skipped:\n{names}\n\n"
+                "To convert a folder's files, open it in the browser and use "
+                "Select All.")
+        if not inputs:
+            return False
+
+        self._checked_paths.update(inputs)
+        self._navigate(os.path.dirname(inputs[0]) or inputs[0])
+        self.selection_changed.emit(list(self._checked_paths))
+        return True
+
+    def open_dropped_store(self, paths: list[str]) -> bool:
+        """Open a dropped OME-Zarr store, as if it had been clicked.
+
+        The viewer shows one dataset at a time, so a drop must be exactly one
+        store.  The browser moves to the folder holding it, so the store is
+        visible in the list as well.
+        """
+        if len(paths) != 1:
+            QMessageBox.warning(
+                self, "One store at a time",
+                "Drop a single OME-Zarr store to inspect it.")
+            return False
+        path = paths[0]
+        if not (os.path.isdir(path) and _is_ome_zarr_local(path)):
+            QMessageBox.warning(
+                self, "Not an OME-Zarr store",
+                f"'{os.path.basename(path)}' is not an OME-Zarr store, so it "
+                "cannot be inspected here. Convert it on the Convert page "
+                "first.")
+            return False
+
+        self._navigate(os.path.dirname(path) or path)
+        self.zarr_selected.emit(path)
+        return True
 
     # ── Public helpers ────────────────────────────────────────────────────────
 

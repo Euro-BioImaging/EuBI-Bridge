@@ -96,7 +96,9 @@ def _config_to_react(cfg: dict) -> dict:
             "overwrite":            conv.get("overwrite", False),
             "squeezeDimensions":    conv.get("squeeze", True),
             "saveOmeXml":           conv.get("save_omexml", True),
-            "overrideChannelNames": conv.get("override_channel_names", False),
+            # Stored under 'metadata' now; 'conversion' is the pre-move fallback.
+            "overrideChannelNames": meta.get("override_channel_names",
+                                             conv.get("override_channel_names", False)),
             "skipDask":             conv.get("skip_dask", False),
             "autoChunk":            conv.get("auto_chunk", True),
             "targetChunkSizeMb":    conv.get("target_chunk_mb", 1),
@@ -426,6 +428,11 @@ def action_save(config_path: str, react_json_str: str) -> None:
 
     resolved = _resolve_configpath(config_path) or config_path
     bridge = EuBIBridge(configpath=resolved)
+    # The form has no channel-labels field, so it always sends that key blank;
+    # keep the stored value rather than wiping one set via the CLI.
+    if "channelLabels" not in react_data.get("metadata", {}):
+        new_cfg["metadata"]["channel_labels"] = (
+            bridge.config.get("metadata", {}).get("channel_labels", ""))
     bridge.config = new_cfg  # setter writes to JSON immediately
 
     result = _config_to_react(bridge.config)

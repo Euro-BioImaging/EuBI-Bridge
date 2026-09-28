@@ -113,10 +113,13 @@ def _parse_axis_params(manager: ArrayManager, kwargs: Dict,
         param_name = AXIS_PARAM_MAP[axis][param_idx]
         if param_name is None:
             # No user-settable parameter for this axis (a channel has no
-            # physical scale or unit).  The axis still belongs in the result,
+            # physical scale or unit).  Its scale still belongs in the result,
             # carrying whatever the file itself says -- dropping it would leave
-            # the scales tuple shorter than the axes it describes.
-            if param_idx in (2, 4):
+            # the scales tuple shorter than the axes it describes.  Its unit
+            # does not: the NGFF writer expects the channel left out of the
+            # units and the default for it ('Channel') is no valid NGFF unit,
+            # which viewers such as Neuroglancer refuse to open.
+            if param_idx == 2:
                 output[axis] = default_dict.get(axis)
             continue
 

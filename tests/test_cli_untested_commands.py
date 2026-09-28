@@ -163,3 +163,74 @@ class TestUpdatePixelMeta:
         axes = json.loads((store / ".zattrs").read_text())["multiscales"][0]["axes"]
         z_axis = next(a for a in axes if a["name"] == "z")
         assert z_axis.get("unit") == "nanometer"
+
+
+class TestUpdateChannelMeta:
+    """channel_intensity_limits moved to the 'metadata' section in 0.1.3."""
+
+    def _window(self, store: Path) -> dict:
+        attrs = json.loads((store / ".zattrs").read_text())
+        return attrs["omero"]["channels"][0]["window"]
+
+    def test_from_array_limits_are_applied(self, bridge, tmp_path):
+        """Collecting only 'conversion' dropped the flag, so the window kept
+        spanning the full dtype range instead of the data's own."""
+        source = tmp_path / "img.tif"
+        tifffile.imwrite(
+            source, np.random.randint(10, 50, (4, 16, 16)).astype(np.uint8),
+            imagej=True, metadata={"axes": "ZYX"})
+        out = tmp_path / "out"
+        bridge.to_zarr(str(source), str(out), verbose=False)
+        store = next(out.glob("*.zarr"))
+        assert self._window(store)["end"] == 255
+
+        bridge.update_channel_meta(str(store),
+                                   channel_intensity_limits="from_array")
+        assert self._window(store)["end"] < 50
+
+class TestChannelAxisUnit:
+    """A channel axis must carry no unit: Neuroglancer rejects the whole store
+    on 'Unsupported unit: "Channel"', the default 0.1.3 briefly wrote there."""
+
+    @staticmethod
+    def _axes(store: Path) -> list:
+        zattrs = store / ".zattrs"
+        if zattrs.exists():
+            attrs = json.loads(zattrs.read_text())
+        else:
+            attrs = json.loads((store / "zarr.json").read_text())["attributes"]
+            attrs = attrs.get("ome", attrs)
+        return attrs["multiscales"][0]["axes"]
+
+    def _converted(self, bridge, tmp_path, zarr_format):
+        source = tmp_path / "img.tif"
+        tifffile.imwrite(
+            source, np.random.randint(0, 255, (3, 16, 16)).astype(np.uint8),
+            imagej=True, metadata={"axes": "CYX"})
+        out = tmp_path / "out"
+        bridge.to_zarr(str(source), str(out), zarr_format=zarr_format,
+                       verbose=False)
+        return next(out.glob("*.zarr"))
+
+    @pytest.mark.parametrize("zarr_format", [2, 3])
+    def test_conversion_writes_no_channel_unit(self, bridge, tmp_path,
+                                               zarr_format):
+        axes = self._axes(self._converted(bridge, tmp_path, zarr_format))
+        channel = next(a for a in axes if a["name"] == "c")
+        assert "unit" not in channel
+        assert all("unit" in a for a in axes if a["type"] == "space")
+
+    def test_update_pixel_meta_repairs_a_bad_store(self, bridge, tmp_path):
+        """Outputs already written with the bad unit can be fixed in place."""
+        store = self._converted(bridge, tmp_path, 2)
+        zattrs = store / ".zattrs"
+        attrs = json.loads(zattrs.read_text())
+        for axis in attrs["multiscales"][0]["axes"]:
+            if axis["name"] == "c":
+                axis["unit"] = "Channel"
+        zattrs.write_text(json.dumps(attrs))
+
+        bridge.update_pixel_meta(str(store))
+
+        channel = next(a for a in self._axes(store) if a["name"] == "c")
+        assert "unit" not in channel
