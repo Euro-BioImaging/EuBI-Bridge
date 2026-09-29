@@ -124,6 +124,34 @@ def _row(*widgets) -> QHBoxLayout:
     return h
 
 
+def _cluster_summary(c: dict) -> str:
+    """Describe a camelCase cluster section in three short lines."""
+    if c.get("useSlurm"):
+        details = [f"partition {c['slurmPartition']}" if c.get("slurmPartition") else "",
+                   f"account {c['slurmAccount']}" if c.get("slurmAccount") else "",
+                   f"time {c.get('slurmTime') or '24:00:00'}"]
+        where = "SLURM (" + ", ".join(d for d in details if d) + ")"
+    elif c.get("useLocalDask"):
+        where = "a local Dask cluster"
+    else:
+        where = "this machine"
+
+    work = [f"{c.get('maxWorkers', 4)} workers",
+            f"queue {c.get('queueSize', 4)}",
+            f"concurrency {c.get('maxConcurrency', 4)}",
+            f"{c.get('maxConcurrentScenes', 1)} scene(s) at a time",
+            f"{c.get('maxConcurrentDownscaleLayers', 3)} downscale layers",
+            f"{float(c.get('regionSizeMb', 256.0)):g} MB regions"]
+    if c.get("useSlurm") or c.get("useLocalDask"):
+        work.append(f"{float(c.get('memoryPerWorker', 4.0)):g} GB per worker")
+
+    bioformats = (f"{c.get('bfReadConcurrency', 4)} concurrent reads · "
+                  f"{float(c.get('jvmMemory', 2.0)):g} GB JVM")
+    return (f"Runs on {where}\n"
+            + " · ".join(work) + "\n"
+            + f"Bio-Formats: {bioformats}")
+
+
 class ConvertPage(QWidget):
     """Full conversion page."""
 
@@ -309,7 +337,7 @@ class ConvertPage(QWidget):
         return scroll, lay
 
     def _build_cluster_tab(self):
-        _, lay = self._scrolled_tab("Cluster")
+        self._cluster_scroll, lay = self._scrolled_tab("Cluster")
 
         _, self._max_workers = _labeled_spin("Max Workers:", 1, 256, 4)
         self._max_workers.setToolTip(
@@ -464,16 +492,6 @@ class ConvertPage(QWidget):
         note.setStyleSheet("color: gray; font-style: italic;")
         bf_lay.addWidget(note)
 
-        self._bf_tile_size_mb = QDoubleSpinBox()
-        self._bf_tile_size_mb.setRange(1.0, 65536.0)
-        self._bf_tile_size_mb.setValue(512.0)
-        self._bf_tile_size_mb.setSingleStep(64.0)
-        self._bf_tile_size_mb.setToolTip(
-            "Size (MB) of each tile read by the Bio-Formats tiled reader.\n"
-            "Larger tiles improve throughput; smaller tiles reduce peak memory."
-        )
-        bf_lay.addLayout(_form_row("BF Tile Size (MB):", self._bf_tile_size_mb))
-
         _, self._bf_read_concurrency = _labeled_spin("BF Read Concurrency:", 1, 64, 4)
         self._bf_read_concurrency.setToolTip(
             "Number of tile-read calls that Bio-Formats issues concurrently.\n"
@@ -546,7 +564,11 @@ class ConvertPage(QWidget):
         self._read_as_mosaic = QCheckBox("Read as Mosaic (stitch tiles)")
         self._read_as_mosaic.setToolTip(
             "Stitch all tiles into a single continuous mosaic image at read time.\n"
-            "When unchecked, each tile is saved as a separate OME-Zarr output."
+            "When unchecked, each tile is saved as a separate OME-Zarr output.\n"
+            "CZI: stitched reading streams each region straight from the file, so\n"
+            "memory stays bounded for files of any size. Separate tiles need a\n"
+            "reader that cannot open some very large files; those fall back to\n"
+            "stitched reading with a warning."
         )
         tile_lay.addWidget(self._read_as_mosaic)
         lay.addWidget(tile_group)
@@ -1451,7 +1473,7 @@ class ConvertPage(QWidget):
         lay.setSpacing(6)
 
         note = QLabel(
-            "A batch queues several one-to-one conversions and runs them later. "
+            "A batch queues several conversions and runs them later. "
             "Configure a conversion on the other tabs, select your input files, "
             "then press ‘Add to Batch’ below. Each row stores only the settings "
             "you changed; a blank cell uses the config value. "
@@ -1459,12 +1481,43 @@ class ConvertPage(QWidget):
             "boxes add whole parameter groups or every parameter at once. "
             "Select any cells and press ‘Edit Cells’ to change them, including "
             "the input and output paths. "
-            "Aggregative (concatenation) conversions are not supported in batch "
-            "mode yet, so use Run mode for those."
+            "To concatenate files, give their rows the same ‘Aggregative group’ "
+            "(shown with ‘Concatenation’) plus the concatenation axes and tags, "
+            "which must match across the group; rows with a blank group convert "
+            "one-to-one. The run settings below apply to the whole batch."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
         lay.addWidget(note)
+
+        # Cluster settings govern the whole run and are taken live from the
+        # Cluster tab when it starts, so they are mirrored here read-only.
+        cluster_box = QGroupBox("Run settings (set in the Cluster tab)")
+        cluster_lay = QHBoxLayout(cluster_box)
+        self._batch_cluster_summary = QLabel("")
+        self._batch_cluster_summary.setWordWrap(True)
+        self._batch_cluster_summary.setStyleSheet("font-size: 10px;")
+        cluster_lay.addWidget(self._batch_cluster_summary, 1)
+        self._edit_cluster_btn = QPushButton("Edit in Cluster tab")
+        self._edit_cluster_btn.setToolTip(
+            "These apply to the whole batch and cannot differ per row.\n"
+            "The values in the Cluster tab when you press Run are the ones used.")
+        self._edit_cluster_btn.clicked.connect(
+            lambda: self._tabs.setCurrentWidget(self._cluster_scroll))
+        cluster_lay.addWidget(self._edit_cluster_btn, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addWidget(cluster_box)
+        for spin in (self._max_workers, self._queue_size, self._max_concurrency,
+                     self._max_concurrent_downscale_layers,
+                     self._max_concurrent_scenes, self._region_size_mb,
+                     self._memory_per_worker, self._slurm_worker_timeout,
+                     self._bf_read_concurrency, self._jvm_memory):
+            spin.valueChanged.connect(self._update_batch_cluster_summary)
+        for box in (self._use_local_dask, self._use_slurm):
+            box.toggled.connect(self._update_batch_cluster_summary)
+        for edit in (self._slurm_partition, self._slurm_account,
+                     self._slurm_time, self._slurm_sif_path):
+            edit.textChanged.connect(self._update_batch_cluster_summary)
+        self._update_batch_cluster_summary()
 
         # Batch-wide settings that no row can override.  Shown explicitly, since
         # they never appear as a table column and are otherwise unverifiable.
@@ -1643,6 +1696,19 @@ class ConvertPage(QWidget):
             spin = self._chunk_spins.get(dim)
             if spin is not None:
                 spin.setValue(value)
+
+    def _update_batch_cluster_summary(self, *_):
+        self._batch_cluster_summary.setText(
+            _cluster_summary(self._ui_cluster_config()))
+
+    def _sync_batch_cluster(self) -> None:
+        """Give the batch the Cluster tab's current settings.
+
+        The baseline is taken from the config file when the first row is added,
+        so without this a batch ran with those saved cluster values no matter
+        what the Cluster tab said.
+        """
+        self._batch.set_cluster(self._ui_cluster_config())
 
     def _refresh_batch_table(self):
         """Rebuild the queue view from the model."""
@@ -2027,6 +2093,9 @@ class ConvertPage(QWidget):
             for p in problems:
                 self._batch_log.append_line(f"  • {p}")
             return None
+        # The snapshot records the cluster settings a run would use now, for
+        # reference; loading it back does not apply them (see _on_batch_load).
+        self._sync_batch_cluster()
         try:
             written = self._batch.save(path)
         except OSError as exc:
@@ -2063,10 +2132,17 @@ class ConvertPage(QWidget):
             return
         self._refresh_batch_table()
         if self._batch.base_config is not None:
-            self._load_config_to_ui(self._batch.base_config)
+            # Everything but the cluster section: those settings belong to the
+            # machine running the batch, not to the batch, so a batch saved on
+            # a laptop must not impose its worker counts on a cluster node.
+            snapshot = deepcopy(self._batch.base_config)
+            snapshot["cluster"] = self._ui_cluster_config()
+            self._load_config_to_ui(snapshot)
+            self._sync_batch_cluster()
             self._batch_status.setText(
                 f"Loaded {len(self._batch)} row(s) from {os.path.basename(path)}; "
-                f"config snapshot applied to the parameter tabs."
+                f"config snapshot applied to the parameter tabs, except the "
+                f"Cluster tab, which keeps its current settings."
             )
         else:
             self._batch_status.setText(
@@ -2092,6 +2168,8 @@ class ConvertPage(QWidget):
         # The batch baseline is the global config for the run; each row overrides
         # it.  The rows are passed as a table rather than written to a CSV first,
         # so saving stays a deliberate act instead of a step every run performs.
+        # Its cluster section is refreshed from the Cluster tab first.
+        self._sync_batch_cluster()
         cfg = deepcopy(self._batch.base_config or self._ui_to_config())
         cfg["inputTable"]     = self._batch.to_table()
         cfg["inputPaths"]     = []
@@ -2140,7 +2218,6 @@ class ConvertPage(QWidget):
         self._slurm_time.setText(c.get("slurmTime", "24:00:00"))
         self._slurm_sif_path.setText(c.get("slurmSifPath", ""))
         self._slurm_worker_timeout.setValue(int(c.get("slurmWorkerTimeout", 300) or 300))
-        self._bf_tile_size_mb.setValue(float(c.get("bfTileSizeMb", 512.0)))
         self._bf_read_concurrency.setValue(c.get("bfReadConcurrency", 4))
         self._jvm_memory.setValue(float(c.get("jvmMemory", 2.0)))
 
@@ -2256,28 +2333,31 @@ class ConvertPage(QWidget):
             self._config_path = cfg["_configPath"]
             self._config_path_label.setText(os.path.basename(cfg["_configPath"]))
 
+    def _ui_cluster_config(self) -> dict:
+        """The Cluster tab's controls as a camelCase config section."""
+        return {
+            "maxWorkers":          self._max_workers.value(),
+            "queueSize":           self._queue_size.value(),
+            "maxConcurrency":      self._max_concurrency.value(),
+            "maxConcurrentDownscaleLayers": self._max_concurrent_downscale_layers.value(),
+            "maxConcurrentScenes": self._max_concurrent_scenes.value(),
+            "regionSizeMb":        self._region_size_mb.value(),
+            "memoryPerWorker":     self._memory_per_worker.value(),
+            "useLocalDask":        self._use_local_dask.isChecked(),
+            "useSlurm":            self._use_slurm.isChecked(),
+            "slurmPartition":      self._slurm_partition.text().strip(),
+            "slurmAccount":        self._slurm_account.text().strip(),
+            "slurmTime":           self._slurm_time.text().strip() or "24:00:00",
+            "slurmSifPath":        self._slurm_sif_path.text().strip() or None,
+            "slurmWorkerTimeout":  self._slurm_worker_timeout.value(),
+            "bfReadConcurrency":   self._bf_read_concurrency.value(),
+            "jvmMemory":           self._jvm_memory.value(),
+        }
+
     def _ui_to_config(self) -> dict:
         """Read all UI controls and build a camelCase config dict."""
         return {
-            "cluster": {
-                "maxWorkers":          self._max_workers.value(),
-                "queueSize":           self._queue_size.value(),
-                "maxConcurrency":      self._max_concurrency.value(),
-                "maxConcurrentDownscaleLayers": self._max_concurrent_downscale_layers.value(),
-                "maxConcurrentScenes": self._max_concurrent_scenes.value(),
-                "regionSizeMb":        self._region_size_mb.value(),
-                "memoryPerWorker":     self._memory_per_worker.value(),
-                "useLocalDask":        self._use_local_dask.isChecked(),
-                "useSlurm":            self._use_slurm.isChecked(),
-                "slurmPartition":      self._slurm_partition.text().strip(),
-                "slurmAccount":        self._slurm_account.text().strip(),
-                "slurmTime":           self._slurm_time.text().strip() or "24:00:00",
-                "slurmSifPath":        self._slurm_sif_path.text().strip() or None,
-                "slurmWorkerTimeout":  self._slurm_worker_timeout.value(),
-                "bfTileSizeMb":        self._bf_tile_size_mb.value(),
-                "bfReadConcurrency":   self._bf_read_concurrency.value(),
-                "jvmMemory":           self._jvm_memory.value(),
-            },
+            "cluster": self._ui_cluster_config(),
             "reader": {
                 "readAllScenes":     self._read_all_scenes.isChecked(),
                 "sceneIndices":      self._scene_indices.text().strip(),

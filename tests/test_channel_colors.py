@@ -136,7 +136,35 @@ class TestUnaryForwarding:
     def test_intensity_limits_are_not_hardcoded(self):
         call = self._unary_call_source()
         assert "meta.channel_intensity_limits" in call,             "unary path ignores the user's channel_intensity_limits setting"
-        assert "'from_dtype'" not in call.split("dtype=")[0],             "channel_intensity_limits is hardcoded"
+
+    @pytest.mark.parametrize("limits, expected", [
+        ("from_dtype", [(0, 255), (0, 255)]),
+        ("from_array", [(10, 40), (90, 90)]),
+    ])
+    def test_the_written_windows_follow_the_setting(self, tmp_path, limits,
+                                                    expected):
+        """The outcome, not the wording: the call site passes 'from_dtype' on
+        purpose when 'from_array' is set, because those windows are measured
+        on the written output afterwards and replace the placeholder ones."""
+        import json
+
+        import numpy as np
+        import tifffile
+
+        from eubi_bridge.ebridge import EuBIBridge
+        data = np.zeros((4, 2, 32, 32), dtype=np.uint8)
+        data[:, 0] = 40
+        data[:, 1] = 90
+        data[0, 0, 0, 0] = 10
+        source = tmp_path / "img.tif"
+        tifffile.imwrite(source, data, imagej=True, metadata={"axes": "ZCYX"})
+        out = tmp_path / "out"
+        EuBIBridge().to_zarr(str(source), str(out),
+                             channel_intensity_limits=limits, verbose=False)
+
+        attrs = json.loads((next(out.glob("*.zarr")) / ".zattrs").read_text())
+        windows = [ch["window"] for ch in attrs["omero"]["channels"]]
+        assert [(w["start"], w["end"]) for w in windows] == expected
 
     def test_the_job_carries_the_parameters(self):
         """They must survive job building, wherever they are stored.

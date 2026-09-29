@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -63,6 +64,8 @@ _DROP_HINT_STYLE_ACTIVE = (
     "border: 1px dashed #4a9eff; border-radius: 3px;"
 )
 _LIST_STYLE_DROP_ACTIVE = "QListWidget { border: 2px dashed #4a9eff; }"
+# Translucent, so the same tint reads on the light and the dark theme.
+_OPEN_STORE_BG = QColor(74, 158, 255, 70)
 
 _RECENTS_MAX = 3
 _RECENTS_FILE = Path.home() / ".eubi_bridge" / "gui_recents_cache" / "recent_dirs.json"
@@ -147,6 +150,9 @@ class SidebarBrowser(QWidget):
         self._click_timer.setInterval(200)
         self._click_timer.timeout.connect(self._on_click_confirmed)
         self._pending_click_path: str = ""
+        # zarr mode: the store open in the viewer, marked in the list so it
+        # stays identifiable after navigating, clicking elsewhere or a drop.
+        self._open_store: str = ""
 
         self._build_ui()
 
@@ -330,6 +336,9 @@ class SidebarBrowser(QWidget):
             if self._mode == "zarr" and not entry["isDirectory"] and not entry["isOmeZarr"]:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
 
+            if self._mode == "zarr" and entry["path"] == self._open_store:
+                self._mark_open(item, True)
+
             if self._mode == "output" and not entry["isDirectory"]:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
 
@@ -417,8 +426,40 @@ class SidebarBrowser(QWidget):
 
     def _on_click_confirmed(self):
         if self._pending_click_path:
+            self._set_open_store(self._pending_click_path)
             self.zarr_selected.emit(self._pending_click_path)
             self._pending_click_path = ""
+
+    # ── Open-store marker (zarr mode) ─────────────────────────────────────────
+
+    @staticmethod
+    def _mark_open(item: QListWidgetItem, is_open: bool):
+        font = item.font()
+        font.setBold(is_open)
+        item.setFont(font)
+        item.setBackground(QBrush(_OPEN_STORE_BG) if is_open else QBrush())
+        item.setToolTip("Open in the viewer" if is_open else "")
+
+    def _set_open_store(self, path: str):
+        """Mark *path* as the open store, restyling items in place.
+
+        Rebuilding the list instead would reset its scroll position under the
+        user's click.
+        """
+        self._open_store = path
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            entry = item.data(Qt.ItemDataRole.UserRole)
+            self._mark_open(item, bool(entry) and entry["path"] == path)
+
+    def _scroll_to_open_store(self):
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            entry = item.data(Qt.ItemDataRole.UserRole)
+            if entry and entry["path"] == self._open_store:
+                self._list.setCurrentItem(item)
+                self._list.scrollToItem(item)
+                return
 
     def _on_single_click(self, item: QListWidgetItem):
         """Single-click behaviour depends on mode.
@@ -600,8 +641,8 @@ class SidebarBrowser(QWidget):
         """Open a dropped OME-Zarr store, as if it had been clicked.
 
         The viewer shows one dataset at a time, so a drop must be exactly one
-        store.  The browser moves to the folder holding it, so the store is
-        visible in the list as well.
+        store.  The browser moves to the folder holding it and marks the store,
+        as a click does, so it is identifiable in the list.
         """
         if len(paths) != 1:
             QMessageBox.warning(
@@ -617,7 +658,14 @@ class SidebarBrowser(QWidget):
                 "first.")
             return False
 
-        self._navigate(os.path.dirname(path) or path)
+        # Open the page of the listing that holds the store, not page one: in a
+        # long folder the marked store would otherwise be out of sight.
+        parent = os.path.dirname(path) or path
+        names = [e["path"] for e in list_local(parent)]
+        page = names.index(path) // PAGE_SIZE if path in names else 0
+        self._open_store = path
+        self._navigate(parent, page)
+        self._scroll_to_open_store()
         self.zarr_selected.emit(path)
         return True
 

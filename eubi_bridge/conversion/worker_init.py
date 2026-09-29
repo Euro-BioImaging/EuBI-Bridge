@@ -245,11 +245,12 @@ def safe_worker_wrapper(func):
             )
 
             logger.error(f"[Worker Error] {error_msg}")
-            # Clear __context__ so multiprocessing doesn't try to pickle the
-            # original (possibly un-picklable) Java exception when sending this
-            # RuntimeError back to the main process.
-            new_exc = RuntimeError(error_msg)
-            new_exc.__context__ = None
-            raise new_exc
+
+        # Raised only once the except block has closed.  Raising inside it
+        # chains the original exception back on as __context__ -- clearing the
+        # attribute beforehand does not survive the raise -- and a Java
+        # exception there cannot be pickled, so the pool broke ("terminated
+        # abruptly") instead of reporting the error, and the task was retried.
+        raise RuntimeError(error_msg)
 
     return wrapper

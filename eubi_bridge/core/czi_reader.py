@@ -3,6 +3,7 @@ Reader for Zeiss CZI microscopy files.
 """
 
 import os
+import threading
 from typing import Any, Iterable, Optional, Union
 
 import dask.array as da
@@ -100,6 +101,84 @@ def _get_mosaic_reader_class():
 
     _MOSAIC_READER_CLASS = _MosaicReader
     return _MOSAIC_READER_CLASS
+
+
+# One open pylibCZIrw reader per file per thread.  bioio reopens the file for
+# every plane it reads; a region source reads many small rectangles, so the
+# handle is kept.  Thread-local, since sharing one reader across threads is not
+# documented as safe.
+_czi_readers = threading.local()
+
+
+def _cached_czi(path: str):
+    import pylibCZIrw.czi as pyczi
+    cache = getattr(_czi_readers, "cache", None)
+    if cache is None:
+        cache = _czi_readers.cache = {}
+    if path not in cache:
+        cache[path] = pyczi.CziReader(path)
+    return cache[path]
+
+
+class _CziRegionSource:
+    """A pylibCZIrw image read lazily, one requested rectangle at a time.
+
+    bioio's pylibCZIrw reader makes each dask chunk a full scene plane; dask
+    computes whole chunks, so every writer region read the whole plane again --
+    for a stitched mosaic that is the entire field of view, several GB, read
+    once per region.  pylibCZIrw reads any rectangle (``roi``), so this source
+    reads exactly each region's pixels and memory stays at the region size.
+
+    It reproduces bioio's reads exactly: the same ``scene``, the same plane
+    indices (T/C/Z, plus any view/phase/illumination/rotation the file has),
+    and a rectangle inside the scene's no-pyramid bounding box.  RGB samples
+    become channels in R, G, B order, as ``CZIReader.get_image_dask_data`` does.
+    """
+
+    def __init__(self, path, scene, origin, shape, dtype, fixed_plane,
+                 samples_as_channels):
+        self.path = path
+        self.scene = scene                        # None when the file has none
+        self.origin = origin                      # (x, y) of the scene's box
+        self.shape = tuple(int(v) for v in shape)  # (T, C, Z, Y, X)
+        self.dtype = np.dtype(dtype)
+        self.ndim = 5
+        self.fixed_plane = dict(fixed_plane)      # e.g. {'I': 1}, never mutated
+        self.samples_as_channels = samples_as_channels
+        # Any rectangle can be read, so a whole plane is advertised as one chunk
+        # and region alignment follows the output chunks alone.
+        self.chunks = (1, 1, 1, self.shape[3], self.shape[4])
+
+    def __getitem__(self, key):
+        from eubi_bridge.utils.array_utils import normalise_basic_index
+        spans, squeeze, steps = normalise_basic_index(key, self.shape)
+        (t0, t1), (c0, c1), (z0, z1), (y0, y1), (x0, x1) = spans
+        out = np.empty(tuple(stop - start for start, stop in spans), dtype=self.dtype)
+        if out.size:
+            czi = _cached_czi(self.path)
+            roi = (self.origin[0] + x0, self.origin[1] + y0, x1 - x0, y1 - y0)
+            for ti, t in enumerate(range(t0, t1)):
+                for zi, z in enumerate(range(z0, z1)):
+                    if self.samples_as_channels:
+                        # One read gives every sample; CZI stores B, G, R.
+                        rgb = czi.read(roi=roi, scene=self.scene,
+                                       plane={'T': t, 'C': 0, 'Z': z,
+                                              **self.fixed_plane})
+                        for ci, c in enumerate(range(c0, c1)):
+                            out[ti, ci, zi] = rgb[:, :, 2 - c]
+                        continue
+                    for ci, c in enumerate(range(c0, c1)):
+                        block = czi.read(roi=roi, scene=self.scene,
+                                         plane={'T': t, 'C': c, 'Z': z,
+                                                **self.fixed_plane})
+                        # Grey: (Y, X, 1).  RGB with real channels too: keep the
+                        # first sample, as the bioio path did.
+                        out[ti, ci, zi] = block[:, :, 0]
+        if any(step != 1 for step in steps):
+            out = out[tuple(slice(None, None, step) for step in steps)]
+        if squeeze:
+            out = out.squeeze(axis=squeeze)
+        return out
 
 
 def _czi_tile_count(input_path: str) -> int:
@@ -360,13 +439,72 @@ class CZIReader(ImageReader):
         self.illumination = illumination_index
         self._set_series_path()
     
+    def _region_source_array(self):
+        """This scene as a region-reading ``DynamicArray``, or None for bioio.
+
+        Built from the reader's state at call time and never mutated after, so
+        each scene / view / illumination snapshot keeps its own indices even
+        when the reader moves on (see the multi-scene lazy-reader issue).
+        """
+        from bioio_czi.pylibczirw_reader import reader as prr
+        from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+
+        img = self.img
+        rects = img._scenes_bounding_rectangle
+        if len(rects) > 0:
+            scene = img._current_scene_index
+            rect = rects[scene]
+            origin, width, height = (rect.x, rect.y), rect.w, rect.h
+        else:
+            scene = None
+            box = img._total_bounding_box
+            (x0, x1) = box[prr.DimensionNames.SpatialX]
+            (y0, y1) = box[prr.DimensionNames.SpatialY]
+            origin, width, height = (x0, y0), x1 - x0, y1 - y0
+
+        dims = img.dims
+        if (dims.Y, dims.X) != (height, width):
+            return None                     # not the geometry bioio reads
+        channels = getattr(dims, 'C', 1) if hasattr(dims, 'C') else 1
+        samples = getattr(dims, 'S', 1) if hasattr(dims, 'S') else 1
+        samples_as_channels = samples > 1 and channels <= 1
+        if samples_as_channels:
+            channels = samples
+        shape = (getattr(dims, 'T', 1) if hasattr(dims, 'T') else 1, channels,
+                 getattr(dims, 'Z', 1) if hasattr(dims, 'Z') else 1,
+                 height, width)
+        # View / phase / illumination / rotation: pinned to the index this
+        # snapshot selects, exactly as _MosaicReader exposes them to bioio.
+        fixed_plane = {
+            d: int(self.index_map.get(d, 0))
+            for d in ('V', 'H', 'I', 'R')
+            if prr.size(img._total_bounding_box, d) > 1
+        }
+        return DynamicArray(_CziRegionSource(
+            self._path, scene, origin, shape,
+            prr.PIXEL_DICT[img._pixel_types[0]], fixed_plane,
+            samples_as_channels))
+
     def get_image_dask_data(self, **kwargs) -> da.Array:
         """Get image data as dask array with dimension order TCZYX.
 
         For RGB/RGBA CZI files, the Samples ('S') axis is preserved and
         folded into the Channel axis so all samples are retained instead of
         only the first.
+
+        On the pylibCZIrw backend (single-tile files and stitched mosaics) the
+        result is a region-reading ``DynamicArray`` instead, so the writer reads
+        each region's rectangle rather than whole planes.
         """
+        if isinstance(self.img, _get_mosaic_reader_class()):
+            try:
+                region_array = self._region_source_array()
+            except Exception as exc:                        # noqa: BLE001
+                logger.warning(f"{self._path}: region reading unavailable "
+                               f"({exc}); reading whole planes via bioio.")
+                region_array = None
+            if region_array is not None:
+                return region_array
         try:
             dims = self.img.dims
             has_samples = hasattr(dims, 'S') and dims.S > 1
@@ -450,26 +588,26 @@ def read_czi(
         raise FileNotFoundError(f"File not found: {input_path}")
 
     # ── Choose the CZI backend ───────────────────────────────────────────
-    # aicspylibczi exposes individual mosaic tiles (needed for per-tile
-    # extraction) but cannot open some large CZI files — libCZI's subblock
-    # parser hits an offset error ("Invalid SubBlock-magic") on e.g. large
-    # CellDiscoverer 7 plates.  pylibczirw stitches tiles into the full field of
-    # view and reads large files robustly.  So aicspylibczi is used *only* when
-    # individual tiles are actually needed — a genuine multi-tile mosaic read
-    # with as_mosaic=False — and pylibczirw is used everywhere else.  Tile count
-    # comes from the CZI metadata (SizeM), which is readable for any file size.
+    # pylibczirw is the default.  It reads large files robustly, reads any
+    # rectangle of a plane (so conversions are memory bounded, see
+    # _CziRegionSource) and -- through _MosaicReader -- exposes views, phases,
+    # illuminations and rotations.  aicspylibczi is used only for what
+    # pylibczirw cannot do: extracting individual mosaic tiles, i.e. a genuine
+    # multi-tile file read with as_mosaic=False.  pylibczirw's reader offers
+    # libCZI's compositing accessor only, with no selection by tile index.
+    #
+    # Views/illuminations used to force aicspylibczi as well, from when
+    # pylibczirw collapsed those dimensions.  _MosaicReader exposes them now,
+    # and both backends were verified to give identical outputs (names, pixels
+    # and metadata) for single-tile multi-view/illumination files.  That rule
+    # sent every GUI conversion to aicspylibczi, since the GUI requests 'all'
+    # views and illuminations by default.  Tile count comes from the CZI
+    # metadata (SizeM), which is readable for any file size.
     n_tiles = _czi_tile_count(input_path)
-
-    # Views and illuminations live on the CZI 'V' / 'I' dimensions, which the
-    # pylibczirw reader collapses (it exposes only X/Y/C/Z/T — so a single-tile
-    # multi-view/illumination file would silently merge to one output).
-    # aicspylibczi exposes the full BVITCZYX layout, so any request that must
-    # address an individual view or illumination has to go through it — even for
-    # single-tile files.
-    needs_view_illu = (view_index != 0) or (illumination_index != 0)
+    requested_mosaic = as_mosaic
 
     def _open_aics():
-        """Open via aicspylibczi — exposes V/I and individual mosaic tiles.
+        """Open via aicspylibczi — exposes individual mosaic tiles (and V/I).
 
         chunk_dims includes the raw libCZI samples axis 'A' so multi-sample
         (RGB/Bgr) pixels read correctly (bioio_czi's default lists the renamed
@@ -479,39 +617,12 @@ def read_czi(
         from bioio_czi.aicspylibczi_reader.reader import Reader
         return Reader(input_path, chunk_dims=['Z', 'Y', 'X', 'A'])
 
-    if as_mosaic:
-        if n_tiles <= 1:
+    if as_mosaic or n_tiles <= 1:
+        if as_mosaic and n_tiles <= 1:
             logger.warning(
                 f"'{input_path}': as_mosaic=True has no effect — the image has a "
                 f"single tile (nothing to stitch)."
             )
-        try:
-            img = _get_mosaic_reader_class()(input_path)
-        except Exception as e:
-            raise RuntimeError(f"Failed to read CZI file: {str(e)}") from e
-    elif needs_view_illu:
-        # Individual view / illumination extraction requested.  Only
-        # aicspylibczi exposes the V / I dimensions, so use it regardless of
-        # tile count (pylibczirw would collapse them into a single output).
-        try:
-            img = _open_aics()
-        except Exception as e:
-            # Large-file subblock-offset limitation — fall back so the
-            # conversion still succeeds, but V/I can no longer be separated.
-            logger.warning(
-                f"The native (aicspylibczi) reader could not open "
-                f"'{input_path}' ({e}) to expose views/illuminations. Falling "
-                f"back to the pylibczirw reader: individual views and "
-                f"illuminations cannot be separated for this file."
-            )
-            try:
-                img = _get_mosaic_reader_class()(input_path)
-            except Exception as e2:
-                raise RuntimeError(f"Failed to read CZI file: {str(e2)}") from e2
-            as_mosaic = True
-    elif n_tiles <= 1:
-        # Single tile: pylibczirw yields the identical result, is more efficient,
-        # and reads large files that aicspylibczi's subblock parser rejects.
         try:
             img = _get_mosaic_reader_class()(input_path)
         except Exception as e:
@@ -565,7 +676,10 @@ def read_czi(
         # spatial (Y/X) dimensions, so 'M' never appears in dimensions_present.
         # Remove it from nonstandard_dims only if it happens to be listed.
         nonstandard_dims = [d for d in nonstandard_dims if d != 'M']
-        if mosaic_tile_index != 0:
+        # Only a genuine multi-tile mosaic has tiles to ignore; a single-tile
+        # file (or the GUI's default 'all') has nothing to warn about.
+        if (requested_mosaic and n_tiles > 1
+                and mosaic_tile_index not in (0, 'all', None)):
             logger.warning(
                 "Mosaic tile index is ignored when reading the entire mosaic. "
                 "Set as_mosaic=False to read specific tiles."

@@ -77,6 +77,7 @@ _logger = _logging.getLogger(__name__)
 OME_ZARR_VERSIONS: Dict[str, int] = {"0.4": 2, "0.5": 3}
 
 _zarr_format_deprecation_warned = False
+_bf_tile_size_deprecation_warned = False
 
 
 def resolve_ome_zarr_target(ome_zarr_version, zarr_format=2, warn: bool = False) -> Tuple[str, int]:
@@ -139,8 +140,25 @@ class ClusterConfig(BaseModel):
     tensorstore_data_copy_concurrency: int = Field(default=4, ge=1)
     max_retries: int = Field(default=10, ge=0, le=100)
     bf_read_concurrency: Optional[int] = Field(default=4, ge=1)
-    bf_tile_size_mb: float = Field(default=512.0, gt=0.0)
+    # DEPRECATED, ignored.  Bio-Formats images are now read one writer region
+    # at a time, so region_size_mb sets the read size and the JVM-heap limit is
+    # applied automatically.  Still accepted so existing configs, saved batches
+    # and scripts keep working; remove in the release after 0.1.3.
+    bf_tile_size_mb: Optional[float] = Field(default=None, gt=0.0)
     jvm_memory: Optional[str] = "1g"
+
+    @field_validator('bf_tile_size_mb')
+    @classmethod
+    def _warn_bf_tile_size_deprecated(cls, v):
+        global _bf_tile_size_deprecation_warned
+        if v is not None and not _bf_tile_size_deprecation_warned:
+            _bf_tile_size_deprecation_warned = True
+            _logger.warning(
+                "DEPRECATION: 'bf_tile_size_mb' is no longer used and is ignored. "
+                "Bio-Formats images are read one region at a time, so "
+                "'region_size_mb' now sets the read size. Remove it from your "
+                "config, batch or script; it will be rejected in a future release.")
+        return v
 
     @field_validator('jvm_memory', mode='before')
     @classmethod

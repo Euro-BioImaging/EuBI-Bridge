@@ -378,3 +378,40 @@ def compute_chunk_batch(
     batch_sizes = tuple(batch_chunks[i] * chunk_shape[i] for i in range(ndims))
 
     return batch_sizes
+
+
+def normalise_basic_index(key, shape):
+    """numpy basic-index key -> (per-axis (start, stop) spans, squeeze axes, steps).
+
+    The source is read as contiguous spans; integer indices and steps are
+    applied to the result in memory afterwards.
+    """
+    if not isinstance(key, tuple):
+        key = (key,)
+    if any(k is Ellipsis for k in key):
+        at = next(i for i, k in enumerate(key) if k is Ellipsis)
+        key = key[:at] + (slice(None),) * (len(shape) - len(key) + 1) + key[at + 1:]
+    if len(key) > len(shape):
+        raise IndexError(f"too many indices: array is {len(shape)}-D, got {len(key)}")
+    key = key + (slice(None),) * (len(shape) - len(key))
+
+    spans, squeeze, steps = [], [], []
+    for axis, (k, size) in enumerate(zip(key, shape)):
+        if isinstance(k, (int, np.integer)):
+            index = int(k) + size if k < 0 else int(k)
+            if not 0 <= index < size:
+                raise IndexError(f"index {k} is out of bounds for axis {axis} "
+                                 f"with size {size}")
+            spans.append((index, index + 1))
+            squeeze.append(axis)
+            steps.append(1)
+        elif isinstance(k, slice):
+            start, stop, step = k.indices(size)
+            if step < 0:
+                raise NotImplementedError("negative steps are not supported")
+            spans.append((start, max(start, stop)))
+            steps.append(step)
+        else:
+            raise NotImplementedError(
+                f"unsupported index type {type(k).__name__} for a Bio-Formats image")
+    return spans, tuple(squeeze), steps

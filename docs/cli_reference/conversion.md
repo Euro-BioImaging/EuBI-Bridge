@@ -210,14 +210,6 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--bf_tile_size_mb</code></summary>
-    <p><strong>Type:</strong>&nbsp; `float`</p>
-    <p><strong>Default:</strong>&nbsp; `512.0`</p>
-    <p><strong>Valid values:</strong>&nbsp; > 0.0</p>
-    <p>—</p>
-    </details>
-
-    <details>
     <summary><code>--jvm_memory</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; `1g`</p>
@@ -530,36 +522,6 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--override_channel_names</code></summary>
-    <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `False`</p>
-    <p><strong>Valid values:</strong>&nbsp; `--override_channel_names` to enable &nbsp;·&nbsp; `--override_channel_names False` to disable</p>
-    <p>Replace output channel labels with the `channel_tag` values. For aggregative conversions with a tuple `channel_tag` only.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --override_channel_names
-    </code></pre>
-    </details>
-
-    <details>
-    <summary><code>--channel_intensity_limits</code></summary>
-    <p><strong>Type:</strong>&nbsp; `from_dtype` or `from_array` or `auto`</p>
-    <p><strong>Default:</strong>&nbsp; `from_dtype`</p>
-    <p><strong>Valid values:</strong>&nbsp; `from_dtype` · `from_array` · `auto`</p>
-    <p>Strategy for OMERO display-window limits.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --channel_intensity_limits from_array
-    </code></pre>
-    </details>
-
-    <details>
-    <summary><code>--metadata_reader</code></summary>
-    <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `bfio`</p>
-    <p><strong>Valid values:</strong>&nbsp; `bfio` · `bioformats`</p>
-    <p>Backend used to read OME-XML pixel metadata.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
-    </code></pre>
-    </details>
-
-    <details>
     <summary><code>--save_omexml</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
     <p><strong>Default:</strong>&nbsp; `True`</p>
@@ -567,6 +529,13 @@ Click any command card below to expand its full parameter reference.
     <p>Write a companion OME-XML sidecar file alongside the zarr.</p>
     <pre><code>eubi to_zarr /data/input /data/output --save_omexml False
     </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--export_acquisition_metadata</code></summary>
+    <p><strong>Type:</strong>&nbsp; `bool` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>—</p>
     </details>
 
     <details>
@@ -880,6 +849,116 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
+    <summary>Metadata overrides</summary>
+
+    <details>
+    <summary><code>--metadata_reader</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `bfio`</p>
+    <p><strong>Valid values:</strong>&nbsp; `bfio` · `bioformats`</p>
+    <p>Backend used to read OME-XML pixel metadata.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--override_channel_names</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--override_channel_names` to enable &nbsp;·&nbsp; `--override_channel_names False` to disable</p>
+    <p>Replace output channel labels with the `channel_tag` values. For aggregative conversions with a tuple `channel_tag` only.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --override_channel_names
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--channel_intensity_limits</code></summary>
+    <p><strong>Type:</strong>&nbsp; `from_dtype` or `from_array` or `auto`</p>
+    <p><strong>Default:</strong>&nbsp; `from_dtype`</p>
+    <p><strong>Valid values:</strong>&nbsp; `from_dtype` · `from_array` · `auto`</p>
+    <p>Strategy for OMERO display-window limits.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --channel_intensity_limits from_array
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--channel_colors</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `""`</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--channel_labels</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `""`</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--time_scale</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Valid values:</strong>&nbsp; > 0</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--z_scale</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Valid values:</strong>&nbsp; > 0</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--y_scale</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Valid values:</strong>&nbsp; > 0</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--x_scale</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Valid values:</strong>&nbsp; > 0</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--time_unit</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--z_unit</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--y_unit</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>—</p>
+    </details>
+
+    <details>
+    <summary><code>--x_unit</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>—</p>
+    </details>
+
+
+    </details>
+
+    <details>
     <summary>Concatenation overrides</summary>
 
     <details>
@@ -944,6 +1023,13 @@ Click any command card below to expand its full parameter reference.
     <p>Filename tag identifying the x axis.</p>
     <pre><code>eubi to_zarr /data/input /data/output --concatenation_axes x --x_tag col_left,col_right
     </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--aggregative_group</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>Name prefixed to the concatenated output, so several concatenated outputs stay distinguishable.  In a conversion table, rows sharing this value are concatenated together and a blank one converts on its own.  Prefer short</p>
     </details>
 
 
@@ -1128,14 +1214,6 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
     <p><strong>Default:</strong>&nbsp; `4`</p>
     <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
-    <p>—</p>
-    </details>
-
-    <details>
-    <summary><code>--bf_tile_size_mb</code></summary>
-    <p><strong>Type:</strong>&nbsp; `float`</p>
-    <p><strong>Default:</strong>&nbsp; `512.0`</p>
-    <p><strong>Valid values:</strong>&nbsp; > 0.0</p>
     <p>—</p>
     </details>
 
@@ -1404,6 +1482,13 @@ Click any command card below to expand its full parameter reference.
     <p>Filename substring (or tuple of substrings) identifying the x axis.</p>
     <pre><code>eubi validate_aggregative /data/input /data/output --concatenation_axes x --x_tag col_left,col_right
     </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--aggregative_group</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>—</p>
     </details>
 
 

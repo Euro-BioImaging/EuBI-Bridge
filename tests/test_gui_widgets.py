@@ -348,6 +348,56 @@ class TestInspectBrowserDrop:
         assert browser.opened == []
         assert len(warnings) == 1
 
+    @staticmethod
+    def _marked(browser) -> list:
+        """Names of the listed stores shown as open in the viewer."""
+        return [browser._list.item(row).text().split(" ", 1)[1]
+                for row in range(browser._list.count())
+                if browser._list.item(row).font().bold()]
+
+    @staticmethod
+    def _item(browser, name):
+        for row in range(browser._list.count()):
+            if browser._list.item(row).text().endswith(name):
+                return browser._list.item(row)
+        raise AssertionError(f"{name} not listed")
+
+    def test_the_dropped_store_is_marked(self, browser, tmp_path):
+        """After the jump to its folder, the store must be recognisable."""
+        TestSidebarBrowserDrop._drop(browser, tmp_path / "one.zarr")
+        assert self._marked(browser) == ["one.zarr"]
+        assert browser._list.currentItem() is self._item(browser, "one.zarr")
+
+    def test_the_marker_follows_a_click(self, browser, tmp_path):
+        TestSidebarBrowserDrop._drop(browser, tmp_path / "one.zarr")
+        browser._on_single_click(self._item(browser, "two.zarr"))
+        browser._on_click_confirmed()        # the single-click timer's job
+        assert self._marked(browser) == ["two.zarr"]
+        assert browser.opened[-1] == str(tmp_path / "two.zarr")
+
+    def test_the_marker_survives_navigation(self, browser, tmp_path):
+        TestSidebarBrowserDrop._drop(browser, tmp_path / "one.zarr")
+        browser.navigate_to(str(Path.home()))
+        browser.navigate_to(str(tmp_path))
+        assert self._marked(browser) == ["one.zarr"]
+
+    def test_a_store_past_the_first_page_is_shown(self, app, tmp_path):
+        """Folders list first, so enough of them push the store to page two."""
+        from eubi_bridge.qt_gui.core.file_service import PAGE_SIZE
+        from eubi_bridge.qt_gui.widgets.sidebar_browser import SidebarBrowser
+        for index in range(PAGE_SIZE + 3):
+            (tmp_path / f"a{index:04d}").mkdir()
+        (tmp_path / "zz.zarr").mkdir()
+        (tmp_path / "zz.zarr" / "zarr.json").write_text("{}")
+        widget = SidebarBrowser(mode="zarr", initial_path=str(Path.home()))
+
+        TestSidebarBrowserDrop._drop(widget, tmp_path / "zz.zarr")
+
+        assert widget._page == 1
+        assert self._marked(widget) == ["zz.zarr"]
+        widget.deleteLater()
+        app.processEvents()
+
 
 class TestSettingsModule:
     """Theme and font settings, used by the docs screenshot script too."""

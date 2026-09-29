@@ -304,3 +304,86 @@ class TestSaveGuards:
         target = tmp_path / "batch.csv"
         assert page._batch_save_to(str(target)) is not None
         assert target.exists()
+
+
+class _FakeSignal:
+    def connect(self, *_):
+        pass
+
+
+class TestBatchClusterSettings:
+    """Cluster settings apply to the whole run and come from the Cluster tab.
+
+    The batch baseline is read from the config file when the first row is
+    added, so a batch used to run with those saved cluster values whatever the
+    Cluster tab said.
+    """
+
+    @pytest.fixture
+    def started(self, monkeypatch):
+        """Configs handed to the conversion worker, which is never started."""
+        from eubi_bridge.qt_gui.pages import convert_page
+        configs = []
+
+        class _Worker:
+            def __init__(self, cfg, parent=None):
+                configs.append(cfg)
+                self.log_line = self.finished = self.failed = _FakeSignal()
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr(convert_page, "ConversionWorker", _Worker)
+        return configs
+
+    def test_a_run_uses_the_cluster_tab(self, page, tmp_path, started):
+        from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
+        _queue(page, tmp_path, 2)
+        page._max_workers.setValue(9)          # changed after rows were added
+        page._jvm_memory.setValue(6.0)
+
+        page._on_batch_run()
+
+        assert len(started) == 1
+        kwargs = _build_kwargs(started[0])
+        assert kwargs["max_workers"] == 9
+        assert kwargs["jvm_memory"] == _build_kwargs(
+            {"cluster": {"jvmMemory": 6.0}})["jvm_memory"]
+
+    def test_the_summary_follows_the_cluster_tab(self, page):
+        page._max_workers.setValue(9)
+        page._use_slurm.setChecked(True)
+        page._slurm_partition.setText("gpu")
+        text = page._batch_cluster_summary.text()
+        assert "9 workers" in text
+        assert "SLURM (partition gpu" in text
+
+    def test_the_edit_button_opens_the_cluster_tab(self, page):
+        page._batch_mode.setChecked(True)      # the Batch tab is attached
+        page._edit_cluster_btn.click()
+        assert page._tabs.currentWidget() is page._cluster_scroll
+
+    def test_loading_a_batch_keeps_the_cluster_tab(self, page, tmp_path,
+                                                    monkeypatch):
+        """The snapshot's other settings are restored; its cluster ones are
+        only recorded, since they describe the machine it was saved on."""
+        import json
+        from eubi_bridge.qt_gui.core.batch import CONFIG_SNAPSHOT_NAME
+        from eubi_bridge.qt_gui.pages import convert_page
+        _queue(page, tmp_path, 2)
+        page._max_workers.setValue(3)
+        page._read_as_mosaic.setChecked(False)
+        written = page._batch_save_to(str(tmp_path / "batch.csv"))
+        snapshot = json.loads(
+            (Path(written).parent / CONFIG_SNAPSHOT_NAME).read_text())
+        assert snapshot["cluster"]["maxWorkers"] == 3   # recorded for reference
+
+        page._max_workers.setValue(12)
+        page._read_as_mosaic.setChecked(True)
+        monkeypatch.setattr(convert_page.QFileDialog, "getOpenFileName",
+                            staticmethod(lambda *a, **k: (written, "")))
+        page._on_batch_load()
+
+        assert page._max_workers.value() == 12          # Cluster tab kept
+        assert not page._read_as_mosaic.isChecked()     # rest restored
+        assert page._batch.base_config["cluster"]["maxWorkers"] == 12

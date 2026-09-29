@@ -74,7 +74,7 @@ _HARMLESS_WHEN_ABSENT = frozenset({"target_chunk_mb"})
 _CLUSTER_KEYS = frozenset({
     "max_workers", "queue_size", "region_size_mb", "max_concurrency",
     "max_concurrent_downscale_layers", "max_concurrent_scenes",
-    "memory_per_worker", "bf_tile_size_mb", "jvm_memory", "bf_read_concurrency",
+    "memory_per_worker", "jvm_memory", "bf_read_concurrency",
     "on_local_cluster", "on_slurm", "slurm_partition", "slurm_account",
     "slurm_time", "slurm_sif_path", "slurm_worker_timeout",
 })
@@ -603,6 +603,19 @@ class BatchModel:
         """
         self._base_config = deepcopy(config)
         self._compare_kwargs = None          # baseline may now be the comparison
+
+    def set_cluster(self, cluster: dict) -> None:
+        """Replace the baseline's cluster section (camelCase, as the UI builds it).
+
+        Cluster settings describe the machine a batch runs on, not the batch, so
+        the page keeps them in step with its Cluster tab instead of leaving them
+        frozen at whatever the config file held when the first row was added.
+        No row can override them, so no row's recorded differences change.
+        """
+        if self._base_config is None:
+            return
+        self._base_config["cluster"] = deepcopy(cluster)
+        self._compare_kwargs = None
 
     def baseline_summary(self) -> str:
         """One-line description of the settings that apply to the whole batch.

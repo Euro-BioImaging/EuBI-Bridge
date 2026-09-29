@@ -161,7 +161,6 @@ def _build_kwargs(config: dict) -> dict:
         "max_concurrent_downscale_layers": cluster_config.get("maxConcurrentDownscaleLayers", 3),
         "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 1),
         "memory_per_worker":        _gb_to_memory_str(cluster_config.get("memoryPerWorker", 4)),
-        "bf_tile_size_mb":          cluster_config.get("bfTileSizeMb", 512.0),
         "jvm_memory":               _gb_to_jvm_str(cluster_config.get("jvmMemory", 2)),
         "bf_read_concurrency":      cluster_config.get("bfReadConcurrency", 4),
         "on_local_cluster":         cluster_config.get("useLocalDask", False),

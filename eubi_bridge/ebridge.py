@@ -156,7 +156,6 @@ class ConfigManager:
             tensorstore_data_copy_concurrency=4,
             max_retries=10,
             bf_read_concurrency=4,
-            bf_tile_size_mb=512.0,
             jvm_memory='1g',
             slurm_time='24:00:00',
             slurm_account=None,
@@ -319,10 +318,22 @@ class ConfigManager:
                     if key not in config[section]:
                         config[section][key] = value
                         dirty = True
+            # Keys that no longer do anything.  Every older config carries them
+            # at their old default, so leaving them would raise a deprecation
+            # warning on every run for a value the user never chose.
+            for section, key in self._RETIRED_KEYS:
+                if isinstance(config.get(section), dict) and key in config[section]:
+                    del config[section][key]
+                    dirty = True
             self._warn_about_relocated_keys(config)
             if dirty:
                 self._save_config_to_json(config)
         self._config = config
+
+    #: Settings that no longer have any effect, removed from a config on load.
+    #: bf_tile_size_mb: Bio-Formats images are read one region at a time since
+    #: 0.1.3, so region_size_mb sets the read size.
+    _RETIRED_KEYS = (('cluster', 'bf_tile_size_mb'),)
 
     #: Settings that used to live in another section.  Their old copies are left
     #: in place rather than moved automatically: silently relocating a value the
@@ -426,6 +437,11 @@ class ConfigManager:
                           slurm_sif_path: str = 'default') -> None:
         """Update cluster parameters. Omitted arguments keep their current values."""
         params = {k: v for k, v in locals().items() if k != 'self'}
+        if params.pop('bf_tile_size_mb') != 'default':
+            logger.warning(
+                "DEPRECATION: 'bf_tile_size_mb' is no longer used and was not saved. "
+                "Bio-Formats images are read one region at a time, so "
+                "'region_size_mb' now sets the read size.")
         for key, val in params.items():
             if key in self.config['cluster'] and val != 'default':
                 self.config['cluster'][key] = val
@@ -894,8 +910,9 @@ class ConfigureGroup:
             max_retries: Retries on broken worker process (default 10).
             bf_read_concurrency: Dask thread count for parallel bfio tile reads
                 (default 4).  ``None`` lets dask choose (cpu_count).
-            bf_tile_size_mb: Tile size budget in MB for bfio tiled reading
-                (default 512).
+            bf_tile_size_mb: DEPRECATED and ignored. Bio-Formats images are now
+                read one region at a time, so ``region_size_mb`` sets the read
+                size. Accepted for now so existing scripts keep working.
             jvm_memory: Maximum JVM heap for Bio-Formats, e.g. ``'8GB'``, ``'4GB'``.
                 Accepts ``'NGB'`` / ``'NMB'`` (like memory_per_worker) and normalises
                 internally to JVM format (``'Ng'`` / ``'Nm'``).  Default ``'2g'``.
@@ -1935,7 +1952,7 @@ class EuBIBridge:
             plan: Pre-computed AggregativePlan from validate_aggregative().
             **kwargs: Any ReaderConfig / ConversionConfig / DownscaleConfig field
                 overrides (e.g. ``zarr_format=3``, ``z_chunk=64``,
-                ``bf_tile_size_mb=1024``, ``jvm_memory='8GB'``,
+                ``region_size_mb=512``, ``jvm_memory='8GB'``,
                 ``force_bioformats=True``).
         """
         return self._conv.to_zarr(
