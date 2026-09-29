@@ -31,8 +31,10 @@ def rgb_czi(tmp_path):
     return _write_rgb_czi(tmp_path / "rgb.czi")
 
 
-# Both backends must handle RGB: as_mosaic=False -> aicspylibczi (chunk_dims fix),
-# as_mosaic=True -> patched pylibczirw (block-grid ndim fix).
+# Both as_mosaic values must handle RGB.  This file has a single tile, so both
+# reach the pylibCZIrw backend (the region source): aicspylibczi is only used
+# to extract individual tiles of a multi-tile file, which this test cannot
+# exercise.  Its RGB fix (chunk_dims 'A') is covered by the real-file runs.
 @pytest.mark.parametrize("as_mosaic", [False, True])
 def test_rgb_samples_fold_into_three_channels(rgb_czi, as_mosaic):
     from eubi_bridge.core.czi_reader import read_czi

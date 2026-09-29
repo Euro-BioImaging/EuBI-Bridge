@@ -48,7 +48,9 @@ from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
 from eubi_bridge.external.dyna_zarr import operations as ops
 from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
-from eubi_bridge.utils.array_utils import autocompute_chunk_shape, get_array_chunks
+from eubi_bridge.utils.array_utils import (autocompute_chunk_shape,
+                                           get_array_chunks,
+                                           normalise_basic_index)
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
                                           sensitive_glob, take_filepaths)
@@ -256,140 +258,90 @@ def _build_ims_omemeta(path: str) -> OME:
     return OME(images=[Image(id="Image:0", name="Series_0", pixels=pixels)])
 
 
-def _compute_tile_shape(
-    T: int, C: int, Z: int, Y: int, X: int, dtype: np.dtype, tile_mb: float,
-) -> tuple[int, int, int, int, int]:
-    """Derive a (t, c, z, y, x) tile shape using a priority-ordered budget.
+# How many Bio-Formats reads may run at once in one process.  Each needs Java
+# heap for its byte[] plus Bio-Formats' working copy, so the per-read size below
+# is derived from this: together the concurrent reads stay within half the heap.
+_JAVA_READ_SLOTS = 4
+_java_read_slots = _threading.BoundedSemaphore(_JAVA_READ_SLOTS)
+# Java arrays are indexed by int, so no single read may exceed 2 GB.
+_JAVA_MAX_ARRAY_BYTES = 2 ** 31 - 1
+_java_read_budget: Optional[int] = None
 
-    Budget is allocated in order X → Y → Z → C → T:
-    - Fill the XY plane first (whole plane if it fits, otherwise square tile).
-    - Any remaining budget is spent on additional Z planes.
-    - Any remaining budget is spent on additional C channels.
-    - Any remaining budget is spent on additional T frames.
 
-    Maximising each dimension reduces the number of BioReader opens per series,
-    which at 7-10 s each dominates total conversion time.
+def _java_read_budget_bytes() -> int:
+    """Largest single Bio-Formats read, in bytes, for this process's JVM heap."""
+    global _java_read_budget
+    if _java_read_budget is None:
+        try:
+            import jpype
+            heap = int(jpype.JClass("java.lang.Runtime").getRuntime().maxMemory())
+        except Exception:                                   # noqa: BLE001
+            heap = 1024 ** 3        # the JVM's usual default when unknown
+        # Two copies per read (Java's buffer, Bio-Formats' working copy), and
+        # _JAVA_READ_SLOTS reads at once, sharing half the heap.
+        per_read = heap // (2 * 2 * _JAVA_READ_SLOTS)
+        _java_read_budget = int(max(1024 ** 2, min(per_read, _JAVA_MAX_ARRAY_BYTES)))
+    return _java_read_budget
+
+
+class _BioFormatsSource:
+    """A Bio-Formats image read lazily, one requested rectangle at a time.
+
+    Wrapped in a ``DynamicArray``, so every writer region becomes a single read
+    of exactly the pixels it needs.  The fixed tile grid this replaces made a
+    region read every whole tile it touched: strip-shaped regions across
+    square tiles re-read each tile several times over, which exhausted both
+    RAM and the Java heap on large planes.  Bio-Formats reads sub-plane
+    rectangles natively, so nothing larger than the region is ever loaded.
     """
-    tile_bytes = tile_mb * 1024 ** 2
-    itemsize = np.dtype(dtype).itemsize
-    remaining = tile_bytes / itemsize   # budget in pixels
 
-    # Priority 1: X and Y
-    if Y * X <= remaining:
-        y_tile, x_tile = Y, X
-    else:
-        yx_side = max(1, int(round(remaining ** 0.5)))
-        y_tile = min(yx_side, Y)
-        x_tile = min(yx_side, X)
-    remaining /= y_tile * x_tile
+    def __init__(self, path: str, series: int, shape, dtype):
+        self.path = path
+        self.series = int(series)
+        self.shape = tuple(int(v) for v in shape)        # (T, C, Z, Y, X)
+        self.dtype = np.dtype(dtype)
+        self.ndim = len(self.shape)
+        # Any rectangle can be read, so a whole plane is advertised as one chunk
+        # and region alignment follows the output chunks alone.
+        self.chunks = (1, 1, 1, self.shape[3], self.shape[4])
 
-    # Priority 2: Z
-    z_tile = max(1, min(Z, int(remaining)))
-    remaining /= z_tile
+    def __getitem__(self, key):
+        spans, squeeze, steps = normalise_basic_index(key, self.shape)
+        (t0, t1), (c0, c1), (z0, z1), (y0, y1), (x0, x1) = spans
+        out = np.empty(tuple(stop - start for start, stop in spans), dtype=self.dtype)
+        if out.size:
+            # Rows per Bio-Formats call: a plane rectangle too large for the
+            # heap (or for one Java array) is read as several row strips.
+            row_bytes = max(1, (x1 - x0) * self.dtype.itemsize)
+            rows = max(1, _java_read_budget_bytes() // row_bytes)
+            reader = _get_cached_reader(self.path, self.series)
+            for ti, t in enumerate(range(t0, t1)):
+                for ci, c in enumerate(range(c0, c1)):
+                    for zi, z in enumerate(range(z0, z1)):
+                        for y in range(y0, y1, rows):
+                            y_end = min(y + rows, y1)
+                            with _java_read_slots:
+                                plane = reader[y:y_end, x0:x1, z:z + 1, c:c + 1, t:t + 1]
+                            # Written straight into the output: collecting planes
+                            # and stacking them held every plane twice.
+                            out[ti, ci, zi, y - y0:y_end - y0] = (
+                                np.asarray(plane).reshape(y_end - y, x1 - x0))
+        if any(step != 1 for step in steps):
+            out = out[tuple(slice(None, None, step) for step in steps)]
+        if squeeze:
+            out = out.squeeze(axis=squeeze)
+        return out
 
-    # Priority 3: C
-    c_tile = max(1, min(C, int(remaining)))
-    remaining /= c_tile
 
-    # Priority 4: T
-    t_tile = max(1, min(T, int(remaining)))
+def _build_bioformats_array(path: str, series: int, shape, dtype) -> DynamicArray:
+    """Lazy (T, C, Z, Y, X) array over a Bio-Formats image.
 
-    return t_tile, c_tile, z_tile, y_tile, x_tile
-
-
-def _read_bfio_tile(
-    path: str,
-    y0: int, y1: int,
-    x0: int, x1: int,
-    z0: int, z1: int,
-    c0: int, c1: int,
-    t0: int, t1: int,
-    series: int = 0,
-) -> np.ndarray:
-    """Read a (T_tile, C_tile, Z_tile, Y, X) block via bfio.
-
-    One BioReader open covers all (t, c, z) combinations in the tile, amortising
-    Java/Bio-Formats init overhead.  Returns shape ``(t1-t0, c1-c0, z1-z0, y1-y0, x1-x0)``.
+    *shape* and *dtype* come from the already-loaded OME-XML, so building the
+    array opens no reader and scene loading stays fully lazy.
     """
-    # Reuse a cached reader for this thread — avoids the 7-10 s BioReader open
-    # cost on every task.  Thread-local storage means no locking is needed.
-    br = _get_cached_reader(path, series)
-    frames = []
-    for t in range(t0, t1):
-        # Read plane-by-plane: 0.8 ms each vs 1334 ms for a multi-dim slice.
-        c_vols = []
-        for c in range(c0, c1):
-            z_planes = []
-            for z in range(z0, z1):
-                p = br[y0:y1, x0:x1, z:z + 1, c:c + 1, t:t + 1]
-                z_planes.append(np.asarray(p).reshape(y1 - y0, x1 - x0))
-            c_vols.append(np.stack(z_planes, axis=0))   # (Z_tile, Y, X)
-        frames.append(np.stack(c_vols, axis=0))         # (C_tile, Z_tile, Y, X)
-    return np.stack(frames, axis=0)                     # → (T_tile, C_tile, Z_tile, Y, X)
-
-
-def _build_tiled_dask_array(
-    path: str,
-    tile_mb: float = 256.0,
-    series: int = 0,
-    shape: 'tuple[int,int,int,int,int] | None' = None,
-    dtype: 'np.dtype | None' = None,
-) -> da.Array:
-    """Build a lazy (T, C, Z, Y, X) dask array using bfio tiles.
-
-    Each dask task reads one priority-ordered tile block via ``_read_bfio_tile``.
-    Tile shape is derived from *tile_mb* with priority X → Y → Z → C → T.
-
-    *shape* ``(T, C, Z, Y, X)`` and *dtype* may be supplied from already-loaded
-    OME-XML metadata to skip the BioReader shape probe, keeping scene loading
-    fully lazy and allowing reads to overlap with writes.
-    """
-    if shape is not None and dtype is not None:
-        T, C, Z, Y, X = shape
-    else:
-        from bfio import BioReader
-        with BioReader(path, level=series) as br:
-            T, C, Z, Y, X = br.T, br.C, br.Z, br.Y, br.X
-            dtype = br.dtype
-
-    t_tile, c_tile, z_tile, y_tile, x_tile = _compute_tile_shape(
-        T, C, Z, Y, X, dtype, tile_mb)
-    logger.info(
-        "bfio tiled read: shape=(T=%d,C=%d,Z=%d,Y=%d,X=%d) dtype=%s "
-        "tile=(%d,%d,%d,%d,%d) tile_mb=%.1f",
-        T, C, Z, Y, X, dtype, t_tile, c_tile, z_tile, y_tile, x_tile, tile_mb,
-    )
-
-    # Priority order T → C → Z → Y → X (outer → inner).
-    # Each task reads (t_tile, c_tile, z_tile, y_tile, x_tile) — one BioReader open.
-    t_blocks = []
-    for t0 in range(0, T, t_tile):
-        t1 = min(t0 + t_tile, T)
-        c_blocks = []
-        for c0 in range(0, C, c_tile):
-            c1 = min(c0 + c_tile, C)
-            z_blocks = []
-            for z0 in range(0, Z, z_tile):
-                z1 = min(z0 + z_tile, Z)
-                y_rows = []
-                for y0 in range(0, Y, y_tile):
-                    y1 = min(y0 + y_tile, Y)
-                    x_cols = []
-                    for x0 in range(0, X, x_tile):
-                        x1 = min(x0 + x_tile, X)
-                        block = da.from_delayed(
-                            dask.delayed(_read_bfio_tile)(
-                                path, y0, y1, x0, x1, z0, z1, c0, c1, t0, t1, series
-                            ),
-                            shape=(t1-t0, c1-c0, z1-z0, y1-y0, x1-x0),
-                            dtype=dtype,
-                        )
-                        x_cols.append(block)
-                    y_rows.append(da.concatenate(x_cols, axis=4))   # join X
-                z_blocks.append(da.concatenate(y_rows, axis=3))     # join Y
-            c_blocks.append(da.concatenate(z_blocks, axis=2))       # join Z
-        t_blocks.append(da.concatenate(c_blocks, axis=1))           # join C
-    return da.concatenate(t_blocks, axis=0)                         # join T → (T,C,Z,Y,X)
+    logger.info("Bio-Formats lazy read: shape=(T=%d,C=%d,Z=%d,Y=%d,X=%d) dtype=%s; "
+                "each writer region is read as one rectangle", *shape, dtype)
+    return DynamicArray(_BioFormatsSource(path, series, shape, dtype))
 
 
 # ---------------------------------------------------------------------------
@@ -715,9 +667,8 @@ class PFFImageMeta(ImageReader):
             # force_bioformats or bfio fallback: rebuild dask graph for new series.
             # Use OME-XML shape to avoid a blocking BioReader probe.
             shape, dtype = self._bfio_shape_from_meta()
-            self.arraydata = _build_tiled_dask_array(
-                self.root, tile_mb=self._tile_mb, series=self._series,
-                shape=shape, dtype=dtype)
+            self.arraydata = _build_bioformats_array(
+                self.root, self._series, shape, dtype)
 
     async def set_scene_isolated(self, scene_index: int) -> None:
         """Switch scenes using a FRESH underlying reader pinned to this scene.
@@ -833,9 +784,8 @@ class PFFImageMeta(ImageReader):
             # User explicitly wants bfio tiled path — skip bioio entirely.
             self._bfio_tiling = True
             shape, dtype = self._bfio_shape_from_meta()
-            self.arraydata = _build_tiled_dask_array(
-                self.root, tile_mb=self._tile_mb, series=self._series,
-                shape=shape, dtype=dtype)
+            self.arraydata = _build_bioformats_array(
+                self.root, self._series, shape, dtype)
             return
 
         self.reader = await read_single_image(self.root, aszarr=self._aszarr, as_mosaic=self._as_mosaic, **{**self._reader_kwargs, **kwargs})
@@ -846,9 +796,8 @@ class PFFImageMeta(ImageReader):
             self._bfio_tiling = True
             self.reader.set_scene(self._series)
             shape, dtype = self._bfio_shape_from_meta()
-            self.arraydata = _build_tiled_dask_array(
-                self.root, tile_mb=self._tile_mb, series=self._series,
-                shape=shape, dtype=dtype)
+            self.arraydata = _build_bioformats_array(
+                self.root, self._series, shape, dtype)
         else:
             # Native bioio plugin (CZI, ND2, LIF, TIFF…) — unchanged path.
             self._bfio_tiling = False
@@ -1643,10 +1592,18 @@ class SceneLoader:
                 indices = [int(scene_indices)]
             else:
                 indices = list(scene_indices)
-            valid = [i for i in indices if i < self.n_scenes]
+            valid = [i for i in indices if 0 <= i < self.n_scenes]
             if len(valid) < len(indices):
                 logger.warning(
                     f"Skipping out-of-range scene indices: {set(indices) - set(valid)}")
+            # Selecting nothing must not look like success: with no scene the
+            # conversion writes no output at all, and silently doing nothing is
+            # far harder to diagnose than a message naming the valid range.
+            if not valid:
+                raise ValueError(
+                    f"No valid scene index in {sorted(set(indices))}: "
+                    f"{os.path.basename(str(self.path))} has {self.n_scenes} "
+                    f"scene(s), so valid indices are 0..{self.n_scenes - 1}.")
 
             if mosaic_tile_index is not None:
                 if mosaic_tile_index == 'all':
@@ -1655,11 +1612,18 @@ class SceneLoader:
                     tile_indices = [int(mosaic_tile_index)]
                 else:
                     tile_indices = list(mosaic_tile_index)
-                valid_tiles = [t for t in tile_indices if t < self.n_tiles]
+                valid_tiles = [t for t in tile_indices if 0 <= t < self.n_tiles]
                 if len(valid_tiles) < len(tile_indices):
                     logger.warning(
                         f"Skipping out-of-range tile indices: "
                         f"{set(tile_indices) - set(valid_tiles)}")
+                if not valid_tiles:
+                    raise ValueError(
+                        f"No valid mosaic tile index in {sorted(set(tile_indices))}: "
+                        f"{os.path.basename(str(self.path))} has {self.n_tiles} "
+                        f"tile(s), so valid indices are 0..{self.n_tiles - 1}. "
+                        f"Note that tiles only exist when reading an unstitched "
+                        f"mosaic (as_mosaic=False).")
             else:
                 valid_tiles = None
 
@@ -2189,7 +2153,12 @@ class ArrayManager:
                         if not arrays or snap_mgr is None:
                             continue
 
-                        concat_arr = da.concatenate(arrays, axis=1)  # axis 1 = C in TCZYX
+                        # axis 1 = C in TCZYX.  Region-reading sources arrive as
+                        # DynamicArray; dask's concatenate would materialise them.
+                        concatenate = (ops.concatenate
+                                       if all(isinstance(a, DynamicArray) for a in arrays)
+                                       else da.concatenate)
+                        concat_arr = concatenate(arrays, axis=1)
                         # state.update() keeps shapedict/chunkdict in sync with the
                         # new channel count; direct array assignment would leave
                         # shapedict stale and cause _ensure_correct_channels to
@@ -2302,19 +2271,51 @@ class ArrayManager:
         await self.create_omemeta()
         assert self.state.omemeta is not None
         gr = await asyncio.to_thread(zarr.group, base_path)
-        try:
-            path = os.path.join(gr.store.root, 'OME', 'METADATA.ome.xml')
-        except AttributeError as e:
-            logger.warning(f"OME-XML can only be written to local stores: {e}")
-            return
         await asyncio.to_thread(gr.create_group, 'OME', overwrite=overwrite)
+        xml = self.state.omemeta.to_xml()
 
-        def _write(p, text):
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, 'w', encoding='utf-8') as f:
-                f.write(text)
+        root = getattr(gr.store, 'root', None)
+        if root is not None:
+            # Local store: write the file directly, as before.
+            def _write_local():
+                path = os.path.join(root, 'OME', 'METADATA.ome.xml')
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(xml)
 
-        await asyncio.to_thread(_write, path, self.state.omemeta.to_xml())
+            await asyncio.to_thread(_write_local)
+        else:
+            # Remote store (S3 and friends): no filesystem path to join, so the
+            # XML is written as an ordinary object.  Previously this branch just
+            # warned and returned, leaving every remote output without its
+            # companion OME-XML.
+            #
+            # Deliberately sync s3fs in a thread rather than zarr's async
+            # FsspecStore.set: that path goes through aiohttp, which requires a
+            # running task, and this coroutine is driven by run_until_complete
+            # inside a worker thread -- raising "Timeout context manager should
+            # be used inside a task".  The local branch above already writes
+            # from a thread, so this keeps both halves symmetrical.
+            def _write_remote():
+                import s3fs
+                text = str(base_path)
+                endpoint = 'https://' + text.replace('https://', '').split('/')[0]
+                relpath = text[len(endpoint):].lstrip('/')
+                fs = s3fs.S3FileSystem(
+                    anon=True,
+                    client_kwargs={'endpoint_url': endpoint},
+                    endpoint_url=endpoint,
+                )
+                with fs.open(f"{relpath.rstrip('/')}/OME/METADATA.ome.xml",
+                             'wb') as handle:
+                    handle.write(xml.encode('utf-8'))
+
+            try:
+                await asyncio.to_thread(_write_remote)
+            except Exception as exc:                       # noqa: BLE001
+                # The pyramid itself is already written; losing the companion
+                # XML must not fail the conversion.
+                logger.warning(f"Could not write OME-XML to {base_path}: {exc}")
         if gr.info._zarr_format == 2:
             gr['OME'].attrs["series"] = [self.series]
         else:

@@ -2,7 +2,7 @@
 Convert page: full conversion config UI with sidebar browser and run panel.
 
 Layout:
-  Left : SidebarBrowser(mode="conversion"), select input files/folders
+  Left : SidebarBrowser(mode="conversion"), select input files/OME-Zarr stores
   Right: QTabWidget (Cluster | Reader | Conversion | Downscaling | Metadata | Run)
          + Config management toolbar above tabs
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from copy import deepcopy
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QItemSelectionModel, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -31,7 +31,6 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QSpinBox,
     QSplitter,
-    QTabBar,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -87,7 +86,6 @@ _LABEL_W = 256
 # Run or Batch depending on the execution mode, so it always sits at _LAST_TAB.
 _N_PARAM_TABS = 5
 _LAST_TAB = _N_PARAM_TABS
-_MODE_RUN, _MODE_BATCH = 0, 1
 
 
 def _labeled_spin(label: str, minimum: int, maximum: int, value: int, step: int = 1) -> tuple[QLabel, QSpinBox]:
@@ -124,6 +122,34 @@ def _row(*widgets) -> QHBoxLayout:
                 _first_label_fixed = True
             h.addWidget(w)
     return h
+
+
+def _cluster_summary(c: dict) -> str:
+    """Describe a camelCase cluster section in three short lines."""
+    if c.get("useSlurm"):
+        details = [f"partition {c['slurmPartition']}" if c.get("slurmPartition") else "",
+                   f"account {c['slurmAccount']}" if c.get("slurmAccount") else "",
+                   f"time {c.get('slurmTime') or '24:00:00'}"]
+        where = "SLURM (" + ", ".join(d for d in details if d) + ")"
+    elif c.get("useLocalDask"):
+        where = "a local Dask cluster"
+    else:
+        where = "this machine"
+
+    work = [f"{c.get('maxWorkers', 4)} workers",
+            f"queue {c.get('queueSize', 4)}",
+            f"concurrency {c.get('maxConcurrency', 4)}",
+            f"{c.get('maxConcurrentScenes', 1)} scene(s) at a time",
+            f"{c.get('maxConcurrentDownscaleLayers', 3)} downscale layers",
+            f"{float(c.get('regionSizeMb', 256.0)):g} MB regions"]
+    if c.get("useSlurm") or c.get("useLocalDask"):
+        work.append(f"{float(c.get('memoryPerWorker', 4.0)):g} GB per worker")
+
+    bioformats = (f"{c.get('bfReadConcurrency', 4)} concurrent reads · "
+                  f"{float(c.get('jvmMemory', 2.0)):g} GB JVM")
+    return (f"Runs on {where}\n"
+            + " · ".join(work) + "\n"
+            + f"Bio-Formats: {bioformats}")
 
 
 class ConvertPage(QWidget):
@@ -262,21 +288,21 @@ class ConvertPage(QWidget):
         self._config_path_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(self._config_path_label, 1)
 
-        right_layout.addLayout(toolbar)
-
-        # Execution mode, which chooses what the final parameter tab is.  Run converts
-        # the current selection straight away; Batch queues conversions into a
-        # table that is executed later.
-        self._mode_bar = QTabBar()
-        self._mode_bar.addTab("Run")
-        self._mode_bar.addTab("Batch")
-        self._mode_bar.setExpanding(False)
-        self._mode_bar.setToolTip(
-            "Run: convert the selected files immediately.\n"
-            "Batch: queue conversions into a table and run them together later."
+        # Execution mode.  A checkbox rather than a second tab strip: a strip
+        # above the tabs reads as another step in the same workflow, when this
+        # actually chooses between two independent ways of working.  It sits in
+        # the config toolbar, right-aligned by the stretch on the path label,
+        # so page-level controls stay together.
+        self._batch_mode = QCheckBox("Batch mode")
+        self._batch_mode.setToolTip(
+            "Off: convert the files selected in the browser straight away.\n"
+            "On: queue conversions into an editable table and run them "
+            "together, each row with its own parameters."
         )
-        self._mode_bar.currentChanged.connect(self._on_mode_changed)
-        right_layout.addWidget(self._mode_bar)
+        self._batch_mode.toggled.connect(self._on_mode_changed)
+        toolbar.addWidget(self._batch_mode)
+
+        right_layout.addLayout(toolbar)
 
         # Tabs
         self._tabs = QTabWidget()
@@ -311,7 +337,7 @@ class ConvertPage(QWidget):
         return scroll, lay
 
     def _build_cluster_tab(self):
-        _, lay = self._scrolled_tab("Cluster")
+        self._cluster_scroll, lay = self._scrolled_tab("Cluster")
 
         _, self._max_workers = _labeled_spin("Max Workers:", 1, 256, 4)
         self._max_workers.setToolTip(
@@ -466,16 +492,6 @@ class ConvertPage(QWidget):
         note.setStyleSheet("color: gray; font-style: italic;")
         bf_lay.addWidget(note)
 
-        self._bf_tile_size_mb = QDoubleSpinBox()
-        self._bf_tile_size_mb.setRange(1.0, 65536.0)
-        self._bf_tile_size_mb.setValue(512.0)
-        self._bf_tile_size_mb.setSingleStep(64.0)
-        self._bf_tile_size_mb.setToolTip(
-            "Size (MB) of each tile read by the Bio-Formats tiled reader.\n"
-            "Larger tiles improve throughput; smaller tiles reduce peak memory."
-        )
-        bf_lay.addLayout(_form_row("BF Tile Size (MB):", self._bf_tile_size_mb))
-
         _, self._bf_read_concurrency = _labeled_spin("BF Read Concurrency:", 1, 64, 4)
         self._bf_read_concurrency.setToolTip(
             "Number of tile-read calls that Bio-Formats issues concurrently.\n"
@@ -548,7 +564,11 @@ class ConvertPage(QWidget):
         self._read_as_mosaic = QCheckBox("Read as Mosaic (stitch tiles)")
         self._read_as_mosaic.setToolTip(
             "Stitch all tiles into a single continuous mosaic image at read time.\n"
-            "When unchecked, each tile is saved as a separate OME-Zarr output."
+            "When unchecked, each tile is saved as a separate OME-Zarr output.\n"
+            "CZI: stitched reading streams each region straight from the file, so\n"
+            "memory stays bounded for files of any size. Separate tiles need a\n"
+            "reader that cannot open some very large files; those fall back to\n"
+            "stitched reading with a warning."
         )
         tile_lay.addWidget(self._read_as_mosaic)
         lay.addWidget(tile_group)
@@ -862,8 +882,37 @@ class ConvertPage(QWidget):
         self._update_shard_state()
         lay.addWidget(fmt_group)
 
+        # Both boxes below are tall enough that leaving them expanded pushes the
+        # ordinary chunking and format settings off the top of the tab, and both
+        # are off the common path.  They get a toggle each rather than sharing
+        # one: cropping applies to a single file just as much as to a series, so
+        # wanting ranges says nothing about wanting concatenation.
+        toggle_row = QHBoxLayout()
+        toggle_row.setSpacing(12)
+
+        self._show_ranges = QCheckBox("Dimension ranges")
+        self._show_ranges.setToolTip(
+            "Reveal the Dimension Ranges settings, which convert only part of\n"
+            "an image (a crop, or a subset of time-points or channels)."
+        )
+        self._show_ranges.toggled.connect(self._sync_advanced_conv)
+        toggle_row.addWidget(self._show_ranges)
+
+        self._show_concat = QCheckBox("Concatenation")
+        self._show_concat.setToolTip(
+            "Reveal the Concatenation settings, which join a series of files\n"
+            "into one output along a chosen axis."
+        )
+        self._show_concat.toggled.connect(self._sync_advanced_conv)
+        toggle_row.addWidget(self._show_concat)
+
+        toggle_row.addStretch(1)
+        lay.addWidget(QLabel("Show:"))
+        lay.addLayout(toggle_row)
+
         # Dim ranges
         range_group = QGroupBox("Dimension Ranges (start,stop)")
+        self._range_group = range_group
         range_layout = QVBoxLayout(range_group)
         self._range_edits: dict[str, QLineEdit] = {}
         _range_dim_labels = {
@@ -886,18 +935,18 @@ class ConvertPage(QWidget):
         self._concat_group = concat_group
         concat_layout = QVBoxLayout(concat_group)
 
-        # Shown only in Batch mode.  Concatenation cannot be batched yet, and a
-        # silently-ignored setting is worse than a disabled one.
+        # Shown only in Batch mode, where these fields are the batch-wide
+        # default rather than the whole story: which rows actually concatenate
+        # is decided per row by 'Aggregative group'.
         self._concat_batch_note = QLabel(
-            "Not available in Batch mode. A batch is a table with one row per "
-            "input file, so it can only describe one-to-one conversions. An "
-            "aggregative job spans several files and has no row to live on. "
-            "Switch to Run mode to concatenate, or clear these fields and batch "
-            "the files individually."
+            "In Batch mode these are the defaults for the whole batch. Give "
+            "rows the same 'Aggregative group' to concatenate them into one "
+            "output; rows with a blank group convert on their own. A group may "
+            "override these settings, but every row of one group must agree."
         )
         self._concat_batch_note.setWordWrap(True)
         self._concat_batch_note.setStyleSheet(
-            "color: #ffb74d; font-style: italic; font-size: 10px;")
+            "color: #aaa; font-style: italic; font-size: 10px;")
         concat_layout.addWidget(self._concat_batch_note)
         self._concat_edits: dict[str, QLineEdit] = {}
         # Placeholder per axis: a single hardcoded example would show the time
@@ -934,6 +983,17 @@ class ConvertPage(QWidget):
             "Example: 't,c' concatenates across time and channel."
         )
         concat_layout.addLayout(_form_row("Concat axes:", self._concat_axes))
+        self._concat_group_edit = QLineEdit()
+        self._concat_group_edit.setPlaceholderText("e.g. gr1 (optional)")
+        self._concat_group_edit.setToolTip(
+            "Name for this aggregative group, prefixed to the output so\n"
+            "several concatenated outputs stay distinguishable.\n"
+            "In a batch, rows sharing this name are concatenated together\n"
+            "and a row with a blank one converts on its own.\n"
+            "Prefer short labels such as 'gr1' or 'A': it becomes part\n"
+            "of the output filename."
+        )
+        concat_layout.addLayout(_form_row("Group name:", self._concat_group_edit))
         self._override_channel_names = QCheckBox("Override Channel Names")
         self._override_channel_names.setToolTip(
             "Replace channel names in the OME-Zarr metadata with names\n"
@@ -941,6 +1001,10 @@ class ConvertPage(QWidget):
         )
         concat_layout.addWidget(self._override_channel_names)
         lay.addWidget(concat_group)
+
+        # Collapsed to begin with; a loaded config that uses either box reopens
+        # it (see _reveal_advanced_conv_if_set).
+        self._sync_advanced_conv()
 
         lay.addStretch()
 
@@ -1322,7 +1386,7 @@ class ConvertPage(QWidget):
 
     def _apply_mode(self):
         """Attach the Run or Batch tab as the final parameter tab."""
-        batch = self._mode_bar.currentIndex() == _MODE_BATCH
+        batch = self._batch_mode.isChecked()
         was_last = self._tabs.currentIndex() == _LAST_TAB
 
         while self._tabs.count() > _N_PARAM_TABS:
@@ -1333,17 +1397,72 @@ class ConvertPage(QWidget):
         if was_last:
             self._tabs.setCurrentIndex(_LAST_TAB)
 
-        # Grey out concatenation in Batch mode so it cannot look supported.
-        # The values are left intact, so switching back to Run restores them.
+        # Concatenation works in both modes; in Batch the note explains that
+        # these values are defaults and grouping is per row.
         if hasattr(self, '_concat_group'):
-            self._concat_group.setEnabled(not batch)
             self._concat_batch_note.setVisible(batch)
-            self._concat_group.setToolTip(
-                self._concat_batch_note.text() if batch else "")
+            self._sync_group_name_hint(batch)
 
-    def _on_mode_changed(self, _index: int):
+    def _sync_advanced_conv(self, *_):
+        """Show or hide the dimension-range and concatenation boxes."""
+        self._range_group.setVisible(self._show_ranges.isChecked())
+        self._concat_group.setVisible(self._show_concat.isChecked())
+
+    def _reveal_advanced_conv_if_set(self):
+        """Open either box whenever it holds a value.
+
+        Hiding a box does not clear it, so a range or a concat axis left behind
+        would still apply while being invisible -- the setting would take effect
+        with nothing on screen to explain it.  Each box is judged on its own
+        fields, so loading a cropped conversion does not also open the
+        concatenation settings it does not use.
+        """
+        if any(e.text().strip() for e in self._range_edits.values()):
+            self._show_ranges.setChecked(True)
+        if (self._concat_axes.text().strip()
+                or self._concat_group_edit.text().strip()
+                or any(e.text().strip() for e in self._concat_edits.values())):
+            self._show_concat.setChecked(True)
+        # Checking a box above emits toggled and syncs already; this covers the
+        # case where neither changed.
+        self._sync_advanced_conv()
+
+    def _sync_group_name_hint(self, batch: bool):
+        """Say what a blank group name means, which differs between the modes.
+
+        In Run mode the whole conversion is aggregative already, so the name
+        only prefixes the output and leaving it empty is harmless.  In Batch
+        mode it is what *marks* a row as aggregative: a row with concatenation
+        settings but no group converts one-to-one instead, silently ignoring
+        them.  Calling it "optional" there would be wrong.
+        """
+        if batch:
+            self._concat_group_edit.setPlaceholderText(
+                "e.g. gr1 (required to concatenate)")
+            self._concat_group_edit.setToolTip(
+                "Marks which rows are concatenated together: rows sharing this\n"
+                "name become one output, and a row with a blank group converts\n"
+                "on its own, ignoring the settings above.\n"
+                "The name is prefixed to the output, so prefer short labels\n"
+                "such as 'gr1' or 'A'."
+            )
+        else:
+            self._concat_group_edit.setPlaceholderText("e.g. gr1 (optional)")
+            self._concat_group_edit.setToolTip(
+                "Name for this aggregative group, prefixed to the output so\n"
+                "several concatenated outputs stay distinguishable.\n"
+                "Optional here: the conversion concatenates either way, and an\n"
+                "empty name simply adds no prefix.\n"
+                "Prefer short labels such as 'gr1' or 'A': it becomes part of\n"
+                "the output filename."
+            )
+
+    def _on_mode_changed(self, _checked: bool):
+        # No tab switch here: _apply_mode already returns to the execution tab
+        # when that is where the user was.  Switching unconditionally would
+        # yank them off whichever parameter tab they were editing, which is
+        # rarely what toggling a mode is meant to mean.
         self._apply_mode()
-        self._tabs.setCurrentIndex(_LAST_TAB)
 
     # ── Batch tab ─────────────────────────────────────────────────────────────
 
@@ -1354,7 +1473,7 @@ class ConvertPage(QWidget):
         lay.setSpacing(6)
 
         note = QLabel(
-            "A batch queues several one-to-one conversions and runs them later. "
+            "A batch queues several conversions and runs them later. "
             "Configure a conversion on the other tabs, select your input files, "
             "then press ‘Add to Batch’ below. Each row stores only the settings "
             "you changed; a blank cell uses the config value. "
@@ -1362,12 +1481,43 @@ class ConvertPage(QWidget):
             "boxes add whole parameter groups or every parameter at once. "
             "Select any cells and press ‘Edit Cells’ to change them, including "
             "the input and output paths. "
-            "Aggregative (concatenation) conversions are not supported in batch "
-            "mode yet, so use Run mode for those."
+            "To concatenate files, give their rows the same ‘Aggregative group’ "
+            "(shown with ‘Concatenation’) plus the concatenation axes and tags, "
+            "which must match across the group; rows with a blank group convert "
+            "one-to-one. The run settings below apply to the whole batch."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
         lay.addWidget(note)
+
+        # Cluster settings govern the whole run and are taken live from the
+        # Cluster tab when it starts, so they are mirrored here read-only.
+        cluster_box = QGroupBox("Run settings (set in the Cluster tab)")
+        cluster_lay = QHBoxLayout(cluster_box)
+        self._batch_cluster_summary = QLabel("")
+        self._batch_cluster_summary.setWordWrap(True)
+        self._batch_cluster_summary.setStyleSheet("font-size: 10px;")
+        cluster_lay.addWidget(self._batch_cluster_summary, 1)
+        self._edit_cluster_btn = QPushButton("Edit in Cluster tab")
+        self._edit_cluster_btn.setToolTip(
+            "These apply to the whole batch and cannot differ per row.\n"
+            "The values in the Cluster tab when you press Run are the ones used.")
+        self._edit_cluster_btn.clicked.connect(
+            lambda: self._tabs.setCurrentWidget(self._cluster_scroll))
+        cluster_lay.addWidget(self._edit_cluster_btn, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addWidget(cluster_box)
+        for spin in (self._max_workers, self._queue_size, self._max_concurrency,
+                     self._max_concurrent_downscale_layers,
+                     self._max_concurrent_scenes, self._region_size_mb,
+                     self._memory_per_worker, self._slurm_worker_timeout,
+                     self._bf_read_concurrency, self._jvm_memory):
+            spin.valueChanged.connect(self._update_batch_cluster_summary)
+        for box in (self._use_local_dask, self._use_slurm):
+            box.toggled.connect(self._update_batch_cluster_summary)
+        for edit in (self._slurm_partition, self._slurm_account,
+                     self._slurm_time, self._slurm_sif_path):
+            edit.textChanged.connect(self._update_batch_cluster_summary)
+        self._update_batch_cluster_summary()
 
         # Batch-wide settings that no row can override.  Shown explicitly, since
         # they never appear as a table column and are otherwise unverifiable.
@@ -1547,6 +1697,19 @@ class ConvertPage(QWidget):
             if spin is not None:
                 spin.setValue(value)
 
+    def _update_batch_cluster_summary(self, *_):
+        self._batch_cluster_summary.setText(
+            _cluster_summary(self._ui_cluster_config()))
+
+    def _sync_batch_cluster(self) -> None:
+        """Give the batch the Cluster tab's current settings.
+
+        The baseline is taken from the config file when the first row is added,
+        so without this a batch ran with those saved cluster values no matter
+        what the Cluster tab said.
+        """
+        self._batch.set_cluster(self._ui_cluster_config())
+
     def _refresh_batch_table(self):
         """Rebuild the queue view from the model."""
         columns = self._batch.columns() if len(self._batch) else list(("input_path", "output_path"))
@@ -1632,6 +1795,16 @@ class ConvertPage(QWidget):
         indexes = self._batch_table.selectionModel().selectedIndexes()
         return min((i.row() for i in indexes), default=-1)
 
+    def _selected_batch_rows(self) -> list[int]:
+        """Every distinct row the selection touches, ascending.
+
+        Unlike :meth:`_selected_batch_row` this keeps them all, so a pick of
+        scattered rows can be acted on at once.  Selection is per-cell, so one
+        cell is enough to count a row in.
+        """
+        indexes = self._batch_table.selectionModel().selectedIndexes()
+        return sorted({i.row() for i in indexes})
+
     def _selected_batch_cells(self) -> tuple[list[int], list[str]]:
         """The rows and parameter columns the current selection spans."""
         indexes = self._batch_table.selectionModel().selectedIndexes()
@@ -1703,18 +1876,16 @@ class ConvertPage(QWidget):
         self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
 
     def _batch_ui_config(self) -> dict:
-        """UI config as a batch should see it, with concatenation neutralised.
+        """UI config as a batch should see it.
 
-        The Concatenation group is disabled in Batch mode but its values are
-        deliberately preserved so switching back to Run does not lose them.  They
-        must not leak into a batch, where they cannot be honoured.
+        Concatenation settings are carried through now that a table can express
+        them: they become the batch-wide default, which a row overrides by
+        naming its own aggregative group and settings.
         """
-        cfg = self._ui_to_config()
-        cfg["concatenation"] = {k: "" for k in cfg.get("concatenation", {})}
-        return cfg
+        return self._ui_to_config()
 
     def _update_batch_availability(self, *_):
-        """Grey out 'Add to Batch' while an aggregative conversion is configured."""
+        """Enable or disable 'Add to Batch' for the current settings."""
         ok, reason = can_batch(self._batch_ui_config())
         self._add_batch_btn.setEnabled(ok)
         self._add_batch_btn.setToolTip(reason if not ok else (
@@ -1724,16 +1895,35 @@ class ConvertPage(QWidget):
 
     # ── Batch callbacks ───────────────────────────────────────────────────────
 
+    def _refuse_add(self, message: str):
+        """Report why nothing was added, on a surface the user can actually see.
+
+        The batch log lives in a sub-tab of the Batch tab, which is not even
+        attached in Run mode -- so a log line alone reads as Add doing nothing
+        at all.  The status label is always visible in Batch mode, and the Run
+        log is what is on screen otherwise.
+        """
+        self._batch_log.append_line(f"ERROR: {message}")
+        self._batch_status.setText(f"⚠ Nothing added: {message}")
+        self._batch_status.setStyleSheet("font-size: 10px; color: #ffb74d;")
+        if self._batch_mode.isChecked():
+            self._tabs.setCurrentIndex(_LAST_TAB)
+        else:
+            self._log.append_line(f"ERROR: {message}")
+
     def _on_add_to_batch(self):
         selected = self._browser.selected_paths()
         output_path = self._output_edit.text().strip()
 
         if not selected:
-            self._batch_log.append_line(
-                "ERROR: No files selected, so nothing was added to the batch.")
+            self._refuse_add(
+                "no files are selected. Tick files in the input browser, or "
+                "apply filters and click 'Select All'.")
             return
         if not output_path:
-            self._batch_log.append_line("ERROR: No output path specified.")
+            self._refuse_add(
+                "no output path is set. Choose an output folder before adding "
+                "rows to the batch.")
             return
 
         cfg = self._batch_ui_config()
@@ -1789,22 +1979,75 @@ class ConvertPage(QWidget):
         else:
             self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
 
+        self._warn_if_concat_without_group(cfg, len(selected))
+
+    def _warn_if_concat_without_group(self, cfg: dict, added: int):
+        """Flag concatenation settings that will not take effect.
+
+        In a batch it is the group name that marks a row as aggregative, so a
+        row carrying axes and tags but no group converts one-to-one and the
+        settings are silently ignored.  The add step is the moment to say so:
+        it is the one validation a batch can offer that a direct run cannot.
+        """
+        concat = cfg.get("concatenation", {}) or {}
+        if str(concat.get("aggregativeGroup", "")).strip():
+            return
+        filled = [name for name, key in (
+            ("concat axes", "concatenationAxes"), ("time tag", "timeTag"),
+            ("channel tag", "channelTag"), ("z tag", "zTag"),
+            ("y tag", "yTag"), ("x tag", "xTag"))
+            if str(concat.get(key, "")).strip()]
+        if not filled:
+            return
+        self._batch_log.append_line(
+            f"WARNING: {', '.join(filled)} set without a group name, so "
+            f"{'this row converts' if added == 1 else 'these rows convert'} "
+            "one-to-one and the concatenation settings are ignored. "
+            "Give the rows a group name to concatenate them."
+        )
+        self._batch_status.setText(
+            f"⚠ {len(self._batch)} row(s) queued, but no group name is set: "
+            "they will convert one-to-one and the concatenation settings "
+            "above are ignored. Set 'Group name' to concatenate them."
+        )
+        self._batch_status.setStyleSheet("font-size: 10px; color: #ffb74d;")
+
     def _on_batch_remove(self):
-        i = self._selected_batch_row()
-        if i < 0:
+        rows = self._selected_batch_rows()
+        if not rows:
             self._batch_status.setText("Select a row first.")
             return
-        self._batch.remove(i)
+        removed = self._batch.remove_many(rows)
+        self._batch_table.clearSelection()   # the indexes no longer mean anything
         self._refresh_batch_table()
+        self._batch_status.setText(
+            f"Removed {removed} row(s); {len(self._batch)} left in the batch.")
+        self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
 
     def _on_batch_duplicate(self):
-        i = self._selected_batch_row()
-        if i < 0:
+        rows = self._selected_batch_rows()
+        if not rows:
             self._batch_status.setText("Select a row first.")
             return
-        self._batch.duplicate(i)
+        copies = self._batch.duplicate_many(rows)
         self._refresh_batch_table()
-        self._batch_table.selectRow(i + 1)
+        # Leave the copies selected: duplicating is almost always followed by
+        # editing a field on them, and they are scattered through the queue
+        # rather than sitting together at the end.
+        # selectRow() *replaces* the selection, so looping it would leave only
+        # the last copy selected; the selection model adds instead.
+        self._batch_table.clearSelection()
+        selection = self._batch_table.selectionModel()
+        model = self._batch_table.model()
+        for index in copies:
+            selection.select(
+                model.index(index, 0),
+                QItemSelectionModel.SelectionFlag.Select
+                | QItemSelectionModel.SelectionFlag.Rows)
+        self._batch_status.setText(
+            f"Duplicated {len(copies)} row(s); {len(self._batch)} in the batch. "
+            "The copies are selected, ready for Edit Cells.")
+        self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
 
     def _on_batch_move(self, delta: int):
         i = self._selected_batch_row()
@@ -1850,6 +2093,9 @@ class ConvertPage(QWidget):
             for p in problems:
                 self._batch_log.append_line(f"  • {p}")
             return None
+        # The snapshot records the cluster settings a run would use now, for
+        # reference; loading it back does not apply them (see _on_batch_load).
+        self._sync_batch_cluster()
         try:
             written = self._batch.save(path)
         except OSError as exc:
@@ -1886,10 +2132,17 @@ class ConvertPage(QWidget):
             return
         self._refresh_batch_table()
         if self._batch.base_config is not None:
-            self._load_config_to_ui(self._batch.base_config)
+            # Everything but the cluster section: those settings belong to the
+            # machine running the batch, not to the batch, so a batch saved on
+            # a laptop must not impose its worker counts on a cluster node.
+            snapshot = deepcopy(self._batch.base_config)
+            snapshot["cluster"] = self._ui_cluster_config()
+            self._load_config_to_ui(snapshot)
+            self._sync_batch_cluster()
             self._batch_status.setText(
                 f"Loaded {len(self._batch)} row(s) from {os.path.basename(path)}; "
-                f"config snapshot applied to the parameter tabs."
+                f"config snapshot applied to the parameter tabs, except the "
+                f"Cluster tab, which keeps its current settings."
             )
         else:
             self._batch_status.setText(
@@ -1902,19 +2155,25 @@ class ConvertPage(QWidget):
             self._batch_status.setText("Batch is empty, so there is nothing to run.")
             return
 
-        default_path = os.path.join(DEFAULT_CONFIG_DIR, "batches", DEFAULT_BATCH_NAME)
-        os.makedirs(os.path.dirname(default_path), exist_ok=True)
-        csv_path = self._batch_save_to(default_path)
-        if csv_path is None:
+        problems = self._batch.validate()
+        if problems:
+            self._batch_status.setText(
+                f"Cannot run: {len(problems)} problem(s); see the Log sub-tab.")
+            self._batch_log.append_line("Batch validation failed:")
+            for problem in problems:
+                self._batch_log.append_line(f"  • {problem}")
+            self._batch_subtabs.setCurrentIndex(1)
             return
 
-        # The batch baseline is the global config for the run; each CSV row
-        # overrides it.  Pass the CSV as inputPath (a bare string) and leave
-        # inputPaths empty, since take_filepaths() treats a list as explicit image
-        # paths and would never reach its table branch.
+        # The batch baseline is the global config for the run; each row overrides
+        # it.  The rows are passed as a table rather than written to a CSV first,
+        # so saving stays a deliberate act instead of a step every run performs.
+        # Its cluster section is refreshed from the Cluster tab first.
+        self._sync_batch_cluster()
         cfg = deepcopy(self._batch.base_config or self._ui_to_config())
+        cfg["inputTable"]     = self._batch.to_table()
         cfg["inputPaths"]     = []
-        cfg["inputPath"]      = csv_path
+        cfg["inputPath"]      = ""
         cfg["outputPath"]     = ""      # each row carries its own output_path
         cfg["includePattern"] = ""
         cfg["excludePattern"] = ""
@@ -1923,7 +2182,7 @@ class ConvertPage(QWidget):
         self._active_log = self._batch_log        # batch output has its own screen
         self._batch_log.clear()
         self._batch_log.append_line(
-            f"Running batch: {csv_path} ({len(self._batch)} row(s))")
+            f"Running batch: {len(self._batch)} conversion(s).")
 
         self._start_btn.setEnabled(False)
         self._batch_run_btn.setEnabled(False)
@@ -1959,7 +2218,6 @@ class ConvertPage(QWidget):
         self._slurm_time.setText(c.get("slurmTime", "24:00:00"))
         self._slurm_sif_path.setText(c.get("slurmSifPath", ""))
         self._slurm_worker_timeout.setValue(int(c.get("slurmWorkerTimeout", 300) or 300))
-        self._bf_tile_size_mb.setValue(float(c.get("bfTileSizeMb", 512.0)))
         self._bf_read_concurrency.setValue(c.get("bfReadConcurrency", 4))
         self._jvm_memory.setValue(float(c.get("jvmMemory", 2.0)))
 
@@ -2065,33 +2323,41 @@ class ConvertPage(QWidget):
         self._concat_edits["y"].setText(concat.get("yTag", "") or "")
         self._concat_edits["x"].setText(concat.get("xTag", "") or "")
         self._concat_axes.setText(concat.get("concatenationAxes", "") or "")
+        self._concat_group_edit.setText(concat.get("aggregativeGroup", "") or "")
+
+        # A hidden box still applies its values, so anything set has to be on
+        # screen to be explicable.
+        self._reveal_advanced_conv_if_set()
 
         if "_configPath" in cfg:
             self._config_path = cfg["_configPath"]
             self._config_path_label.setText(os.path.basename(cfg["_configPath"]))
 
+    def _ui_cluster_config(self) -> dict:
+        """The Cluster tab's controls as a camelCase config section."""
+        return {
+            "maxWorkers":          self._max_workers.value(),
+            "queueSize":           self._queue_size.value(),
+            "maxConcurrency":      self._max_concurrency.value(),
+            "maxConcurrentDownscaleLayers": self._max_concurrent_downscale_layers.value(),
+            "maxConcurrentScenes": self._max_concurrent_scenes.value(),
+            "regionSizeMb":        self._region_size_mb.value(),
+            "memoryPerWorker":     self._memory_per_worker.value(),
+            "useLocalDask":        self._use_local_dask.isChecked(),
+            "useSlurm":            self._use_slurm.isChecked(),
+            "slurmPartition":      self._slurm_partition.text().strip(),
+            "slurmAccount":        self._slurm_account.text().strip(),
+            "slurmTime":           self._slurm_time.text().strip() or "24:00:00",
+            "slurmSifPath":        self._slurm_sif_path.text().strip() or None,
+            "slurmWorkerTimeout":  self._slurm_worker_timeout.value(),
+            "bfReadConcurrency":   self._bf_read_concurrency.value(),
+            "jvmMemory":           self._jvm_memory.value(),
+        }
+
     def _ui_to_config(self) -> dict:
         """Read all UI controls and build a camelCase config dict."""
         return {
-            "cluster": {
-                "maxWorkers":          self._max_workers.value(),
-                "queueSize":           self._queue_size.value(),
-                "maxConcurrency":      self._max_concurrency.value(),
-                "maxConcurrentDownscaleLayers": self._max_concurrent_downscale_layers.value(),
-                "maxConcurrentScenes": self._max_concurrent_scenes.value(),
-                "regionSizeMb":        self._region_size_mb.value(),
-                "memoryPerWorker":     self._memory_per_worker.value(),
-                "useLocalDask":        self._use_local_dask.isChecked(),
-                "useSlurm":            self._use_slurm.isChecked(),
-                "slurmPartition":      self._slurm_partition.text().strip(),
-                "slurmAccount":        self._slurm_account.text().strip(),
-                "slurmTime":           self._slurm_time.text().strip() or "24:00:00",
-                "slurmSifPath":        self._slurm_sif_path.text().strip() or None,
-                "slurmWorkerTimeout":  self._slurm_worker_timeout.value(),
-                "bfTileSizeMb":        self._bf_tile_size_mb.value(),
-                "bfReadConcurrency":   self._bf_read_concurrency.value(),
-                "jvmMemory":           self._jvm_memory.value(),
-            },
+            "cluster": self._ui_cluster_config(),
             "reader": {
                 "readAllScenes":     self._read_all_scenes.isChecked(),
                 "sceneIndices":      self._scene_indices.text().strip(),
@@ -2180,6 +2446,7 @@ class ConvertPage(QWidget):
                 "yTag":                self._concat_edits["y"].text().strip(),
                 "xTag":                self._concat_edits["x"].text().strip(),
                 "concatenationAxes":   self._concat_axes.text().strip(),
+                "aggregativeGroup":    self._concat_group_edit.text().strip(),
             },
         }
 

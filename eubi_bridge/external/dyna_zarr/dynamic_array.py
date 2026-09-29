@@ -275,7 +275,25 @@ class DynamicArray:
             # Apply transformation to read all data
             full_slice = tuple(slice(None) for _ in range(len(self.shape)))
             return self._transform.read(full_slice)
-    
+
+    def __array__(self, dtype=None, copy=None):
+        """Materialize to a real numpy array - what ``np.asarray(a)`` calls.
+
+        Ported from upstream dyna_zarr.  Without it NumPy treats a DynamicArray
+        as an opaque object and returns a 0-d object array instead of the data.
+        Eager, like ``.compute()``: slice first, then convert.  ``copy=False``
+        cannot be honoured (the data does not exist until read), and NumPy 2
+        requires that to raise.
+        """
+        if copy is False:
+            raise ValueError(
+                "cannot return a view of a DynamicArray without copying: the data "
+                "is produced lazily on read. Use np.asarray(a) or a.compute().")
+        result = self.compute()
+        if dtype is not None:
+            result = result.astype(dtype, copy=False)
+        return result
+
     def _read_direct(self, key):
         """
         Internal method to read data directly without creating transforms.

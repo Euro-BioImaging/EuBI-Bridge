@@ -484,7 +484,10 @@ class NGFFMetadataHandler:
                 'type': {'t': 'time', 'c': 'channel', 'z': 'space',
                          'y': 'space', 'x': 'space'}.get(ax_name, 'custom')
             }
-            if unit is not None:
+            # NGFF units are for space and time axes only.  A channel unit
+            # (the defaults give it 'Channel') makes Neuroglancer reject the
+            # whole store, so it is never written, whichever caller passed it.
+            if unit is not None and axis_data['type'] != 'channel':
                 axis_data['unit'] = unit
             new_axes.append(axis_data)
 

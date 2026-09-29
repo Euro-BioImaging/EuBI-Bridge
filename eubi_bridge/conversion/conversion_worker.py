@@ -11,14 +11,16 @@ import sys
 from typing import Any, Dict, Optional, Tuple, Union
 
 import dask.array as da
+import numpy as np
 import pandas as pd
 import psutil
 
 # Add these imports at the top of conversion_worker.py
 from eubi_bridge.conversion.worker_init import safe_worker_wrapper
 from eubi_bridge.core.config_models import ChunkConfig, ConversionJob
-from eubi_bridge.core.data_manager import ArrayManager, _compute_tile_shape
-from eubi_bridge.core.writers import (store_existing_pyramid_async,
+from eubi_bridge.core.data_manager import ArrayManager
+from eubi_bridge.core.writers import (store_exists,
+                                      store_existing_pyramid_async,
                                        store_multiscale_async)
 from eubi_bridge.utils.array_utils import autocompute_chunk_shape
 from eubi_bridge.utils.jvm_manager import soft_start_jvm
@@ -53,7 +55,8 @@ DEFAULT_SCALE_FACTORS = {
 
 AXIS_PARAM_MAP = {
     't': ('time_chunk', 'time_shard_coef', 'time_scale', 'time_scale_factor', 'time_unit'),
-    'c': ('channel_chunk', 'channel_shard_coef', 'channel_scale', 'channel_scale_factor', None),
+    # No scale or unit for channels: a channel has no physical extent.
+    'c': ('channel_chunk', 'channel_shard_coef', None, 'channel_scale_factor', None),
     'z': ('z_chunk', 'z_shard_coef', 'z_scale', 'z_scale_factor', 'z_unit'),
     'y': ('y_chunk', 'y_shard_coef', 'y_scale', 'y_scale_factor', 'y_unit'),
     'x': ('x_chunk', 'x_shard_coef', 'x_scale', 'x_scale_factor', 'x_unit'),
@@ -109,7 +112,16 @@ def _parse_axis_params(manager: ArrayManager, kwargs: Dict,
             continue
 
         param_name = AXIS_PARAM_MAP[axis][param_idx]
-        if param_name is None:  # Skip channel unit
+        if param_name is None:
+            # No user-settable parameter for this axis (a channel has no
+            # physical scale or unit).  Its scale still belongs in the result,
+            # carrying whatever the file itself says -- dropping it would leave
+            # the scales tuple shorter than the axes it describes.  Its unit
+            # does not: the NGFF writer expects the channel left out of the
+            # units and the default for it ('Channel') is no valid NGFF unit,
+            # which viewers such as Neuroglancer refuse to open.
+            if param_idx == 2:
+                output[axis] = default_dict.get(axis)
             continue
 
         output[axis] = _get_param_value(kwargs, param_name, axis, default_dict)
@@ -139,9 +151,24 @@ def parse_shard_coefs(manager: ArrayManager, job: ConversionJob) -> Tuple:
     return tuple(shard_map[ax] for ax in manager.axes if ax in shard_map)
 
 
+def _axis_metadata_kwargs(job: ConversionJob) -> Dict:
+    """Scale/unit overrides from the metadata config, overlaid with job.extra.
+
+    These are typed fields on MetadataConfig now, so they no longer arrive as
+    unrecognised keys in ``extra``.  ``extra`` is still consulted and still
+    wins, because that is where a per-row override from a conversion table
+    arrives -- the config value is only the batch-wide default.
+    """
+    stored = {k: v for k, v in job.metadata.model_dump().items()
+              if (k.endswith(('_scale', '_unit')) and v is not None)}
+    stored.update(job.extra)
+    return stored
+
+
 def parse_scales(manager: ArrayManager, job: ConversionJob) -> Tuple:
-    """Parse per-axis scale overrides from job.extra, falling back to manager.scaledict."""
-    return _parse_axis_params(manager, job.extra, 2, manager.scaledict)
+    """Parse per-axis scale overrides, falling back to manager.scaledict."""
+    return _parse_axis_params(
+        manager, _axis_metadata_kwargs(job), 2, manager.scaledict)
 
 
 def parse_translation(manager: ArrayManager, job: ConversionJob) -> Optional[Tuple]:
@@ -267,8 +294,9 @@ def parse_smart_scale_factors(manager: ArrayManager, job: ConversionJob) -> Opti
 
 
 def parse_units(manager: ArrayManager, job: ConversionJob) -> Tuple:
-    """Parse per-axis unit overrides from job.extra, falling back to manager.unitdict."""
-    return _parse_axis_params(manager, job.extra, 4, manager.unitdict)
+    """Parse per-axis unit overrides, falling back to manager.unitdict."""
+    return _parse_axis_params(
+        manager, _axis_metadata_kwargs(job), 4, manager.unitdict)
 
 
 def _extract_cropping_slices(kwargs: Dict) -> Dict:
@@ -354,95 +382,59 @@ async def _prepare_manager(manager: ArrayManager, job: ConversionJob) -> None:
 
 
 
-def _maybe_compute_bfio_array(
-    manager: ArrayManager,
-    max_concurrent_scenes: int,
-    tile_mb: float,
-) -> None:
-    """Optimise bfio-tiled dask arrays before writing.
+def _maybe_compute_bfio_array(manager: ArrayManager, region_size_mb: float) -> None:
+    """Read a small Bio-Formats image into memory in one go.
 
-    bfio's BioReader.setId() costs 8-10 s.  The queue-based writer subdivides
-    the dask array into small regions and computes each independently.  If a
-    region boundary cuts across a bfio tile, the same tile task is re-executed
-    multiple times, each paying setId() again.
-
-    Strategy: use *tile_mb* (= bf_tile_size_mb) as the compute-region size.
-    The dask array is already chunked at that size, so rechunking to the same
-    size is a no-op — every rechunked chunk maps 1-to-1 with one _read_bfio_tile
-    call.  The writer then slices the resulting numpy chunks freely with no
-    extra BioReader opens.
-
-    If *tile_mb* exceeds the per-scene RAM budget (available/2/concurrent), it
-    is capped and the user is warned to lower --bf_tile_size_mb.
-
-    Small arrays (full array ≤ effective tile size):
-        Compute the entire array into a single numpy-backed in-memory chunk.
-    Large arrays:
-        Rechunk to effective tile size; each chunk computed on demand.
+    A larger one stays lazy: the writer reads it region by region, each region
+    as a single Bio-Formats rectangle, so nothing beyond a region is loaded.
     """
-    if not manager._bfio_tiling:
+    if not manager._bfio_tiling or manager.array is None:
         return
-    if not isinstance(manager.array, da.Array):
+    arr = manager.array
+    nbytes = int(np.prod(arr.shape)) * np.dtype(arr.dtype).itemsize
+    if nbytes > region_size_mb * 1024 ** 2:
         return
+    logger.info(f"Bio-Formats: reading {nbytes / 1e6:.1f} MB into memory at once")
+    computed = arr.compute() if hasattr(arr, 'compute') else np.asarray(arr)
+    manager.state.update(
+        array=da.from_array(computed, chunks=computed.shape),
+        axes=manager.axes,
+        units=manager.units,
+        scales=manager.scales,
+    )
 
+
+#: Smallest region the RAM cap below may impose; below this, per-region
+#: overhead dominates and the conversion would crawl rather than fit.
+_MIN_REGION_MB = 16.0
+
+
+def _region_budget_mb(clus) -> float:
+    """``region_size_mb``, capped so every region in flight fits in RAM.
+
+    Each writer holds up to ``2 * max_concurrency`` regions being read,
+    ``queue_size`` waiting and ``max_concurrency`` being written, and that per
+    concurrent scene in every worker process.  The configured size is kept when
+    all of those fit in half the available memory; otherwise it is lowered.
+    """
+    configured = float(clus.region_size_mb)
+    concurrency = max(1, int(clus.max_concurrency or 1))
+    queued = max(1, int(clus.queue_size or 1))
+    in_flight = (max(1, int(clus.max_workers or 1))
+                 * max(1, int(clus.max_concurrent_scenes or 1))
+                 * (3 * concurrency + queued))
     try:
-        available    = psutil.virtual_memory().available
-        budget_bytes = available / 2 / max(1, max_concurrent_scenes)
-        tile_bytes   = tile_mb * 1024 ** 2
-    except Exception as e:
-        logger.debug(f"bfio RAM check failed ({e}); keeping tiled dask array")
-        return
-
-    if tile_bytes > budget_bytes:
-        effective_mb = budget_bytes / (1024 ** 2)
-        logger.warning(
-            f"bf_tile_size_mb={tile_mb:.0f} exceeds per-scene RAM budget "
-            f"({effective_mb:.0f} MB); capping. "
-            f"Consider reducing --bf_tile_size_mb."
-        )
-    else:
-        effective_mb = tile_mb
-
-    arr         = manager.array
-    array_bytes = arr.nbytes
-
-    if array_bytes <= effective_mb * 1024 ** 2:
-        # ── small: compute fully into one in-memory chunk ──────────────────
-        logger.info(
-            f"bfio: computing {array_bytes / 1e6:.1f} MB into memory "
-            f"(tile_mb={effective_mb:.0f}, "
-            f"{max_concurrent_scenes} concurrent scenes)"
-        )
-        computed = manager.array.compute()
-        manager.state.update(
-            array=da.from_array(computed, chunks=computed.shape),
-            axes=manager.axes,
-            units=manager.units,
-            scales=manager.scales,
-        )
-    else:
-        # ── large: rechunk to tile-aligned boundaries ──────────────────────
-        # tile_mb == bf_tile_size_mb → rechunk is a no-op on the existing
-        # bfio dask chunks, so each task calls _read_bfio_tile exactly once.
-        sd = dict(zip(manager.axes, arr.shape))
-        T = sd.get('t', 1); C = sd.get('c', 1); Z = sd.get('z', 1)
-        Y = sd.get('y', 1); X = sd.get('x', 1)
-        t_t, c_t, z_t, y_t, x_t = _compute_tile_shape(
-            T, C, Z, Y, X, arr.dtype, effective_mb)
-        chunk = tuple(
-            {'t': t_t, 'c': c_t, 'z': z_t, 'y': y_t, 'x': x_t}[ax]
-            for ax in manager.axes
-        )
-        logger.info(
-            f"bfio: rechunking to tile-aligned regions "
-            f"chunk={chunk} ({effective_mb:.0f} MB per region)"
-        )
-        manager.state.update(
-            array=arr.rechunk(chunk),
-            axes=manager.axes,
-            units=manager.units,
-            scales=manager.scales,
-        )
+        available_mb = psutil.virtual_memory().available / 1024 ** 2
+    except Exception:                                       # noqa: BLE001
+        return configured
+    cap = max(_MIN_REGION_MB, 0.5 * available_mb / in_flight)
+    if configured <= cap:
+        return configured
+    logger.info(
+        f"region_size_mb={configured:g} lowered to {cap:.0f} MB so the "
+        f"{in_flight} regions that can be in flight at once fit in half the "
+        f"available RAM ({available_mb / 1024:.1f} GB)")
+    return cap
 
 
 async def _process_single_scene(manager: ArrayManager, output_path: str,
@@ -452,12 +444,13 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         conv = job.conversion
         ds   = job.downscale
         clus = job.cluster
+        meta = job.metadata
 
         # Fail fast on a name collision when not overwriting — BEFORE any data
         # preparation or writing, and crucially WITHOUT touching the existing
         # dataset.  (Otherwise the writer hits the existing array, errors, and
         # the error-cleanup below would delete the pre-existing output.)
-        if not conv.overwrite and os.path.exists(output_path):
+        if not conv.overwrite and store_exists(output_path):
             raise FileExistsError(
                 f"Output already exists: '{output_path}'. Refusing to convert "
                 f"with overwrite=False — the existing dataset was left untouched. "
@@ -468,19 +461,27 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             logger.info(f"The manager array shape before preparation: "
                         f"{manager.array.shape if manager.array is not None else 'N/A'}")
         await _prepare_manager(manager, job)
-        _maybe_compute_bfio_array(manager, clus.max_concurrent_scenes, clus.bf_tile_size_mb)
+        region_size_mb = _region_budget_mb(clus)
+        _maybe_compute_bfio_array(manager, region_size_mb)
+        update_channels = meta.channel_intensity_limits == 'from_array'
 
         # Windows must describe the dtype actually written, not the source: a
         # uint16 -> uint8 conversion would otherwise advertise 0-65535 for uint8
         # data and render black in viewers.
         channel_meta = parse_channels(
             manager,
-            channel_intensity_limits=conv.channel_intensity_limits,
+            # 'from_array' windows are measured on the written output below and
+            # replace these, so the source is not read in full a second time
+            # just to compute values that are discarded.
+            channel_intensity_limits=('from_dtype' if update_channels
+                                      else meta.channel_intensity_limits),
             dtype=conv.dtype or manager.array.dtype,
             # Without these the unary path silently ignored --channel_colors and
             # --channel_labels, which the aggregative path already honoured.
-            **{k: v for k, v in job.extra.items()
-               if k in ('channel_labels', 'channel_colors')},
+            # They have their own config section now; job.extra still wins so a
+            # per-row override from a conversion table is not overruled.
+            channel_labels=job.extra.get('channel_labels', meta.channel_labels),
+            channel_colors=job.extra.get('channel_colors', meta.channel_colors),
         )
 
         if conv.verbose:
@@ -513,7 +514,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     output_shard_coefficients=parse_shard_coefs(manager, job),
                     overwrite=conv.overwrite,
                     max_concurrency=clus.max_concurrency,
-                    region_size_mb=clus.region_size_mb,
+                    region_size_mb=region_size_mb,
                     queue_size=clus.queue_size,
                     verbose=conv.verbose,
                     compressor=conv.compressor,
@@ -546,7 +547,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     smart_scale_factor=parse_smart_scale_factors(manager, job),
                     max_concurrency=clus.max_concurrency,
                     max_concurrent_downscale_layers=clus.max_concurrent_downscale_layers,
-                    region_size_mb=clus.region_size_mb,
+                    region_size_mb=region_size_mb,
                     compute_batch_size=job.extra.get('compute_batch_size', 4),
                     queue_size=clus.queue_size,
                     memory_limit_per_batch=job.extra.get('memory_limit_per_batch', 1024),
@@ -556,8 +557,6 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     downscale_method=ds.downscale_method,
                 )
 
-        update_channels = conv.channel_intensity_limits == 'from_array'
-
         if conv.save_omexml or update_channels:
             out_mgr = ArrayManager(output_path, skip_dask=conv.skip_dask)
             await out_mgr.init()
@@ -565,14 +564,19 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             if update_channels:
                 out_mgr.fill_default_meta()
                 await out_mgr.sync_pyramid(save_changes=False)
-                if conv.squeeze:
-                    out_mgr.squeeze()
+                # No squeeze here: the output is already written, squeezed or
+                # not, and only its channel windows are updated.  Squeezing
+                # swaps the on-disk pyramid for a detached in-memory one, so
+                # saving failed with "No zarr group connected" whenever the
+                # output kept a singleton axis (keep_existing_resolutions).
                 channels = parse_channels(
                     out_mgr,
-                    channel_intensity_limits=conv.channel_intensity_limits,
+                    channel_intensity_limits=meta.channel_intensity_limits,
                     dtype=conv.dtype,
-                    **{k: v for k, v in job.extra.items()
-                       if k in ('channel_labels', 'channel_colors')},
+                    channel_labels=job.extra.get(
+                        'channel_labels', meta.channel_labels),
+                    channel_colors=job.extra.get(
+                        'channel_colors', meta.channel_colors),
                 )
                 assert out_mgr.pyr is not None
                 meta = out_mgr.pyr.meta
@@ -596,7 +600,10 @@ async def _process_single_scene_safe(manager: ArrayManager, output_path: str,
     # Whether the output already existed BEFORE this run.  A pre-existing
     # dataset is never ours to delete — only partial output created by this run
     # may be cleaned up on failure.
-    preexisting = os.path.exists(target)
+    # Remote-aware: os.path.exists is always False for a URL, which
+    # would make a pre-existing remote store look like our own partial
+    # output and hand it to the cleanup below.
+    preexisting = store_exists(target)
     try:
         await _process_single_scene(manager, output_path, job, sem)
     except FileExistsError:
@@ -648,9 +655,8 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
     """Open the input file, load all requested scenes/tiles/views/illuminations."""
     manager = ArrayManager(
         job.input_path,
-        metadata_reader=job.conversion.metadata_reader,
+        metadata_reader=job.metadata.metadata_reader,
         skip_dask=job.conversion.skip_dask,
-        reader_tile_size_mb=job.cluster.bf_tile_size_mb,
         force_bioformats=job.readers.force_bioformats,
         as_mosaic=job.readers.as_mosaic,
         keep_existing_resolutions=job.downscale.keep_existing_resolutions,
@@ -755,11 +761,22 @@ async def unary_worker(job: ConversionJob) -> None:
 
     # ── View / illumination outputs take priority when present ───────────
     if manager.loaded_views_illuminations is not None:
+        input_stem = os.path.splitext(os.path.basename(str(job.input_path)))[0]
+        basename = (job.resolved_basename
+                    or os.path.basename(str(job.input_path)).split('.')[0])
         for man in manager.loaded_views_illuminations.values():
+            # The view/illumination part of the name ("_illu1", "_view_concat")
+            # exists only inside series_path, and a resolved basename replaces
+            # that whole stem -- so it is carried over here.  Without it every
+            # view or illumination got the same name and all but the first were
+            # skipped as "Output already exists".
+            series_stem = os.path.splitext(os.path.basename(man.series_path))[0]
+            vi_suffix = (series_stem[len(input_stem):]
+                         if series_stem.startswith(input_stem) else "")
             out_path = _generate_output_path(
                 job.output_path, man.series_path,
                 man.series if add_scene else None,
-                resolved_basename=job.resolved_basename,
+                resolved_basename=basename + vi_suffix,
             )
             tasks.append(asyncio.create_task(
                 _process_single_scene_safe(man, out_path, job, sem)
