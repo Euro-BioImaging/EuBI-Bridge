@@ -34,7 +34,16 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
-    
+
+    - name: Cache downloaded test data
+      # Small public sample files fetched by the tests themselves (e.g. a Zeiss
+      # CZI mosaic from Zenodo 7015307, CC-BY-4.0), verified by MD5; cached so
+      # each runner downloads them once rather than on every run.
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/eubi-bridge-test-data
+        key: eubi-test-data-v1
+
     - name: Install Qt system libraries (Linux)
       if: runner.os == 'Linux'
       run: |
