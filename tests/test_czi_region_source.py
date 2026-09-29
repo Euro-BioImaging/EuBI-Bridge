@@ -111,9 +111,36 @@ class TestBackendRouting:
         assert self._backend(path, view_index="all",
                              illumination_index="all") == "pylibczirw"
 
-    def test_individual_tiles_still_use_aicspylibczi(self, tmp_path):
+    def test_individual_tiles_still_use_aicspylibczi(self, tmp_path,
+                                                     monkeypatch):
+        """Only the routing decision is tested here, so aicspylibczi is stubbed.
+
+        Opening this pylibCZIrw-written file with the real aicspylibczi crashed
+        the whole process on the Windows / Python 3.11 CI runner (an access
+        violation inside CziFile.__init__, which cannot be caught).  Its actual
+        reading is covered by the real-file comparisons, not by this test.
+        """
+        from types import SimpleNamespace
+
+        import bioio_czi.aicspylibczi_reader.reader as aics_reader
+        from eubi_bridge.core.czi_reader import read_czi
+
+        opened = []
+
+        class _AicsStub:
+            standard_metadata = SimpleNamespace(dimensions_present="MCZYX")
+            dims = SimpleNamespace()
+
+            def __init__(self, path, chunk_dims=None):
+                opened.append(path)
+
+        monkeypatch.setattr(aics_reader, "Reader", _AicsStub)
         path = self._write(tmp_path / "two.czi", tiles=2)
-        assert self._backend(path, as_mosaic=False) == "aics"
+
+        reader = read_czi(path, as_mosaic=False)
+
+        assert opened == [path]
+        assert isinstance(reader.img, _AicsStub)
 
     def test_stitched_tiles_use_pylibczirw(self, tmp_path):
         path = self._write(tmp_path / "two.czi", tiles=2)
