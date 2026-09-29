@@ -944,13 +944,6 @@ eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount --slu
 <p>—</p>
 </details></p>
 <p><details>
-<summary><code>--bf_tile_size_mb</code></summary>
-<p><strong>Type:</strong>&nbsp; <code>float</code></p>
-<p><strong>Default:</strong>&nbsp; <code>512.0</code></p>
-<p><strong>Valid values:</strong>&nbsp; &gt; 0.0</p>
-<p>—</p>
-</details></p>
-<p><details>
 <summary><code>--jvm_memory</code></summary>
 <p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
 <p><strong>Default:</strong>&nbsp; <code>1g</code></p>
@@ -1518,6 +1511,100 @@ eubi to_zarr /data/input /data/output --illumination_index all --concat_illumina
 </details></p>
 </details>
 <p><details>
+<summary>Metadata overrides</summary></p>
+<p><details>
+<summary><code>--metadata_reader</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>bfio</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>bfio</code> · <code>bioformats</code></p>
+<p>Backend used to read OME-XML pixel metadata.</p>
+<pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--override_channel_names</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>False</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--override_channel_names</code> to enable &nbsp;·&nbsp; <code>--override_channel_names False</code> to disable</p>
+<p>Replace output channel labels with the <code>channel_tag</code> values. For aggregative conversions with a tuple <code>channel_tag</code> only.</p>
+<pre><code>eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --override_channel_names
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_intensity_limits</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>from_dtype</code> or <code>from_array</code> or <code>auto</code></p>
+<p><strong>Default:</strong>&nbsp; <code>from_dtype</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>from_dtype</code> · <code>from_array</code> · <code>auto</code></p>
+<p>Strategy for OMERO display-window limits.</p>
+<pre><code>eubi to_zarr /data/input /data/output --channel_intensity_limits from_array
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_colors</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>""</code></p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--channel_labels</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>""</code></p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--time_scale</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--z_scale</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--y_scale</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--x_scale</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p><strong>Valid values:</strong>&nbsp; &gt; 0</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--time_unit</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--z_unit</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--y_unit</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>—</p>
+</details></p>
+<p><details>
+<summary><code>--x_unit</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code> or <code>None</code></p>
+<p><strong>Default:</strong>&nbsp; —</p>
+<p>—</p>
+</details></p>
+</details>
+<p><details>
 <summary>Concatenation overrides</summary></p>
 <p><details>
 <summary><code>--concatenation_axes</code></summary>
@@ -1738,13 +1825,6 @@ eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount --slu
 <p><strong>Type:</strong>&nbsp; <code>int</code> or <code>None</code></p>
 <p><strong>Default:</strong>&nbsp; <code>4</code></p>
 <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
-<p>—</p>
-</details></p>
-<p><details>
-<summary><code>--bf_tile_size_mb</code></summary>
-<p><strong>Type:</strong>&nbsp; <code>float</code></p>
-<p><strong>Default:</strong>&nbsp; <code>512.0</code></p>
-<p><strong>Valid values:</strong>&nbsp; &gt; 0.0</p>
 <p>—</p>
 </details></p>
 <p><details>

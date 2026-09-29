@@ -889,12 +889,6 @@ eubi configure cluster --max_retries 5
 <p>Dask thread count for parallel bfio tile reads (default 4).  <code>None</code> lets dask choose (cpu_count).</p>
 </details></p>
 <p><details>
-<summary><code>--bf_tile_size_mb</code></summary>
-<p><strong>Type:</strong>&nbsp; <code>float</code></p>
-<p><strong>Default:</strong>&nbsp; <code>default</code></p>
-<p>Tile size budget in MB for bfio tiled reading (default 512).</p>
-</details></p>
-<p><details>
 <summary><code>--jvm_memory</code></summary>
 <p><strong>Type:</strong>&nbsp; <code>str</code></p>
 <p><strong>Default:</strong>&nbsp; <code>default</code></p>
@@ -1485,9 +1479,103 @@ eubi configure readers --concat_illuminations
 </details>
 </details>
 <details class="command">
+<summary><strong><code>configure metadata</code></strong>&ensp;—&ensp;Update output metadata parameters. Omitted arguments keep their current values</summary>
+<p><strong>Usage:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>eubi<span class="w"> </span>configure<span class="w"> </span>metadata<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div></p>
+<p><details>
+<summary>Optional arguments</summary></p>
+<p><details>
+<summary><code>--metadata_reader</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Metadata backend — <code>'bfio'</code> (default) or <code>'bioformats'</code>.</p>
+<pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--override_channel_names</code></summary>
+<p><strong>Type:</strong>&nbsp; boolean flag</p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p><strong>Valid values:</strong>&nbsp; <code>--override_channel_names</code> to enable &nbsp;·&nbsp; <code>--override_channel_names False</code> to disable</p>
+<p>Replace channel names with ones derived from the concatenation tag values (default False).</p>
+<pre><code>eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --override_channel_names
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_intensity_limits</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>Literal['from_dtype', 'from_array', 'auto']</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>How to set OMERO window limits — <code>'from_dtype'</code> (default) uses dtype min/max, <code>'from_array'</code> computes per-channel min/max from pixel data, <code>'auto'</code> lets the viewer decide.</p>
+<pre><code>eubi to_zarr /data/input /data/output --channel_intensity_limits from_array
+</code></pre>
+</details></p>
+<p><details>
+<summary><code>--channel_colors</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Per-channel colour overrides as <code>"0,FF0000;1,00FF00"</code>. Channels left out keep their source colour, or are given one automatically.</p>
+</details></p>
+<p><details>
+<summary><code>--channel_labels</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Per-channel name overrides as <code>"0,DAPI;1,GFP"</code>.</p>
+</details></p>
+<p><details>
+<summary><code>--time_scale</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Physical size of one time step. Unset keeps whatever the source file states.</p>
+</details></p>
+<p><details>
+<summary><code>--z_scale</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Physical pixel size along z (e.g. <code>0.5</code>). Unset keeps the source value.</p>
+</details></p>
+<p><details>
+<summary><code>--y_scale</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Physical pixel size along y. Unset keeps the source value.</p>
+</details></p>
+<p><details>
+<summary><code>--x_scale</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>float</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Physical pixel size along x. Unset keeps the source value.</p>
+</details></p>
+<p><details>
+<summary><code>--time_unit</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Unit for <code>time_scale</code> (e.g. <code>'second'</code>).</p>
+</details></p>
+<p><details>
+<summary><code>--z_unit</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Unit for <code>z_scale</code> (e.g. <code>'micrometer'</code>).</p>
+</details></p>
+<p><details>
+<summary><code>--y_unit</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Unit for <code>y_scale</code>.</p>
+</details></p>
+<p><details>
+<summary><code>--x_unit</code></summary>
+<p><strong>Type:</strong>&nbsp; <code>str</code></p>
+<p><strong>Default:</strong>&nbsp; <code>default</code></p>
+<p>Unit for <code>x_scale</code>.</p>
+</details></p>
+</details>
+</details>
+<details class="command">
 <summary><strong><code>configure concatenation</code></strong>&ensp;—&ensp;Update aggregative (concatenation) parameters. Omitted arguments keep their current values</summary>
 <p><strong>Usage:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>eubi<span class="w"> </span>configure<span class="w"> </span>concatenation<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>eubi<span class="w"> </span>configure<span class="w"> </span>concatenation<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </code></pre></div></p>
 <p><details>
 <summary>Optional arguments</summary></p>
