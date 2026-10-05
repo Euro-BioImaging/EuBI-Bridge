@@ -184,7 +184,7 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--squeeze`            | `bool` | Drop the singlet dimensions from the output array        |
 | `--overwrite`          | `bool` | Overwrite existing Zarr data                             |
 | `--dtype`              | `str`  | `auto` keeps the source dtype; pass a NumPy dtype (e.g. `uint8`) to cast on write |
-| `--metadata_reader`    | `str`  | Metadata extraction backend (`bfio` or `bioformats`)     |
+| `--metadata_reader`    | `str`  | Metadata extraction backend: `micro` (default; Bio-Formats only as a per-file fallback), `bfio` or `bioio` |
 | `--save_omexml`        | `bool` | Save a companion OME-XML sidecar file                    |
 
 #### Downscale Parameters

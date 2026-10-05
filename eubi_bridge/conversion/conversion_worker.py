@@ -4,13 +4,15 @@ Conversion workers for image data processing with zarr storage.
 This module provides async workers for converting image data to zarr format,
 supporting both unary (single-file) and aggregative (multi-file) conversion modes.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import asyncio
 import os
 import sys
 from typing import Any, Dict, Optional, Tuple, Union
 
-import dask.array as da
 import numpy as np
 import pandas as pd
 import psutil
@@ -26,8 +28,12 @@ from eubi_bridge.utils.array_utils import autocompute_chunk_shape
 from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.metadata_utils import parse_channels
+from eubi_bridge.utils.optional_deps import dask_config
 from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
                                           sensitive_glob, take_filepaths)
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 # soft_start_jvm()
 
@@ -205,6 +211,9 @@ def build_acquisition_metadata(manager: ArrayManager,
     ``translation`` transforms (see :func:`parse_translation`).
     """
     flag = getattr(job.conversion, 'export_acquisition_metadata', None)
+    # metadata_reader='micro': wavelengths and axis values that OME-Zarr has
+    # no field for (D4) are written whenever the file has them
+    extras = dict(getattr(manager, 'acquisition_extras', None) or {})
     is_split = any(getattr(manager, attr, None) is not None
                    for attr in ('mosaic_tile_index',)) or bool(
                    getattr(manager, 'origindict', None))
@@ -213,10 +222,12 @@ def build_acquisition_metadata(manager: ArrayManager,
         if marker in os.path.basename(series_path):
             is_split = True
             break
-    if flag is False or (flag is None and not is_split):
+    if flag is False:
         return None
+    if flag is None and not is_split:
+        return extras or None
 
-    meta: dict = {}
+    meta: dict = dict(extras)
     for key, attr in (('scene_index', 'series'),
                       ('tile_index', 'mosaic_tile_index')):
         val = getattr(manager, attr, None)
@@ -231,7 +242,9 @@ def build_acquisition_metadata(manager: ArrayManager,
         if m:
             meta[key] = int(m.group(1))
     if 'origindict' in dir(manager) and manager.origindict:
-        meta['origin_um'] = dict(manager.origindict)
+        unit = (getattr(manager, 'unitdict', None) or {}).get('x', 'micrometer')
+        key = 'origin_um' if unit in ('micrometer', 'µm', 'um') else f'origin_{unit}'
+        meta[key] = dict(manager.origindict)
     meta['source_path'] = str(getattr(job, 'input_path', '') or '')
     return meta or None
 
@@ -396,6 +409,7 @@ def _maybe_compute_bfio_array(manager: ArrayManager, region_size_mb: float) -> N
         return
     logger.info(f"Bio-Formats: reading {nbytes / 1e6:.1f} MB into memory at once")
     computed = arr.compute() if hasattr(arr, 'compute') else np.asarray(arr)
+    import dask.array as da                     # Bio-Formats tiling: the full stack
     manager.state.update(
         array=da.from_array(computed, chunks=computed.shape),
         axes=manager.axes,
@@ -414,13 +428,17 @@ def _region_budget_mb(clus) -> float:
 
     Each writer holds up to ``2 * max_concurrency`` regions being read,
     ``queue_size`` waiting and ``max_concurrency`` being written, and that per
-    concurrent scene in every worker process.  The configured size is kept when
-    all of those fit in half the available memory; otherwise it is lowered.
+    concurrent scene in every conversion running at once -- ``concurrent_jobs``,
+    which the dispatcher sets to min(max_workers, the number of jobs): one
+    concatenated output keeps one worker busy, not ``max_workers``.  The
+    configured size is kept when all of those fit in half the available
+    memory; otherwise it is lowered.
     """
     configured = float(clus.region_size_mb)
     concurrency = max(1, int(clus.max_concurrency or 1))
     queued = max(1, int(clus.queue_size or 1))
-    in_flight = (max(1, int(clus.max_workers or 1))
+    running = getattr(clus, 'concurrent_jobs', None) or clus.max_workers
+    in_flight = (max(1, int(running or 1))
                  * max(1, int(clus.max_concurrent_scenes or 1))
                  * (3 * concurrency + queued))
     try:
@@ -488,7 +506,6 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             logger.info(f"The manager array shape before storing: "
                         f"{manager.array.shape if manager.array is not None else 'N/A'}")
 
-        import dask
         # bf_read_concurrency caps dask's thread pool → caps peak concurrent open
         # BioReader instances (one per thread via thread-local cache).  Without this,
         # dask defaults to cpu_count threads, potentially opening cpu_count readers
@@ -496,7 +513,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         dask_kw = {}
         if clus.bf_read_concurrency is not None:
             dask_kw['num_workers'] = clus.bf_read_concurrency
-        with dask.config.set(**dask_kw):
+        with dask_config(**dask_kw):
             if ds.keep_existing_resolutions and manager.pyr is not None and len(manager.pyr.layers) > 1:
                 logger.info(f"Preserving {len(manager.pyr.layers)} existing resolution levels "
                             f"from source for {output_path}")
@@ -653,6 +670,9 @@ def _generate_output_path(base_path: str, series_path: str,
 
 async def _load_input_manager(job: ConversionJob) -> ArrayManager:
     """Open the input file, load all requested scenes/tiles/views/illuminations."""
+    if job.readers.pixel_reader == 'micro' or job.metadata.metadata_reader == 'micro':
+        from eubi_bridge.core.micro_source import set_read_concurrency
+        set_read_concurrency(job.cluster.micro_read_concurrency, job.cluster.memory_per_worker)
     manager = ArrayManager(
         job.input_path,
         metadata_reader=job.metadata.metadata_reader,
@@ -660,6 +680,8 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
         force_bioformats=job.readers.force_bioformats,
         as_mosaic=job.readers.as_mosaic,
         keep_existing_resolutions=job.downscale.keep_existing_resolutions,
+        pixel_reader=job.readers.pixel_reader,
+        micro_check_pixels=job.readers.micro_check_pixels,
     )
 
     # scene_index may be 'all', an int, or a comma-separated string from CSV
@@ -943,7 +965,7 @@ async def _aggregative_group_pipeline(
 
     scene_index            = job_kwargs.get('scene_index', 0)
     override_channel_names = job_kwargs.get('override_channel_names', False)
-    metadata_reader        = job_kwargs.get('metadata_reader', 'bfio')
+    metadata_reader        = job_kwargs.get('metadata_reader', 'micro')
     common_dir             = os.path.commonpath(file_paths)
 
     base = AggregativeConverter(
@@ -952,8 +974,20 @@ async def _aggregative_group_pipeline(
     )
     base.filepaths = file_paths
 
+    pixel_reader = job_kwargs.get('pixel_reader', 'micro')
+    micro_check_pixels = bool(job_kwargs.get('micro_check_pixels', False))
+    if metadata_reader == 'micro':
+        # micro-reader's metadata comes with its pixels (one parse)
+        pixel_reader, micro_check_pixels = 'micro', False
+    if pixel_reader == 'micro':
+        from eubi_bridge.core.micro_source import set_read_concurrency
+        set_read_concurrency(job_kwargs.get('micro_read_concurrency', 4),
+                             job_kwargs.get('memory_per_worker'))
+
     await base.read_dataset(
-        readers_params={'aszarr': job_kwargs.get('skip_dask', False)}
+        readers_params={'aszarr': job_kwargs.get('skip_dask', False)},
+        pixel_reader=pixel_reader,
+        micro_check_pixels=micro_check_pixels,
     )
     await base.digest(
         time_tag=job_kwargs.get('time_tag'),
@@ -964,6 +998,8 @@ async def _aggregative_group_pipeline(
         axes_of_concatenation=job_kwargs.get('concatenation_axes'),
         metadata_reader=metadata_reader,
         output_path=common_dir,
+        pixel_reader=pixel_reader,      # reaches each file's ArrayManager
+        micro_check_pixels=micro_check_pixels,
     )
 
     if not base.managers:
@@ -987,7 +1023,6 @@ def aggregative_worker_from_paths(
     Each subprocess starts its own JVM instance — no shared reader state.
     """
     import concurrent.futures
-    import dask
 
     soft_start_jvm()
 
@@ -995,7 +1030,7 @@ def aggregative_worker_from_paths(
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            with dask.config.set(scheduler='synchronous'):
+            with dask_config(scheduler='synchronous'):
                 return loop.run_until_complete(
                     _aggregative_group_pipeline(file_paths, output_path, job_kwargs)
                 )

@@ -181,10 +181,13 @@ def initialize_worker_process(tensorstore_data_copy_concurrency='default'):
     os.environ['JGO_CACHE_DIR'] = '/dev/null'
     os.environ['MAVEN_OFFLINE'] = 'true'
 
-    # Configure scyjava BEFORE any imports that might use Java
-    import scyjava
-    scyjava.config.endpoints.clear()
-    scyjava.config.maven_offline = True
+    # Configure scyjava BEFORE any imports that might use Java (the Java
+    # bridge is in the full eubi-bridge only)
+    from eubi_bridge.utils.optional_deps import is_installed
+    if is_installed("scyjava"):
+        import scyjava
+        scyjava.config.endpoints.clear()
+        scyjava.config.maven_offline = True
 
     # Disable JGO
     try:
@@ -198,8 +201,12 @@ def initialize_worker_process(tensorstore_data_copy_concurrency='default'):
     from eubi_bridge.utils.jvm_manager import soft_start_jvm
 
     try:
-        soft_start_jvm()
-        logger.info(f"[Worker {mp.current_process().name}] JVM initialized successfully")
+        status = soft_start_jvm()
+        if status == "started":
+            logger.info(f"[Worker {mp.current_process().name}] JVM initialized successfully")
+        elif status == "on demand":
+            logger.debug(f"[Worker {mp.current_process().name}] JVM not started: it starts "
+                         f"only if a file needs Bio-Formats")
     except Exception as e:
         logger.error(f"[Worker {mp.current_process().name}] JVM init failed: {e}")
         import traceback

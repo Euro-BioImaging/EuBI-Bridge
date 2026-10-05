@@ -854,10 +854,10 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--metadata_reader</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `bfio`</p>
-    <p><strong>Valid values:</strong>&nbsp; `bfio` · `bioformats`</p>
-    <p>Backend used to read OME-XML pixel metadata.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
+    <p><strong>Default:</strong>&nbsp; `micro`</p>
+    <p><strong>Valid values:</strong>&nbsp; `micro` · `bfio` · `bioio`</p>
+    <p>Backend used to read the pixel metadata. `micro` (the default) reads metadata and pixels with micro-reader; a file it does not read falls back to Bio-Formats, which starts Java only then.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bfio
     </code></pre>
     </details>
 

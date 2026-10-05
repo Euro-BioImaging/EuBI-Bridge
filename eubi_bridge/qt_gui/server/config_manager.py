@@ -68,6 +68,7 @@ def _config_to_react(cfg: dict) -> dict:
             "useSlurm":             cluster.get("on_slurm", False),
             "jvmMemory":            _parse_jvm_gb(cluster.get("jvm_memory", "2g"), 2.0),
             "bfReadConcurrency":    cluster.get("bf_read_concurrency", 4),
+            "microReadConcurrency": cluster.get("micro_read_concurrency", 4),
         },
         "reader": {
             "readAsMosaic":         readers.get("as_mosaic", False),
@@ -85,6 +86,7 @@ def _config_to_react(cfg: dict) -> dict:
             "rotationIndex":        str(readers.get("rotation_index", 0)),
             "sampleIndex":          str(readers.get("sample_index", 0)),
             "forceBioformats":      readers.get("force_bioformats", False),
+            "useMicroReader":       readers.get("pixel_reader", "micro") == "micro",
         },
         "conversion": {
             "zarrFormat":           conv.get("zarr_format", 2),
@@ -142,7 +144,7 @@ def _config_to_react(cfg: dict) -> dict:
         "metadata": {
             # Read from the 'metadata' section, falling back to 'conversion'
             # only so a config written before the move still populates the form.
-            "metadataReader":         meta.get("metadata_reader", conv.get("metadata_reader", "bfio")),
+            "metadataReader":         meta.get("metadata_reader", conv.get("metadata_reader", "micro")),
             "channelIntensityLimits": "from_datatype" if meta.get("channel_intensity_limits", conv.get("channel_intensity_limits", "from_dtype")) == "from_dtype" else "from_array",
             # Per-channel colour overrides, "idx,RRGGBB;..." as the CLI takes
             # them.  Empty means every channel keeps its source colour or gets
@@ -226,6 +228,7 @@ def _react_to_config(data: dict) -> dict:
             "max_retries":                     10,
             "jvm_memory":                      _gb_to_jvm_str(cluster_d.get("jvmMemory", 2)),
             "bf_read_concurrency":             cluster_d.get("bfReadConcurrency", 4),
+            "micro_read_concurrency":          cluster_d.get("microReadConcurrency", 4),
         },
         "readers": {
             "as_mosaic":            reader_d.get("readAsMosaic", False),
@@ -239,6 +242,7 @@ def _react_to_config(data: dict) -> dict:
             "rotation_index":       _parse_int(reader_d.get("rotationIndex", "0")),
             "sample_index":         _parse_int(reader_d.get("sampleIndex", "0")),
             "force_bioformats":     reader_d.get("forceBioformats", False),
+            "pixel_reader":         "micro" if reader_d.get("useMicroReader", True) else "standard",
         },
         "conversion": {
             "zarr_format":           conv_d.get("zarrFormat", 2),
@@ -287,7 +291,7 @@ def _react_to_config(data: dict) -> dict:
             "time_smart_scale_factor":  down_d.get("smartScaleTime") or None,
         },
         "metadata": {
-            "metadata_reader":          meta_d.get("metadataReader", "bfio"),
+            "metadata_reader":          meta_d.get("metadataReader", "micro"),
             "override_channel_names":   conv_d.get("overrideChannelNames", False),
             "channel_intensity_limits": ci_limits,
             "channel_colors":           meta_d.get("channelColors", "") or "",

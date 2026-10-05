@@ -29,6 +29,7 @@ from typing import Any, Iterable, NamedTuple
 from eubi_bridge.core.config_models import (
     ConversionConfig, DownscaleConfig, MetadataConfig)
 from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
+from eubi_bridge.utils.capabilities import has_bioformats
 from eubi_bridge.utils.path_utils import (
     AGGREGATIVE_GROUP_COLUMN, concat_without_group_problems,
     sanitise_group_name)
@@ -75,6 +76,7 @@ _CLUSTER_KEYS = frozenset({
     "max_workers", "queue_size", "region_size_mb", "max_concurrency",
     "max_concurrent_downscale_layers", "max_concurrent_scenes",
     "memory_per_worker", "jvm_memory", "bf_read_concurrency",
+    "micro_read_concurrency",
     "on_local_cluster", "on_slurm", "slurm_partition", "slurm_account",
     "slurm_time", "slurm_sif_path", "slurm_worker_timeout",
 })
@@ -135,6 +137,9 @@ _INDEX_TIP = ("'all', a single index, or a comma-separated list such as '0,2,3'.
 # The parameters an Edit Cells dialog may offer.  Anything absent is either
 # non-overridable (_NON_ROW_OVERRIDABLE), cluster-wide (_CLUSTER_KEYS), or has no
 # sensible single-cell editor; those keep the baseline value.
+#: Bio-Formats installed (the full eubi-bridge); lite offers micro-reader only
+_BIOFORMATS = has_bioformats()
+
 _PARAM_SPECS: tuple[ParamSpec, ...] = (
     # ---- Paths ----
     # Editable like any other cell, but with a browse button: these are among
@@ -197,7 +202,16 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
               tab="Reader", group="Other Indices (Experimental)"),
     ParamSpec("sample_index", "Sample index", "text", tooltip=_INDEX_TIP,
               tab="Reader", group="Other Indices (Experimental)"),
-    ParamSpec("force_bioformats", "Force Bio-Formats", "bool", tab="Reader"),
+    # Bio-Formats only in the full eubi-bridge: no column for it in lite
+    *([ParamSpec("force_bioformats", "Force Bio-Formats", "bool", tab="Reader")]
+      if _BIOFORMATS else []),
+    # chosen per conversion, like the metadata reader ('micro' with micro-reader's
+    # metadata either way); the standard readers only in the full eubi-bridge
+    ParamSpec("pixel_reader", "Pixel reader", "choice",
+              ("micro", "standard") if _BIOFORMATS else ("micro",), tab="Reader",
+              tooltip="'micro': read the pixels with micro-reader (a file it does not "
+                      "read falls back to the standard reader); 'standard': the "
+                      "format's usual reader."),
 
     # ---- Conversion tab (group order follows the form) ----
     ParamSpec("compressor", "Compressor", "choice",
@@ -277,7 +291,8 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
               _literal_options(MetadataConfig, "channel_intensity_limits"),
               tab="Metadata"),
     ParamSpec("metadata_reader", "Metadata reader", "choice",
-              ("bioio", "bfio", "bioformats"), tab="Metadata"),
+              ("micro", "bfio", "bioio", "bioformats") if _BIOFORMATS else ("micro",),
+              tab="Metadata"),
     # Edited as raw text here rather than with a colour picker: a batch row is
     # one cell, and the CLI's own format is the clearest thing to show.
     ParamSpec("channel_colors", "Channel colours", "text", tab="Metadata",
@@ -561,6 +576,16 @@ def _overridable(value: Any) -> bool:
 
 # ── batch model ───────────────────────────────────────────────────────────────
 
+#: in a row: the parameters the user set (Edit Cells, a loaded CSV) -- shown
+#: and written even when equal to the config, so a value someone chose is never
+#: displayed as a blank "inherit" cell.  Not a parameter itself.
+_EXPLICIT = "_explicit"
+
+
+def _explicit(row: dict[str, Any]) -> set:
+    return row.get(_EXPLICIT) or set()
+
+
 class BatchModel:
     """An ordered queue of conversion rows plus the config they diff against.
 
@@ -817,6 +842,7 @@ class BatchModel:
         for index in row_indices:
             row = self._rows[index]
             row[key] = value
+            row.setdefault(_EXPLICIT, set()).add(key)
             if key == "compressor":
                 # The previous codec's parameters are meaningless for the new
                 # one: blosc's cname/shuffle passed to GZip raise TypeError.
@@ -839,6 +865,8 @@ class BatchModel:
         if uneditable_reason(key) is not None:
             raise KeyError(f"{key!r} cannot be overridden per row")
         base = self._effective_kwargs()
+        for index in row_indices:
+            _explicit(self._rows[index]).discard(key)
         if key not in base:
             for index in row_indices:
                 self._rows[index].pop(key, None)
@@ -896,7 +924,10 @@ class BatchModel:
                     else _to_sentinel(key, self._effective_kwargs().get(key)))
         if key not in row:
             return None
-        return row[key] if self.differs(row, key) else None
+        if self.differs(row, key) or key in _explicit(row) or any(
+                key in group and _explicit(row) & group for group in _COUPLED_KEYS):
+            return row[key]
+        return None
 
     def is_inert(self, row: dict[str, Any], key: str,
                  _seen: frozenset[str] = frozenset()) -> bool:
@@ -985,7 +1016,7 @@ class BatchModel:
         candidates: dict[str, None] = {}          # insertion-ordered set
         for row in self._rows:
             for key in row:
-                if key in _PATH_COLUMNS:
+                if key in _PATH_COLUMNS or key == _EXPLICIT:
                     continue
                 if not for_csv and key in _COUPLED_RIDERS:
                     continue
@@ -1004,7 +1035,8 @@ class BatchModel:
             # Hoisted out of the loop: ``differs`` would otherwise rebuild this
             # comparison value for every row.
             want = _to_sentinel(key, baseline.get(key))
-            if any(key in row and not values_equal(want, row[key])
+            if any(key in row and (key in _explicit(row)
+                                   or not values_equal(want, row[key]))
                    for row in self._rows):
                 extra.add(key)
         return [*_PATH_COLUMNS, *sort_keys(extra)]
@@ -1134,6 +1166,7 @@ class BatchModel:
                 for col in _PATH_COLUMNS:
                     if row.get(col):
                         row[col] = _absolutise(row[col], base_dir)
+                row[_EXPLICIT] = {k for k in row if k not in _PATH_COLUMNS}
                 model._rows.append(row)
 
         snapshot = os.path.join(base_dir, CONFIG_SNAPSHOT_NAME)

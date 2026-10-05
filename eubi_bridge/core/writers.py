@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import asyncio
 import concurrent.futures
 import gc
@@ -11,13 +15,16 @@ from pathlib import Path
 from queue import Queue
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-import dask
-import dask.array as da
 import numpy as np
 import s3fs
 import tensorstore as ts
 import zarr
 from natsort import natsorted
+
+from eubi_bridge.utils.optional_deps import is_dask_array
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 
 def cast_to_dtype(arr, dtype):
@@ -79,8 +86,6 @@ def _zarr_group(store, overwrite: bool, zarr_format: int) -> zarr.Group:
         except TypeError:
             return zarr.group(store, overwrite=overwrite)
 
-from dask import delayed
-from distributed import get_client
 from zarr import codecs
 from zarr.storage import LocalStore
 
@@ -114,7 +119,17 @@ def _get_read_lock(arr) -> threading.Lock:
 
 
 def _is_resource_backed(arr) -> bool:
-    """Return True when *arr* is a resource-backed dask array (BioFormats-backed)."""
+    """Return True when *arr* is a resource-backed dask array.
+
+    Such arrays read through one shared handle that is not thread-safe, so
+    ``_read_region`` serialises them: Bio-Formats-backed arrays (one Java
+    reader) and bioio-nd2 (the nd2 library's file handle / memory map, which
+    returns wrong pixels or crashes the process when read from several
+    threads at once).  This lock is what keeps ND2 conversions correct;
+    ``tests/test_resource_backed_read_lock.py`` fails if it stops applying.
+    """
+    if not is_dask_array(arr):
+        return False
     try:
         from resource_backed_dask_array import ResourceBackedDaskArray
         return isinstance(arr, ResourceBackedDaskArray)
@@ -478,6 +493,13 @@ def _get_or_create_multimeta(gr: zarr.Group,
     return handler
 
 
+#: Put on a writer queue once per writer thread after the last region: the
+#: writer stops when it takes one.  (Writers used to poll the queue with a 1 s
+#: timeout and stop on an empty queue, which added up to a second to every
+#: write -- and every scene, tile and pyramid level paid it.)
+_END_OF_REGIONS = object()
+
+
 def _read_region(arr, region_slice):
     """
     Unified region reader for both dask.array and DynamicArray.
@@ -502,8 +524,9 @@ def _read_region(arr, region_slice):
             return arr._read_direct(region_slice)
         elif hasattr(arr, 'compute') and hasattr(arr, '__dask_graph__'):
             # Dask array: slice then compute.
-            # BioFormats-backed arrays share a single Java reader which is NOT
-            # thread-safe, so serialise concurrent reads through a per-array lock.
+            # Resource-backed arrays (Bio-Formats' single Java reader, bioio-nd2's
+            # file handle) are NOT thread-safe: serialise concurrent reads
+            # through a per-array lock (see _is_resource_backed).
             if _is_resource_backed(arr):
                 with _get_read_lock(arr):
                     sliced = arr[region_slice]
@@ -873,7 +896,7 @@ async def write_with_queue_async(
         input_chunks=input_chunks
     )
     # If arr is a dask array, use dask to write
-    if isinstance(arr, da.Array):
+    if is_dask_array(arr):
         arr = arr.rechunk(region_shape)
     
     # === OPEN WITH TENSORSTORE FOR WRITING ===
@@ -976,13 +999,11 @@ async def write_with_queue_async(
             
             async def _async_writer():
                 while True:
-                    try:
-                        region_slice, data = q.get(timeout=1.0)
-                    except Exception:
-                        # Check if reading is done and queue is empty
-                        if state['done_reading'] and q.empty():
-                            break
-                        continue
+                    item = q.get()
+                    if item is _END_OF_REGIONS:
+                        q.task_done()
+                        break
+                    region_slice, data = item
                     
                     try:
                         # Submit async write
@@ -1008,19 +1029,22 @@ async def write_with_queue_async(
             loop.close()
         
         # === MONITOR THREAD ===
+        # Wakes every 2 s to log progress, and at once when writing ends (it
+        # used to sleep 2 s before every check, and the write waited for it).
+        finished = threading.Event()
+
+        def log_progress():
+            with state['lock']:
+                completed, total = state['completed'], state['total']
+            if total > 0 and verbose:
+                logger.info(f"Write progress: {completed}/{total} regions "
+                            f"({100.0 * completed / total:.1f}%)")
+
         def monitor_progress():
-            """Log progress every 2 seconds."""
-            while True:
-                time.sleep(2.0)
-                with state['lock']:
-                    completed = state['completed']
-                    total = state['total']
-                    if total > 0:
-                        pct = 100.0 * completed / total
-                        if verbose:
-                            logger.info(f"Write progress: {completed}/{total} regions ({pct:.1f}%)")
-                    if completed + state['failed'] >= total:
-                        break
+            """Log progress every 2 seconds until writing ends."""
+            while not finished.wait(2.0):
+                log_progress()
+            log_progress()
         
         # === START THREADS ===
         readers = [threading.Thread(target=reader_thread, daemon=True) for _ in range(num_readers)]
@@ -1037,15 +1061,19 @@ async def write_with_queue_async(
         for t in readers:
             t.join()
         
-        # Signal writers that reading is done
+        # Signal writers that reading is done: one end marker each, queued
+        # behind the regions still waiting
         state['done_reading'] = True
-        
+        for _ in writers:
+            q.put(_END_OF_REGIONS)
+
         # Wait for queue to empty and writers to finish
         q.join()
         for t in writers:
             t.join()
-        
-        monitor.join(timeout=5.0)
+
+        finished.set()
+        monitor.join()
         
         # Check for errors
         if state['error'] is not None:
@@ -1226,12 +1254,11 @@ async def write_pyramid_single_pass_async(
 
             async def _async_writer():
                 while True:
-                    try:
-                        region_slice, data = q.get(timeout=1.0)
-                    except Exception:
-                        if state["done_reading"] and q.empty():
-                            break
-                        continue
+                    item = q.get()
+                    if item is _END_OF_REGIONS:
+                        q.task_done()
+                        break
+                    region_slice, data = item
                     try:
                         source = ts.array(np.ascontiguousarray(data))
                         for store, factors, level_shape in zip(
@@ -1285,6 +1312,8 @@ async def write_pyramid_single_pass_async(
         for t in readers:
             t.join()
         state["done_reading"] = True
+        for _ in writers:                       # one end marker per writer
+            q.put(_END_OF_REGIONS)
         q.join()
         for t in writers:
             t.join()

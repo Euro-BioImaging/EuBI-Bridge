@@ -62,22 +62,52 @@ def _normalise_row_overrides(overrides: dict) -> dict:
     return normalised
 
 
+def _row_metadata_readers(input_path, default: str, force_default: bool) -> tuple:
+    """The metadata readers a conversion will use, and whether any forces
+    Bio-Formats: the configured ones for a plain input; for a conversion
+    table (a DataFrame, or a .csv / .tsv / .txt / .xls / .xlsx file), each
+    row's own -- a blank cell means the configured value."""
+    import pandas as pd
+    df = None
+    if isinstance(input_path, pd.DataFrame):
+        df = input_path
+    elif isinstance(input_path, str) and input_path.endswith(tuple(TABLE_FORMATS)):
+        try:
+            df = (pd.read_excel(input_path) if input_path.endswith((".xls", ".xlsx"))
+                  else pd.read_csv(input_path))
+        except Exception:                       # noqa: BLE001 - read again (and fail) later
+            df = None
+    if df is None or df.empty:
+        return {default}, bool(force_default)
+
+    def given(value) -> bool:
+        return value is not None and value == value and str(value).strip() != ""
+
+    readers = ({str(v) if given(v) else default for v in df["metadata_reader"]}
+               if "metadata_reader" in df else {default})
+    force = bool(force_default)
+    if "force_bioformats" in df:
+        force = any((str(v).strip().lower() in ("true", "1")) if given(v) else force_default
+                    for v in df["force_bioformats"])
+    return readers, force
+
+
 # Heavy imports are deferred — config commands don't need zarr/dask/JVM.
 def _ensure_heavy_imports():
     """Lazy-load heavy modules only when needed for actual conversions."""
-    global dask, np, psutil, s3fs, zarr, da, AggregativeConverter, run_updates
-    if 'dask' in globals():
+    global np, psutil, s3fs, zarr, AggregativeConverter, run_updates, _heavy_imported
+    if _heavy_imported:
         return
-    import scyjava
-    scyjava.config.endpoints.clear()
-    scyjava.config.maven_offline = True
-    scyjava.config.jgo_disabled = True
-    import dask
+    from eubi_bridge.utils.optional_deps import is_installed
+    if is_installed("scyjava"):            # the Java bridge: the full eubi-bridge only
+        import scyjava
+        scyjava.config.endpoints.clear()
+        scyjava.config.maven_offline = True
+        scyjava.config.jgo_disabled = True
     import numpy as np
     import psutil
     import s3fs
     import zarr
-    from dask import array as da
     warnings.filterwarnings(
         "ignore",
         message="Dask configuration key 'distributed.p2p.disk' has been deprecated",
@@ -89,6 +119,10 @@ def _ensure_heavy_imports():
     )
     from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
     from eubi_bridge.conversion.updater import run_updates
+    _heavy_imported = True
+
+
+_heavy_imported = False
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +190,7 @@ class ConfigManager:
             tensorstore_data_copy_concurrency=4,
             max_retries=10,
             bf_read_concurrency=4,
+            micro_read_concurrency=4,
             jvm_memory='1g',
             slurm_time='24:00:00',
             slurm_account=None,
@@ -173,6 +208,8 @@ class ConfigManager:
             mosaic_tile_index=0,
             sample_index=0,
             force_bioformats=False,
+            pixel_reader='micro',
+            micro_check_pixels=False,
             concat_views=False,
             concat_illuminations=False,
         ),
@@ -224,7 +261,7 @@ class ConfigManager:
             x_smart_scale_factor=None,
         ),
         metadata=dict(
-            metadata_reader='bfio',
+            metadata_reader='micro',
             override_channel_names=False,
             channel_intensity_limits='from_dtype',
             channel_colors='',
@@ -428,6 +465,7 @@ class ConfigManager:
                           tensorstore_data_copy_concurrency: int = 'default',
                           max_retries: int = 'default',
                           bf_read_concurrency: int = 'default',
+                          micro_read_concurrency: int = 'default',
                           bf_tile_size_mb: float = 'default',
                           jvm_memory: str = 'default',
                           slurm_time: str = 'default',
@@ -459,7 +497,9 @@ class ConfigManager:
                           sample_index: int = 'default',
                           force_bioformats: bool = 'default',
                           concat_views: bool = 'default',
-                          concat_illuminations: bool = 'default') -> None:
+                          concat_illuminations: bool = 'default',
+                          pixel_reader: str = 'default',
+                          micro_check_pixels: bool = 'default') -> None:
         """Update reader parameters. Omitted arguments keep their current values."""
         params = {k: v for k, v in locals().items() if k != 'self'}
         for key, val in params.items():
@@ -527,8 +567,11 @@ class ConfigManager:
         warns and says which keys to set here instead.
 
         Args:
-            metadata_reader: Metadata backend — ``'bfio'`` (default) or
-                ``'bioformats'``.
+            metadata_reader: Metadata backend — ``'micro'`` (default):
+                micro-reader's metadata, and its pixels with it (no JVM unless
+                a file falls back to Bio-Formats; also writes the stage
+                position as the NGFF translation and wavelengths in the
+                ``eubi_bridge`` attributes); ``'bfio'`` or ``'bioio'``.
             override_channel_names: Replace channel names with ones derived
                 from the concatenation tags (default False).
             channel_intensity_limits: How to set OMERO window limits —
@@ -882,6 +925,7 @@ class ConfigureGroup:
                 tensorstore_data_copy_concurrency: int = 'default',
                 max_retries: int = 'default',
                 bf_read_concurrency: int = 'default',
+                micro_read_concurrency: int = 'default',
                 bf_tile_size_mb: float = 'default',
                 jvm_memory: str = 'default',
                 slurm_time: str = 'default',
@@ -910,6 +954,8 @@ class ConfigureGroup:
             max_retries: Retries on broken worker process (default 10).
             bf_read_concurrency: Dask thread count for parallel bfio tile reads
                 (default 4).  ``None`` lets dask choose (cpu_count).
+            micro_read_concurrency: micro-reader's decode threads per worker
+                process, used with ``readers(pixel_reader='micro')`` (default 4).
             bf_tile_size_mb: DEPRECATED and ignored. Bio-Formats images are now
                 read one region at a time, so ``region_size_mb`` sets the read
                 size. Accepted for now so existing scripts keep working.
@@ -938,7 +984,9 @@ class ConfigureGroup:
                 sample_index: int = 'default',
                 force_bioformats: bool = 'default',
                 concat_views: bool = 'default',
-                concat_illuminations: bool = 'default') -> None:
+                concat_illuminations: bool = 'default',
+                pixel_reader: str = 'default',
+                micro_check_pixels: bool = 'default') -> None:
         """Update file-reader parameters. Omitted arguments keep their current values.
 
         Args:
@@ -959,6 +1007,12 @@ class ConfigureGroup:
                 writing separate OME-Zarr outputs (default False).
             concat_illuminations: Stack multiple illuminations along the channel axis
                 instead of writing separate OME-Zarr outputs (default False).
+            pixel_reader: ``'micro'`` (default): read the pixels with
+                micro-reader (a file it does not read falls back to the
+                standard reader with a warning), or ``'standard'``.
+            micro_check_pixels: with ``pixel_reader='micro'``, also open the
+                standard reader and compare its pixels with micro-reader's
+                (slower; default False: checked against the metadata only).
         """
         return self._cfg.configure_readers(**{k: v for k, v in locals().items() if k != 'self'})
 
@@ -1091,8 +1145,11 @@ class ConfigureGroup:
         """Update output metadata parameters. Omitted arguments keep their current values.
 
         Args:
-            metadata_reader: Metadata backend — ``'bfio'`` (default) or
-                ``'bioformats'``.
+            metadata_reader: Metadata backend — ``'micro'`` (default):
+                micro-reader's metadata, and its pixels with it (no JVM unless
+                a file falls back to Bio-Formats; also writes the stage
+                position as the NGFF translation and wavelengths in the
+                ``eubi_bridge`` attributes); ``'bfio'`` or ``'bioio'``.
             override_channel_names: Replace channel names with ones derived from
                 the concatenation tag values (default False).
             channel_intensity_limits: How to set OMERO window limits —
@@ -1182,8 +1239,6 @@ class ConversionManager:
                 **kwargs) -> None:
         """Convert image data to OME-Zarr format."""
         _ensure_heavy_imports()
-        from eubi_bridge.utils.jvm_manager import soft_start_jvm
-        soft_start_jvm()
 
         t0 = time.time()
         logger.info("Conversion starting.")
@@ -1230,6 +1285,23 @@ class ConversionManager:
         ConversionConfig(**conversion_p)
         DownscaleConfig(**downscale_p)
         MetadataConfig(**metadata_p)
+        # The metadata readers every conversion will use: a conversion table
+        # (a batch) states its own per row
+        row_readers, any_forced = _row_metadata_readers(
+            input_path, metadata_p.get('metadata_reader'), readers_p.get('force_bioformats'))
+        # eubi-bridge-lite: what it lacks is refused here, before any work
+        from eubi_bridge.utils.capabilities import check_run
+        for reader in sorted(row_readers, key=str):
+            check_run(metadata_reader=reader,
+                      pixel_reader=readers_p.get('pixel_reader'),
+                      on_local_cluster=cluster_p.get('on_local_cluster', False),
+                      on_slurm=cluster_p.get('on_slurm', False),
+                      force_bioformats=any_forced)
+        # With micro-reader's metadata (and so its pixels) nothing may need
+        # Java: the JVM then starts only if a file falls back to Bio-Formats
+        from eubi_bridge.utils.jvm_manager import set_jvm_lazy, soft_start_jvm
+        set_jvm_lazy(row_readers == {'micro'} and not any_forced)
+        soft_start_jvm()
 
         # Resolve concatenation params: call-time args take priority over config.
         cli_concat = {k: v for k, v in dict(
@@ -1631,10 +1703,14 @@ class MetadataManager:
             from eubi_bridge.utils.metadata_utils import read_ome_zarr_metadata_from_collection
             metadata_list = asyncio.run(read_ome_zarr_metadata_from_collection(zarr_paths))
         else:
-            logger.info("Non-Zarr files detected — initializing JVM.")
             _ensure_heavy_imports()
-            from eubi_bridge.utils.jvm_manager import soft_start_jvm
-            soft_start_jvm()
+            from eubi_bridge.utils.jvm_manager import set_jvm_lazy, soft_start_jvm
+            # micro-reader's metadata: the JVM starts only if a file needs Bio-Formats
+            metadata_reader = self._config._collect_params('metadata', **kwargs).get(
+                'metadata_reader')
+            set_jvm_lazy(metadata_reader == 'micro')
+            if soft_start_jvm() == "started":
+                logger.info("Non-Zarr files detected — JVM started for Bio-Formats.")
             cluster_p    = self._config._collect_params('cluster',    **kwargs)
             readers_p    = self._config._collect_params('readers',    **kwargs)
             conversion_p = self._config._collect_params('conversion', **kwargs)
@@ -1749,7 +1825,11 @@ class EuBIBridge:
     continue to work unchanged.
     """
 
-    def __init__(self, configpath: str = f"{os.path.expanduser('~')}/.eubi_bridge"):
+    def __init__(self, configpath: str = None):
+        # the config folder: given, else EUBI_CONFIG_DIR, else ~/.eubi_bridge
+        # (resolved now, not when this module was imported)
+        configpath = (configpath or os.environ.get("EUBI_CONFIG_DIR")
+                      or f"{os.path.expanduser('~')}/.eubi_bridge")
         self._cfg      = ConfigManager(configpath)
         self._conv     = ConversionManager(self._cfg)
         self._meta     = MetadataManager(self._cfg)

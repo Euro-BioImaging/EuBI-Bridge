@@ -132,6 +132,10 @@ class ClusterConfig(BaseModel):
     on_slurm: bool = False
     use_threading: bool = False
     max_workers: int = Field(default=4, ge=1, le=256)
+    # Conversions that actually run at once: min(max_workers, the number of
+    # jobs / output groups), set by the dispatcher (not a user setting).
+    # None: max_workers.  The region budget divides RAM among these only.
+    concurrent_jobs: Optional[int] = Field(default=None, ge=1)
     queue_size: int = Field(default=4, ge=1, le=4096)
     region_size_mb: int = Field(default=256, gt=0)
     max_concurrency: int = Field(default=4, ge=1)
@@ -140,6 +144,9 @@ class ClusterConfig(BaseModel):
     tensorstore_data_copy_concurrency: int = Field(default=4, ge=1)
     max_retries: int = Field(default=10, ge=0, le=100)
     bf_read_concurrency: Optional[int] = Field(default=4, ge=1)
+    # micro-reader's decode threads per worker process when
+    # readers.pixel_reader='micro' (its region reads share one pool)
+    micro_read_concurrency: int = Field(default=4, ge=1)
     # DEPRECATED, ignored.  Bio-Formats images are now read one writer region
     # at a time, so region_size_mb sets the read size and the JVM-heap limit is
     # applied automatically.  Still accepted so existing configs, saved batches
@@ -200,6 +207,14 @@ class ReaderConfig(BaseModel):
     mosaic_tile_index: Union[int, str, None] = None
     sample_index: int = Field(default=0, ge=0)
     force_bioformats: bool = False
+    # Where pixels come from: 'micro' (micro-reader, the default; falls back to
+    # the standard reader, with a warning, for a file it does not read) or
+    # 'standard' (the format's usual reader).
+    pixel_reader: Literal['standard', 'micro'] = 'micro'
+    # With pixel_reader='micro': also open the standard reader and compare its
+    # pixels with micro-reader's (slower; for checking a new format).  Off:
+    # micro-reader is the reader, checked against the metadata only.
+    micro_check_pixels: bool = False
     # When True, arrays for each view / illumination are stacked along the
     # channel axis rather than written as separate OME-Zarr outputs.
     concat_views: bool = False
@@ -460,7 +475,9 @@ class MetadataConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    metadata_reader: str = "bfio"
+    # 'micro' (the default): micro-reader reads metadata and pixels, and a file
+    # it does not read falls back to Bio-Formats -- the JVM starts only then.
+    metadata_reader: str = "micro"
     override_channel_names: bool = False
     channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = "from_dtype"
     # "idx,RRGGBB;..." and "idx,label;..." as the CLI accepts them.  Empty means

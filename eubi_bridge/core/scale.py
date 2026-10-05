@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import asyncio
 import dataclasses
 import itertools
@@ -6,13 +10,15 @@ from fractions import Fraction
 from math import gcd, lcm
 from typing import Union, Optional, Dict, Any, List
 
-import dask.array as da
 import numpy as np
 import tensorstore as ts
 import zarr
 
 from eubi_bridge.utils.storage_utils import make_kvstore
 from eubi_bridge.utils.logging_config import get_logger
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 logger = get_logger(__name__)
 

@@ -39,6 +39,84 @@ def _model(paths=("/d/a.tif", "/d/b.tif"), **downscaling):
     return model
 
 
+class TestPixelReaderPerRow:
+    """The pixel reader is chosen per conversion, like the metadata reader:
+    a column in the queue table, editable in Edit Cells (it used to be a
+    run-level setting, taken from the form for every row)."""
+
+    def test_it_is_editable_per_row(self):
+        from eubi_bridge.qt_gui.core.batch import spec_for, uneditable_reason
+        assert uneditable_reason("pixel_reader") is None
+        spec = spec_for("pixel_reader")
+        assert spec.kind == "choice" and spec.tab == "Reader"
+        from eubi_bridge.utils.capabilities import has_bioformats
+        # the standard readers only where they are installed (not in lite)
+        assert spec.choices == (("micro", "standard") if has_bioformats() else ("micro",))
+
+    def test_a_row_override_reaches_its_conversion(self):
+        from eubi_bridge.qt_gui.core.batch import spec_for
+        choices = spec_for("pixel_reader").choices
+        if len(choices) < 2:
+            pytest.skip("one pixel reader installed (lite): nothing to override")
+        value = choices[-1]                                      # 'standard'
+        model = _model()
+        model.update_cells([1], "pixel_reader", value)
+        assert "pixel_reader" in model.columns()
+        table = model.to_table()
+        assert table.loc[1, "pixel_reader"] == value
+        assert pd.isna(table.loc[0, "pixel_reader"])          # the form's value
+
+
+class TestExplicitValuesAreShown:
+    """A value the user sets appears in its cell even when it equals the
+    config (Bugra, 2026-10-05): a chosen value must not look like an
+    inherited blank.  Reset is what takes a cell back to blank."""
+
+    def test_setting_the_config_value_shows_it(self):
+        model = _model()
+        same = model.config_value("pixel_reader")                # 'micro'
+        model.update_cells([0], "pixel_reader", same)
+        assert model.cell(model.rows[0], "pixel_reader") == same
+        assert model.cell(model.rows[1], "pixel_reader") is None  # untouched: inherits
+        assert "pixel_reader" in model.columns()
+        assert model.to_table().loc[0, "pixel_reader"] == same
+        model.reset_cells([0], "pixel_reader")
+        assert model.cell(model.rows[0], "pixel_reader") is None
+        assert "pixel_reader" not in model.columns()
+
+    def test_an_added_parameter_is_written_as_shown(self):
+        """Edit Cells -> Add parameter -> OK, leaving the value it shows."""
+        if not _qt():
+            pytest.skip("Qt is not available")
+        from eubi_bridge.qt_gui.widgets.batch_cell_editor import BatchCellEditor
+        model = _model()
+        dlg = BatchCellEditor(model, [0, 1], ["pixel_reader"], added=["pixel_reader"])
+        shown = dlg._fields["pixel_reader"].value()
+        assert dlg.apply() == ["pixel_reader"]
+        assert [model.cell(r, "pixel_reader") for r in model.rows] == [shown, shown]
+
+    def test_an_explicit_value_survives_the_csv(self, tmp_path):
+        from eubi_bridge.qt_gui.core.batch import BatchModel
+        model = _model()
+        model.update_cells([0], "pixel_reader", model.config_value("pixel_reader"))
+        back = BatchModel.load(model.save(str(tmp_path / "batch.csv")))
+        assert back.cell(back.rows[0], "pixel_reader") == "micro"
+        assert "pixel_reader" in back.columns()
+
+
+def _qt() -> bool:
+    from tests.conftest import qt_available
+    if not qt_available():
+        return False
+    global _APP
+    from PyQt6.QtWidgets import QApplication
+    _APP = QApplication.instance() or QApplication([])
+    return True
+
+
+_APP = None
+
+
 class TestToTable:
     def test_one_row_per_queued_conversion(self):
         table = _model().to_table()

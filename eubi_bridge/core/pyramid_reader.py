@@ -1,19 +1,22 @@
 """
 Reader for NGFF/Zarr pyramid datasets.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from typing import Any, Optional
 
-import dask
-import dask.array as da
 import fsspec
 import numpy as np
 import zarr
-from dask import delayed
 
 from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.logging_config import get_logger
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 logger = get_logger(__name__)
 

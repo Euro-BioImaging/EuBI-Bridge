@@ -147,9 +147,10 @@ def _cluster_summary(c: dict) -> str:
 
     bioformats = (f"{c.get('bfReadConcurrency', 4)} concurrent reads · "
                   f"{float(c.get('jvmMemory', 2.0)):g} GB JVM")
+    micro = f"\nmicro-reader: {c.get('microReadConcurrency', 4)} read threads per worker"
     return (f"Runs on {where}\n"
             + " · ".join(work) + "\n"
-            + f"Bio-Formats: {bioformats}")
+            + f"Bio-Formats: {bioformats}" + micro)
 
 
 class ConvertPage(QWidget):
@@ -317,6 +318,7 @@ class ConvertPage(QWidget):
         self._build_run_tab()
         self._build_batch_tab()
         self._apply_mode()
+        self._apply_capabilities()
 
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 0)
@@ -479,6 +481,7 @@ class ConvertPage(QWidget):
 
         # ── Bio-Formats group ─────────────────────────────────────────────────
         bf_group = QGroupBox("Bio-Formats Settings")
+        self._bf_group = bf_group                   # disabled in eubi-bridge-lite
         bf_lay = QVBoxLayout(bf_group)
         bf_lay.setSpacing(6)
 
@@ -511,6 +514,30 @@ class ConvertPage(QWidget):
         bf_lay.addLayout(_form_row("JVM Memory (GB):", self._jvm_memory))
 
         lay.addWidget(bf_group)
+
+        # ── micro-reader group ────────────────────────────────────────────────
+        micro_group = QGroupBox("micro-reader Settings")
+        micro_lay = QVBoxLayout(micro_group)
+        micro_lay.setSpacing(6)
+
+        micro_note = QLabel(
+            "These settings apply only when 'Read pixels with micro-reader' is "
+            "ticked in the Reader tab."
+        )
+        micro_note.setWordWrap(True)
+        micro_note.setStyleSheet("color: gray; font-style: italic;")
+        micro_lay.addWidget(micro_note)
+
+        _, self._micro_read_concurrency = _labeled_spin("Micro Read Concurrency:", 1, 64, 4)
+        self._micro_read_concurrency.setToolTip(
+            "Threads micro-reader reads and decodes with in each worker process,\n"
+            "shared by all region reads. It caps the CPU spent reading; how many\n"
+            "regions are in flight is still set by the cluster settings above."
+        )
+        micro_lay.addLayout(_row(QLabel("Micro Read Concurrency:"), self._micro_read_concurrency))
+        self._micro_read_concurrency.setEnabled(False)   # until ticked in the Reader tab
+
+        lay.addWidget(micro_group)
 
         lay.addStretch()
 
@@ -673,6 +700,19 @@ class ConvertPage(QWidget):
             "Useful when the native reader gives incorrect results."
         )
         lay.addWidget(self._force_bioformats)
+
+        self._use_micro_reader = QCheckBox("Read pixels with micro-reader")
+        self._use_micro_reader.setToolTip(
+            "Read the pixels with micro-reader (the default) instead of the format's usual\n"
+            "reader. A file micro-reader does not read is read the usual way, with a\n"
+            "warning in the log. Its read concurrency is in the Cluster tab."
+        )
+        self._use_micro_reader.setChecked(True)
+        self._use_micro_reader.toggled.connect(self._micro_read_concurrency.setEnabled)
+        # ticked by default: the concurrency is live from the start, not only
+        # after the box is toggled (setChecked above ran before this connection)
+        self._micro_read_concurrency.setEnabled(self._use_micro_reader.isChecked())
+        lay.addWidget(self._use_micro_reader)
 
         lay.addStretch()
 
@@ -1138,10 +1178,13 @@ class ConvertPage(QWidget):
         _, lay = self._scrolled_tab("Metadata")
 
         self._metadata_reader = QComboBox()
-        self._metadata_reader.addItems(["bfio", "bioio"])
+        self._metadata_reader.addItems(["micro", "bfio", "bioio"])
         self._metadata_reader.setToolTip(
             "Library used to extract OME metadata (channel names, physical scales, etc.).\n"
-            "'bfio' uses Bio-Formats via a Java bridge; 'bioio' is the pure-Python successor."
+            "'micro' (the default) reads metadata and pixels with micro-reader: no Java for\n"
+            "the formats it reads; other files fall back to Bio-Formats. It also writes the\n"
+            "stage position. 'bfio' uses Bio-Formats via a Java bridge; 'bioio' is the\n"
+            "pure-Python successor."
         )
         lay.addLayout(_form_row("Metadata Reader:", self._metadata_reader))
 
@@ -1510,7 +1553,8 @@ class ConvertPage(QWidget):
                      self._max_concurrent_downscale_layers,
                      self._max_concurrent_scenes, self._region_size_mb,
                      self._memory_per_worker, self._slurm_worker_timeout,
-                     self._bf_read_concurrency, self._jvm_memory):
+                     self._bf_read_concurrency, self._jvm_memory,
+                     self._micro_read_concurrency):
             spin.valueChanged.connect(self._update_batch_cluster_summary)
         for box in (self._use_local_dask, self._use_slurm):
             box.toggled.connect(self._update_batch_cluster_summary)
@@ -1855,11 +1899,13 @@ class ConvertPage(QWidget):
 
         # The dialog can ask to be re-opened with one more parameter, so the
         # user can reach settings the queue shows no column for yet.
+        added: list[str] = []
         while True:
-            dlg = BatchCellEditor(self._batch, rows, editable, parent=self)
+            dlg = BatchCellEditor(self._batch, rows, editable, parent=self, added=added)
             result = dlg.exec()
             if result == _ADD_PARAMETER and getattr(dlg, "added_key", None):
                 editable = [*editable, dlg.added_key]
+                added.append(dlg.added_key)
                 continue
             break
         if not result:
@@ -2220,6 +2266,7 @@ class ConvertPage(QWidget):
         self._slurm_worker_timeout.setValue(int(c.get("slurmWorkerTimeout", 300) or 300))
         self._bf_read_concurrency.setValue(c.get("bfReadConcurrency", 4))
         self._jvm_memory.setValue(float(c.get("jvmMemory", 2.0)))
+        self._micro_read_concurrency.setValue(c.get("microReadConcurrency", 4))
 
         r = cfg.get("reader", {})
         self._read_all_scenes.setChecked(r.get("readAllScenes", True))
@@ -2237,6 +2284,7 @@ class ConvertPage(QWidget):
         self._rotation_index.setText(str(r.get("rotationIndex", "0")))
         self._sample_index.setText(str(r.get("sampleIndex", "0")))
         self._force_bioformats.setChecked(r.get("forceBioformats", False))
+        self._use_micro_reader.setChecked(r.get("useMicroReader", True))
 
         conv = cfg.get("conversion", {})
         # Prefer the OME-Zarr version; fall back to the (deprecated) zarrFormat
@@ -2300,7 +2348,7 @@ class ConvertPage(QWidget):
             self._smart_spins[dim].setValue(val if val else 1)
 
         meta = cfg.get("metadata", {})
-        idx = self._metadata_reader.findText(meta.get("metadataReader", "bfio"))
+        idx = self._metadata_reader.findText(meta.get("metadataReader", "micro"))
         if idx >= 0:
             self._metadata_reader.setCurrentIndex(idx)
         idx = self._channel_intensity.findText(meta.get("channelIntensityLimits", "from_datatype"))
@@ -2333,6 +2381,42 @@ class ConvertPage(QWidget):
             self._config_path = cfg["_configPath"]
             self._config_path_label.setText(os.path.basename(cfg["_configPath"]))
 
+        # a config may ask for what this installation cannot do
+        self._apply_capabilities()
+
+    def _apply_capabilities(self) -> None:
+        """Disable what this installation cannot do, saying why.
+
+        eubi-bridge-lite has neither Bio-Formats (the bfio / bioio metadata
+        readers, the standard pixel readers, forced Bio-Formats and its
+        settings) nor a dask cluster (local dask, SLURM).  Called once the
+        tabs are built, and again after a config is loaded."""
+        from eubi_bridge.utils.capabilities import has_bioformats, has_cluster
+        why = "Needs the full eubi-bridge: pip install eubi-bridge"
+
+        def explain(widget):
+            tip = widget.toolTip()
+            if not tip.startswith(why):
+                widget.setToolTip(why + ("\n\n" + tip if tip else ""))
+
+        if not has_bioformats():
+            model = self._metadata_reader.model()
+            for i in range(self._metadata_reader.count()):
+                if self._metadata_reader.itemText(i) != "micro":
+                    model.item(i).setEnabled(False)
+                    model.item(i).setToolTip(why)
+            self._metadata_reader.setCurrentText("micro")
+            self._use_micro_reader.setChecked(True)
+            self._force_bioformats.setChecked(False)
+            for widget in (self._use_micro_reader, self._force_bioformats, self._bf_group):
+                widget.setEnabled(False)
+                explain(widget)
+        if not has_cluster():
+            for box in (self._use_local_dask, self._use_slurm):
+                box.setChecked(False)
+                box.setEnabled(False)
+                explain(box)
+
     def _ui_cluster_config(self) -> dict:
         """The Cluster tab's controls as a camelCase config section."""
         return {
@@ -2352,6 +2436,7 @@ class ConvertPage(QWidget):
             "slurmWorkerTimeout":  self._slurm_worker_timeout.value(),
             "bfReadConcurrency":   self._bf_read_concurrency.value(),
             "jvmMemory":           self._jvm_memory.value(),
+            "microReadConcurrency": self._micro_read_concurrency.value(),
         }
 
     def _ui_to_config(self) -> dict:
@@ -2374,6 +2459,7 @@ class ConvertPage(QWidget):
                 "rotationIndex":        self._rotation_index.text().strip(),
                 "sampleIndex":       self._sample_index.text().strip(),
                 "forceBioformats":   self._force_bioformats.isChecked(),
+                "useMicroReader":    self._use_micro_reader.isChecked(),
             },
             "conversion": {
                 "omeZarrVersion":       self._ome_zarr_version.currentText(),

@@ -915,6 +915,10 @@ class TestChoicesMatchTheConfigModels:
             assert not invalid, f"{spec.key} offers {invalid}, not in {allowed}"
 
     def test_no_valid_option_is_hidden_from_the_user(self):
+        # eubi-bridge-lite hides what it cannot run (the standard pixel reader);
+        # the full installation hides nothing
+        from eubi_bridge.utils.capabilities import has_bioformats
+        not_installed = set() if has_bioformats() else {"standard"}
         for spec in _PARAM_SPECS:
             if spec.kind != "choice":
                 continue
@@ -922,7 +926,8 @@ class TestChoicesMatchTheConfigModels:
             if found is None:
                 continue
             _, allowed = found
-            missing = [a for a in allowed if a not in spec.choices]
+            missing = [a for a in allowed
+                       if a not in spec.choices and a not in not_installed]
             assert not missing, f"{spec.key} hides valid options {missing}"
 
     def test_every_choice_builds_a_valid_job(self):

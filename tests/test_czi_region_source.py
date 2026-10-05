@@ -42,9 +42,9 @@ def fake(monkeypatch):
     return make
 
 
-def _source(shape, origin=(500, 300), fixed=None, rgb=False, scene=1):
+def _source(shape, origin=(500, 300), fixed=None, samples=1, scene=1):
     return _CziRegionSource("x.czi", scene, origin, shape, np.uint16,
-                            fixed or {}, rgb)
+                            fixed or {}, samples)
 
 
 def test_reads_exactly_the_requested_rectangle(fake):
@@ -70,9 +70,21 @@ def test_view_or_illumination_is_pinned(fake):
 def test_rgb_samples_become_channels_in_rgb_order(fake):
     """CZI stores B, G, R; output channels are R, G, B, from one read."""
     reader = fake(width=8, height=4, samples=3)
-    out = _source((1, 3, 1, 4, 8), rgb=True)[...]
+    out = _source((1, 3, 1, 4, 8), samples=3)[...]
     assert [out[0, c, 0, 0, 0] for c in range(3)] == [2, 1, 0]
     assert len(reader.calls) == 1
+
+
+def test_several_rgb_channels_keep_every_sample(fake):
+    """Real channels *and* samples: C x S channels, channel-major, R G B
+    (the region source used to keep sample 0 of each channel only)."""
+    reader = fake(width=8, height=4, samples=3)
+    out = _source((1, 6, 1, 4, 8), samples=3)[...]
+    # value = 100*C + sample; stored B, G, R -> output R, G, B per channel
+    assert [out[0, k, 0, 0, 0] for k in range(6)] == [2, 1, 0, 102, 101, 100]
+    assert [c[2]["C"] for c in reader.calls] == [0, 1]            # one read per channel
+    part = _source((1, 6, 1, 4, 8), samples=3)[0, 4:6]              # channel 1: G and B
+    assert [part[k, 0, 0, 0] for k in range(2)] == [101, 100]
 
 
 def test_numpy_indexing_semantics(fake):

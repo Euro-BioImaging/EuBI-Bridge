@@ -163,6 +163,9 @@ def _build_kwargs(config: dict) -> dict:
         "memory_per_worker":        _gb_to_memory_str(cluster_config.get("memoryPerWorker", 4)),
         "jvm_memory":               _gb_to_jvm_str(cluster_config.get("jvmMemory", 2)),
         "bf_read_concurrency":      cluster_config.get("bfReadConcurrency", 4),
+        "micro_read_concurrency":   cluster_config.get("microReadConcurrency", 4),
+        "pixel_reader":             ("micro" if reader_config.get("useMicroReader", True)
+                                     else "standard"),
         "on_local_cluster":         cluster_config.get("useLocalDask", False),
         "on_slurm":                 cluster_config.get("useSlurm", False),
         "slurm_partition":          cluster_config.get("slurmPartition") or None,
@@ -203,7 +206,7 @@ def _build_kwargs(config: dict) -> dict:
         "overwrite":                conv_config.get("overwrite", False),
         "override_channel_names":   conv_config.get("overrideChannelNames", False),
         "channel_intensity_limits": "from_dtype" if meta_config.get("channelIntensityLimits", "from_datatype") == "from_datatype" else "from_array",
-        "metadata_reader":          meta_config.get("metadataReader", "bioio"),
+        "metadata_reader":          meta_config.get("metadataReader", "micro"),
         # "idx,RRGGBB;..." as the CLI expects; empty means every channel is
         # coloured automatically.
         "channel_colors":           meta_config.get("channelColors", ""),

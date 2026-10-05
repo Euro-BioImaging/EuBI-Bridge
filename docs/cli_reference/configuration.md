@@ -823,9 +823,9 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--metadata_reader</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Metadata backend — `'bfio'` (default) or `'bioformats'`.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
+    <p><strong>Default:</strong>&nbsp; `micro`</p>
+    <p>Metadata backend — `'micro'` (default: micro-reader reads metadata and pixels; a file it does not read falls back to Bio-Formats, which starts Java only then), `'bfio'` or `'bioio'`.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bfio
     </code></pre>
     </details>
 

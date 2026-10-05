@@ -1,16 +1,21 @@
 """
 Reader for Zeiss CZI microscopy files.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import os
 import threading
 from typing import Any, Iterable, Optional, Union
 
-import dask.array as da
 import numpy as np
 
 from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.utils.logging_config import get_logger
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 logger = get_logger(__name__)
 
@@ -132,19 +137,19 @@ class _CziRegionSource:
     It reproduces bioio's reads exactly: the same ``scene``, the same plane
     indices (T/C/Z, plus any view/phase/illumination/rotation the file has),
     and a rectangle inside the scene's no-pyramid bounding box.  RGB samples
-    become channels in R, G, B order, as ``CZIReader.get_image_dask_data`` does.
+    become channels in R, G, B order, C x S of them (``sample_channels``), as
+    ``CZIReader.get_image_dask_data`` does.
     """
 
-    def __init__(self, path, scene, origin, shape, dtype, fixed_plane,
-                 samples_as_channels):
+    def __init__(self, path, scene, origin, shape, dtype, fixed_plane, samples=1):
         self.path = path
         self.scene = scene                        # None when the file has none
         self.origin = origin                      # (x, y) of the scene's box
-        self.shape = tuple(int(v) for v in shape)  # (T, C, Z, Y, X)
+        self.shape = tuple(int(v) for v in shape)  # (T, C x samples, Z, Y, X)
         self.dtype = np.dtype(dtype)
         self.ndim = 5
         self.fixed_plane = dict(fixed_plane)      # e.g. {'I': 1}, never mutated
-        self.samples_as_channels = samples_as_channels
+        self.samples = int(samples)               # 1: grey; 3: Bgr pixels
         # Any rectangle can be read, so a whole plane is advertised as one chunk
         # and region alignment follows the output chunks alone.
         self.chunks = (1, 1, 1, self.shape[3], self.shape[4])
@@ -159,21 +164,24 @@ class _CziRegionSource:
             roi = (self.origin[0] + x0, self.origin[1] + y0, x1 - x0, y1 - y0)
             for ti, t in enumerate(range(t0, t1)):
                 for zi, z in enumerate(range(z0, z1)):
-                    if self.samples_as_channels:
-                        # One read gives every sample; CZI stores B, G, R.
-                        rgb = czi.read(roi=roi, scene=self.scene,
-                                       plane={'T': t, 'C': 0, 'Z': z,
-                                              **self.fixed_plane})
-                        for ci, c in enumerate(range(c0, c1)):
-                            out[ti, ci, zi] = rgb[:, :, 2 - c]
+                    if self.samples > 1:
+                        # Output channel k is sample k % S of real channel
+                        # k // S.  One read per real channel gives all its
+                        # samples; CZI stores them B, G, R.
+                        planes = {}
+                        for ci, k in enumerate(range(c0, c1)):
+                            c, s = divmod(k, self.samples)
+                            if c not in planes:
+                                planes[c] = czi.read(roi=roi, scene=self.scene,
+                                                     plane={'T': t, 'C': c, 'Z': z,
+                                                            **self.fixed_plane})
+                            out[ti, ci, zi] = planes[c][:, :, self.samples - 1 - s]
                         continue
                     for ci, c in enumerate(range(c0, c1)):
                         block = czi.read(roi=roi, scene=self.scene,
                                          plane={'T': t, 'C': c, 'Z': z,
                                                 **self.fixed_plane})
-                        # Grey: (Y, X, 1).  RGB with real channels too: keep the
-                        # first sample, as the bioio path did.
-                        out[ti, ci, zi] = block[:, :, 0]
+                        out[ti, ci, zi] = block[:, :, 0]         # grey: (Y, X, 1)
         if any(step != 1 for step in steps):
             out = out[tuple(slice(None, None, step) for step in steps)]
         if squeeze:
@@ -439,6 +447,16 @@ class CZIReader(ImageReader):
         self.illumination = illumination_index
         self._set_series_path()
     
+    @property
+    def sample_layout(self):
+        """``(channels, samples)`` for RGB (Bgr) pixels, else None.  The
+        samples are read as channels, C x S of them (``sample_channels``)."""
+        dims = self.img.dims
+        samples = dims.S if hasattr(dims, 'S') else 1
+        if samples <= 1:
+            return None
+        return (dims.C if hasattr(dims, 'C') else 1, samples)
+
     def _region_source_array(self):
         """This scene as a region-reading ``DynamicArray``, or None for bioio.
 
@@ -467,10 +485,7 @@ class CZIReader(ImageReader):
             return None                     # not the geometry bioio reads
         channels = getattr(dims, 'C', 1) if hasattr(dims, 'C') else 1
         samples = getattr(dims, 'S', 1) if hasattr(dims, 'S') else 1
-        samples_as_channels = samples > 1 and channels <= 1
-        if samples_as_channels:
-            channels = samples
-        shape = (getattr(dims, 'T', 1) if hasattr(dims, 'T') else 1, channels,
+        shape = (getattr(dims, 'T', 1) if hasattr(dims, 'T') else 1, channels * samples,
                  getattr(dims, 'Z', 1) if hasattr(dims, 'Z') else 1,
                  height, width)
         # View / phase / illumination / rotation: pinned to the index this
@@ -482,8 +497,7 @@ class CZIReader(ImageReader):
         }
         return DynamicArray(_CziRegionSource(
             self._path, scene, origin, shape,
-            prr.PIXEL_DICT[img._pixel_types[0]], fixed_plane,
-            samples_as_channels))
+            prr.PIXEL_DICT[img._pixel_types[0]], fixed_plane, samples))
 
     def get_image_dask_data(self, **kwargs) -> da.Array:
         """Get image data as dask array with dimension order TCZYX.
@@ -507,28 +521,16 @@ class CZIReader(ImageReader):
                 return region_array
         try:
             dims = self.img.dims
-            has_samples = hasattr(dims, 'S') and dims.S > 1
-            has_channels = hasattr(dims, 'C') and dims.C > 1
-            if has_samples and not has_channels:
+            if hasattr(dims, 'S') and dims.S > 1:
+                from eubi_bridge.core.sample_channels import fold_dask
                 data = self.img.get_image_dask_data(
                     dimension_order_out='TCZYXS',
                     **self.index_map
                 )
-                # 'C' is a padded singleton axis here; fold 'S' into its place.
-                data = da.moveaxis(data, -1, 1)   # -> T S C Z Y X
-                data = data[:, :, 0, :, :, :]     # -> T S Z Y X  (S acts as C)
-                # CZI 'Bgr' samples are stored Blue, Green, Red; reverse to
-                # R, G, B so the per-channel default colours (red, green, blue)
-                # line up with the data they tint.
-                if data.shape[1] == 3:
-                    data = data[:, ::-1, :, :, :]
-                return data
-            if has_samples and has_channels:
-                logger.warning(
-                    f"{self._path}: both a multi-value 'C' ({dims.C}) and "
-                    f"'S' ({dims.S}) dimension are present; only the first "
-                    "sample will be read for each channel."
-                )
+                # Every sample becomes a channel, C x S.  CZI 'Bgr' samples are
+                # stored Blue, Green, Red; reversed to R, G, B so the default
+                # colours (red, green, blue) line up with the data they tint.
+                return fold_dask(data, reverse=dims.S == 3)
             return self.img.get_image_dask_data(
                 dimension_order_out='TCZYX',
                 **self.index_map

@@ -112,8 +112,10 @@ def _conversion_subprocess(call_args: dict, log_queue, result_queue) -> None:
     _conv_module.ProcessPoolExecutor = _LoggingPPE
 
     try:
-        from eubi_bridge.utils.jvm_manager import soft_start_jvm
-        soft_start_jvm()
+        # to_zarr starts the JVM itself -- or, when every conversion reads its
+        # metadata with micro-reader, only once a file needs Bio-Formats.  (A
+        # batch carries its readers in the table, not in these kwargs: starting
+        # the JVM here on their absence started it for every batch.)
 
         from eubi_bridge.ebridge import EuBIBridge
         bridge = EuBIBridge()

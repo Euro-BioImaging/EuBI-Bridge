@@ -28,12 +28,15 @@ def _block_network():
 # Uncomment if you want to completely prevent network access:
 # _block_network()
 
-# Now import scyjava and configure it
-import scyjava
+# Now import scyjava and configure it (the Java bridge is in the full
+# eubi-bridge only; eubi-bridge-lite has none)
+from eubi_bridge.utils.optional_deps import is_installed
 
 # Disable Maven completely
-scyjava.config.endpoints.clear()
-scyjava.config.maven_offline = True
+if is_installed("scyjava"):
+    import scyjava
+    scyjava.config.endpoints.clear()
+    scyjava.config.maven_offline = True
 
 # Monkey-patch JGO to prevent it from doing anything
 try:

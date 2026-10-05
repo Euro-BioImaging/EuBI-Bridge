@@ -156,6 +156,12 @@ def dispatch_unary_jobs(jobs: list) -> list:
     """
     if not jobs:
         return []
+    # the conversions that will run at once: the region budget is shared by
+    # these, not by max_workers
+    running = min(jobs[0].cluster.max_workers, len(jobs))
+    jobs = [job.model_copy(update={
+                'cluster': job.cluster.model_copy(update={'concurrent_jobs': running})})
+            for job in jobs]
     cluster       = jobs[0].cluster
     use_threading = cluster.use_threading
 
@@ -514,13 +520,13 @@ def _aggregative_slurm_task(input_path, output_path, kwargs_dict):
     import concurrent.futures
 
     def _run_in_fresh_thread():
-        import dask
         from eubi_bridge.utils.jvm_manager import soft_start_jvm
+        from eubi_bridge.utils.optional_deps import dask_config
         soft_start_jvm()
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            with dask.config.set(scheduler='synchronous'):
+            with dask_config(scheduler='synchronous'):
                 return loop.run_until_complete(
                     run_conversions_with_concatenation(
                         input_path, output_path, **kwargs_dict)
@@ -711,7 +717,8 @@ async def run_conversions_with_concatenation(
         tasks = [
             loop.run_in_executor(
                 pool, aggregative_worker_from_paths,
-                file_paths, out_path, dict(job_kwargs),
+                # one output group per worker: file_workers write at once
+                file_paths, out_path, {**job_kwargs, 'concurrent_jobs': file_workers},
             )
             for out_path, file_paths in groups.items()
         ]

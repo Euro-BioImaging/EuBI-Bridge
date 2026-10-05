@@ -133,6 +133,89 @@ def test_ims_image_meta_without_keep_existing_resolutions_single_layer(synthetic
     assert pyr.layers['0'].shape == (1, 2, 4, 16, 16)
 
 
+# --- Imaris' chunk padding -------------------------------------------------
+#
+# Real Imaris files pad every Data dataset to whole HDF5 chunks: a 424 x 424
+# image is stored as 512 x 512 with zeros beyond, and the real size is in the
+# Channel group's ImageSizeZ/Y/X attributes (per resolution level).  The
+# reader used to wrap the padded dataset, so conversions carried the zero
+# margin.
+
+REAL, PADDED = (5, 21, 27), (8, 32, 32)
+
+
+def _write_padded_ims(path, n_resolution_levels=2, n_channels=2):
+    """Like Imaris: each level half the size (rounded down), padded to
+    ``PADDED / 2**r``, with the real size in ImageSize attributes.  Returns
+    the real (unpadded) data per level as (C, Z, Y, X)."""
+    rng = np.random.default_rng(0)
+    real_levels = []
+    with h5py.File(path, 'w') as f:
+        for r in range(n_resolution_levels):
+            real = tuple(max(1, s >> r) for s in REAL)
+            padded = tuple(max(1, s >> r) for s in PADDED)
+            level = rng.integers(1, 255, size=(n_channels, *real), dtype=np.uint16)
+            for c in range(n_channels):
+                grp = f.require_group(f'/DataSet/ResolutionLevel {r}/TimePoint 0/Channel {c}')
+                data = np.zeros(padded, dtype=np.uint16)
+                data[:real[0], :real[1], :real[2]] = level[c]
+                grp.create_dataset('Data', data=data, chunks=padded)
+                for axis, size in zip('ZYX', real):
+                    grp.attrs[f'ImageSize{axis}'] = _char_attr(size)
+            real_levels.append(level)
+        img = f.create_group('DataSetInfo/Image')
+        for axis, size, i in zip('ZYX', REAL, (2, 1, 0)):
+            img.attrs[axis] = _char_attr(size)
+            img.attrs[f'ExtMin{i}'] = _char_attr(0)
+            img.attrs[f'ExtMax{i}'] = _char_attr(size * 0.5)       # 0.5 um pixels
+        for c in range(n_channels):
+            f.create_group(f'DataSetInfo/Channel {c}').attrs['Name'] = _char_attr(f'Ch{c}')
+    return real_levels
+
+
+def test_padding_is_cropped_at_every_level(tmp_test_data):
+    path = tmp_test_data / "padded.ims"
+    real_levels = _write_padded_ims(path)
+    reader = read_ims(str(path))
+    for r, real in enumerate(real_levels):
+        data = np.asarray(reader.get_resolution_level_dask_data(r))
+        assert data.shape == (1, *real.shape)
+        np.testing.assert_array_equal(data[0], real)
+
+
+def test_padded_array_matches_its_metadata(tmp_test_data):
+    """Pixel sizes were always right (extent / real size, as Bio-Formats);
+    only the array was too large for them."""
+    path = tmp_test_data / "padded.ims"
+    _write_padded_ims(path)
+    meta = IMSImageMeta(str(path))
+    asyncio.run(meta.read_dataset())
+    pixels = meta.get_pixels()
+    assert (pixels.size_z, pixels.size_y, pixels.size_x) == REAL
+    assert meta.arraydata.shape == (1, 2, *REAL)
+    assert meta.get_scaledict()['x'] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("keep", [False, True], ids=["rebuilt_pyramid", "kept_pyramid"])
+def test_conversion_writes_the_real_size(tmp_path, keep):
+    """End to end: the written OME-Zarr has the image, not the padding."""
+    import zarr
+
+    from eubi_bridge.ebridge import EuBIBridge
+
+    source = tmp_path / "padded.ims"
+    real_levels = _write_padded_ims(source)
+    out = tmp_path / "out"
+    EuBIBridge().to_zarr(str(source), str(out), squeeze=False, n_layers=2,
+                         keep_existing_resolutions=keep, verbose=False)
+    root = zarr.open_group(str(next(out.glob("*.zarr"))), mode='r')
+    level0 = np.asarray(root['0'])
+    assert level0.shape == (1, 2, *REAL)
+    np.testing.assert_array_equal(level0[0], real_levels[0])
+    if keep:
+        np.testing.assert_array_equal(np.asarray(root['1'])[0], real_levels[1])
+
+
 def test_build_ims_omemeta_malformed(tmp_test_data):
     path = tmp_test_data / "malformed.ims"
     with h5py.File(path, 'w') as f:

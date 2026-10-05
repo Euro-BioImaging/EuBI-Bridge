@@ -4,10 +4,18 @@ Auto-imports fixtures from conftest_fixtures.py
 """
 
 import os
+import tempfile
 
-import pytest
+# Every test -- and every `eubi` subprocess a test starts -- uses a fresh
+# config folder with the installation defaults, never the developer's own
+# ~/.eubi_bridge: a local run then sees what CI sees, and no test writes into
+# the real config.  (Set before eubi_bridge is imported; a test that needs a
+# particular config passes `configpath=` itself.)
+os.environ["EUBI_CONFIG_DIR"] = tempfile.mkdtemp(prefix="eubi_test_config_")
 
-from .conftest_fixtures import *  # noqa: F401, F403
+import pytest  # noqa: E402
+
+from .conftest_fixtures import *  # noqa: F401, F403, E402
 
 # Resolved once, lazily, by qt_available() below.
 _QT_AVAILABLE = None

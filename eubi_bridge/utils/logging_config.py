@@ -12,11 +12,11 @@ _MIN_LOG_WIDTH = 120
 def setup_logging(level=logging.INFO):
     """Configure rich-colored logging for eubi_bridge, silence everything else."""
 
-    # Import bfio here (not at module level) to avoid slowdown in config-only commands
-    try:
-        import bfio
-    except ImportError:
-        pass  # bfio is optional
+    # Import bfio here (not at module level) to avoid slowdown in config-only commands;
+    # it is not in eubi-bridge-lite
+    from eubi_bridge.utils.optional_deps import is_installed
+    if is_installed("bfio"):
+        import bfio  # noqa: F401
 
     # Respect the actual terminal state — don't force ANSI into non-terminal outputs
     # (e.g. subprocess workers write to a queue, not a real TTY).

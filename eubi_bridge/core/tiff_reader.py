@@ -4,20 +4,23 @@ Readers for TIFF and OME-TIFF files.
 Supports both native tifffile-based reading and bioio-tifffile-based reading
 for metadata-rich TIFF files.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from typing import Any, Optional
 
-import dask
-import dask.array as da
 import fsspec
 import numpy as np
 import zarr
-from dask import delayed
 
 from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 logger = get_logger(__name__)
 
@@ -158,7 +161,16 @@ class TIFFDynaZarrReader(ImageReader):
         
         # Normalize to TCZYX using lazy operations
         #print(f"[set_scene] Calling _normalize_to_tczyx with axes={processed_axes}, array shape={dyna_array.shape}")
-        dyna_array = self._normalize_to_tczyx(dyna_array, processed_axes)
+        if 'S' in processed_axes:
+            # Channels *and* samples: normalise to TCZYXS, then every sample
+            # becomes a channel (C x S), read lazily by rectangle.
+            from eubi_bridge.core.sample_channels import SamplesAsChannels
+            dyna_array = self._normalize_to_tczyx(dyna_array, processed_axes, 'TCZYXS')
+            self._sample_layout = (dyna_array.shape[1], dyna_array.shape[5])
+            dyna_array = DynamicArray(SamplesAsChannels(dyna_array))
+        else:
+            self._sample_layout = None
+            dyna_array = self._normalize_to_tczyx(dyna_array, processed_axes)
         #print(f"[set_scene] After normalize_to_tczyx: shape={dyna_array.shape}")
         
         # Store the normalized array
@@ -216,9 +228,14 @@ class TIFFDynaZarrReader(ImageReader):
         if 'S' in processed_axes:
             has_c = 'C' in processed_axes
             s_idx = processed_axes.index('S')
-            if has_c:
-                # Spurious S alongside a real C axis — drop it
-                logger.debug(f"Found both 'C' and 'S' in '{processed_axes}', dropping 'S'")
+            if has_c and processed_shape[s_idx] > 1:
+                # Real channels *and* samples (e.g. RGB per channel): keep S;
+                # set_scene folds the samples into channels, C x S of them
+                # (sample_channels).  It used to be dropped: sample 0 only.
+                logger.debug(f"Found both 'C' and 'S' in '{processed_axes}': "
+                             "samples become channels")
+            elif has_c:
+                # A singleton S next to C holds nothing: drop it
                 processed_shape = tuple(v for i, v in enumerate(processed_shape) if i != s_idx)
                 processed_axes  = processed_axes.replace('S', '')
             else:
@@ -227,7 +244,7 @@ class TIFFDynaZarrReader(ImageReader):
                 processed_axes = processed_axes.replace('S', 'C')
 
         # ── 2. Remap / squeeze any remaining unrecognised axes ────────────────
-        unknown = [ax for ax in processed_axes if ax not in _TARGET]
+        unknown = [ax for ax in processed_axes if ax not in _TARGET and ax != 'S']
         for ax in unknown:
             ax_idx    = processed_axes.index(ax)
             ax_size   = processed_shape[ax_idx]
@@ -262,7 +279,8 @@ class TIFFDynaZarrReader(ImageReader):
         )
         return processed_axes, processed_shape
     
-    def _normalize_to_tczyx(self, dyna_array: 'DynamicArray', tiff_axes: str) -> 'DynamicArray':
+    def _normalize_to_tczyx(self, dyna_array: 'DynamicArray', tiff_axes: str,
+                            target_axes: str = 'TCZYX') -> 'DynamicArray':
         """
         Normalize array dimensions to TCZYX format using lazy operations.
         
@@ -295,8 +313,7 @@ class TIFFDynaZarrReader(ImageReader):
         from eubi_bridge.external.dyna_zarr import operations
         
         current_axes = tiff_axes
-        target_axes = 'TCZYX'
-        
+
         #print(f"[_normalize_to_tczyx] Starting with axes={current_axes}, shape={dyna_array.shape}")
         
         # Step 1: Add missing dimensions using expand_dims
@@ -344,11 +361,11 @@ class TIFFDynaZarrReader(ImageReader):
         
         #print(f"[_normalize_to_tczyx] Final shape: {dyna_array.shape}, axes: {current_axes}")
         
-        # Verify final shape has 5 dimensions
-        if len(dyna_array.shape) != 5:
+        # Verify the final shape has one dimension per target axis
+        if len(dyna_array.shape) != len(target_axes):
             raise RuntimeError(
-                f"Dimension normalization failed: expected 5 dimensions (TCZYX), "
-                f"got {len(dyna_array.shape)} with axes {current_axes}"
+                f"Dimension normalization failed: expected {len(target_axes)} dimensions "
+                f"({target_axes}), got {len(dyna_array.shape)} with axes {current_axes}"
             )
         
         logger.debug(f"Final normalized shape (TCZYX): {dyna_array.shape}")
@@ -358,7 +375,13 @@ class TIFFDynaZarrReader(ImageReader):
         """No-op for TIFF (no tile support)."""
         if tile_index != 0:
             logger.warning("TIFF does not support tiles. Ignoring set_tile().")
-    
+
+    @property
+    def sample_layout(self):
+        """``(channels, samples)`` when a series has real channels *and*
+        samples, which set_scene folded into C x S channels; else None."""
+        return getattr(self, '_sample_layout', None)
+
     def get_image_dask_data(self, **kwargs) -> 'DynamicArray':
         """
         Get image data as DynamicArray (NOT dask array, despite the name).
@@ -473,8 +496,8 @@ class TIFFBioIOReader(ImageReader):
         has_c = 'C' in dims
         
         if has_s and has_c:
-            # Both exist: prefer C, ignore S
-            logger.debug(f"TIFF has both 'S' and 'C' dimensions. Using 'C' (ignoring 'S').")
+            # Both exist: TCZYX; get_image_dask_data folds any real samples
+            # into the channels (sample_layout), a singleton S is ignored.
             return 'TCZYX'
         elif has_s and not has_c:
             # Only S exists: treat as channel
@@ -493,13 +516,27 @@ class TIFFBioIOReader(ImageReader):
         """
         try:
             dimensions_to_read = kwargs.get('dimensions_to_read', None)
+            if dimensions_to_read in (None, 'TCZYX') and self.sample_layout is not None:
+                # Channels *and* samples: every sample becomes a channel (C x S)
+                from eubi_bridge.core.sample_channels import fold_dask
+                return fold_dask(self.img.get_image_dask_data('TCZYXS'))
             if dimensions_to_read is None:
                 # Auto-detect correct dimension order
                 dimensions_to_read = self._get_dimension_order()
-            
+
             return self.img.get_image_dask_data(dimensions_to_read)
         except Exception as e:
             raise RuntimeError(f"Failed to read TIFF data: {str(e)}") from e
+
+    @property
+    def sample_layout(self):
+        """``(channels, samples)`` when the file has real channels *and*
+        samples (folded into C x S channels), else None.  RGB without
+        channels keeps its S -> C handling (``_get_dimension_order``)."""
+        dims = self.img.dims
+        if 'S' in dims.order and 'C' in dims.order and dims.S > 1 and dims.C > 1:
+            return (dims.C, dims.S)
+        return None
 
 
 def read_tiff_image(input_path: str, aszarr: bool = True, **kwargs) -> ImageReader:

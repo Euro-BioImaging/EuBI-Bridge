@@ -40,6 +40,7 @@ dependencies = [
     "install-jdk",
     "lz4>=4.4.4",
     "matplotlib",
+    "micro-reader>=0.0.1",
     "natsort>=0.0.0",
     "nd2>=0.0.0",
     "numpy>=1.24",

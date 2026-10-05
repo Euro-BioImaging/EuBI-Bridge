@@ -20,6 +20,8 @@ which is unchanged: ``manager.array``, ``manager.axes``, ``manager.scaledict``,
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import asyncio
 import copy
 import json
@@ -29,13 +31,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-import dask
-import dask.delayed
 import natsort
 import numpy as np
 import psutil
 import zarr
-from dask import array as da
 from ome_types.model import (OME, Channel, Image, Pixels,
                              Pixels_DimensionOrder, PixelType, UnitsLength,
                              UnitsTime)
@@ -46,9 +45,10 @@ from eubi_bridge.core.readers import (
     read_metadata_via_extension, read_single_image)
 from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
 from eubi_bridge.external.dyna_zarr import operations as ops
+from eubi_bridge.utils.optional_deps import is_dask_array
 from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
-from eubi_bridge.utils.array_utils import (autocompute_chunk_shape,
+from eubi_bridge.utils.array_utils import (autocompute_chunk_shape, channel_extrema,
                                            get_array_chunks,
                                            normalise_basic_index)
 from eubi_bridge.utils.logging_config import get_logger
@@ -85,6 +85,9 @@ def _is_bioformats_backed(reader: object) -> bool:
 # setId() once.  All subsequent accesses for ANY series of that file call setSeries()
 # on the already-open Java ImageReader — that is essentially free.
 import threading as _threading
+
+if TYPE_CHECKING:
+    import dask.array as da
 _tl_readers: _threading.local = _threading.local()
 
 
@@ -606,7 +609,44 @@ class PFFImageMeta(ImageReader):
     def __getstate__(self): return self.__dict__.copy()
     def __setstate__(self, state): self.__dict__.update(state)
 
+    async def _micro_omemeta(self):
+        """OME metadata from micro-reader (metadata_reader='micro'), or None
+        when micro-reader does not take this file (then Bio-Formats is used,
+        and the standard pixel reader with it)."""
+        from eubi_bridge.core.micro_source import MicroReader, micro_omemeta
+        kwargs = {k: v for k, v in self._reader_kwargs.items() if k != 'pixel_reader'}
+        reader = await asyncio.to_thread(MicroReader.open, self.root,
+                                         as_mosaic=self._as_mosaic, **kwargs)
+        if reader is None:
+            return None
+        try:
+            return await asyncio.to_thread(micro_omemeta, reader)
+        except Exception as exc:                    # noqa: BLE001 - fall back, say why
+            logger.warning(f"metadata_reader=micro: {self.root}: Bio-Formats used "
+                           f"({type(exc).__name__}: {exc})")
+            return None
+
     async def read_omemeta(self):
+        #: metadata from micro-reader (metadata_reader='micro'): then micro-reader
+        #: also reads the pixels -- one parse, so the two cannot disagree
+        self._micro_meta = False
+        if self._meta_reader == 'micro':
+            omemeta = await self._micro_omemeta()
+            if omemeta is not None:
+                self._micro_meta = True
+                self.omemeta = omemeta
+                self._n_scenes = len(omemeta.images)
+                return
+            # micro-reader does not take this file: Bio-Formats metadata, and
+            # the standard pixel reader with it -- if installed (not in lite)
+            from eubi_bridge.utils.capabilities import (has_bioformats,
+                                                        micro_reader_declined)
+            if not has_bioformats():
+                raise micro_reader_declined(self.root)
+            self._reader_kwargs = {k: v for k, v in self._reader_kwargs.items()
+                                   if k != 'pixel_reader'}
+            logger.info(f"metadata_reader=micro: {self.root}: Bio-Formats metadata "
+                        f"and the standard reader used")
         if self.root.endswith('ome') or self.root.endswith('xml'):
             from ome_types import OME
             omemeta = OME().from_xml(self.root)
@@ -619,8 +659,10 @@ class PFFImageMeta(ImageReader):
             from eubi_bridge.core.czi_reader import build_czi_omemeta
             omemeta = await asyncio.to_thread(build_czi_omemeta, self.root)
         else:
-            # 'czi_native' on a non-CZI input falls back to the default reader.
-            meta_reader = 'bfio' if self._meta_reader == 'czi_native' else self._meta_reader
+            # 'czi_native' on a non-CZI input, and 'micro' on a file micro-reader
+            # does not take, fall back to the default reader.
+            meta_reader = ('bfio' if self._meta_reader in ('czi_native', 'micro')
+                           else self._meta_reader)
             if meta_reader == 'bioio':
                 try:
                     omemeta = await read_metadata_via_extension(self.root, series=self._series)
@@ -639,9 +681,12 @@ class PFFImageMeta(ImageReader):
         self._n_scenes = len(self.omemeta.images)
 
     async def get_arraydata(self):
+        if getattr(self.reader, 'sample_layout', None) is not None:
+            # Multi-sample (RGB) pixels: the reader returns every sample as a
+            # channel, C x S (see sample_channels); get_pixels matches it.
+            return self.reader.get_image_dask_data()
         pix = self.pixels
         dims = self.reader.img.dims
-        shape = (pix.size_t, pix.size_c, pix.size_z, pix.size_y, pix.size_x)
         if not hasattr(dims, 'S'):
             dask_data = self.reader.get_image_dask_data(dimensions_to_read='TCZYX')
         elif hasattr(dims, 'S') and not hasattr(dims, 'C'):
@@ -758,14 +803,12 @@ class PFFImageMeta(ImageReader):
             pixels.model_fields_set.update(missing)
         except (AttributeError, IndexError) as e:
             raise ValueError(f"Failed to get pixels from {self.root} series {self._series}: {e}") from e
-        if isinstance(self.reader, CZIReader):
-            dims = self.reader.img.dims
-            if hasattr(dims, 'S') and dims.S > 1 and pixels.size_c == 1:
-                pixels.size_c = dims.S
-                pixels.channels = [
-                    Channel(id=f"Channel:{i}", samples_per_pixel=1)
-                    for i in range(dims.S)
-                ]
+        layout = getattr(self.reader, 'sample_layout', None)
+        if layout is not None and not getattr(self, '_bfio_tiling', False):
+            # The array holds every sample as a channel (C x S); make the
+            # channel list say so.  Idempotent.
+            from eubi_bridge.core.sample_channels import expand_channel_metadata
+            expand_channel_metadata(pixels, *layout)
         return pixels
 
     @property
@@ -789,6 +832,7 @@ class PFFImageMeta(ImageReader):
             return
 
         self.reader = await read_single_image(self.root, aszarr=self._aszarr, as_mosaic=self._as_mosaic, **{**self._reader_kwargs, **kwargs})
+        await self._check_micro_reader(**kwargs)
 
         if _is_bioformats_backed(self.reader):
             # bioio_bioformats fallback — Bio-Formats can't read >2 GB planes in one call.
@@ -805,7 +849,62 @@ class PFFImageMeta(ImageReader):
             await self.set_tile(self._tile)
             self.arraydata = await self.get_arraydata()
 
+    def _micro_stored_pyramid(self, version: str):
+        """The file's own resolution levels as a Pyramid, when micro-reader is
+        the reader and the file stores more than one (keep_existing_resolutions;
+        as IMSImageMeta does for Imaris); else None.  Each level's pixel size
+        is level 0's scaled by the shape ratio."""
+        from eubi_bridge.core.micro_source import MicroReader
+        reader = self.reader
+        if not isinstance(reader, MicroReader) or reader.n_resolution_levels <= 1:
+            return None
+        arrays = [reader.get_resolution_level_dask_data(r)
+                  for r in range(reader.n_resolution_levels)]
+        base_shape = arrays[0].shape
+        pix = self.pixels
+        # a size the metadata lacks counts as 1.0 (eubi-bridge's default scale)
+        base_scale = [1.0 if v is None else float(v) for v in (
+            pix.time_increment, 1.0, pix.physical_size_z,
+            pix.physical_size_y, pix.physical_size_x)]
+        scales = [[s * (b / a) for s, b, a in zip(base_scale, base_shape, arr.shape)]
+                  for arr in arrays]
+        logger.info(f"pixel_reader=micro: {self.root}: keeping the file's "
+                    f"{len(arrays)} resolution levels")
+        return Pyramid().from_arrays(
+            arrays=arrays, axis_order='tczyx',
+            unit_list=self.get_units(), scales=scales,
+            version=version, name="Series_0",
+        )
+
+    async def _check_micro_reader(self, **kwargs) -> None:
+        """With micro-reader as the reader (pixel_reader='micro'), check it
+        against the metadata -- no pixels read, no standard reader opened --
+        and use the standard reader for this file if anything disagrees."""
+        from eubi_bridge.core.micro_source import MicroReader, metadata_mismatch
+        if not isinstance(self.reader, MicroReader):
+            return
+        if getattr(self, '_micro_meta', False):     # metadata from the same parse
+            self.reader.set_scene(min(self._series, self.reader.n_scenes - 1))
+            return
+        try:
+            problem = metadata_mismatch(self.reader, self.omemeta)
+        except Exception as exc:                    # noqa: BLE001 - fall back, say why
+            problem = f"check failed: {type(exc).__name__}: {exc}"
+        if not problem:
+            self.reader.set_scene(min(self._series, self.reader.n_scenes - 1))
+            return
+        logger.warning(f"pixel_reader=micro: {self.root}: standard reader used ({problem})")
+        self._reader_kwargs = {k: v for k, v in self._reader_kwargs.items()
+                               if k != 'pixel_reader'}
+        self.reader = await read_single_image(
+            self.root, aszarr=self._aszarr, as_mosaic=self._as_mosaic,
+            **{**self._reader_kwargs, **kwargs})
+
     async def get_pyramid(self, version='0.4') -> Pyramid:
+        if getattr(self, '_keep_existing_resolutions', False):
+            stored = self._micro_stored_pyramid(version)
+            if stored is not None:
+                return stored
         # Use the already-built tiled array when read_img() set it (bioformats path).
         # Calling get_arraydata() again would re-issue a full-plane openBytes and
         # hit the 2 GB limit for large files.
@@ -1067,6 +1166,15 @@ class IMSImageMeta(PFFImageMeta):
         if self._force_bioformats:
             await super().read_omemeta()   # Track B applies here
             return
+        if self._meta_reader == 'micro':
+            omemeta = await self._micro_omemeta()
+            if omemeta is not None:
+                self._micro_meta, self._native_ims = True, True
+                self.omemeta, self._n_scenes = omemeta, 1
+                return
+            self._reader_kwargs = {k: v for k, v in self._reader_kwargs.items()
+                                   if k != 'pixel_reader'}
+        self._micro_meta = False
         try:
             self.omemeta = await asyncio.to_thread(_build_ims_omemeta, self.root)
             self._n_scenes = 1
@@ -1081,9 +1189,38 @@ class IMSImageMeta(PFFImageMeta):
         if self._force_bioformats or not getattr(self, '_native_ims', True):
             await super().read_img()
             return
+        if self._reader_kwargs.get('pixel_reader') == 'micro':
+            reader = await asyncio.to_thread(self._micro_reader)
+            if reader is not None:
+                self.reader = reader
+                self.arraydata = await self.get_arraydata()
+                return
         from eubi_bridge.core.ims_reader import read_ims
         self.reader = await asyncio.to_thread(read_ims, self.root)
         self.arraydata = await self.get_arraydata()
+
+    def _micro_reader(self):
+        """micro-reader as the reader (pixel_reader='micro'), checked against
+        the metadata built from the file; None to use eubi-bridge's own reader.
+        It offers what this class uses of a reader: get_image_dask_data,
+        n_resolution_levels, get_resolution_level_dask_data."""
+        from eubi_bridge.core.micro_source import MicroReader, metadata_mismatch
+        reader = MicroReader.open(self.root)
+        if reader is None:
+            return None
+        if getattr(self, '_micro_meta', False):     # metadata from the same parse
+            reader.set_scene(0)
+            return reader
+        try:
+            problem = metadata_mismatch(reader, self.omemeta)
+        except Exception as exc:                    # noqa: BLE001 - fall back, say why
+            problem = f"check failed: {type(exc).__name__}: {exc}"
+        if problem:
+            logger.warning(f"pixel_reader=micro: {self.root}: eubi-bridge's Imaris reader "
+                           f"used ({problem})")
+            return None
+        reader.set_scene(0)
+        return reader
 
     async def get_arraydata(self):
         if self._force_bioformats or not getattr(self, '_native_ims', True):
@@ -1349,13 +1486,19 @@ class ArrayState:
             if self.array is None:
                 raise ValueError("Array required for from_array=True.")
             axes_to_compute = tuple(i for i, ax in enumerate(self.axes) if ax != 'c')
-            arr = da.from_zarr(self.array) if isinstance(self.array, zarr.Array) else self.array
-            if starts is None:
-                v = arr.min(axis=axes_to_compute).compute().tolist()
-                starts = [v] if np.isscalar(v) else v
-            if ends is None:
-                v = arr.max(axis=axes_to_compute).compute().tolist()
-                ends = [v] if np.isscalar(v) else v
+            if is_dask_array(self.array):
+                arr = self.array
+                if starts is None:
+                    v = arr.min(axis=axes_to_compute).compute().tolist()
+                    starts = [v] if np.isscalar(v) else v
+                if ends is None:
+                    v = arr.max(axis=axes_to_compute).compute().tolist()
+                    ends = [v] if np.isscalar(v) else v
+            else:                       # zarr, DynamicArray, numpy: no dask needed
+                c_index = self.axes.index('c') if 'c' in self.axes else None
+                lows, highs = channel_extrema(self.array, c_index)
+                starts = lows if starts is None else starts
+                ends = highs if ends is None else ends
         else:
             if dtype is None:
                 if self.array is None:
@@ -1377,16 +1520,18 @@ class ArrayState:
         """Remove singleton dimensions in-place."""
         if all(n > 1 for n in self.array.shape):
             return
-        if isinstance(self.array, zarr.Array):
-            logger.warning("Zarr arrays don't support squeeze — converting to dask.")
-            arr = da.from_array(self.array)
-        else:
-            arr = self.array
+        arr = DynamicArray(self.array) if isinstance(self.array, zarr.Array) else self.array
         singlet = {ax for ax, sz in self.shapedict.items() if sz == 1}
         newaxes  = ''.join(ax for ax in self.axes  if ax not in singlet)
         newunits = [self.unitdict[ax]  for ax in self.axes if ax not in singlet and ax in self.unitdict]
         newscales = [self.scaledict[ax] for ax in self.axes if ax not in singlet and ax in self.scaledict]
-        newarray = ops.squeeze(arr) if isinstance(arr, DynamicArray) else da.squeeze(arr)
+        if isinstance(arr, DynamicArray):
+            newarray = ops.squeeze(arr)
+        elif is_dask_array(arr):
+            import dask.array as da
+            newarray = da.squeeze(arr)
+        else:
+            newarray = np.squeeze(arr)
         self.update(newarray, newaxes, newunits, newscales)
         version = self.pyr.meta.multiscales.get('version', '0.4') if self.pyr else '0.4'
         self.pyr = Pyramid().from_array(newarray, axis_order=newaxes,
@@ -1425,7 +1570,7 @@ class ArrayState:
             start = cs.start or 0
             stop  = cs.stop  or len(omero_copy['channels'])
             self.pyr.meta.omero['channels'] = omero_copy['channels'][start:stop]
-        arr = (da.from_array(self.array) if isinstance(self.array, zarr.Array)
+        arr = (DynamicArray(self.array) if isinstance(self.array, zarr.Array)
                else self.array)
         slices = tuple(slicedict[ax] for ax in self.axes)
         logger.info(f"Cropping {self.array.shape} → {slicedict}")
@@ -1457,8 +1602,16 @@ class SceneLoader:
                  reader_tile_size_mb: float = 256.0, force_bioformats: bool = False,
                  as_mosaic: bool = False,
                  reader_kwargs: Optional[dict] = None,
-                 keep_existing_resolutions: bool = False):
+                 keep_existing_resolutions: bool = False,
+                 pixel_reader: str = 'standard',
+                 micro_check_pixels: bool = False):
         self.path = path
+        #: 'standard', or 'micro': pixels from micro-reader (core/micro_source.py)
+        self._pixel_reader = pixel_reader
+        #: with 'micro': False (default) -- micro-reader is the reader, no
+        #: standard reader is opened; True -- the standard reader is opened
+        #: and its pixels are compared with micro-reader's (swap_in)
+        self._micro_check_pixels = bool(micro_check_pixels)
         self._meta_reader = metadata_reader
         self._skip_dask = skip_dask
         self._tile_mb = float(reader_tile_size_mb)
@@ -1472,6 +1625,7 @@ class SceneLoader:
         self.n_tiles: int = 0
         self.n_views: int = 1
         self.n_illuminations: int = 1
+        self.may_have_views: bool = True      # set by _open
         self.is_ngff: bool = False
 
     async def _open(self) -> None:
@@ -1482,20 +1636,26 @@ class SceneLoader:
             self.is_ngff = True
         elif path.endswith('.h5'):
             self._img = await asyncio.to_thread(H5ImageMeta, path, self._meta_reader)
-        elif path.lower().endswith('.ims'):
+        elif (path.lower().endswith('.ims')
+              and (self._meta_reader != 'micro' or self._force_bioformats)):
+            # eubi's own Imaris reader; with micro-reader's metadata (the
+            # default) an .ims goes the micro-reader way below, its stored
+            # pyramid kept by keep_existing_resolutions too
             self._img = await asyncio.to_thread(
                 IMSImageMeta, path, self._meta_reader,
                 reader_tile_size_mb=self._tile_mb,
                 force_bioformats=self._force_bioformats,
-                reader_kwargs=self._reader_kwargs,
+                reader_kwargs=self._pff_reader_kwargs(),
                 keep_existing_resolutions=self._keep_existing_resolutions,
             )
         elif not self._skip_dask:
             self._img = await asyncio.to_thread(
                 PFFImageMeta, path, self._meta_reader, self._skip_dask,
                 self._tile_mb, self._force_bioformats, self._as_mosaic,
-                self._reader_kwargs,
+                self._pff_reader_kwargs(),
             )
+            # micro-reader keeps the file's own pyramid (keep_existing_resolutions)
+            self._img._keep_existing_resolutions = self._keep_existing_resolutions
         else:
             if path.endswith(('.tif', '.tiff')):
                 self._img = await asyncio.to_thread(TIFFImageMeta, path,
@@ -1506,13 +1666,19 @@ class SceneLoader:
                 self._img = await asyncio.to_thread(
                     PFFImageMeta, path, self._meta_reader, self._skip_dask,
                     self._tile_mb, self._force_bioformats, self._as_mosaic,
-                    self._reader_kwargs,
+                    self._pff_reader_kwargs(),
                 )
         await self._img.read_dataset()
         self.n_scenes        = self._img.n_scenes
         self.n_tiles         = self._img.n_tiles
         self.n_views         = getattr(self._img, 'n_views', 1)
         self.n_illuminations = getattr(self._img, 'n_illuminations', 1)
+        #: whether the file can have views / illuminations at all: only the CZI
+        #: reader has them (every reader inherits set_view, so ask the type),
+        #: or micro-reader reading a CZI
+        reader = getattr(self._img, 'reader', None)
+        self.may_have_views = (isinstance(reader, CZIReader)
+                               or bool(getattr(reader, 'may_have_views', False)))
         # The number of scenes the file's index advertises (before any
         # readability cap) — used to report partial conversions accurately.
         self.n_scenes_in_file = self.n_scenes
@@ -1544,16 +1710,28 @@ class SceneLoader:
             )
             self.n_scenes = meta_n
 
-    async def _snapshot(self, series: int, tile: Optional[int] = None) -> "ArrayManager":
+    async def _snapshot(self, series: int, tile: Optional[int] = None, *,
+                        view: Optional[int] = None,
+                        illumination: Optional[int] = None) -> "ArrayManager":
         """Capture the reader's current state into a fresh independent ArrayManager.
 
-        The caller must have already called ``set_scene`` / ``set_tile`` on
-        ``self._img`` before invoking this.
+        The caller must have already called ``set_scene`` / ``set_tile`` (and,
+        for views / illuminations, ``set_view`` / ``set_illumination``) on
+        ``self._img`` before invoking this; *view* / *illumination* say which
+        were set, for ``pixel_reader='micro'``.
         """
         state = ArrayState()
         state.pyr = await self._img.get_pyramid()
+        array = self._img.arraydata
+        micro = await self._micro_array(series, tile, view, illumination)
+        if micro is not None:
+            array = micro
+            state.pyr = Pyramid().from_array(
+                array=micro, axis_order=self._img.get_axes(),
+                unit_list=self._img.get_units(), scale=self._img.get_scales(),
+                version='0.4', name="Series_0")
         state.update(
-            array=self._img.arraydata,
+            array=array,
             axes=self._img.get_axes(),
             units=self._img.get_units(),
             scales=self._img.get_scales(),
@@ -1572,7 +1750,58 @@ class SceneLoader:
         mgr._n_tiles     = self.n_tiles
         mgr._is_ngff     = self.is_ngff
         mgr._bfio_tiling = getattr(self._img, '_bfio_tiling', False)
+        self._attach_micro_extras(mgr)
         return mgr
+
+    def _attach_micro_extras(self, mgr: "ArrayManager") -> None:
+        """With micro-reader's metadata: the image's position as the NGFF
+        translation (``origindict``; D3) and wavelengths / axis values for
+        the ``eubi_bridge`` attrs block (``acquisition_extras``; D4)."""
+        from eubi_bridge.core.micro_source import MicroReader, micro_extras
+        reader = getattr(self._img, 'reader', None)
+        if not getattr(self._img, '_micro_meta', False) or not isinstance(reader, MicroReader):
+            return
+        try:
+            origin, acquisition = micro_extras(reader, mgr.unitdict)
+        except Exception as exc:                    # noqa: BLE001 - metadata extras only
+            logger.warning(f"metadata_reader=micro: {self.path}: no position / "
+                           f"wavelengths ({type(exc).__name__}: {exc})")
+            return
+        if origin:
+            mgr.origindict = origin
+        mgr.acquisition_extras = acquisition
+
+    def _pff_reader_kwargs(self) -> dict:
+        """Reader options for PFFImageMeta: with pixel_reader='micro' (and no
+        pixel check against the standard reader) micro-reader is the reader."""
+        if self._meta_reader == 'micro' or (
+                self._pixel_reader == 'micro' and not self._micro_check_pixels):
+            # metadata_reader='micro' reads the pixels with micro-reader too
+            return {**self._reader_kwargs, 'pixel_reader': 'micro'}
+        return self._reader_kwargs
+
+    async def _micro_array(self, series: int, tile: Optional[int],
+                           view: Optional[int], illumination: Optional[int]):
+        """micro-reader's array for this snapshot, or None to keep the
+        standard reader's (other pixel reader, a format or layout micro-reader
+        does not map, or a mismatch: see ``micro_source.swap_in``)."""
+        if (self._pixel_reader != 'micro' or not self._micro_check_pixels
+                or self.is_ngff or self._keep_existing_resolutions
+                or self._img is None or self._img.get_axes() != 'tczyx'):
+            return None
+        from eubi_bridge.core.micro_source import swap_in
+
+        def _index(name, given):
+            if given is not None:
+                return int(given)
+            value = self._reader_kwargs.get(name, 0)
+            return int(value) if isinstance(value, (int, np.integer)) else 0
+
+        return await asyncio.to_thread(
+            swap_in, self._img, str(self.path), series, tile, as_mosaic=self._as_mosaic,
+            view=_index('view_index', view),
+            illumination=_index('illumination_index', illumination),
+            rotation=_index('rotation_index', None), phase=_index('phase_index', None))
 
     async def load(
         self,
@@ -1653,7 +1882,12 @@ def czi_mosaic_tile_origins(path: str) -> dict:
     are returned in pixels and shifted so the minimum is zero, because NGFF
     translations are offsets within a shared coordinate system and CZI centres
     its mosaic on zero (giving negative coordinates).
+
+    Only CZI files have them; aicspylibczi (the full eubi-bridge) reads them.
+    Files micro-reader reads carry each tile's position already.
     """
+    if not str(path).lower().endswith('.czi'):
+        return {}
     try:
         from aicspylibczi import CziFile
         czi = CziFile(path)
@@ -1712,6 +1946,9 @@ class ArrayManager:
         # other than the origin — currently CZI mosaic tiles.  Written out as an
         # NGFF 'translation' transform so a split mosaic stays reassemblable.
         self.origindict: dict = {}
+        #: metadata OME-Zarr has no field for (metadata_reader='micro': channel
+        #: wavelengths, axis values), for the ``eubi_bridge`` attrs block
+        self.acquisition_extras: dict = {}
 
         self._meta_reader        = metadata_reader
         self._skip_dask          = skip_dask
@@ -1719,6 +1956,8 @@ class ArrayManager:
         self._force_bioformats   = bool(kwargs.get('force_bioformats', False))
         self._as_mosaic          = bool(kwargs.get('as_mosaic', False))
         self._keep_existing_resolutions = bool(kwargs.get('keep_existing_resolutions', False))
+        self._pixel_reader       = kwargs.get('pixel_reader', 'standard')
+        self._micro_check_pixels = bool(kwargs.get('micro_check_pixels', False))
 
         self.loaded_scenes:  Optional[dict] = None
         self.loaded_tiles:   Optional[dict] = None
@@ -1834,7 +2073,9 @@ class ArrayManager:
                              reader_tile_size_mb=self._tile_mb,
                              force_bioformats=self._force_bioformats,
                              as_mosaic=self._as_mosaic,
-                             keep_existing_resolutions=self._keep_existing_resolutions)
+                             keep_existing_resolutions=self._keep_existing_resolutions,
+                             pixel_reader=self._pixel_reader,
+                             micro_check_pixels=self._micro_check_pixels)
         await loader._open()
         self._n_scenes = loader.n_scenes
         self._n_tiles  = loader.n_tiles
@@ -1866,7 +2107,9 @@ class ArrayManager:
                              reader_tile_size_mb=self._tile_mb,
                              force_bioformats=self._force_bioformats,
                              as_mosaic=self._as_mosaic,
-                             keep_existing_resolutions=self._keep_existing_resolutions)
+                             keep_existing_resolutions=self._keep_existing_resolutions,
+                             pixel_reader=self._pixel_reader,
+                             micro_check_pixels=self._micro_check_pixels)
         managers = await loader.load(scene_indices=scene_indices,
                                      mosaic_tile_index=mosaic_tile_index)
         self._n_scenes         = loader.n_scenes
@@ -1874,18 +2117,19 @@ class ArrayManager:
         self._n_tiles          = loader.n_tiles
         self._n_views         = loader.n_views
         self._n_illuminations = loader.n_illuminations
+        self._may_have_views  = loader.may_have_views
         self._is_ngff         = loader.is_ngff
 
         # Attach each tile's physical origin so it survives the split.  Done here
         # rather than in a single caller because every conversion path funnels
         # through load_scenes, and a tile without its position cannot be put back
         # where it belongs.
-        if mosaic_tile_index is not None:
+        if mosaic_tile_index is not None and any(not m.origindict for m in managers):
             tile_origins = czi_mosaic_tile_origins(str(self.path))
             if tile_origins:
                 for m in managers:
                     o = tile_origins.get(int(m.mosaic_tile_index or 0))
-                    if not o:
+                    if not o or m.origindict:       # micro-reader's position kept
                         continue
                     sd = getattr(m, 'scaledict', None) or {}
                     m.origindict = {
@@ -1906,7 +2150,9 @@ class ArrayManager:
                              reader_tile_size_mb=self._tile_mb,
                              force_bioformats=self._force_bioformats,
                              as_mosaic=self._as_mosaic,
-                             keep_existing_resolutions=self._keep_existing_resolutions)
+                             keep_existing_resolutions=self._keep_existing_resolutions,
+                             pixel_reader=self._pixel_reader,
+                             micro_check_pixels=self._micro_check_pixels)
         await loader._open()
         try:
             await loader._img.set_scene(scene_idx)  # type: ignore[union-attr]
@@ -1958,9 +2204,13 @@ class ArrayManager:
         """
         if not self.loaded_scenes:
             raise RuntimeError("Call load_scenes() before load_views_illuminations().")
+        # A format without views / illuminations has nothing to iterate: skip
+        # reopening the file (reader and metadata again) just to find that out.
+        if not getattr(self, '_may_have_views', True):
+            self._n_views = self._n_illuminations = 1
+            return {}
 
         assert self.path is not None
-        import dask.array as da  # local import — mirrors rest of module
 
         # Open the file ONCE with full view/illumination exposure so that
         # n_views / n_illuminations report the real totals and all
@@ -1973,6 +2223,8 @@ class ArrayManager:
             as_mosaic=self._as_mosaic,
             keep_existing_resolutions=self._keep_existing_resolutions,
             reader_kwargs={'view_index': 'all', 'illumination_index': 'all'},
+            pixel_reader=self._pixel_reader,
+            micro_check_pixels=self._micro_check_pixels,
         )
         await loader._open()
         assert loader._img is not None, "SceneLoader._open() failed to initialize _img"
@@ -2017,7 +2269,8 @@ class ArrayManager:
                 # the correct data slice.
                 if not getattr(reader, '_bfio_tiling', False):
                     reader.arraydata = await reader.get_arraydata()
-                mgr = await loader._snapshot(scene_idx, tile_idx if tiled else None)
+                mgr = await loader._snapshot(scene_idx, tile_idx if tiled else None,
+                                             view=v_idx, illumination=i_idx)
                 # OME-XML may report channels for all illuminations while
                 # get_image_dask_data returns only the slice for the current
                 # illumination.  Select the per-illumination window.
@@ -2057,9 +2310,10 @@ class ArrayManager:
                     vi_parts.append(f'_tile{tile_idx}')
                     # Carry the tile's stage position through as a physical
                     # origin so the split mosaic can be reassembled downstream.
-                    tile_origins = czi_mosaic_tile_origins(str(loader.path))
+                    tile_origins = ({} if mgr.origindict      # micro-reader's position kept
+                                    else czi_mosaic_tile_origins(str(loader.path)))
                     o = tile_origins.get(int(tile_idx)) if tile_origins else None
-                    if o:
+                    if o and not mgr.origindict:
                         sd = getattr(mgr, 'scaledict', {}) or {}
                         mgr.origindict = {
                             'y': o['y'] * float(sd.get('y', 1.0)),
@@ -2155,9 +2409,13 @@ class ArrayManager:
 
                         # axis 1 = C in TCZYX.  Region-reading sources arrive as
                         # DynamicArray; dask's concatenate would materialise them.
-                        concatenate = (ops.concatenate
-                                       if all(isinstance(a, DynamicArray) for a in arrays)
-                                       else da.concatenate)
+                        if any(is_dask_array(a) for a in arrays):
+                            import dask.array as da
+                            concatenate = da.concatenate
+                        else:
+                            arrays = [DynamicArray(a) if isinstance(a, zarr.Array) else a
+                                      for a in arrays]
+                            concatenate = ops.concatenate
                         concat_arr = concatenate(arrays, axis=1)
                         # state.update() keeps shapedict/chunkdict in sync with the
                         # new channel count; direct array assignment would leave

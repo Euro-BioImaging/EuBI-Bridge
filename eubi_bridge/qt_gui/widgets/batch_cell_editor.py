@@ -13,15 +13,17 @@ from the spec table instead.
 
 Two behaviours follow from how the batch CSV is read:
 
-* A blank cell means "use the config value", and setting a field back to that
-  value clears the override on its own.  Each field therefore carries a reset
-  button rather than a separate mode: it fills in the config value, which the
-  user would otherwise have to know and retype.
+* A blank cell means "use the config value".  A value the user sets is shown
+  and written even when it equals the config -- a chosen value never looks
+  like an inherited blank.  Each field's reset button is how a cell goes back
+  to blank: it clears the override (and shows the config value it inherits).
 * When the selected rows disagree on a value, the editor starts blank and
   untouched fields are left alone, so a bulk edit never silently flattens
   differences the user could not see.
 """
 from __future__ import annotations
+
+from typing import Iterable
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -65,6 +67,8 @@ class _Field(QWidget):
         super().__init__(parent)
         self.spec = spec
         self.changed = False
+        #: the reset button was used: clear the override rather than set a value
+        self.reset = False
         self.inactive = False
         self.config_value = config_value
 
@@ -104,9 +108,11 @@ class _Field(QWidget):
         self.editor.setToolTip("\n".join(parts))
 
     def _on_reset_to_config(self):
-        """Put the config's value back into the editor."""
+        """Clear the override: the cell goes back to blank, inheriting the
+        config value, which the editor shows."""
         self.set_value(self.config_value)
-        self._touch()
+        self.changed = True
+        self.reset = True               # after set_value: its own _touch clears it
 
     # -- construction --
 
@@ -233,6 +239,7 @@ class _Field(QWidget):
 
     def _touch(self, *_):
         self.changed = True
+        self.reset = False              # an edit after a reset is a value again
 
     def value(self):
         """The editor's value, converted to what the model should store."""
@@ -294,9 +301,12 @@ class BatchCellEditor(QDialog):
     """Bulk-edit the given parameter *keys* across the given *rows*."""
 
     def __init__(self, model: BatchModel, rows: list[int], keys: list[str],
-                 parent=None):
+                 parent=None, added: Iterable[str] = ()):
         super().__init__(parent)
         self._model = model
+        #: parameters added through "Add parameter": set by being added, so the
+        #: value they show is written even if the user leaves it as it is
+        self._added = set(added)
         self._rows = sorted(set(rows))
         self._fields: dict[str, _Field] = {}
 
@@ -340,6 +350,8 @@ class BatchCellEditor(QDialog):
                     value, agreed = model.common_value(self._rows, spec.key)
                     field = _Field(spec, value, agreed,
                                    config_value=model.config_value(spec.key))
+                    if spec.key in self._added:
+                        field.changed = True
                     self._fields[spec.key] = field
                     form.addRow(spec.label + ":", field)
                     if not agreed:
@@ -491,6 +503,11 @@ class BatchCellEditor(QDialog):
                 self._model.reset_cells(stale, key)
                 applied.append(key)
             if field.inactive or not field.changed:
+                continue
+            if field.reset:
+                self._model.reset_cells(self._rows, key)
+                if key not in applied:
+                    applied.append(key)
                 continue
             if field.is_blank():
                 continue
