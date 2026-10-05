@@ -104,7 +104,67 @@ def find_libjvm() -> str:
     )
 
 
-def soft_start_jvm(jvm_memory: Optional[str] = None) -> None:
+#: environment flag (inherited by spawned workers): start the JVM only when
+#: something uses Java -- set when micro-reader reads pixels and metadata, so
+#: a conversion of micro-reader formats never starts it
+LAZY_JVM_ENV = "EUBI_JVM_LAZY"
+_original_start_jvm = None
+
+
+def set_jvm_lazy(lazy: bool) -> None:
+    """Make ``soft_start_jvm`` defer the JVM to its first use (this process
+    and the workers it spawns from now on)."""
+    if lazy:
+        os.environ[LAZY_JVM_ENV] = "1"
+    else:
+        os.environ.pop(LAZY_JVM_ENV, None)
+
+
+def jvm_lazy() -> bool:
+    return os.environ.get(LAZY_JVM_ENV) == "1"
+
+
+def _install_lazy_start(jvm_memory: Optional[str] = None) -> None:
+    """Route scyjava's own JVM start -- which bfio and bioio-bioformats call
+    on first use (``scyjava.start_jvm`` / ``jimport``) -- to the bundled-JAR
+    start, so the JVM starts exactly when a file needs Bio-Formats."""
+    global _original_start_jvm
+    import scyjava
+    import scyjava._jvm as _jvm
+    if _original_start_jvm is None:
+        _original_start_jvm = _jvm.start_jvm
+
+    def _start(*_args, **_kwargs):
+        if not scyjava.jvm_started():
+            logger.info("Starting the JVM on first use (Bio-Formats needed)")
+            _start_jvm_now(jvm_memory)
+
+    scyjava.start_jvm = _start
+    _jvm.start_jvm = _start
+
+
+#: what ``soft_start_jvm`` did
+JVM_STARTED, JVM_ON_DEMAND, JVM_UNAVAILABLE = "started", "on demand", "unavailable"
+
+
+def soft_start_jvm(jvm_memory: Optional[str] = None) -> str:
+    """Start the JVM with bundled JARs, or -- in lazy mode (``set_jvm_lazy``)
+    -- arrange for it to start on first use.  Without the Java bridge
+    (eubi-bridge-lite) there is no JVM to start.  Returns what it did:
+    ``JVM_STARTED``, ``JVM_ON_DEMAND`` or ``JVM_UNAVAILABLE`` -- for logs
+    that say so, instead of announcing a JVM that may never start."""
+    from eubi_bridge.utils.optional_deps import is_installed
+    if not is_installed("scyjava"):
+        logger.debug("No Java bridge (scyjava) installed: no JVM")
+        return JVM_UNAVAILABLE
+    if jvm_lazy():
+        _install_lazy_start(jvm_memory)
+        return JVM_ON_DEMAND
+    _start_jvm_now(jvm_memory)
+    return JVM_STARTED
+
+
+def _start_jvm_now(jvm_memory: Optional[str] = None) -> None:
     """Start JVM with bundled JARs only, bypassing Maven/JGO entirely.
 
     Parameters
@@ -222,8 +282,8 @@ def soft_start_jvm(jvm_memory: Optional[str] = None) -> None:
     for jar in jars:
         scyjava.config.add_classpath(jar)
 
-    # Start JVM
-    scyjava.start_jvm()
+    # Start JVM (scyjava's own start, also when the lazy hook replaced it)
+    (_original_start_jvm or scyjava.start_jvm)()
     logger.info("JVM started successfully with scyjava")
 
 

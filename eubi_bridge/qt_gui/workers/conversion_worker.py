@@ -161,9 +161,11 @@ def _build_kwargs(config: dict) -> dict:
         "max_concurrent_downscale_layers": cluster_config.get("maxConcurrentDownscaleLayers", 3),
         "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 1),
         "memory_per_worker":        _gb_to_memory_str(cluster_config.get("memoryPerWorker", 4)),
-        "bf_tile_size_mb":          cluster_config.get("bfTileSizeMb", 512.0),
         "jvm_memory":               _gb_to_jvm_str(cluster_config.get("jvmMemory", 2)),
         "bf_read_concurrency":      cluster_config.get("bfReadConcurrency", 4),
+        "micro_read_concurrency":   cluster_config.get("microReadConcurrency", 4),
+        "pixel_reader":             ("micro" if reader_config.get("useMicroReader", True)
+                                     else "standard"),
         "on_local_cluster":         cluster_config.get("useLocalDask", False),
         "on_slurm":                 cluster_config.get("useSlurm", False),
         "slurm_partition":          cluster_config.get("slurmPartition") or None,
@@ -204,7 +206,7 @@ def _build_kwargs(config: dict) -> dict:
         "overwrite":                conv_config.get("overwrite", False),
         "override_channel_names":   conv_config.get("overrideChannelNames", False),
         "channel_intensity_limits": "from_dtype" if meta_config.get("channelIntensityLimits", "from_datatype") == "from_datatype" else "from_array",
-        "metadata_reader":          meta_config.get("metadataReader", "bioio"),
+        "metadata_reader":          meta_config.get("metadataReader", "micro"),
         # "idx,RRGGBB;..." as the CLI expects; empty means every channel is
         # coloured automatically.
         "channel_colors":           meta_config.get("channelColors", ""),
@@ -232,6 +234,18 @@ def _build_kwargs(config: dict) -> dict:
 
     if conv_config.get("autoChunk", True):
         kwargs["target_chunk_mb"] = conv_config.get("targetChunkSizeMb", 32)
+
+    # Concatenation settings ride along so a batch row can carry them: a table
+    # groups rows with 'aggregative_group' and each group may concatenate along
+    # its own axes.  Blank means "inherit", which is what a one-to-one row wants.
+    for _key, _src in (("aggregative_group", "aggregativeGroup"),
+                       ("concatenation_axes", "concatenationAxes"),
+                       ("time_tag", "timeTag"),
+                       ("channel_tag", "channelTag"),
+                       ("z_tag", "zTag"),
+                       ("y_tag", "yTag"),
+                       ("x_tag", "xTag")):
+        kwargs[_key] = concat_config.get(_src) or None
 
     if meta_config.get("overridePhysicalScale", False):
         for ax in ("time", "z", "y", "x"):
@@ -280,22 +294,27 @@ class ConversionWorker(QThread):
 
     def run(self):
         config = self._config
+        # A queue can hand over its rows directly, so a batch does not have to be
+        # written to a CSV purely to be run.  The table wins when present; it
+        # already carries the per-row overrides a path list cannot express.
+        input_table = config.get("inputTable")
         input_paths_list = config.get("inputPaths", [])
-        input_path  = input_paths_list if input_paths_list else config.get("inputPath", "")
+        if input_table is not None:
+            input_path = input_table
+        elif input_paths_list:
+            input_path = input_paths_list
+        else:
+            input_path = config.get("inputPath", "")
         output_path = config.get("outputPath", "")
-        concat      = config.get("concatenation", {})
 
         call_args = {
             "input_path":         input_path,
             "output_path":        output_path or None,
             "includes":           _split_patterns(config.get("includePattern", "")),
             "excludes":           _split_patterns(config.get("excludePattern", "")),
-            "time_tag":           concat.get("timeTag")           or None,
-            "channel_tag":        concat.get("channelTag")        or None,
-            "z_tag":              concat.get("zTag")              or None,
-            "y_tag":              concat.get("yTag")              or None,
-            "x_tag":              concat.get("xTag")              or None,
-            "concatenation_axes": concat.get("concatenationAxes") or None,
+            # The concatenation settings live in to_zarr_kwargs, which is also
+            # where a batch row's own values arrive; duplicating them here
+            # would pass each one to to_zarr twice.
             "to_zarr_kwargs":     _build_kwargs(config),
         }
 

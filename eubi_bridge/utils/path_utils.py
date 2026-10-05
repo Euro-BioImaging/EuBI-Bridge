@@ -233,6 +233,190 @@ def _matches_any(path: str, patterns) -> bool:
     return any(pattern_matches(path, p) for p in patterns)
 
 
+#: Column naming the aggregative group a conversion-table row belongs to.
+#: Rows sharing a value are concatenated into one output; a blank cell is a
+#: plain one-to-one conversion.
+AGGREGATIVE_GROUP_COLUMN = "aggregative_group"
+
+
+def is_blank_cell(value) -> bool:
+    """True for a cell that means "inherit", i.e. one the user left empty.
+
+    An empty CSV cell arrives as NaN, which is not equal to itself; the GUI
+    leaves None or an empty string instead.
+    """
+    return value is None or value != value or str(value).strip() == ""
+
+
+def sanitise_group_name(group: object) -> str:
+    """Turn an aggregative group id into something usable in a filename.
+
+    The raw value identifies the group and is compared as given, so grouping
+    stays exact; only the copy that reaches a path is normalised.  Without this
+    a perfectly reasonable id such as ``"Embryo 1/A"`` would silently create a
+    subdirectory.
+    """
+    # str(None) is 'None' and str(nan) is 'nan', both usable in a filename, so
+    # an unset cell has to be rejected before the value is stringified.
+    if is_blank_cell(group):
+        return ""
+    text = str(group).strip()
+    safe = "".join(ch if (ch.isalnum() or ch in "_.-") else "_" for ch in text)
+    return safe.strip("_") or ""
+
+
+def prefix_with_group(name: str, group: object) -> str:
+    """Prefix an output *name* with its aggregative group.
+
+    Aggregative names are derived from what was concatenated
+    (``img_t0_zset``), which is what keeps sibling outputs apart when one
+    directory yields several groups.  The group is therefore added in front
+    rather than replacing anything::
+
+        gr1  +  img_t0_zset  ->  gr1_img_t0_zset
+
+    An empty or missing group leaves the name untouched, so conversions that do
+    not use the column keep exactly the names they had.
+    """
+    safe = sanitise_group_name(group) if group is not None else ""
+    if not safe:
+        return name
+    return f"{safe}_{name}" if name else safe
+
+
+#: Concatenation settings that describe *how a group is assembled*, so they may
+#: differ between groups but must agree within one.  ``includes``/``excludes``
+#: are deliberately absent: they filter the input search, which a table has
+#: already done by naming its paths explicitly, so they stay global.
+PER_GROUP_CONCAT_KEYS = (
+    "concatenation_axes", "time_tag", "channel_tag", "z_tag", "y_tag", "x_tag",
+)
+
+
+def resolve_group_concat_params(group_id, group_df, defaults: dict) -> dict:
+    """Return one group's concatenation settings, or explain why it cannot.
+
+    Every row of a group describes the *same* output, so a setting that differs
+    between its rows has no single meaning.  Taking the first row silently would
+    discard the others, so a genuine disagreement is an error naming the group,
+    the parameter and the values, rather than a value quietly winning.
+
+    A blank cell inherits *defaults*, which keeps a table that sets nothing
+    behaving exactly as it did before the columns existed.
+    """
+    resolved = dict(defaults)
+    for key in PER_GROUP_CONCAT_KEYS:
+        if key not in group_df.columns:
+            continue
+        present = [v for v in group_df[key].tolist() if not is_blank_cell(v)]
+        if not present:
+            continue
+        distinct = list(dict.fromkeys(str(v) for v in present))
+        if len(distinct) > 1:
+            raise ValueError(
+                f"Aggregative group {group_id!r} has conflicting {key}: "
+                f"{', '.join(repr(v) for v in distinct)}. Every row of a group "
+                f"builds one output, so its concatenation settings must agree; "
+                f"use separate groups if they should differ."
+            )
+        resolved[key] = present[0]
+    return resolved
+
+
+def concat_without_group_problems(df: pd.DataFrame,
+                                  defaults: dict | None = None) -> list:
+    """Report rows that ask to concatenate but say nothing to concatenate with.
+
+    In a conversion table it is ``aggregative_group`` that marks a row as
+    aggregative: rows sharing a value become one output, a blank one converts
+    alone.  So a row carrying ``concatenation_axes`` but no group silently
+    converts one-to-one, producing something other than what its settings
+    describe -- a wrong result rather than a preference, which is why this
+    blocks rather than warns.
+
+    Only the axes count as the declaration.  Stray tags left in a form or a
+    config are harmless on a unary row, and refusing them would make a mixed
+    table needlessly awkward to write.
+
+    *defaults* are the run-wide settings a blank cell inherits, so axes given
+    once on the command line are caught as readily as axes written per row.
+    """
+    defaults = defaults or {}
+    default_axes = not is_blank_cell(defaults.get("concatenation_axes"))
+
+    if AGGREGATIVE_GROUP_COLUMN not in df.columns:
+        groups = [None] * len(df)
+    else:
+        groups = df[AGGREGATIVE_GROUP_COLUMN].tolist()
+
+    if "concatenation_axes" in df.columns:
+        axes = df["concatenation_axes"].tolist()
+    else:
+        axes = [None] * len(df)
+
+    def _summarise(positions: list) -> str:
+        shown = ", ".join(str(p) for p in positions[:5])
+        if len(positions) > 5:
+            shown += f", ... (+{len(positions) - 5} more)"
+        return shown
+
+    no_group, no_axes = [], []
+    for position, (group, axis) in enumerate(zip(groups, axes), start=1):
+        has_axes = not is_blank_cell(axis) or default_axes
+        has_group = not is_blank_cell(group)
+        if has_axes and not has_group:
+            no_group.append(position)
+        elif has_group and not has_axes:
+            no_axes.append(position)
+
+    problems = []
+    if no_group:
+        problems.append(
+            f"Row {_summarise(no_group)}: concatenation axes are set but no "
+            f"aggregative group is. Rows are concatenated by sharing a group "
+            f"name, so these would convert one-to-one and ignore the "
+            f"concatenation settings. Give them a group name to concatenate "
+            f"them, or clear the axes to convert them singly."
+        )
+    if no_axes:
+        # The mirror image, and just as silent: the rows are collected into a
+        # group and then concatenated along nothing, which currently fails deep
+        # in the dispatcher as "commonpath() arg is an empty sequence".
+        problems.append(
+            f"Row {_summarise(no_axes)}: an aggregative group is set but no "
+            f"concatenation axes are. A group has to be told which axis to "
+            f"concatenate along, so set the axes (e.g. 'z'), or clear the group "
+            f"name to convert these rows one-to-one."
+        )
+    return problems
+
+
+def partition_by_group(df: pd.DataFrame):
+    """Split a conversion table into unary rows and aggregative groups.
+
+    Returns ``(unary_df, groups)`` where *groups* is a list of
+    ``(group_id, group_df)`` pairs, one per aggregative output, in the order the
+    groups first appear in the table.
+
+    A blank ``aggregative_group`` cell means the row converts on its own, which
+    is the behaviour of every table written before the column existed.  Rows
+    sharing a value are concatenated together, so the column decides membership
+    explicitly rather than the tags having to be re-derived at run time.
+    """
+    if AGGREGATIVE_GROUP_COLUMN not in df.columns:
+        return df, []
+
+    blank = df[AGGREGATIVE_GROUP_COLUMN].map(is_blank_cell)
+    unary = df[blank]
+
+    groups = []
+    grouped = df[~blank]
+    for group_id in grouped[AGGREGATIVE_GROUP_COLUMN].drop_duplicates():
+        groups.append((group_id,
+                       grouped[grouped[AGGREGATIVE_GROUP_COLUMN] == group_id]))
+    return unary, groups
+
+
 def disambiguate_output_names(input_paths: List[str]) -> dict:
     """Map each input path to a unique output basename.
 
@@ -362,22 +546,56 @@ def take_filepaths_from_path(
     return sorted(paths)
 
 
+def _apply_table_filters_and_defaults(df: pd.DataFrame,
+                                      global_kwargs: dict) -> pd.DataFrame:
+    """Apply include/exclude filters and global column defaults to *df*.
+
+    Shared by every branch of :func:`take_filepaths` so a pattern behaves
+    identically whether the rows came from a directory, an explicit file list, a
+    conversion table on disk, or a table handed over in memory.
+    """
+    def _keep(row) -> bool:
+        inp = row["input_path"]
+        includes = global_kwargs.get('includes')
+        excludes = global_kwargs.get('excludes')
+        if not _matches_any(inp, includes):
+            return False
+        if excludes is not None and _matches_any(inp, excludes):
+            return False
+        return True
+
+    df = df[df.apply(_keep, axis=1)]
+
+    # Global values fill in only the columns the table does not carry itself, so
+    # a per-row override always wins over the run-wide setting.
+    for k, v in global_kwargs.items():
+        if k not in df.columns:
+            if hasattr(v, '__len__') and not isinstance(v, str):
+                df[k] = [v for _ in range(len(df))]
+            else:
+                df[k] = v
+
+    return df
+
+
 def take_filepaths(
-    input_path: Union[str, os.PathLike, list, tuple],
+    input_path: Union[str, os.PathLike, list, tuple, pd.DataFrame],
     **global_kwargs,
 ) -> pd.DataFrame:
     """Load file paths into a DataFrame, from directory, files, CSV/Excel table,
-    or an explicit list of paths (e.g. from GUI multi-select).
+    an explicit list of paths (e.g. from GUI multi-select), or a ready-made
+    table.
 
     Handles multiple input types:
+    - DataFrame: an already-built conversion table, used as-is
     - List/tuple of paths: Used directly, no globbing or filtering applied
     - Directory path: Finds all files
     - File glob pattern: Matches files
     - CSV/XLSX table: Reads table with 'input_path' column
 
     Args:
-        input_path: Directory, file, glob pattern, table path,
-                    or list/tuple of explicit file paths
+        input_path: Directory, file, glob pattern, table path, list/tuple of
+                    explicit file paths, or a DataFrame of rows
         **global_kwargs: Include/exclude filters, column defaults
 
     Returns:
@@ -387,6 +605,26 @@ def take_filepaths(
         ValueError: If input is invalid or no paths found
         Exception: If conflicting parameters provided
     """
+    # ── An already-built table ────────────────────────────────────────────────
+    # A caller that has per-row overrides in hand (the GUI batch queue) can pass
+    # them straight through, instead of writing a CSV purely so this function
+    # can read it back.  Filtering and column defaults below still apply, so the
+    # rows behave exactly as if they had come from a file.
+    if isinstance(input_path, pd.DataFrame):
+        df = input_path.copy()
+        if "filepath" in df.columns and "input_path" not in df.columns:
+            df = df.rename(columns={"filepath": "input_path"})
+        if "input_path" not in df.columns:
+            raise ValueError(
+                "A DataFrame input must have an 'input_path' or 'filepath' "
+                "column.")
+        if df.empty:
+            raise ValueError("Empty conversion table provided.")
+        # Match the CSV branch: NaN cells become None so that configuration
+        # defaults (which expect None, not NaN) take effect.
+        df = df.astype(object).where(pd.notna(df), None)
+        return _apply_table_filters_and_defaults(df, global_kwargs)
+
     # ── Explicit list of paths (GUI multi-select or programmatic use) ──────────
     if isinstance(input_path, (list, tuple)):
         fps = [str(p) for p in input_path if p]
@@ -432,16 +670,6 @@ def take_filepaths(
 
     # Handle different input types
     if input_path.endswith(TABLE_FORMATS):
-        concatenation_axes = global_kwargs.get('concatenation_axes', None)
-        if concatenation_axes is not None:
-            logger.error(
-                "Specifying tables as input is only supported for one-to-one conversions. "
-                "With aggregative conversions, specify a directory instead."
-            )
-            raise Exception(
-                "Specifying tables as input is only supported for one-to-one conversions. "
-                "With aggregative conversions, specify a directory instead."
-            )
 
         logger.info(f"Loading conversion table from {input_path}")
         
@@ -492,31 +720,8 @@ def take_filepaths(
 
     if "input_path" not in df.columns:
         raise ValueError("Table must include an 'input_path' or 'filepath' column.")
-    
-    # Filter by includes/excludes.  Uses the same matcher as
-    # take_filepaths_from_path so a pattern behaves identically whether the input
-    # was a directory, an explicit file list, or a conversion table.
-    def _keep(row) -> bool:
-        inp = row["input_path"]
-        includes = global_kwargs.get('includes')
-        excludes = global_kwargs.get('excludes')
-        if not _matches_any(inp, includes):
-            return False
-        if excludes is not None and _matches_any(inp, excludes):
-            return False
-        return True
 
-    df = df[df.apply(_keep, axis=1)]
-    
-    # Apply global defaults for missing parameters
-    for k, v in global_kwargs.items():
-        if k not in df.columns:
-            if hasattr(v, '__len__') and not isinstance(v, str):
-                df[k] = [v for _ in range(len(df))]
-            else:
-                df[k] = v
-
-    return df
+    return _apply_table_filters_and_defaults(df, global_kwargs)
 
 
 def find_common_root(paths: List[Union[str, os.PathLike]]) -> str:

@@ -29,6 +29,7 @@ from eubi_bridge.core.config_models import (
     ConversionConfig,
     ConcatenationConfig,
     DownscaleConfig,
+    MetadataConfig,
     ReaderConfig,
     SUPPORTED_COMPRESSORS_V2,
     SUPPORTED_COMPRESSORS_V3,
@@ -46,6 +47,7 @@ COMMAND_GROUPS: dict[str, list[str]] = {
         "configure.conversion",
         "configure.downscale",
         "configure.readers",
+        "configure.metadata",
         "configure.concatenation",
     ],
     "Named Configs": [
@@ -65,7 +67,7 @@ COMMAND_GROUPS: dict[str, list[str]] = {
 COMMAND_KWARGS_SECTIONS: dict[str, list[str]] = {
     "to_zarr": [
         "Cluster overrides", "Conversion overrides", "Downscale overrides",
-        "Reader overrides", "Concatenation overrides",
+        "Reader overrides", "Metadata overrides", "Concatenation overrides",
     ],
     "validate_aggregative": [
         "Cluster overrides", "Reader overrides", "Concatenation overrides",
@@ -78,8 +80,13 @@ KWARGS_SECTIONS: dict[str, Any] = {
     "Conversion overrides":    ConversionConfig,
     "Downscale overrides":     DownscaleConfig,
     "Reader overrides":        ReaderConfig,
+    "Metadata overrides":      MetadataConfig,
     "Concatenation overrides": ConcatenationConfig,
 }
+
+# Deprecated parameters: still accepted (so old configs and scripts keep
+# working) but no longer documented, since they have no effect.
+_HIDDEN_PARAMS: frozenset[str] = frozenset({"bf_tile_size_mb"})
 
 # All field names covered by config models — used to exclude duplicates from
 # the "CLI-only options" section (they already appear in the override sections).
@@ -1140,6 +1147,8 @@ def _build_kwargs_collapsibles(
     """Return per-flag collapsible blocks for all fields of a Pydantic model."""
     blocks: list[str] = []
     for fname, finfo in model.model_fields.items():
+        if fname in _HIDDEN_PARAMS:
+            continue
         type_s = _type_str(finfo.annotation)
         default_s = _default_str(finfo)
         valid_s = _constraints_for(fname, finfo)
@@ -1316,7 +1325,7 @@ def _render_command(name: str, method: Any) -> str:
     params = [
         (pname, p)
         for pname, p in sig.parameters.items()
-        if pname not in ("self", "args", "kwargs")
+        if pname not in ("self", "args", "kwargs") and pname not in _HIDDEN_PARAMS
     ]
 
     required = [(n, p) for n, p in params if p.default is inspect.Parameter.empty]

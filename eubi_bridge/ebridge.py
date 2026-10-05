@@ -30,6 +30,7 @@ from eubi_bridge.core.config_models import (
     ConversionConfig,
     resolve_ome_zarr_target,
     DownscaleConfig,
+    MetadataConfig,
     ReaderConfig,
 )
 
@@ -61,22 +62,52 @@ def _normalise_row_overrides(overrides: dict) -> dict:
     return normalised
 
 
+def _row_metadata_readers(input_path, default: str, force_default: bool) -> tuple:
+    """The metadata readers a conversion will use, and whether any forces
+    Bio-Formats: the configured ones for a plain input; for a conversion
+    table (a DataFrame, or a .csv / .tsv / .txt / .xls / .xlsx file), each
+    row's own -- a blank cell means the configured value."""
+    import pandas as pd
+    df = None
+    if isinstance(input_path, pd.DataFrame):
+        df = input_path
+    elif isinstance(input_path, str) and input_path.endswith(tuple(TABLE_FORMATS)):
+        try:
+            df = (pd.read_excel(input_path) if input_path.endswith((".xls", ".xlsx"))
+                  else pd.read_csv(input_path))
+        except Exception:                       # noqa: BLE001 - read again (and fail) later
+            df = None
+    if df is None or df.empty:
+        return {default}, bool(force_default)
+
+    def given(value) -> bool:
+        return value is not None and value == value and str(value).strip() != ""
+
+    readers = ({str(v) if given(v) else default for v in df["metadata_reader"]}
+               if "metadata_reader" in df else {default})
+    force = bool(force_default)
+    if "force_bioformats" in df:
+        force = any((str(v).strip().lower() in ("true", "1")) if given(v) else force_default
+                    for v in df["force_bioformats"])
+    return readers, force
+
+
 # Heavy imports are deferred — config commands don't need zarr/dask/JVM.
 def _ensure_heavy_imports():
     """Lazy-load heavy modules only when needed for actual conversions."""
-    global dask, np, psutil, s3fs, zarr, da, AggregativeConverter, run_updates
-    if 'dask' in globals():
+    global np, psutil, s3fs, zarr, AggregativeConverter, run_updates, _heavy_imported
+    if _heavy_imported:
         return
-    import scyjava
-    scyjava.config.endpoints.clear()
-    scyjava.config.maven_offline = True
-    scyjava.config.jgo_disabled = True
-    import dask
+    from eubi_bridge.utils.optional_deps import is_installed
+    if is_installed("scyjava"):            # the Java bridge: the full eubi-bridge only
+        import scyjava
+        scyjava.config.endpoints.clear()
+        scyjava.config.maven_offline = True
+        scyjava.config.jgo_disabled = True
     import numpy as np
     import psutil
     import s3fs
     import zarr
-    from dask import array as da
     warnings.filterwarnings(
         "ignore",
         message="Dask configuration key 'distributed.p2p.disk' has been deprecated",
@@ -88,6 +119,10 @@ def _ensure_heavy_imports():
     )
     from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
     from eubi_bridge.conversion.updater import run_updates
+    _heavy_imported = True
+
+
+_heavy_imported = False
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +190,7 @@ class ConfigManager:
             tensorstore_data_copy_concurrency=4,
             max_retries=10,
             bf_read_concurrency=4,
-            bf_tile_size_mb=512.0,
+            micro_read_concurrency=4,
             jvm_memory='1g',
             slurm_time='24:00:00',
             slurm_account=None,
@@ -173,6 +208,8 @@ class ConfigManager:
             mosaic_tile_index=0,
             sample_index=0,
             force_bioformats=False,
+            pixel_reader='micro',
+            micro_check_pixels=False,
             concat_views=False,
             concat_illuminations=False,
         ),
@@ -202,9 +239,6 @@ class ConfigManager:
             compressor='blosc',
             compressor_params={},
             overwrite=False,
-            override_channel_names=False,
-            channel_intensity_limits='from_dtype',
-            metadata_reader='bfio',
             save_omexml=True,
             export_acquisition_metadata=None,
             squeeze=True,
@@ -226,6 +260,21 @@ class ConfigManager:
             y_smart_scale_factor=None,
             x_smart_scale_factor=None,
         ),
+        metadata=dict(
+            metadata_reader='micro',
+            override_channel_names=False,
+            channel_intensity_limits='from_dtype',
+            channel_colors='',
+            channel_labels='',
+            time_scale=None,
+            z_scale=None,
+            y_scale=None,
+            x_scale=None,
+            time_unit=None,
+            z_unit=None,
+            y_unit=None,
+            x_unit=None,
+        ),
         concatenation=dict(
             concatenation_axes=None,
             time_tag=None,
@@ -233,6 +282,7 @@ class ConfigManager:
             z_tag=None,
             y_tag=None,
             x_tag=None,
+            aggregative_group=None,
         ),
     )
 
@@ -289,13 +339,88 @@ class ConfigManager:
             if isinstance(cp.get('shuffle'), str):
                 cp['shuffle'] = _shuffle_map.get(cp['shuffle'].lower(), 1)
                 dirty = True
-            # Upgrade: add concatenation section if absent (pre-existing config file)
-            if 'concatenation' not in config:
-                config['concatenation'] = dict(self._ROOT_DEFAULTS['concatenation'])
-                dirty = True
+            # Upgrade: backfill anything the installed version knows about but
+            # this file predates -- whole sections, and individual keys within a
+            # section that already exists.  Without the key-level pass a field
+            # added after the file was written would stay absent forever, since
+            # every existing config already has the section it belongs to.
+            for section, defaults in self._ROOT_DEFAULTS.items():
+                if section not in config:
+                    config[section] = dict(defaults)
+                    dirty = True
+                    continue
+                if not isinstance(config[section], dict):
+                    continue
+                for key, value in defaults.items():
+                    if key not in config[section]:
+                        config[section][key] = value
+                        dirty = True
+            # Keys that no longer do anything.  Every older config carries them
+            # at their old default, so leaving them would raise a deprecation
+            # warning on every run for a value the user never chose.
+            for section, key in self._RETIRED_KEYS:
+                if isinstance(config.get(section), dict) and key in config[section]:
+                    del config[section][key]
+                    dirty = True
+            self._warn_about_relocated_keys(config)
             if dirty:
                 self._save_config_to_json(config)
         self._config = config
+
+    #: Settings that no longer have any effect, removed from a config on load.
+    #: bf_tile_size_mb: Bio-Formats images are read one region at a time since
+    #: 0.1.3, so region_size_mb sets the read size.
+    _RETIRED_KEYS = (('cluster', 'bf_tile_size_mb'),)
+
+    #: Settings that used to live in another section.  Their old copies are left
+    #: in place rather than moved automatically: silently relocating a value the
+    #: user set is how a conversion ends up not matching its config, so the
+    #: choice of how to fix it stays theirs.
+    _RELOCATED_KEYS = {
+        'metadata_reader': ('conversion', 'metadata'),
+        'override_channel_names': ('conversion', 'metadata'),
+        'channel_intensity_limits': ('conversion', 'metadata'),
+        'channel_colors': ('conversion', 'metadata'),
+        'channel_labels': ('conversion', 'metadata'),
+    }
+
+    def _warn_about_relocated_keys(self, config: dict) -> None:
+        """Say loudly when a config still holds a setting in its old section.
+
+        The stale copy is simply ignored, so without this the conversion would
+        quietly use the default while the file appears to say otherwise -- and
+        the file looks perfectly valid, which makes it very hard to spot.
+        """
+        stale = [(key, old, new)
+                 for key, (old, new) in self._RELOCATED_KEYS.items()
+                 if isinstance(config.get(old), dict) and key in config[old]]
+        if not stale:
+            return
+
+        lines = [
+            "",
+            "=" * 70,
+            "CONFIG OUT OF DATE: some settings have moved to a new section.",
+            "",
+            "These are still in their old place and are now being IGNORED:",
+            "",
+        ]
+        for key, old, new in stale:
+            value = config[old][key]
+            lines.append(f"    {old}.{key} = {value!r}")
+            lines.append(f"        -> now read from '{new}.{key}'")
+        lines += [
+            "",
+            f"Config file: {self._get_json_path()}",
+            "",
+            "Fix it either way:",
+            "  * eubi config reset_config          (start from the defaults), or",
+            "  * eubi configure metadata --<key> <value>   for each one above,",
+            "    then delete the stale keys from the 'conversion' section.",
+            "=" * 70,
+            "",
+        ]
+        logger.warning("\n".join(lines))
 
     # ── config property ───────────────────────────────────────────────────
 
@@ -340,6 +465,7 @@ class ConfigManager:
                           tensorstore_data_copy_concurrency: int = 'default',
                           max_retries: int = 'default',
                           bf_read_concurrency: int = 'default',
+                          micro_read_concurrency: int = 'default',
                           bf_tile_size_mb: float = 'default',
                           jvm_memory: str = 'default',
                           slurm_time: str = 'default',
@@ -349,6 +475,11 @@ class ConfigManager:
                           slurm_sif_path: str = 'default') -> None:
         """Update cluster parameters. Omitted arguments keep their current values."""
         params = {k: v for k, v in locals().items() if k != 'self'}
+        if params.pop('bf_tile_size_mb') != 'default':
+            logger.warning(
+                "DEPRECATION: 'bf_tile_size_mb' is no longer used and was not saved. "
+                "Bio-Formats images are read one region at a time, so "
+                "'region_size_mb' now sets the read size.")
         for key, val in params.items():
             if key in self.config['cluster'] and val != 'default':
                 self.config['cluster'][key] = val
@@ -366,7 +497,9 @@ class ConfigManager:
                           sample_index: int = 'default',
                           force_bioformats: bool = 'default',
                           concat_views: bool = 'default',
-                          concat_illuminations: bool = 'default') -> None:
+                          concat_illuminations: bool = 'default',
+                          pixel_reader: str = 'default',
+                          micro_check_pixels: bool = 'default') -> None:
         """Update reader parameters. Omitted arguments keep their current values."""
         params = {k: v for k, v in locals().items() if k != 'self'}
         for key, val in params.items():
@@ -399,9 +532,6 @@ class ConfigManager:
                              compressor: str = 'default',
                              compressor_params: dict = 'default',
                              overwrite: bool = 'default',
-                             override_channel_names: bool = 'default',
-                             channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
-                             metadata_reader: str = 'default',
                              save_omexml: bool = 'default',
                              export_acquisition_metadata: bool = 'default',
                              squeeze: bool = 'default',
@@ -413,6 +543,63 @@ class ConfigManager:
             if key in self.config['conversion'] and val != 'default':
                 self.config['conversion'][key] = val
         ConversionConfig(**self.config['conversion'])
+        self._save_config_to_json(self.config)
+
+    def configure_metadata(self,
+                           metadata_reader: str = 'default',
+                           override_channel_names: bool = 'default',
+                           channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
+                           channel_colors: str = 'default',
+                           channel_labels: str = 'default',
+                           time_scale: float = 'default',
+                           z_scale: float = 'default',
+                           y_scale: float = 'default',
+                           x_scale: float = 'default',
+                           time_unit: str = 'default',
+                           z_unit: str = 'default',
+                           y_unit: str = 'default',
+                           x_unit: str = 'default') -> None:
+        """Update how the output's metadata is read and described.
+
+        These moved here from ``conversion`` so the config file matches the
+        Metadata tab the interface has always shown them on.  A config written
+        before the move keeps its old copies, which are ignored -- loading one
+        warns and says which keys to set here instead.
+
+        Args:
+            metadata_reader: Metadata backend — ``'micro'`` (default):
+                micro-reader's metadata, and its pixels with it (no JVM unless
+                a file falls back to Bio-Formats; also writes the stage
+                position as the NGFF translation and wavelengths in the
+                ``eubi_bridge`` attributes); ``'bfio'`` or ``'bioio'``.
+            override_channel_names: Replace channel names with ones derived
+                from the concatenation tags (default False).
+            channel_intensity_limits: How to set OMERO window limits —
+                ``'from_dtype'`` (default) uses dtype min/max,
+                ``'from_array'`` computes per-channel min/max from pixel data,
+                ``'auto'`` lets the viewer decide.
+            channel_colors: Per-channel colour overrides as
+                ``"0,FF0000;1,00FF00"``. Channels left out keep their source
+                colour, or are given one automatically.
+            channel_labels: Per-channel name overrides as ``"0,DAPI;1,GFP"``.
+            time_scale: Physical size of one time step. ``None`` keeps whatever
+                the source file states.
+            z_scale: Physical pixel size along z (e.g. ``0.5``). ``None`` keeps
+                the source value.
+            y_scale: Physical pixel size along y. ``None`` keeps the source value.
+            x_scale: Physical pixel size along x. ``None`` keeps the source value.
+            time_unit: Unit for ``time_scale`` (e.g. ``'second'``). ``None``
+                keeps the source value.
+            z_unit: Unit for ``z_scale`` (e.g. ``'micrometer'``). ``None`` keeps
+                the source value.
+            y_unit: Unit for ``y_scale``. ``None`` keeps the source value.
+            x_unit: Unit for ``x_scale``. ``None`` keeps the source value.
+        """
+        params = {k: v for k, v in locals().items() if k != 'self'}
+        for key, val in params.items():
+            if key in self.config['metadata'] and val != 'default':
+                self.config['metadata'][key] = val
+        MetadataConfig(**self.config['metadata'])
         self._save_config_to_json(self.config)
 
     def configure_downscale(self,
@@ -444,7 +631,8 @@ class ConfigManager:
                                 channel_tag: Union[str, tuple, None] = 'default',
                                 z_tag: Union[str, tuple, None] = 'default',
                                 y_tag: Union[str, tuple, None] = 'default',
-                                x_tag: Union[str, tuple, None] = 'default') -> None:
+                                x_tag: Union[str, tuple, None] = 'default',
+                                aggregative_group: Union[str, None] = 'default') -> None:
         """Update aggregative (concatenation) parameters.
 
         Set ``concatenation_axes`` to a string of axis letters (e.g. ``'c'``,
@@ -453,6 +641,19 @@ class ConfigManager:
         etc.) to be set as well — either here or at ``to_zarr()`` call time.
         Set ``concatenation_axes=None`` to revert to unary (non-concatenated)
         conversion.
+
+        Args:
+            concatenation_axes: Axes to concatenate along, e.g. ``'z'`` or ``'tc'``.
+            time_tag: Filename tag marking the time index.
+            channel_tag: Filename tag marking the channel index.
+            z_tag: Filename tag marking the z index.
+            y_tag: Filename tag marking the y index.
+            x_tag: Filename tag marking the x index.
+            aggregative_group: Name prefixed to the concatenated output.  In a
+                conversion table, rows sharing this value are concatenated
+                together and a blank one converts on its own.  Prefer short
+                labels such as ``gr1`` or ``A``, since it becomes part of the
+                output filename.
         """
         params = {k: v for k, v in locals().items() if k != 'self'}
         for key, val in params.items():
@@ -621,7 +822,7 @@ class ConfigManager:
         _console.print(header_text)
         _console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
         sections = {k: v for k, v in config.items()
-                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'concatenation')}
+                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'metadata', 'concatenation')}
         self._print_config_unified(title, sections)
         _console.print()
 
@@ -631,7 +832,7 @@ class ConfigManager:
         _console.print("[bold yellow]Installation Defaults[/bold yellow]")
         _console.print("[bold yellow]═══════════════════════════════════════════════════════[/bold yellow]\n")
         sections = {k: v for k, v in self._ROOT_DEFAULTS.items()
-                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'concatenation')}
+                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'metadata', 'concatenation')}
         self._print_config_unified("Defaults", sections)
         _console.print()
 
@@ -724,6 +925,7 @@ class ConfigureGroup:
                 tensorstore_data_copy_concurrency: int = 'default',
                 max_retries: int = 'default',
                 bf_read_concurrency: int = 'default',
+                micro_read_concurrency: int = 'default',
                 bf_tile_size_mb: float = 'default',
                 jvm_memory: str = 'default',
                 slurm_time: str = 'default',
@@ -752,8 +954,11 @@ class ConfigureGroup:
             max_retries: Retries on broken worker process (default 10).
             bf_read_concurrency: Dask thread count for parallel bfio tile reads
                 (default 4).  ``None`` lets dask choose (cpu_count).
-            bf_tile_size_mb: Tile size budget in MB for bfio tiled reading
-                (default 512).
+            micro_read_concurrency: micro-reader's decode threads per worker
+                process, used with ``readers(pixel_reader='micro')`` (default 4).
+            bf_tile_size_mb: DEPRECATED and ignored. Bio-Formats images are now
+                read one region at a time, so ``region_size_mb`` sets the read
+                size. Accepted for now so existing scripts keep working.
             jvm_memory: Maximum JVM heap for Bio-Formats, e.g. ``'8GB'``, ``'4GB'``.
                 Accepts ``'NGB'`` / ``'NMB'`` (like memory_per_worker) and normalises
                 internally to JVM format (``'Ng'`` / ``'Nm'``).  Default ``'2g'``.
@@ -779,7 +984,9 @@ class ConfigureGroup:
                 sample_index: int = 'default',
                 force_bioformats: bool = 'default',
                 concat_views: bool = 'default',
-                concat_illuminations: bool = 'default') -> None:
+                concat_illuminations: bool = 'default',
+                pixel_reader: str = 'default',
+                micro_check_pixels: bool = 'default') -> None:
         """Update file-reader parameters. Omitted arguments keep their current values.
 
         Args:
@@ -800,6 +1007,12 @@ class ConfigureGroup:
                 writing separate OME-Zarr outputs (default False).
             concat_illuminations: Stack multiple illuminations along the channel axis
                 instead of writing separate OME-Zarr outputs (default False).
+            pixel_reader: ``'micro'`` (default): read the pixels with
+                micro-reader (a file it does not read falls back to the
+                standard reader with a warning), or ``'standard'``.
+            micro_check_pixels: with ``pixel_reader='micro'``, also open the
+                standard reader and compare its pixels with micro-reader's
+                (slower; default False: checked against the metadata only).
         """
         return self._cfg.configure_readers(**{k: v for k, v in locals().items() if k != 'self'})
 
@@ -827,9 +1040,6 @@ class ConfigureGroup:
                    compressor: str = 'default',
                    compressor_params: dict = 'default',
                    overwrite: bool = 'default',
-                   override_channel_names: bool = 'default',
-                   channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
-                   metadata_reader: str = 'default',
                    save_omexml: bool = 'default',
                    export_acquisition_metadata: bool = 'default',
                    squeeze: bool = 'default',
@@ -859,13 +1069,7 @@ class ConfigureGroup:
             overwrite: Overwrite existing output zarr (default False).
             dtype: Output dtype — ``'auto'`` keeps the source dtype, or any
                 NumPy dtype string such as ``'uint16'``.
-            channel_intensity_limits: How to set OMERO window limits —
-                ``'from_dtype'`` (default) uses dtype min/max,
-                ``'from_array'`` computes per-channel min/max from pixel data,
-                ``'auto'`` lets the viewer decide.
             squeeze: Remove singleton dimensions before writing (default True).
-            metadata_reader: Metadata backend — ``'bfio'`` (default) or
-                ``'bioformats'``.
             save_omexml: Write a companion OME-XML file alongside the zarr
                 (default True).
             export_acquisition_metadata: Write acquisition metadata that NGFF has
@@ -924,13 +1128,59 @@ class ConfigureGroup:
         """
         return self._cfg.configure_downscale(**{k: v for k, v in locals().items() if k != 'self'})
 
+    def metadata(self,
+                 metadata_reader: str = 'default',
+                 override_channel_names: bool = 'default',
+                 channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
+                 channel_colors: str = 'default',
+                 channel_labels: str = 'default',
+                 time_scale: float = 'default',
+                 z_scale: float = 'default',
+                 y_scale: float = 'default',
+                 x_scale: float = 'default',
+                 time_unit: str = 'default',
+                 z_unit: str = 'default',
+                 y_unit: str = 'default',
+                 x_unit: str = 'default') -> None:
+        """Update output metadata parameters. Omitted arguments keep their current values.
+
+        Args:
+            metadata_reader: Metadata backend — ``'micro'`` (default):
+                micro-reader's metadata, and its pixels with it (no JVM unless
+                a file falls back to Bio-Formats; also writes the stage
+                position as the NGFF translation and wavelengths in the
+                ``eubi_bridge`` attributes); ``'bfio'`` or ``'bioio'``.
+            override_channel_names: Replace channel names with ones derived from
+                the concatenation tag values (default False).
+            channel_intensity_limits: How to set OMERO window limits —
+                ``'from_dtype'`` (default) uses dtype min/max,
+                ``'from_array'`` computes per-channel min/max from pixel data,
+                ``'auto'`` lets the viewer decide.
+            channel_colors: Per-channel colour overrides as
+                ``"0,FF0000;1,00FF00"``. Channels left out keep their source
+                colour, or are given one automatically.
+            channel_labels: Per-channel name overrides as ``"0,DAPI;1,GFP"``.
+            time_scale: Physical size of one time step. Unset keeps whatever the
+                source file states.
+            z_scale: Physical pixel size along z (e.g. ``0.5``). Unset keeps the
+                source value.
+            y_scale: Physical pixel size along y. Unset keeps the source value.
+            x_scale: Physical pixel size along x. Unset keeps the source value.
+            time_unit: Unit for ``time_scale`` (e.g. ``'second'``).
+            z_unit: Unit for ``z_scale`` (e.g. ``'micrometer'``).
+            y_unit: Unit for ``y_scale``.
+            x_unit: Unit for ``x_scale``.
+        """
+        return self._cfg.configure_metadata(**{k: v for k, v in locals().items() if k != 'self'})
+
     def concatenation(self,
                       concatenation_axes: Union[str, int, None] = 'default',
                       time_tag: Union[str, tuple, None] = 'default',
                       channel_tag: Union[str, tuple, None] = 'default',
                       z_tag: Union[str, tuple, None] = 'default',
                       y_tag: Union[str, tuple, None] = 'default',
-                      x_tag: Union[str, tuple, None] = 'default') -> None:
+                      x_tag: Union[str, tuple, None] = 'default',
+                      aggregative_group: Union[str, None] = 'default') -> None:
         """Update aggregative (concatenation) parameters. Omitted arguments keep their current values.
 
         Args:
@@ -947,6 +1197,12 @@ class ConfigureGroup:
                 axis.
             x_tag: Filename substring (or tuple of substrings) identifying the x
                 axis.
+            aggregative_group: Name prefixed to the concatenated output, so
+                several concatenated outputs from one run stay distinguishable.
+                In a conversion table, rows sharing this value are concatenated
+                together and a blank one converts on its own.  Prefer short
+                labels such as ``gr1`` or ``A``: it becomes part of the output
+                filename.
         """
         return self._cfg.configure_concatenation(**{k: v for k, v in locals().items() if k != 'self'})
 
@@ -972,6 +1228,7 @@ class ConversionManager:
                 y_tag: Union[str, tuple] = None,
                 x_tag: Union[str, tuple] = None,
                 concatenation_axes: Union[int, tuple, str] = None,
+                aggregative_group: str = None,
                 max_workers: int = None,
                 max_retries: int = None,
                 tensorstore_data_copy_concurrency: int = None,
@@ -982,13 +1239,21 @@ class ConversionManager:
                 **kwargs) -> None:
         """Convert image data to OME-Zarr format."""
         _ensure_heavy_imports()
-        from eubi_bridge.utils.jvm_manager import soft_start_jvm
-        soft_start_jvm()
 
         t0 = time.time()
         logger.info("Conversion starting.")
         if output_path is None:
-            assert input_path.endswith(('.csv', '.tsv', '.txt', '.xlsx'))
+            # Without a global output path, every row must carry its own, which
+            # only a conversion table can express: a file on disk, or one handed
+            # over directly (the GUI batch queue runs without writing a CSV).
+            import pandas as pd
+            if not (isinstance(input_path, pd.DataFrame)
+                    or (isinstance(input_path, str)
+                        and input_path.endswith(tuple(TABLE_FORMATS)))):
+                raise ValueError(
+                    "output_path is required unless input_path is a conversion "
+                    "table (.csv/.tsv/.txt/.xlsx) whose rows carry their own "
+                    "output_path.")
 
         # Collect CLI overrides (explicit non-None args take priority)
         cli_kwargs = {k: v for k, v in dict(
@@ -1014,16 +1279,36 @@ class ConversionManager:
             conversion_p.get('ome_zarr_version') or cli_kwargs.get('ome_zarr_version'),
             conversion_p.get('zarr_format', 2), warn=True)
         downscale_p  = self._config._collect_params('downscale',  **cli_kwargs)
+        metadata_p   = self._config._collect_params('metadata',   **cli_kwargs)
         ClusterConfig(**cluster_p)
         ReaderConfig(**readers_p)
         ConversionConfig(**conversion_p)
         DownscaleConfig(**downscale_p)
+        MetadataConfig(**metadata_p)
+        # The metadata readers every conversion will use: a conversion table
+        # (a batch) states its own per row
+        row_readers, any_forced = _row_metadata_readers(
+            input_path, metadata_p.get('metadata_reader'), readers_p.get('force_bioformats'))
+        # eubi-bridge-lite: what it lacks is refused here, before any work
+        from eubi_bridge.utils.capabilities import check_run
+        for reader in sorted(row_readers, key=str):
+            check_run(metadata_reader=reader,
+                      pixel_reader=readers_p.get('pixel_reader'),
+                      on_local_cluster=cluster_p.get('on_local_cluster', False),
+                      on_slurm=cluster_p.get('on_slurm', False),
+                      force_bioformats=any_forced)
+        # With micro-reader's metadata (and so its pixels) nothing may need
+        # Java: the JVM then starts only if a file falls back to Bio-Formats
+        from eubi_bridge.utils.jvm_manager import set_jvm_lazy, soft_start_jvm
+        set_jvm_lazy(row_readers == {'micro'} and not any_forced)
+        soft_start_jvm()
 
         # Resolve concatenation params: call-time args take priority over config.
         cli_concat = {k: v for k, v in dict(
             concatenation_axes=concatenation_axes,
             time_tag=time_tag, channel_tag=channel_tag,
             z_tag=z_tag, y_tag=y_tag, x_tag=x_tag,
+            aggregative_group=aggregative_group,
         ).items() if v is not None}
         concat_p = self._config._collect_params('concatenation', **cli_concat)
         ConcatenationConfig(**concat_p)
@@ -1034,17 +1319,52 @@ class ConversionManager:
         effective_z_tag       = concat_p['z_tag']
         effective_y_tag       = concat_p['y_tag']
         effective_x_tag       = concat_p['x_tag']
+        effective_aggregative_group = concat_p['aggregative_group']
 
-        merged = {**cluster_p, **readers_p, **conversion_p, **downscale_p}
+        merged = {**cluster_p, **readers_p, **conversion_p, **downscale_p,
+                  **metadata_p}
         extra  = {k: v for k, v in kwargs.items() if k not in merged}
-        if isinstance(input_path, tuple):
-            _input: Union[str, list] = list(input_path)
+        import pandas as _pd
+        if isinstance(input_path, _pd.DataFrame):
+            # An already-built table: take_filepaths uses it as-is, so there is
+            # no path here to normalise.
+            _input: Union[str, list, _pd.DataFrame] = input_path
+        elif isinstance(input_path, tuple):
+            _input = list(input_path)
         elif isinstance(input_path, list):
             _input = input_path
         else:
             _input = os.path.abspath(input_path)
 
-        if effective_concatenation_axes is not None:
+        # A conversion table may mix both kinds of job, so it is read before the
+        # branch below rather than after it: rows sharing an aggregative_group
+        # are concatenated together, the rest convert one-to-one.  Everything
+        # else (a directory, a glob, a file list) still picks one mode globally.
+        from eubi_bridge.utils.path_utils import (
+            AGGREGATIVE_GROUP_COLUMN, partition_by_group, take_filepaths)
+        import pandas as _pd
+
+        _is_table = isinstance(_input, _pd.DataFrame) or (
+            isinstance(_input, str) and _input.endswith(tuple(TABLE_FORMATS)))
+        _mixed_table = False
+        if _is_table:
+            _table = take_filepaths(
+                _input, output_path=output_path,
+                includes=includes, excludes=excludes,
+                **merged, **extra,
+            )
+            _mixed_table = AGGREGATIVE_GROUP_COLUMN in _table.columns
+
+        if _mixed_table:
+            self._run_mixed_table(
+                _table, output_path=output_path,
+                cluster_p=cluster_p, readers_p=readers_p,
+                conversion_p=conversion_p, downscale_p=downscale_p,
+                metadata_p=metadata_p, concat_p=concat_p,
+                merged=merged, extra=extra,
+                includes=includes, excludes=excludes,
+            )
+        elif effective_concatenation_axes is not None:
             from eubi_bridge.conversion.dispatcher import dispatch_aggregative_job
             job = AggregativeConversionJob(
                 input_path=_input,
@@ -1053,12 +1373,14 @@ class ConversionManager:
                 readers=ReaderConfig(**readers_p),
                 conversion=ConversionConfig(**conversion_p),
                 downscale=DownscaleConfig(**downscale_p),
+                metadata=MetadataConfig(**metadata_p),
                 concatenation_axes=effective_concatenation_axes,
                 time_tag=effective_time_tag,
                 channel_tag=effective_channel_tag,
                 z_tag=effective_z_tag,
                 y_tag=effective_y_tag,
                 x_tag=effective_x_tag,
+                aggregative_group=effective_aggregative_group,
                 includes=includes,
                 excludes=excludes,
                 extra=extra,
@@ -1068,10 +1390,9 @@ class ConversionManager:
             # Unary path — build one validated ConversionJob per file here in
             # ebridge.py so the dispatcher receives already-validated objects.
             # CSV row params (Stage 2 triage) are validated here too (Path 2).
-            from eubi_bridge.utils.path_utils import take_filepaths
             from eubi_bridge.core.config_models import ConversionJob
 
-            df = take_filepaths(
+            df = _table if _is_table else take_filepaths(
                 _input, output_path=output_path,
                 includes=includes, excludes=excludes,
                 **merged, **extra,
@@ -1103,6 +1424,101 @@ class ConversionManager:
 
         logger.info("Conversion complete for all datasets.")
         logger.info(f"Elapsed for conversion + downscaling: {(time.time() - t0) / 60:.2f} min.")
+
+    def _run_mixed_table(self, table, *, output_path, cluster_p, readers_p,
+                         conversion_p, downscale_p, metadata_p, concat_p,
+                         merged, extra, includes, excludes) -> None:
+        """Run a conversion table that may contain both kinds of job.
+
+        Rows sharing an ``aggregative_group`` become one concatenated output;
+        rows with a blank group convert one-to-one.  Both run from the same
+        table, which is the point of the column: a batch should not have to be
+        split by hand into two separate runs.
+        """
+        from eubi_bridge.conversion.dispatcher import (
+            dispatch_aggregative_jobs, dispatch_unary_jobs)
+        from eubi_bridge.core.config_models import ConversionJob
+        from eubi_bridge.utils.path_utils import (
+            AGGREGATIVE_GROUP_COLUMN, PER_GROUP_CONCAT_KEYS,
+            concat_without_group_problems, disambiguate_output_names,
+            partition_by_group, resolve_group_concat_params)
+
+        # Caught before anything is dispatched: a row with axes but no group
+        # converts one-to-one, so the run would quietly produce something other
+        # than the table describes.  A hand-written CSV reaches here without
+        # passing any GUI check, which is why the guard lives on this path.
+        problems = concat_without_group_problems(table, concat_p)
+        if problems:
+            raise ValueError("\n".join(problems))
+
+        unary_rows, groups = partition_by_group(table)
+
+        def _row_overrides(row_dict: dict) -> dict:
+            # Drop NaN/None cells so they cannot shadow the global value.
+            clean = {k: v for k, v in row_dict.items()
+                     if v is not None and v == v}      # v == v filters NaN
+            clean.pop(AGGREGATIVE_GROUP_COLUMN, None)
+            return _normalise_row_overrides(clean)
+
+        # ── one-to-one rows ──────────────────────────────────────────────────
+        unary_jobs = []
+        if len(unary_rows):
+            unique_names = disambiguate_output_names(
+                [str(path) for path in unary_rows["input_path"].tolist()])
+            for _, row in unary_rows.iterrows():
+                row_dict = row.to_dict()
+                inp = row_dict.pop("input_path")
+                out = row_dict.pop("output_path", None) or output_path
+                unary_jobs.append(ConversionJob.from_kwargs(
+                    inp, out, {**merged, **extra, **_row_overrides(row_dict)},
+                    resolved_basename=unique_names.get(str(inp))))
+
+        # ── aggregative groups ───────────────────────────────────────────────
+        aggregative_jobs = []
+        for group_id, group_rows in groups:
+            first = group_rows.iloc[0].to_dict()
+            paths = [str(path) for path in group_rows["input_path"].tolist()]
+            out = first.get("output_path") or output_path
+            # Concatenation settings describe the group as a whole, so they are
+            # resolved across all of its rows and a disagreement is refused.
+            concat = resolve_group_concat_params(group_id, group_rows, concat_p)
+            # Everything else still comes from the first row: those settings
+            # describe one output, so a per-row difference has nothing to apply
+            # to.  The concatenation keys are dropped here to keep the resolved
+            # values above authoritative.
+            overrides = _row_overrides({
+                k: v for k, v in first.items()
+                if k not in ("input_path", "output_path")
+                and k not in PER_GROUP_CONCAT_KEYS})
+            aggregative_jobs.append(AggregativeConversionJob(
+                input_path=paths,
+                output_path=str(out) if out is not None else "",
+                aggregative_group=str(group_id),
+                cluster=ClusterConfig(**{**cluster_p, **overrides}),
+                readers=ReaderConfig(**{**readers_p, **overrides}),
+                conversion=ConversionConfig(**{**conversion_p, **overrides}),
+                downscale=DownscaleConfig(**{**downscale_p, **overrides}),
+                metadata=MetadataConfig(**{**metadata_p, **overrides}),
+                concatenation_axes=concat["concatenation_axes"],
+                time_tag=concat["time_tag"],
+                channel_tag=concat["channel_tag"],
+                z_tag=concat["z_tag"],
+                y_tag=concat["y_tag"],
+                x_tag=concat["x_tag"],
+                includes=includes,
+                excludes=excludes,
+                extra=extra,
+            ))
+
+        logger.info(
+            f"Conversion table: {len(unary_jobs)} one-to-one job(s), "
+            f"{len(aggregative_jobs)} aggregative group(s).")
+
+        if unary_jobs:
+            dispatch_unary_jobs(unary_jobs)
+        if aggregative_jobs:
+            dispatch_aggregative_jobs(aggregative_jobs)
+
 
     def validate_aggregative(
         self,
@@ -1287,10 +1703,14 @@ class MetadataManager:
             from eubi_bridge.utils.metadata_utils import read_ome_zarr_metadata_from_collection
             metadata_list = asyncio.run(read_ome_zarr_metadata_from_collection(zarr_paths))
         else:
-            logger.info("Non-Zarr files detected — initializing JVM.")
             _ensure_heavy_imports()
-            from eubi_bridge.utils.jvm_manager import soft_start_jvm
-            soft_start_jvm()
+            from eubi_bridge.utils.jvm_manager import set_jvm_lazy, soft_start_jvm
+            # micro-reader's metadata: the JVM starts only if a file needs Bio-Formats
+            metadata_reader = self._config._collect_params('metadata', **kwargs).get(
+                'metadata_reader')
+            set_jvm_lazy(metadata_reader == 'micro')
+            if soft_start_jvm() == "started":
+                logger.info("Non-Zarr files detected — JVM started for Bio-Formats.")
             cluster_p    = self._config._collect_params('cluster',    **kwargs)
             readers_p    = self._config._collect_params('readers',    **kwargs)
             conversion_p = self._config._collect_params('conversion', **kwargs)
@@ -1350,6 +1770,10 @@ class MetadataManager:
             **self._config._collect_params('conversion', **kwargs),
         }
         combined['channel_intensity_limits'] = 'auto'
+        # metadata_reader moved to the 'metadata' section, which is not
+        # collected wholesale here: its scales/units are the arguments above.
+        combined['metadata_reader'] = self._config._collect_params(
+            'metadata', **kwargs)['metadata_reader']
         extra = {k: v for k, v in kwargs.items() if k not in combined}
         pixel_meta = {k: v for k, v in dict(
             time_scale=time_scale, z_scale=z_scale, y_scale=y_scale, x_scale=x_scale,
@@ -1371,9 +1795,14 @@ class MetadataManager:
         combined = {
             **self._config._collect_params('cluster',    **kwargs),
             **self._config._collect_params('readers',    **kwargs),
-            **self._config._collect_params(
-                'conversion', channel_intensity_limits=channel_intensity_limits, **kwargs),
+            **self._config._collect_params('conversion', **kwargs),
         }
+        # Both keys live in the 'metadata' section now, so collecting
+        # 'conversion' silently dropped them.  The section is not merged
+        # wholesale: its channel_labels/colors are this method's own arguments.
+        combined['channel_intensity_limits'] = channel_intensity_limits
+        combined['metadata_reader'] = self._config._collect_params(
+            'metadata', **kwargs)['metadata_reader']
         extra = {k: v for k, v in kwargs.items() if k not in combined}
         channel_meta = {k: v for k, v in dict(
             channel_labels=channel_labels, channel_colors=channel_colors,
@@ -1396,7 +1825,11 @@ class EuBIBridge:
     continue to work unchanged.
     """
 
-    def __init__(self, configpath: str = f"{os.path.expanduser('~')}/.eubi_bridge"):
+    def __init__(self, configpath: str = None):
+        # the config folder: given, else EUBI_CONFIG_DIR, else ~/.eubi_bridge
+        # (resolved now, not when this module was imported)
+        configpath = (configpath or os.environ.get("EUBI_CONFIG_DIR")
+                      or f"{os.path.expanduser('~')}/.eubi_bridge")
         self._cfg      = ConfigManager(configpath)
         self._conv     = ConversionManager(self._cfg)
         self._meta     = MetadataManager(self._cfg)
@@ -1559,6 +1992,7 @@ class EuBIBridge:
         y_tag: Union[str, tuple] = None,
         x_tag: Union[str, tuple] = None,
         concatenation_axes: Union[int, tuple, str] = None,
+        aggregative_group: Optional[str] = None,
         max_workers: int = None,
         max_retries: int = None,
         tensorstore_data_copy_concurrency: int = None,
@@ -1589,18 +2023,27 @@ class EuBIBridge:
             use_threading: Use a ThreadPool instead of a ProcessPool.
             on_slurm: Submit jobs to a SLURM cluster.
             on_local_cluster: Use a Dask LocalCluster.
+            aggregative_group: Name prefixed to the concatenated output, so
+                several concatenated outputs stay distinguishable.  In a
+                conversion table, rows sharing this value are concatenated
+                together and a blank one converts on its own.  Prefer short
+                labels such as ``gr1`` or ``A``: it becomes part of the output
+                filename.
             plan: Pre-computed AggregativePlan from validate_aggregative().
             **kwargs: Any ReaderConfig / ConversionConfig / DownscaleConfig field
                 overrides (e.g. ``zarr_format=3``, ``z_chunk=64``,
-                ``bf_tile_size_mb=1024``, ``jvm_memory='8GB'``,
+                ``region_size_mb=512``, ``jvm_memory='8GB'``,
                 ``force_bioformats=True``).
         """
         return self._conv.to_zarr(
             input_path, output_path, includes, excludes,
             time_tag, channel_tag, z_tag, y_tag, x_tag,
-            concatenation_axes, max_workers, max_retries,
-            tensorstore_data_copy_concurrency, use_threading,
-            on_slurm, on_local_cluster, plan, **kwargs,
+            concatenation_axes=concatenation_axes,
+            aggregative_group=aggregative_group,
+            max_workers=max_workers, max_retries=max_retries,
+            tensorstore_data_copy_concurrency=tensorstore_data_copy_concurrency,
+            use_threading=use_threading, on_slurm=on_slurm,
+            on_local_cluster=on_local_cluster, plan=plan, **kwargs,
         )
 
     def validate_aggregative(

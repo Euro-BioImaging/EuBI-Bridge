@@ -156,11 +156,8 @@ def test_unshown_parameters_can_be_added(qapp, model):
 
 
 def test_reset_button_restores_the_config_value(qapp, model):
-    """Replaces the old Inherit checkbox: it fills in the config value.
-
-    Setting a field back to that value already clears the override, so this is
-    a shortcut for a number the user would otherwise have to know and retype.
-    """
+    """Replaces the old Inherit checkbox: the cell goes back to blank,
+    inheriting the config value (which the editor shows)."""
     from eubi_bridge.qt_gui.widgets.batch_cell_editor import BatchCellEditor
     model.update_cells([0], "auto_chunk", False)
     model.update_cells([0], "z_chunk", 64)
@@ -196,8 +193,10 @@ def test_paths_have_no_reset_button(qapp, model):
         assert dlg._fields[key].reset_btn.isHidden()
 
 
-def test_typing_the_config_value_also_clears_the_override(qapp, model):
-    """The reset button is a shortcut, not the only route."""
+def test_typing_the_config_value_keeps_it_visible(qapp, model):
+    """A value the user sets is shown, even when it equals the config: a
+    chosen value must not look like an inherited blank (Bugra, 2026-10-05).
+    Only the reset button takes a cell back to blank."""
     from eubi_bridge.qt_gui.widgets.batch_cell_editor import BatchCellEditor
     model.update_cells([0], "dtype", "uint16")
     dlg = BatchCellEditor(model, [0], ["dtype"])
@@ -205,4 +204,5 @@ def test_typing_the_config_value_also_clears_the_override(qapp, model):
     field.set_value(model.config_value("dtype"))
     field._touch()
     dlg.apply()
-    assert model.cell(model.rows[0], "dtype") is None
+    assert model.cell(model.rows[0], "dtype") == model.config_value("dtype")
+    assert "dtype" in model.columns()

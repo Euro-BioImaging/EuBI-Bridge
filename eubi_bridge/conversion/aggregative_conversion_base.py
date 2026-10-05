@@ -10,13 +10,12 @@ from typing import Union
 import tempfile as tempfile_module
 
 # Third-party imports
-import dask
 import numpy as np
 
 from eubi_bridge.conversion.fileset_io import BatchFile
 # Local application imports
 from eubi_bridge.core.data_manager import BatchManager
-from eubi_bridge.core.readers import (read_single_image,
+from eubi_bridge.core.readers import (read_image_sync, read_single_image,
                                       read_single_image_delayed)
 from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
@@ -25,6 +24,19 @@ from eubi_bridge.utils.path_utils import take_filepaths
 
 # Configure logging
 logger = get_logger(__name__)
+
+
+def _open_all(paths, reader_kwargs: dict) -> tuple:
+    """Open every input file, in parallel and in order: through dask when it
+    is installed (on the active dask cluster, if any, as before), else on a
+    thread pool -- dask's own default for delayed calls (eubi-bridge-lite)."""
+    from eubi_bridge.utils.optional_deps import is_installed
+    if not is_installed("dask"):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            return tuple(pool.map(lambda path: read_image_sync(path, **reader_kwargs), paths))
+    import dask
+    return dask.compute(*[read_single_image_delayed(path, **reader_kwargs) for path in paths])
 
 
 
@@ -93,6 +105,8 @@ class AggregativeConverter:
     async def read_dataset(self,
                      # chunks_yx = None,  # TODO: Figure out what this is for
                      readers_params = {},
+                     pixel_reader: str = 'standard',
+                     micro_check_pixels: bool = False,
                      ):
         """
         - If the input path is a directory, can read single or multiple files from it.
@@ -132,29 +146,25 @@ class AggregativeConverter:
         
         # Remove scene_index from readers_params if present (handled separately below)
         readers_params.pop('scene_index', None)
+        # micro-reader as the reader: no standard reader is opened per file
+        # (with micro_check_pixels the standard reader is opened and compared)
+        if pixel_reader == 'micro' and not micro_check_pixels:
+            readers_params = {**readers_params, 'pixel_reader': 'micro'}
 
-        futures = [ ### This must change. Read all series from within the function.
-                    ### Function must return a list of series.
-                    ### Then flatten the series here.
-                    read_single_image_delayed(
-                                      path,
-                                      # chunks_yx=chunks_yx,  # TODO: Figure out what this is for
-                                      # verified_for_cluster=verified_for_cluster,
-                                      zarr_format = zarr_format,
-                                      verbose = verbose,
-                                      scene_index = 0,
-                                      **readers_params
-                                      )
-                    for path in self.filepaths
-        ]
-
-        self.imgs = dask.compute(*futures)
+        ### This must change. Read all series from within the function.
+        ### Function must return a list of series.
+        ### Then flatten the series here.
+        self.imgs = _open_all(self.filepaths, dict(zarr_format=zarr_format,
+                                                   verbose=verbose,
+                                                   scene_index=0,
+                                                   **readers_params))
 
         self.arrays = {
             img.series_path: img.get_image_dask_data() for img in self.imgs
         }
         self.arrays = {}
         self.series_filepaths = []
+        verified_layouts: set = set()          # micro-reader: pixels checked once per layout
         for img in self.imgs:
             if series == 'all':
                 series_ = list(range(img.n_scenes))
@@ -165,7 +175,17 @@ class AggregativeConverter:
             for s in series_:
                 img.set_scene(s)
                 self.series_filepaths.append(img.series_path)
-                self.arrays[img.series_path] = img.get_image_dask_data()
+                array = img.get_image_dask_data()
+                if pixel_reader == 'micro' and micro_check_pixels:
+                    # pixels from micro-reader, checked against this array
+                    # (core/micro_source.py); the standard array otherwise
+                    from types import SimpleNamespace
+                    from eubi_bridge.core.micro_source import swap_in
+                    micro = swap_in(SimpleNamespace(arraydata=array), img.path, s, None,
+                                    verified_layouts=verified_layouts)
+                    if micro is not None:
+                        array = micro
+                self.arrays[img.series_path] = array
 
         if metadata_path is None:
             self.metadata_path = self.filepaths[0]
@@ -262,7 +282,7 @@ class AggregativeConverter:
             'z_unit': 'z', 'y_unit': 'y', 'x_unit': 'x'
         }
         scale_mapping = {
-            'time_scale': 't', 'channel_scale': 'c',
+            'time_scale': 't',
             'z_scale': 'z', 'y_scale': 'y', 'x_scale': 'x'
         }
 

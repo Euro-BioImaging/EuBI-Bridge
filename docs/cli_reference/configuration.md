@@ -145,13 +145,6 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--bf_tile_size_mb</code></summary>
-    <p><strong>Type:</strong>&nbsp; `float`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Tile size budget in MB for bfio tiled reading (default 512).</p>
-    </details>
-
-    <details>
     <summary><code>--jvm_memory</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
@@ -461,40 +454,6 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--override_channel_names</code></summary>
-    <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p><strong>Valid values:</strong>&nbsp; `--override_channel_names` to enable &nbsp;·&nbsp; `--override_channel_names False` to disable</p>
-    <p>Replace output channel labels with the `channel_tag` values. For aggregative conversions with a tuple `channel_tag` only.</p>
-    <pre><code># Replace channel labels with the channel_tag values from filenames
-    eubi configure conversion --override_channel_names
-    </code></pre>
-    </details>
-
-    <details>
-    <summary><code>--channel_intensity_limits</code></summary>
-    <p><strong>Type:</strong>&nbsp; `Literal['from_dtype', 'from_array', 'auto']`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>How to set OMERO window limits — `'from_dtype'` (default) uses dtype min/max, `'from_array'` computes per-channel min/max from pixel data, `'auto'` lets the viewer decide.</p>
-    <pre><code># Compute display window limits from actual pixel data
-    eubi configure conversion --channel_intensity_limits from_array
-    </code></pre>
-    <pre><code># Let the viewer compute limits automatically
-    eubi configure conversion --channel_intensity_limits auto
-    </code></pre>
-    </details>
-
-    <details>
-    <summary><code>--metadata_reader</code></summary>
-    <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Metadata backend — `'bfio'` (default) or `'bioformats'`.</p>
-    <pre><code># Use the Java BioFormats backend for metadata (more formats supported)
-    eubi configure conversion --metadata_reader bioformats
-    </code></pre>
-    </details>
-
-    <details>
     <summary><code>--save_omexml</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
@@ -503,6 +462,14 @@ Click any command card below to expand its full parameter reference.
     <pre><code># Disable OME-XML sidecar file generation
     eubi configure conversion --save_omexml False
     </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--export_acquisition_metadata</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--export_acquisition_metadata` to enable &nbsp;·&nbsp; `--export_acquisition_metadata False` to disable</p>
+    <p>Write acquisition metadata that NGFF has no field for (view/illumination indices, objective NA, per-channel emission) into the namespaced `eubi_bridge` attrs</p>
     </details>
 
     <details>
@@ -843,6 +810,118 @@ Click any command card below to expand its full parameter reference.
     </details>
 
 
+??? command "**`configure metadata`**&ensp;—&ensp;Update output metadata parameters. Omitted arguments keep their current values"
+
+    **Usage:**
+    ```shell
+    eubi configure metadata [OPTIONS]
+    ```
+
+    <details>
+    <summary>Optional arguments</summary>
+
+    <details>
+    <summary><code>--metadata_reader</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `micro`</p>
+    <p>Metadata backend — `'micro'` (default: micro-reader reads metadata and pixels; a file it does not read falls back to Bio-Formats, which starts Java only then), `'bfio'` or `'bioio'`.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bfio
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--override_channel_names</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--override_channel_names` to enable &nbsp;·&nbsp; `--override_channel_names False` to disable</p>
+    <p>Replace channel names with ones derived from the concatenation tag values (default False).</p>
+    <pre><code>eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --override_channel_names
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--channel_intensity_limits</code></summary>
+    <p><strong>Type:</strong>&nbsp; `Literal['from_dtype', 'from_array', 'auto']`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>How to set OMERO window limits — `'from_dtype'` (default) uses dtype min/max, `'from_array'` computes per-channel min/max from pixel data, `'auto'` lets the viewer decide.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --channel_intensity_limits from_array
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--channel_colors</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Per-channel colour overrides as `"0,FF0000;1,00FF00"`. Channels left out keep their source colour, or are given one automatically.</p>
+    </details>
+
+    <details>
+    <summary><code>--channel_labels</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Per-channel name overrides as `"0,DAPI;1,GFP"`.</p>
+    </details>
+
+    <details>
+    <summary><code>--time_scale</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Physical size of one time step. Unset keeps whatever the source file states.</p>
+    </details>
+
+    <details>
+    <summary><code>--z_scale</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Physical pixel size along z (e.g. `0.5`). Unset keeps the source value.</p>
+    </details>
+
+    <details>
+    <summary><code>--y_scale</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Physical pixel size along y. Unset keeps the source value.</p>
+    </details>
+
+    <details>
+    <summary><code>--x_scale</code></summary>
+    <p><strong>Type:</strong>&nbsp; `float`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Physical pixel size along x. Unset keeps the source value.</p>
+    </details>
+
+    <details>
+    <summary><code>--time_unit</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Unit for `time_scale` (e.g. `'second'`).</p>
+    </details>
+
+    <details>
+    <summary><code>--z_unit</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Unit for `z_scale` (e.g. `'micrometer'`).</p>
+    </details>
+
+    <details>
+    <summary><code>--y_unit</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Unit for `y_scale`.</p>
+    </details>
+
+    <details>
+    <summary><code>--x_unit</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Unit for `x_scale`.</p>
+    </details>
+
+
+    </details>
+
+
 ??? command "**`configure concatenation`**&ensp;—&ensp;Update aggregative (concatenation) parameters. Omitted arguments keep their current values"
 
     **Usage:**
@@ -917,6 +996,13 @@ Click any command card below to expand its full parameter reference.
     <pre><code># Two columns of a tile scan
     eubi configure concatenation --concatenation_axes x --x_tag col_left,col_right
     </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--aggregative_group</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Name prefixed to the concatenated output, so several concatenated outputs from one run stay distinguishable. In a conversion table, rows sharing this value are concatenated together and a blank one converts on its own.  Prefer short</p>
     </details>
 
 

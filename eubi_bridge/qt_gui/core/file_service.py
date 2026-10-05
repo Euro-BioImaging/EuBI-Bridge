@@ -190,14 +190,30 @@ def list_s3(
         }
 
     s3_path = s3_path.rstrip("/")
-    # Strip scheme for s3fs
-    if s3_path.startswith("s3://"):
+    # Remember the endpoint so listed children keep the https:// form: s3://
+    # paths are signed by botocore and fail on a public bucket, while the
+    # https:// URL opens anonymously (and is what zarr itself can open).
+    endpoint = ""
+    if s3_path.startswith(("https://", "http://")):
+        scheme, _, rest = s3_path.partition("://")
+        endpoint = f"{scheme}://{rest.split('/')[0]}"
+        stripped = rest[len(rest.split("/")[0]):].lstrip("/")
+    elif s3_path.startswith("s3://"):
         stripped = s3_path[5:]
     else:
         stripped = s3_path
 
+    def _to_path(key: str) -> str:
+        """Public URL for a bucket key, preserving the browsing scheme."""
+        key = key.strip("/")
+        return f"{endpoint}/{key}" if endpoint else f"s3://{key}"
+
     try:
-        fs = s3fs.S3FileSystem(anon=False)
+        fs_kwargs = {"anon": True}
+        if endpoint:
+            fs_kwargs.update(endpoint_url=endpoint,
+                             client_kwargs={"endpoint_url": endpoint})
+        fs = s3fs.S3FileSystem(**fs_kwargs)
         raw = fs.ls(stripped, detail=True)
     except Exception as exc:
         return {
@@ -229,7 +245,7 @@ def list_s3(
 
     items: list[FileEntry] = []
     for c in page_candidates:
-        full_path = f"s3://{c['s3key'].rstrip('/')}"
+        full_path = _to_path(c["s3key"])
         is_zarr = False
         if c["isDirectory"]:
             # Lightweight probe: check for .zattrs or zarr.json
@@ -254,7 +270,7 @@ def list_s3(
     parent_path: str | None = None
     if stripped and "/" in stripped:
         parent_stripped = "/".join(stripped.split("/")[:-1])
-        parent_path = f"s3://{parent_stripped}" if parent_stripped else None
+        parent_path = _to_path(parent_stripped) if parent_stripped else None
 
     return {
         "currentPath": s3_path,

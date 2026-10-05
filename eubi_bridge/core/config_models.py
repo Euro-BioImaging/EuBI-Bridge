@@ -77,6 +77,7 @@ _logger = _logging.getLogger(__name__)
 OME_ZARR_VERSIONS: Dict[str, int] = {"0.4": 2, "0.5": 3}
 
 _zarr_format_deprecation_warned = False
+_bf_tile_size_deprecation_warned = False
 
 
 def resolve_ome_zarr_target(ome_zarr_version, zarr_format=2, warn: bool = False) -> Tuple[str, int]:
@@ -131,6 +132,10 @@ class ClusterConfig(BaseModel):
     on_slurm: bool = False
     use_threading: bool = False
     max_workers: int = Field(default=4, ge=1, le=256)
+    # Conversions that actually run at once: min(max_workers, the number of
+    # jobs / output groups), set by the dispatcher (not a user setting).
+    # None: max_workers.  The region budget divides RAM among these only.
+    concurrent_jobs: Optional[int] = Field(default=None, ge=1)
     queue_size: int = Field(default=4, ge=1, le=4096)
     region_size_mb: int = Field(default=256, gt=0)
     max_concurrency: int = Field(default=4, ge=1)
@@ -139,8 +144,28 @@ class ClusterConfig(BaseModel):
     tensorstore_data_copy_concurrency: int = Field(default=4, ge=1)
     max_retries: int = Field(default=10, ge=0, le=100)
     bf_read_concurrency: Optional[int] = Field(default=4, ge=1)
-    bf_tile_size_mb: float = Field(default=512.0, gt=0.0)
+    # micro-reader's decode threads per worker process when
+    # readers.pixel_reader='micro' (its region reads share one pool)
+    micro_read_concurrency: int = Field(default=4, ge=1)
+    # DEPRECATED, ignored.  Bio-Formats images are now read one writer region
+    # at a time, so region_size_mb sets the read size and the JVM-heap limit is
+    # applied automatically.  Still accepted so existing configs, saved batches
+    # and scripts keep working; remove in the release after 0.1.3.
+    bf_tile_size_mb: Optional[float] = Field(default=None, gt=0.0)
     jvm_memory: Optional[str] = "1g"
+
+    @field_validator('bf_tile_size_mb')
+    @classmethod
+    def _warn_bf_tile_size_deprecated(cls, v):
+        global _bf_tile_size_deprecation_warned
+        if v is not None and not _bf_tile_size_deprecation_warned:
+            _bf_tile_size_deprecation_warned = True
+            _logger.warning(
+                "DEPRECATION: 'bf_tile_size_mb' is no longer used and is ignored. "
+                "Bio-Formats images are read one region at a time, so "
+                "'region_size_mb' now sets the read size. Remove it from your "
+                "config, batch or script; it will be rejected in a future release.")
+        return v
 
     @field_validator('jvm_memory', mode='before')
     @classmethod
@@ -182,6 +207,14 @@ class ReaderConfig(BaseModel):
     mosaic_tile_index: Union[int, str, None] = None
     sample_index: int = Field(default=0, ge=0)
     force_bioformats: bool = False
+    # Where pixels come from: 'micro' (micro-reader, the default; falls back to
+    # the standard reader, with a warning, for a file it does not read) or
+    # 'standard' (the format's usual reader).
+    pixel_reader: Literal['standard', 'micro'] = 'micro'
+    # With pixel_reader='micro': also open the standard reader and compare its
+    # pixels with micro-reader's (slower; for checking a new format).  Off:
+    # micro-reader is the reader, checked against the metadata only.
+    micro_check_pixels: bool = False
     # When True, arrays for each view / illumination are stacked along the
     # channel axis rather than written as separate OME-Zarr outputs.
     concat_views: bool = False
@@ -275,9 +308,6 @@ class ConversionConfig(BaseModel):
     compressor: Optional[str] = "blosc"
     compressor_params: dict = Field(default_factory=dict)
     overwrite: bool = False
-    override_channel_names: bool = False
-    channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = "from_dtype"
-    metadata_reader: str = "bfio"
     save_omexml: bool = True
     # Write acquisition metadata NGFF has no field for (view/illumination
     # indices, objective NA, per-channel emission) into the namespaced
@@ -428,6 +458,49 @@ class DownscaleConfig(BaseModel):
 # ConcatenationConfig
 # ---------------------------------------------------------------------------
 
+class MetadataConfig(BaseModel):
+    """How the output's metadata is read and described.
+
+    These were kept under ``conversion`` while the GUI has always presented them
+    on a Metadata tab, and ``channel_colors`` / ``channel_labels`` had no model
+    at all -- they survived in a config file only because unknown keys were
+    persisted verbatim.  Giving them a section makes the file say what the
+    interface says, and makes the two colour settings first-class rather than
+    accidental.
+
+    ``save_omexml`` and ``export_acquisition_metadata`` deliberately stay in
+    ``conversion``: they decide what the writer emits rather than describing the
+    image, and moving them would break more existing configs for less gain.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    # 'micro' (the default): micro-reader reads metadata and pixels, and a file
+    # it does not read falls back to Bio-Formats -- the JVM starts only then.
+    metadata_reader: str = "micro"
+    override_channel_names: bool = False
+    channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = "from_dtype"
+    # "idx,RRGGBB;..." and "idx,label;..." as the CLI accepts them.  Empty means
+    # every channel keeps its source colour/name, or is given one automatically.
+    channel_colors: str = ""
+    channel_labels: str = ""
+
+    # Physical pixel size and unit per axis.  None means "keep whatever the
+    # source file says", which is both the old behaviour and what a blank cell
+    # in a conversion table resolves to -- so no 'auto' sentinel is needed here,
+    # unlike dtype/n_layers where None already means "compute it for me".
+    # There is deliberately no channel_scale/channel_unit: a channel has no
+    # physical extent.
+    time_scale: Optional[float] = Field(default=None, gt=0)
+    z_scale:    Optional[float] = Field(default=None, gt=0)
+    y_scale:    Optional[float] = Field(default=None, gt=0)
+    x_scale:    Optional[float] = Field(default=None, gt=0)
+    time_unit:  Optional[str] = None
+    z_unit:     Optional[str] = None
+    y_unit:     Optional[str] = None
+    x_unit:     Optional[str] = None
+
+
 class ConcatenationConfig(BaseModel):
     """Aggregative (concatenation) parameters persisted in the config file.
 
@@ -446,6 +519,11 @@ class ConcatenationConfig(BaseModel):
     z_tag:       Optional[Union[str, List[str]]] = None
     y_tag:       Optional[Union[str, List[str]]] = None
     x_tag:       Optional[Union[str, List[str]]] = None
+    # Names the concatenated output and, in a conversion table, decides which
+    # rows are concatenated together.  A single run has one group, so setting it
+    # here only prefixes the output name; the grouping meaning appears when a
+    # table gives different rows different values.
+    aggregative_group: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +646,7 @@ _CONFIG_MODEL_KEYS: frozenset[str] = frozenset(
     | set(ReaderConfig.model_fields)
     | set(ConversionConfig.model_fields)
     | set(DownscaleConfig.model_fields)
+    | set(MetadataConfig.model_fields)
 )
 
 
@@ -596,6 +675,7 @@ class ConversionJob(BaseModel):
     readers: ReaderConfig     = Field(default_factory=ReaderConfig)
     conversion: ConversionConfig = Field(default_factory=ConversionConfig)
     downscale: DownscaleConfig   = Field(default_factory=DownscaleConfig)
+    metadata: MetadataConfig     = Field(default_factory=MetadataConfig)
     extra: dict               = Field(default_factory=dict)
 
     @classmethod
@@ -620,6 +700,7 @@ class ConversionJob(BaseModel):
             readers=ReaderConfig(**kwargs),
             conversion=ConversionConfig(**kwargs),
             downscale=DownscaleConfig(**kwargs),
+            metadata=MetadataConfig(**kwargs),
             extra={k: v for k, v in kwargs.items() if k not in _CONFIG_MODEL_KEYS},
         )
 
@@ -630,6 +711,7 @@ class ConversionJob(BaseModel):
         result.update(self.readers.model_dump())
         result.update(self.conversion.model_dump())
         result.update(self.downscale.model_dump())
+        result.update(self.metadata.model_dump())
         result.update(self.extra)
         return result
 
@@ -654,10 +736,16 @@ class AggregativeConversionJob(BaseModel):
 
     input_path: Union[str, List[str]]
     output_path: str
+    # Names this group of files in a mixed conversion table, and is prefixed to
+    # the output name so several groups from one run stay distinguishable.
+    # None means no prefix, which is what every conversion did before the
+    # column existed.
+    aggregative_group: Optional[str] = None
     cluster: ClusterConfig       = Field(default_factory=ClusterConfig)
     readers: ReaderConfig        = Field(default_factory=ReaderConfig)
     conversion: ConversionConfig = Field(default_factory=ConversionConfig)
     downscale: DownscaleConfig   = Field(default_factory=DownscaleConfig)
+    metadata: MetadataConfig     = Field(default_factory=MetadataConfig)
 
     # Aggregative-specific fields
     concatenation_axes: Optional[Union[str, int, tuple]] = None
@@ -719,6 +807,7 @@ class AggregativeConversionJob(BaseModel):
             readers=ReaderConfig(**kwargs),
             conversion=ConversionConfig(**kwargs),
             downscale=DownscaleConfig(**kwargs),
+            metadata=MetadataConfig(**kwargs),
             concatenation_axes=kwargs.get("concatenation_axes"),
             time_tag=kwargs.get("time_tag"),
             channel_tag=kwargs.get("channel_tag"),
@@ -738,7 +827,12 @@ class AggregativeConversionJob(BaseModel):
         result.update(self.readers.model_dump())
         result.update(self.conversion.model_dump())
         result.update(self.downscale.model_dump())
+        result.update(self.metadata.model_dump())
         result.update(self.extra)
+        # Carried through so the writer can prefix the derived output name,
+        # keeping several groups from one run distinguishable.
+        if self.aggregative_group:
+            result["aggregative_group"] = self.aggregative_group
         return result
 
 

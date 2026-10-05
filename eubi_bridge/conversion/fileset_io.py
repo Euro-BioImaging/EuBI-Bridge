@@ -1,16 +1,23 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import copy
 import os
 import re
 from typing import Dict, Iterable, List, Union
 
-import dask.array as da
 import numpy as np
 from natsort import natsorted
 
 from eubi_bridge.core.data_manager import (ArrayManager,  # , prune_seriesfix
                                            ChannelIterator)
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.optional_deps import is_dask_array
 from eubi_bridge.external.dyna_zarr import operations as ops, DynamicArray
+
+if TYPE_CHECKING:
+    import dask.array as da
                         
 logger = get_logger(__name__)
 
@@ -297,7 +304,8 @@ class FileSet:
     def concatenate(self, arrays, axis: int):
         concatenate = ops.concatenate
         for arr in self.array_dict.values():
-            if isinstance(arr, da.Array):
+            if is_dask_array(arr):
+                import dask.array as da
                 concatenate = da.concatenate
         return concatenate(arrays, axis=axis)
 

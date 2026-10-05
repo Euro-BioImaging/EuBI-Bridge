@@ -4,19 +4,22 @@ Reader for formats supported via bioio (Platform-independent File Format reader)
 This is the generic fallback reader that handles any format supported by bioio,
 including OME-TIFF, CZI, LIF, ND2, PNG, JPG, and anything bioformats can open.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from typing import Any, Optional
 
-import dask
-import dask.array as da
 import fsspec
 import numpy as np
 import zarr
-from dask import delayed
 
 from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.logging_config import get_logger
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 logger = get_logger(__name__)
 
@@ -87,10 +90,27 @@ class BioIOReader(ImageReader):
         if tile_index != 0:
             logger.warning("This format does not support tiles. Ignoring set_tile().")
     
+    @property
+    def sample_layout(self):
+        """``(channels, samples)`` when pixels hold several samples (RGB),
+        else None.  Those samples are read as channels (``sample_channels``)."""
+        dims = self.img.dims
+        samples = dims.S if hasattr(dims, 'S') else 1
+        if samples <= 1:
+            return None
+        return (dims.C if hasattr(dims, 'C') else 1, samples)
+
     def get_image_dask_data(self, **kwargs) -> da.Array:
-        """Get image data as dask array."""
+        """Get image data as dask array.
+
+        TCZYX (the default) keeps every sample of multi-sample pixels: they
+        become channels, C x S of them (bioio would return sample 0 only).
+        """
         try:
             dimensions_to_read = kwargs.get('dimensions_to_read', 'TCZYX')
+            if dimensions_to_read == 'TCZYX' and self.sample_layout is not None:
+                from eubi_bridge.core.sample_channels import fold_dask
+                return fold_dask(self.img.get_image_dask_data('TCZYXS'))
             return self.img.get_image_dask_data(dimensions_to_read)
         except Exception as e:
             raise RuntimeError(f"Failed to read image data from {self._path}: {str(e)}") from e

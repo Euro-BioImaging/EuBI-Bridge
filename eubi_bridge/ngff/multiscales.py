@@ -1,10 +1,13 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import asyncio
 import copy
 import inspect
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, List, Optional, Tuple, Union
 
-import dask.array as da
 import numpy as np
 import zarr
 from natsort import natsorted
@@ -26,6 +29,10 @@ from eubi_bridge.utils.json_utils import make_json_safe
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.external.dyna_zarr import operations as ops
 from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+from eubi_bridge.utils.optional_deps import is_dask_array, require
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 
 logger = get_logger(__name__)
@@ -484,7 +491,10 @@ class NGFFMetadataHandler:
                 'type': {'t': 'time', 'c': 'channel', 'z': 'space',
                          'y': 'space', 'x': 'space'}.get(ax_name, 'custom')
             }
-            if unit is not None:
+            # NGFF units are for space and time axes only.  A channel unit
+            # (the defaults give it 'Channel') makes Neuroglancer reject the
+            # whole store, so it is never written, whichever caller passed it.
+            if unit is not None and axis_data['type'] != 'channel':
                 axis_data['unit'] = unit
             new_axes.append(axis_data)
 
@@ -987,12 +997,7 @@ class Pyramid:
         basearr = self.base_array
         if all(n > 1 for n in basearr.shape):
             return self
-        if isinstance(basearr, zarr.Array):
-            logger.warning(f"Zarr arrays are not supported for squeeze operation.\n"
-                        f"Zarr array for the path {self.series_path} is being converted to dask array.")
-            array = da.from_zarr(basearr)
-        else:
-            array = basearr
+        array = DynamicArray(basearr) if isinstance(basearr, zarr.Array) else basearr
         shapedict = dict(zip(self.axes, self.shape))
         singlet_axes = [ax for ax, size in shapedict.items() if size == 1]
         scaledict = self.meta.scaledict
@@ -1015,8 +1020,11 @@ class Pyramid:
         arrays_squeezed = []
         for key in natsorted(arrays.keys()):
             arr = arrays[key]
-            # Use dask squeeze for dask arrays, handle other types
-            if isinstance(arr, da.Array):
+            # dask squeeze for dask arrays; zarr layers squeezed lazily as DynamicArray
+            if isinstance(arr, zarr.Array):
+                arr = DynamicArray(arr)
+            if is_dask_array(arr):
+                import dask.array as da
                 newarray = da.squeeze(arr, axis = singlet_indices)
             elif isinstance(arr, DynamicArray):
                 newarray = ops.squeeze(arr, axis = singlet_indices) if singlet_axes else arr
@@ -1064,7 +1072,7 @@ class Pyramid:
             Returns self for method chaining.
         """
 
-        if isinstance(arrays, (np.ndarray, da.Array, zarr.Array)):
+        if isinstance(arrays, (np.ndarray, zarr.Array, DynamicArray)) or is_dask_array(arrays):
             arrays = [arrays]
         base_array = arrays[0]
         ndim = base_array.ndim
@@ -1192,6 +1200,7 @@ class Pyramid:
             # Return in-memory arrays preserving their type (dask, DynamicArray, numpy)
             return self._array_layers
         # Convert only zarr arrays to dask for consistent computation access
+        da = require("dask.array", "Pyramid.get_dask_data (dask arrays)")
         result = {}
         for path in self.meta.resolution_paths:
             arr = self.layers[path]
@@ -1201,18 +1210,34 @@ class Pyramid:
                 result[str(path)] = arr
         return result
 
+    def _arrays(self) -> Dict[str, Any]:
+        """Every level as a lazy array, DynamicArray-first, as in
+        ome_zarr_pyramid's ``Pyramid._arrays``: zarr and TensorStore levels
+        wrapped as DynamicArray (no dask needed: eubi-bridge-lite), dask and
+        DynamicArray levels as they are, numpy as is (the vendored dyna_zarr
+        does not wrap numpy).  ``get_dask_data`` gives dask arrays."""
+        if self.gr is None:
+            layers = self._array_layers
+        else:
+            layers = {str(p): self.layers[p] for p in self.meta.resolution_paths}
+        result = {}
+        for path, arr in layers.items():
+            wrap = isinstance(arr, zarr.Array) or (hasattr(arr, "read") and hasattr(arr, "spec"))
+            result[str(path)] = DynamicArray(arr) if wrap else arr
+        return result
+
     @property
     def dask_arrays(self):
         return self.get_dask_data()
 
     @property
     def base_array(self):
-        return self.dask_arrays['0']
+        return self._arrays()['0']
 
     def shrink(self,
                 paths: List[str] = ['0']
                 ):
-        arrays = [self.dask_arrays[path] for path in paths]
+        arrays = [self._arrays()[path] for path in paths]
         axis_order = self.meta.axis_order
         unit_list = self.meta.unit_list
         scales = [self.meta.scales[path] for path in paths]
@@ -1308,9 +1333,10 @@ class Pyramid:
                 x_chunk = None,
                 ):
         """
-        Rechunks the dask arrays in the Pyramid.
+        Rechunks the dask arrays in the Pyramid (needs dask).
         :return: Pyramid
         """
+        require("dask.array", "Pyramid.rechunk")
         chunkdict = {'t': time_chunk,
                   'c': channel_chunk,
                   'z': z_chunk,

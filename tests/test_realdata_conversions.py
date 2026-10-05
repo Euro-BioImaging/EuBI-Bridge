@@ -4,7 +4,7 @@ Real-microscopy conversion audit — exercises ALL to_zarr parameter categories
 ND2 / LSM files, not just synthetic TIFFs.
 
 Files are referenced *in place* (never copied — some are GB-scale) from
-``EUBI_TEST_DATA`` (default: ``C:/Users/oezdemir/Desktop/ome/input``). Every test
+``EUBI_TEST_DATA`` (default: ``C:/Users/oezdemir/Desktop/quarantine/temp/ome/input``). Every test
 skips automatically when its source file is absent, so the suite is safe to run
 anywhere. Marked ``realdata`` so it is opt-in:
 
@@ -47,7 +47,7 @@ pytestmark = pytest.mark.realdata
 # File manifest — relative to the real-data root (skip-if-absent).
 # ---------------------------------------------------------------------------
 
-DATA_ROOT = Path(os.environ.get("EUBI_TEST_DATA", r"C:/Users/oezdemir/Desktop/ome/input"))
+DATA_ROOT = Path(os.environ.get("EUBI_TEST_DATA", r"C:/Users/oezdemir/Desktop/quarantine/temp/ome/input"))
 
 FILES = {
     "czi_workhorse": "czi/7015307/T=3_Z=5_CH=2.czi",          # tczyx (3,2,5,256,256)

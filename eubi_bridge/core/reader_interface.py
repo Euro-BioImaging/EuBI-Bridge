@@ -5,11 +5,16 @@ This module establishes clear contracts that all image reader implementations
 must follow, enabling consistent behavior across different file formats and
 improving type safety and extensibility.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-import dask.array as da
+if TYPE_CHECKING:
+    import dask.array as da
+
 
 
 class ImageReader(ABC):

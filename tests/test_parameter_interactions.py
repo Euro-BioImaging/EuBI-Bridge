@@ -386,3 +386,42 @@ class TestParameterCombinations:
         ])
         
         assert validate_zarr_exists(output)
+
+    def test_zarr_v3_sharding_level_not_multiple_of_chunk(self, tmp_path):
+        """Sharded v3 pyramid whose downscaled extent isn't a chunk multiple.
+
+        Level 1 of a 250x170 image is 125x85; with 64-px chunks and 192-px
+        shards the level's shard used to be clamped to 125, which zarr rejects
+        because a shard must hold a whole number of chunks.
+        """
+        import tifffile
+        import zarr
+
+        tif_path = tmp_path / "odd.tif"
+        data = np.random.randint(0, 255, (16, 2, 250, 170), dtype=np.uint8)
+        tifffile.imwrite(str(tif_path), data, imagej=True,
+                         metadata={'axes': 'ZCYX'})
+        output = tmp_path / "output.zarr"
+
+        result = run_eubi_command([
+            str(tif_path),
+            str(output),
+            '--zarr_format', '3',
+            '--auto_chunk', 'False',
+            '--y_chunk', '64',
+            '--x_chunk', '64',
+            '--y_shard_coef', '3',
+            '--x_shard_coef', '3',
+            '--n_layers', '3',
+        ])
+        assert result.returncode == 0, result.stderr
+
+        group = zarr.open_group(str(output / "odd.zarr"), mode='r')
+        levels = sorted(k for k in group.array_keys())
+        assert len(levels) == 3
+        assert group['1'].chunks[-2:] == (64, 64)
+        for key in levels:
+            arr = group[key]
+            for shard, chunk in zip(arr.shards, arr.chunks):
+                assert shard % chunk == 0
+        np.testing.assert_array_equal(group['0'][:], data.transpose(1, 0, 2, 3))

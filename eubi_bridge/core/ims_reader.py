@@ -4,7 +4,8 @@ Native reader for Imaris (.ims) files.
 Imaris files are plain HDF5 with a documented internal resolution-pyramid
 layout::
 
-    /DataSet/ResolutionLevel {r}/TimePoint {t}/Channel {c}/Data   # 3D (Z, Y, X)
+    /DataSet/ResolutionLevel {r}/TimePoint {t}/Channel {c}/Data   # 3D (Z, Y, X), padded
+    /DataSet/ResolutionLevel {r}/TimePoint {t}/Channel {c}  .attrs: ImageSizeZ/Y/X (real size)
     /DataSetInfo/Image            .attrs: X, Y, Z, Unit, ExtMin0/1/2, ExtMax0/1/2
     /DataSetInfo/TimeInfo          .attrs: DatasetTimePoints, TimePoint1..N
     /DataSetInfo/Channel {c}        .attrs: Name, Color, ...
@@ -14,13 +15,19 @@ lets its own downscaler rebuild the pyramid. ``get_resolution_level_dask_data``
 exposes the other resolution levels for the ``keep_existing_resolutions``
 opt-in path.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import h5py
-import dask.array as da
 import numpy as np
 
 from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.optional_deps import require
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 logger = get_logger(__name__)
 
@@ -33,6 +40,24 @@ def _ims_attr_str(attrs, key, default=None):
     if isinstance(val, np.ndarray):
         return ''.join(v.decode() if isinstance(v, bytes) else str(v) for v in val)
     return val.decode() if isinstance(val, bytes) else str(val)
+
+
+def _ims_image_size(ds):
+    """Image size (Z, Y, X) of an Imaris ``Data`` dataset.
+
+    Imaris pads every ``Data`` dataset to whole HDF5 chunks (e.g. a 424 x 424
+    image stored as 512 x 512, zeros beyond); the real size is in the
+    ``ImageSizeZ/Y/X`` attributes of its ``Channel`` group, per resolution
+    level.  Falls back to the dataset shape when they are missing or invalid.
+    """
+    sizes = []
+    for axis, stored in zip('ZYX', ds.shape):
+        try:
+            size = int(_ims_attr_str(ds.parent.attrs, f'ImageSize{axis}'))
+        except (TypeError, ValueError):
+            size = stored
+        sizes.append(size if 0 < size <= stored else stored)
+    return tuple(sizes)
 
 
 class IMSReader(ImageReader):
@@ -89,7 +114,9 @@ class IMSReader(ImageReader):
         return self.get_resolution_level_dask_data(0)
 
     def get_resolution_level_dask_data(self, level: int) -> da.Array:
-        """Return the given resolution level as a T C Z Y X dask array."""
+        """Return the given resolution level as a T C Z Y X dask array,
+        cropped to the image size (without Imaris' chunk padding)."""
+        da = require("dask.array", "eubi-bridge's own Imaris reader")
         try:
             t_arrays = []
             for t in range(self.n_timepoints):
@@ -102,7 +129,9 @@ class IMSReader(ImageReader):
                     # dask chunks 1:1 with the native HDF5 chunk grid so reads
                     # don't re-decompress partial chunks. 'auto' is only a
                     # fallback for the (rare) unchunked/contiguous case.
-                    c_arrays.append(da.from_array(ds, chunks=ds.chunks or 'auto'))
+                    arr = da.from_array(ds, chunks=ds.chunks or 'auto')
+                    z, y, x = _ims_image_size(ds)
+                    c_arrays.append(arr[:z, :y, :x])
                 t_arrays.append(da.stack(c_arrays, axis=0))
             return da.stack(t_arrays, axis=0)  # -> T C Z Y X
         except Exception as e:

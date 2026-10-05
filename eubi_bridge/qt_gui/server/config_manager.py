@@ -28,6 +28,7 @@ def _config_to_react(cfg: dict) -> dict:
     readers = cfg.get("readers", {})
     conv    = cfg.get("conversion", {})
     down    = cfg.get("downscale", {})
+    meta    = cfg.get("metadata", {})
     concat  = cfg.get("concatenation", {})
 
     # Reconstruct compression dict from compressor + compressor_params
@@ -65,9 +66,9 @@ def _config_to_react(cfg: dict) -> dict:
             "memoryPerWorker":      _parse_memory_gb(cluster.get("memory_per_worker", "4GB"), 4.0),
             "useLocalDask":         cluster.get("on_local_cluster", False),
             "useSlurm":             cluster.get("on_slurm", False),
-            "bfTileSizeMb":         cluster.get("bf_tile_size_mb", 512.0),
             "jvmMemory":            _parse_jvm_gb(cluster.get("jvm_memory", "2g"), 2.0),
             "bfReadConcurrency":    cluster.get("bf_read_concurrency", 4),
+            "microReadConcurrency": cluster.get("micro_read_concurrency", 4),
         },
         "reader": {
             "readAsMosaic":         readers.get("as_mosaic", False),
@@ -85,6 +86,7 @@ def _config_to_react(cfg: dict) -> dict:
             "rotationIndex":        str(readers.get("rotation_index", 0)),
             "sampleIndex":          str(readers.get("sample_index", 0)),
             "forceBioformats":      readers.get("force_bioformats", False),
+            "useMicroReader":       readers.get("pixel_reader", "micro") == "micro",
         },
         "conversion": {
             "zarrFormat":           conv.get("zarr_format", 2),
@@ -95,7 +97,9 @@ def _config_to_react(cfg: dict) -> dict:
             "overwrite":            conv.get("overwrite", False),
             "squeezeDimensions":    conv.get("squeeze", True),
             "saveOmeXml":           conv.get("save_omexml", True),
-            "overrideChannelNames": conv.get("override_channel_names", False),
+            # Stored under 'metadata' now; 'conversion' is the pre-move fallback.
+            "overrideChannelNames": meta.get("override_channel_names",
+                                             conv.get("override_channel_names", False)),
             "skipDask":             conv.get("skip_dask", False),
             "autoChunk":            conv.get("auto_chunk", True),
             "targetChunkSizeMb":    conv.get("target_chunk_mb", 1),
@@ -138,18 +142,33 @@ def _config_to_react(cfg: dict) -> dict:
             "smartScaleTime":       down.get("time_smart_scale_factor", None),
         },
         "metadata": {
-            "metadataReader":         conv.get("metadata_reader", "bfio"),
-            "channelIntensityLimits": "from_datatype" if conv.get("channel_intensity_limits", "from_dtype") == "from_dtype" else "from_array",
+            # Read from the 'metadata' section, falling back to 'conversion'
+            # only so a config written before the move still populates the form.
+            "metadataReader":         meta.get("metadata_reader", conv.get("metadata_reader", "micro")),
+            "channelIntensityLimits": "from_datatype" if meta.get("channel_intensity_limits", conv.get("channel_intensity_limits", "from_dtype")) == "from_dtype" else "from_array",
             # Per-channel colour overrides, "idx,RRGGBB;..." as the CLI takes
             # them.  Empty means every channel keeps its source colour or gets
             # an automatic one.
-            "channelColors":          conv.get("channel_colors", "") or "",
-            # Physical scale overrides cannot be stored in the config file
-            "overridePhysicalScale": False,
-            "scaleTime": "", "unitTime": "second",
-            "scaleZ": "",    "unitZ": "micrometer",
-            "scaleY": "",    "unitY": "micrometer",
-            "scaleX": "",    "unitX": "micrometer",
+            "channelColors":          meta.get("channel_colors", conv.get("channel_colors", "")) or "",
+            "channelLabels":          meta.get("channel_labels", conv.get("channel_labels", "")) or "",
+            # A stored scale or unit has to come back ticked, or the form would
+            # show the value while the toggle said it was not being applied.
+            "overridePhysicalScale": any(
+                meta.get(f"{axis}_scale") is not None
+                or meta.get(f"{axis}_unit") is not None
+                for axis in ("time", "z", "y", "x")),
+            **{
+                f"scale{axis.capitalize()}": (
+                    "" if meta.get(f"{axis}_scale") is None
+                    else str(meta[f"{axis}_scale"]))
+                for axis in ("time", "z", "y", "x")
+            },
+            **{
+                f"unit{axis.capitalize()}": (
+                    meta.get(f"{axis}_unit")
+                    or ("second" if axis == "time" else "micrometer"))
+                for axis in ("time", "z", "y", "x")
+            },
         },
         "concatenation": {
             "concatenationAxes": concat.get("concatenation_axes", "") or "",
@@ -158,6 +177,7 @@ def _config_to_react(cfg: dict) -> dict:
             "zTag":              concat.get("z_tag", "")       or "",
             "yTag":              concat.get("y_tag", "")       or "",
             "xTag":              concat.get("x_tag", "")       or "",
+            "aggregativeGroup":  concat.get("aggregative_group", "") or "",
         },
     }
 
@@ -206,9 +226,9 @@ def _react_to_config(data: dict) -> dict:
             "memory_per_worker":               _gb_to_memory_str(cluster_d.get("memoryPerWorker", 4)),
             "tensorstore_data_copy_concurrency": 4,
             "max_retries":                     10,
-            "bf_tile_size_mb":                 cluster_d.get("bfTileSizeMb", 512.0),
             "jvm_memory":                      _gb_to_jvm_str(cluster_d.get("jvmMemory", 2)),
             "bf_read_concurrency":             cluster_d.get("bfReadConcurrency", 4),
+            "micro_read_concurrency":          cluster_d.get("microReadConcurrency", 4),
         },
         "readers": {
             "as_mosaic":            reader_d.get("readAsMosaic", False),
@@ -222,6 +242,7 @@ def _react_to_config(data: dict) -> dict:
             "rotation_index":       _parse_int(reader_d.get("rotationIndex", "0")),
             "sample_index":         _parse_int(reader_d.get("sampleIndex", "0")),
             "force_bioformats":     reader_d.get("forceBioformats", False),
+            "pixel_reader":         "micro" if reader_d.get("useMicroReader", True) else "standard",
         },
         "conversion": {
             "zarr_format":           conv_d.get("zarrFormat", 2),
@@ -241,10 +262,6 @@ def _react_to_config(data: dict) -> dict:
             "compressor":            compressor,
             "compressor_params":     compressor_params,
             "overwrite":             conv_d.get("overwrite", False),
-            "override_channel_names": conv_d.get("overrideChannelNames", False),
-            "channel_intensity_limits": ci_limits,
-            "metadata_reader":       meta_d.get("metadataReader", "bfio"),
-            "channel_colors":        meta_d.get("channelColors", "") or "",
             "save_omexml":           conv_d.get("saveOmeXml", True),
             "squeeze":               conv_d.get("squeezeDimensions", True),
             "skip_dask":             conv_d.get("skipDask", False),
@@ -273,6 +290,29 @@ def _react_to_config(data: dict) -> dict:
             "x_smart_scale_factor":     down_d.get("smartScaleX") or None,
             "time_smart_scale_factor":  down_d.get("smartScaleTime") or None,
         },
+        "metadata": {
+            "metadata_reader":          meta_d.get("metadataReader", "micro"),
+            "override_channel_names":   conv_d.get("overrideChannelNames", False),
+            "channel_intensity_limits": ci_limits,
+            "channel_colors":           meta_d.get("channelColors", "") or "",
+            "channel_labels":           meta_d.get("channelLabels", "") or "",
+            # Physical overrides only count when the form's toggle is on; blank
+            # or unticked means "keep what the source file says".
+            **{
+                f"{axis}_scale": (
+                    float(meta_d[f"scale{axis.capitalize()}"])
+                    if meta_d.get("overridePhysicalScale", False)
+                    and str(meta_d.get(f"scale{axis.capitalize()}", "")).strip()
+                    else None)
+                for axis in ("time", "z", "y", "x")
+            },
+            **{
+                f"{axis}_unit": (
+                    meta_d.get(f"unit{axis.capitalize()}") or None
+                    if meta_d.get("overridePhysicalScale", False) else None)
+                for axis in ("time", "z", "y", "x")
+            },
+        },
         "concatenation": {
             "concatenation_axes": concat_d.get("concatenationAxes") or None,
             "time_tag":           concat_d.get("timeTag")    or None,
@@ -280,6 +320,7 @@ def _react_to_config(data: dict) -> dict:
             "z_tag":              concat_d.get("zTag")       or None,
             "y_tag":              concat_d.get("yTag")       or None,
             "x_tag":              concat_d.get("xTag")       or None,
+            "aggregative_group":  concat_d.get("aggregativeGroup") or None,
         },
     }
 
@@ -389,6 +430,11 @@ def action_save(config_path: str, react_json_str: str) -> None:
 
     resolved = _resolve_configpath(config_path) or config_path
     bridge = EuBIBridge(configpath=resolved)
+    # The form has no channel-labels field, so it always sends that key blank;
+    # keep the stored value rather than wiping one set via the CLI.
+    if "channelLabels" not in react_data.get("metadata", {}):
+        new_cfg["metadata"]["channel_labels"] = (
+            bridge.config.get("metadata", {}).get("channel_labels", ""))
     bridge.config = new_cfg  # setter writes to JSON immediately
 
     result = _config_to_react(bridge.config)

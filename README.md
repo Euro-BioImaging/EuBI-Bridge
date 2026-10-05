@@ -2,14 +2,13 @@
 
 [![Documentation](https://img.shields.io/badge/documentation-online-green)](https://euro-bioimaging.github.io/EuBI-Bridge/)
 
-EuBI-Bridge is a tool for distributed conversion of microscopic image collections into the OME-Zarr format. 
-It can run on the command line or as part of a Python script.  
+EuBI-Bridge is a tool for **distributed conversion of microscopy image collections to OME-Zarr**. Conversion can be performed through either a command-line interface (CLI) or a graphical user interface (GUI). The installation described below provides access to both interfaces.
 
-A key feature of EuBI-Bridge is **aggregative conversion**, which concatenates multiple images along specified dimensions—particularly useful for handling large datasets stored as TIFF file collections.  
+A key feature of EuBI-Bridge is **aggregative conversion**, which combines multiple input images along user-specified axes into a single OME-Zarr container. This is particularly useful when images belong to the same multidimensional dataset but are stored as separate, unlinked files. By aggregating these files during conversion, EuBI-Bridge can reconstruct the intended multidimensional dataset.
 
-EuBI-Bridge is built on several powerful libraries, including `zarr`, `bioio`, `dask` and `tensorstore`, among others. 
+EuBI-Bridge is built on several powerful libraries, including `zarr`, `tensorstore` and `dask`, among others.
 
-Relying on `bioio` plugins for reading, EuBI-Bridge supports a wide range of input file formats. 
+Input files are read with [micro-reader](https://pypi.org/project/micro-reader/) by default. It reads the common microscopy formats without Java. If a file cannot be read by `micro-reader`, EuBI-Bridge falls back to other readers (such as `bioio`- and `Bio-Formats`-based readers) for that particular file. Java only starts when this happens. 
 
 
 ## Installation
@@ -31,9 +30,8 @@ Then install EuBI-Bridge via pip in the conda environment:
 
 ```bash
 conda activate eubizarr
-pip install --no-cache-dir "eubi-bridge==0.1.2"
-# If a previous version of eubi-bridge was installed before, reset the configuration:
-eubi reset_config
+pip install --no-cache-dir "eubi-bridge==0.1.3"
+eubi reset_config   # see "After installing or upgrading" below
 ```
 
 ### Alternative: pip only
@@ -44,16 +42,32 @@ version 3.11 or 3.12:
 ```bash
 python -m venv venv # Python must be either version 3.11 or 3.12.
 source venv/bin/activate
-pip install "eubi-bridge==0.1.2" # installs both GUI and CLI
-
-# If a previous version of eubi-bridge was installed before, reset the configuration:
-eubi reset_config
+pip install "eubi-bridge==0.1.3" # installs both GUI and CLI
+eubi reset_config   # see "After installing or upgrading" below
 ```
 
 **On Linux this installs the graphical interface but not the Qt system
 libraries it needs at runtime**, so the graphical interface may fail to start. See
 [Linux: the GUI does not start](#linux-the-gui-does-not-start) below for the fix.
 The command-line interface is unaffected.
+
+### After installing or upgrading
+
+Run this once:
+
+```bash
+eubi reset_config
+```
+
+EuBI-Bridge keeps your settings in a configuration file. That file is written the
+first time you run the tool, and later versions do not change it. So if you have
+used EuBI-Bridge before, you keep the old defaults until you reset it.
+
+- Resetting gives you the current defaults. For example, files are now read with
+  micro-reader, and Java only starts if a file needs Bio-Formats.
+- It overwrites your default settings. Run `eubi show_config` first if you
+  want to note them down. Configurations you saved under a name are kept.
+- On a fresh install it does no harm.
 
 ### Troubleshooting
 
@@ -98,10 +112,9 @@ then try the following:
 ```bash
 # In the `eubizarr` environment
 mamba install cmake zlib boost # preinstall dependencies that can help build from source
-pip install --no-cache-dir "eubi-bridge==0.1.2" # try installing again with the dependencies available
-# If a previous version of eubi-bridge was installed before, reset the configuration:
+pip install --no-cache-dir "eubi-bridge==0.1.3" # try installing again with the dependencies available
 eubi reset_config
-````
+```
 
 ## Documentation
 
@@ -111,7 +124,7 @@ Find the documentation for EuBI-Bridge [here](https://euro-bioimaging.github.io/
 
 Launch the graphical interface by running `eubi-gui` in the terminal. The four short videos below walk you through one complete job: converting several images to OME-Zarr, and then inspecting one of the outputs.
 
-The videos cover the common scenario: one-to-one conversion from a collection of files. More advanced features such as aggregative conversions (concatenation of multiple files), editable batch tables, custom configuration files and editing output metadata are all supported by the interface but not yet demonstrated in the videos; demos for those will be provided soon. In the meantime the [documentation](https://euro-bioimaging.github.io/EuBI-Bridge/) describe the API, and every control in the interface carries a tooltip. 
+The videos cover the common scenario: one-to-one conversion from a collection of files. More advanced features such as aggregative conversions (concatenation of multiple files), editable batch tables, custom configuration files and editing output metadata are all supported by the interface but not yet demonstrated in the videos; demos for those will be provided soon. In the meantime the [documentation](https://euro-bioimaging.github.io/EuBI-Bridge/) describes the API, and every control in the interface carries a tooltip. 
 
 ### 1. Selecting input and output folders
 
@@ -165,12 +178,14 @@ To convert each TIFF into a separate OME-Zarr container (unary conversion):
 eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr
 ```  
 
-Use the argument `--zarr_format` to specify the zarr format version to use.
-To create a zarr version 3 dataset, use `--zarr_format 3`:
+By default this writes OME-Zarr 0.4 (zarr version 2). Use `--ome_zarr_version`
+to choose the version. For OME-Zarr 0.5 (zarr version 3, which supports sharding):
 
 ```bash
-eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr --zarr_format 3
+eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr --ome_zarr_version 0.5
 ```  
+
+`--zarr_format` still works, but it is deprecated. Use `--ome_zarr_version` instead.
 
 Both of these commands will perform unary conversion, resulting in the following output:  
 
@@ -211,7 +226,7 @@ eubi to_zarr multichannel_timeseries multichannel_timeseries_concat_zarr \
 Output:  
 
 ```bash
-multichannel_timeseries_time-concat_zarr
+multichannel_timeseries_concat_zarr
 ├── Channel1-T_tset.zarr
 └── Channel2-T_tset.zarr
 ```  
@@ -229,7 +244,7 @@ eubi to_zarr multichannel_timeseries multichannel_timeseries_concat_zarr \
 --concatenation_axes ct
 ```  
 
-Note that both axes are specified wia the argument `--concatenation_axes ct`.
+Note that both axes are specified via the argument `--concatenation_axes ct`.
 
 Output:
 
@@ -324,7 +339,7 @@ in quotes as shown in the example above.
 For datasets where channel names are categorical such as in:
 
 ```bash
-blueredchannel_timeseries
+blueredchannels_timeseries
 ├── Blue-T0001.tif
 ├── Blue-T0002.tif
 ├── Blue-T0003.tif

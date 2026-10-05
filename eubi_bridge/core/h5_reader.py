@@ -1,21 +1,25 @@
 """
 Reader for HDF5 files.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from typing import Any, Optional
 
-import dask
-import dask.array as da
 import fsspec
 import fsspec.compression
 import fsspec.core
 import fsspec.spec
 import numpy as np
 import zarr
-from dask import delayed
 
 from eubi_bridge.core.reader_interface import ImageReader
+from eubi_bridge.utils.optional_deps import require
 from eubi_bridge.utils.logging_config import get_logger
+
+if TYPE_CHECKING:
+    import dask.array as da
 
 logger = get_logger(__name__)
 
@@ -88,6 +92,7 @@ class H5Reader(ImageReader):
         try:
             dset_name = list(self.h5file.keys())[self.series]
             ds = self.h5file[dset_name]
+            da = require("dask.array", "Reading HDF5 (.h5) files")
             array = da.from_array(ds, **kwargs)
             return array
         except Exception as e:

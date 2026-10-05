@@ -9,11 +9,9 @@ This module provides:
 
 import asyncio
 
-import dask
 import fsspec
 import numpy as np
 import zarr
-from dask import delayed
 
 from eubi_bridge.core.metadata_extractors import MetadataExtractorFactory
 from eubi_bridge.core.reader_interface import ImageReader
@@ -59,7 +57,19 @@ async def read_single_image(
     """
     logger.info(f"Reading image: {input_path}")
     verbose = kwargs.get('verbose', False)
-    
+    # 'micro': micro-reader reads the file itself, no standard reader opened
+    # (core/micro_source.py); it falls back to the routing below for files it
+    # does not read.  Never forwarded: the standard readers do not take it.
+    pixel_reader = kwargs.pop('pixel_reader', 'standard')
+    if pixel_reader == 'micro' and not input_path.endswith(('.zarr', '.h5')):
+        from eubi_bridge.core.micro_source import MicroReader
+        reader = MicroReader.open(input_path, **kwargs)
+        if reader is not None:
+            scene_index = kwargs.get('scene_index', None)
+            if scene_index is not None:
+                reader.set_scene(scene_index)
+            return reader
+
     # Route to appropriate reader
     if input_path.endswith('.zarr'):
         from eubi_bridge.core.pyramid_reader import read_pyramid
@@ -134,10 +144,10 @@ def read_image_sync(path: str, **kwargs) -> ImageReader:
         return asyncio.run(read_single_image(path, **kwargs))
 
 
-@delayed
-def read_single_image_delayed(path: str, **kwargs) -> ImageReader:
+def read_single_image_delayed(path: str, **kwargs):
     """
-    Lazy/delayed version of read_single_image for dask workflows.
+    Lazy/delayed version of read_single_image for dask workflows: a
+    ``dask.delayed`` call of ``read_image_sync`` (needs dask).
     
     Parameters
     ----------
@@ -151,7 +161,8 @@ def read_single_image_delayed(path: str, **kwargs) -> ImageReader:
     ImageReader
         Reader instance (returned as dask delayed object).
     """
-    return read_image_sync(path, **kwargs)
+    from dask import delayed
+    return delayed(read_image_sync)(path, **kwargs)
     
 
 def get_metadata_reader_by_path(input_path: str, **kwargs):
