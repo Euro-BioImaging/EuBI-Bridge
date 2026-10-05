@@ -1,0 +1,137 @@
+/* Align Material's copy button nav with the first line of code */
+.md-code__nav {
+  top: 0 !important;
+}
+
+/* ── Header logo ───────────────────────────────────────────────
+   Material renders the logo as a tiny 1.2rem square by default,
+   which also squishes the (non-square) Euro-BioImaging logo.
+   Enlarge it to nearly fill the header height and keep its aspect
+   ratio.  Kept within the existing header height so the nav tabs
+   are unaffected. */
+.md-header__button.md-logo {
+  padding-top: 0.1rem;
+  padding-bottom: 0.1rem;
+}
+
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 2.2rem;
+  width: auto;
+}
+
+
+
+footer {
+  display: none !important;
+}
+
+/* ── CLI Reference ─────────────────────────────────────────── */
+
+/* "command" admonition card: orange left border + tinted title bar */
+.md-typeset details.command {
+  border-color: #e65100;
+}
+
+.md-typeset details.command > summary.admonition-title {
+  background-color: rgba(230, 81, 0, 0.10);
+  font-family: var(--md-code-font-family);
+  font-size: 0.82rem;
+}
+
+/* Parameter group <details> nested inside a command card */
+.md-typeset details.command details {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 4px;
+  box-shadow: none;
+  margin: 0.45em 0 0.7em;
+}
+
+.md-typeset details.command details > summary {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+  background: var(--md-code-bg-color);
+  padding: 0.3em 0.75em;
+  border-radius: 4px;
+  cursor: pointer;
+  list-style: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.md-typeset details.command details[open] > summary {
+  border-radius: 4px 4px 0 0;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.md-typeset details.command details > summary:hover {
+  background: rgba(230, 81, 0, 0.08);
+  color: #e65100;
+}
+
+/* Hide Material's pencil/icon on parameter group and flag summaries */
+.md-typeset details.command details > summary::before,
+.md-typeset details.command details details > summary::before {
+  display: none !important;
+}
+
+/* Flag-level collapsibles inside CLI-only options */
+.md-typeset details.command details details {
+  border: none;
+  border-left: 2px solid var(--md-accent-fg-color, teal);
+  border-radius: 0;
+  box-shadow: none;
+  margin: 0.25em 0 0.25em 0.5em;
+}
+
+.md-typeset details.command details details > summary {
+  font-family: var(--md-code-font-family);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--md-code-fg-color);
+  background: var(--md-code-bg-color);
+  padding: 0.2em 0.6em;
+  border-radius: 3px;
+}
+
+.md-typeset details.command details details > summary:hover {
+  background: rgba(0, 150, 136, 0.08);
+  color: var(--md-accent-fg-color);
+}
+
+.md-typeset details.command details details p,
+.md-typeset details.command details details pre {
+  margin: 0.35em 0 0.35em 0.6em;
+  font-size: 0.8rem;
+}
+
+.md-typeset details.command details details pre {
+  background: var(--md-code-bg-color);
+  border-radius: 3px;
+  padding: 0.4em 0.6em;
+}
+
+.md-typeset details.command details details pre > code {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* Pin Flag, Type, Default columns; let Constraints and Description wrap. */
+.md-typeset details.command details table th:nth-child(-n+3),
+.md-typeset details.command details table td:nth-child(-n+3) {
+  white-space: nowrap;
+}
+
+.md-typeset details.command details table td:last-child {
+  min-width: 14em;
+}
+
+/* Horizontal scroll if the table is still wider than the card */
+.md-typeset details.command details {
+  overflow-x: auto;
+}
