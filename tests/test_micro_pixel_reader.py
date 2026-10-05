@@ -501,11 +501,7 @@ def test_disagreement_with_the_metadata_keeps_the_standard_reader(tmp_path):
 def test_views_count_as_images_against_bio_formats(tmp_path):
     """Bio-Formats lists a CZI's views as separate images: 1 scene x 2 views
     must pass against 2 metadata images (Bugra: 25 scenes x 2 views = 50)."""
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "incubation" / "micro-reader"
-                           / "tests"))
-    from _czi_writer import raw_payload, write_czi
+    from tests._czi_writer import raw_payload, write_czi
 
     from eubi_bridge.core.micro_source import metadata_mismatch
     path = str(tmp_path / "views.czi")
@@ -526,11 +522,7 @@ def test_views_count_as_images_against_bio_formats(tmp_path):
 def test_czi_resolution_levels_count_against_bio_formats(tmp_path):
     """Bio-Formats lists a CZI's stored resolution levels as images when its
     own collapse does not apply (S=2_2x2: 2 scenes x 2 levels = 4 images)."""
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "incubation" / "micro-reader"
-                           / "tests"))
-    from _czi_writer import raw_payload, write_czi
+    from tests._czi_writer import raw_payload, write_czi
 
     from eubi_bridge.core.micro_source import metadata_mismatch
     path = str(tmp_path / "pyr.czi")
@@ -609,18 +601,14 @@ def test_imaris_reads_with_micro_reader_and_keeps_its_levels(tmp_path):
     bypass pixel_reader: the base array and the kept levels must come from
     micro-reader and equal the file's."""
     import asyncio
-    import sys
-    from pathlib import Path
     pytest.importorskip("h5py")
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "incubation" / "micro-reader"
-                           / "tests"))
-    from test_resolutions import _pyramid_ims
+    from tests._ims_writer import write_pyramid_ims
 
     from eubi_bridge.core.data_manager import ArrayManager
     from eubi_bridge.core.micro_source import MicroSource
     data = RNG.integers(0, 4000, (1, 2, 5, 21, 27)).astype("u2")
     path = str(tmp_path / "pyr.ims")
-    _pyramid_ims(path, data)
+    write_pyramid_ims(path, data)
 
     async def load(**kw):
         manager = ArrayManager(path, metadata_reader="bfio", **kw)
