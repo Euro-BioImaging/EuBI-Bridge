@@ -1,5 +1,4 @@
-aicspylibczi>=3.3.1,<4; sys_platform == 'win32'
-aicspylibczi>=3.3.1; sys_platform != 'win32'
+aicspylibczi>=0.0.0
 asciitree>=0.3.3
 bfio>=0.0.0
 bioformats_jar>=0.0.0

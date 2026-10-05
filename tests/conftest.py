@@ -15,6 +15,11 @@ os.environ["EUBI_CONFIG_DIR"] = tempfile.mkdtemp(prefix="eubi_test_config_")
 
 import pytest  # noqa: E402
 
+# Before qt_available() below imports PyQt6: importing eubi_bridge loads the
+# system's C++ runtime first on Windows, so Qt's old copy cannot crash the
+# later native readers (see eubi_bridge/__init__.py, test_windows_cpp_runtime).
+import eubi_bridge  # noqa: E402, F401
+
 from .conftest_fixtures import *  # noqa: F401, F403, E402
 
 # Resolved once, lazily, by qt_available() below.

@@ -8,7 +8,7 @@ A key feature of EuBI-Bridge is **aggregative conversion**, which combines multi
 
 EuBI-Bridge is built on several powerful libraries, including `zarr`, `tensorstore` and `dask`, among others.
 
-Input files are read with [micro-reader](https://pypi.org/project/micro-reader/) by default. It reads the common microscopy formats without Java. If a file needs something micro-reader cannot read, EuBI-Bridge falls back to Bio-Formats for that file only. Java only starts when this happens. 
+Input files are read with [micro-reader](https://pypi.org/project/micro-reader/) by default. It reads the common microscopy formats without Java. If a file cannot be read by `micro-reader`, EuBI-Bridge falls back to other readers (such as `bioio`- and `Bio-Formats`-based readers) for that particular file. Java only starts when this happens. 
 
 
 ## Installation

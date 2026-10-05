@@ -17,11 +17,7 @@ authors = [
 ]
 license = "MIT"
 dependencies = [
-    # Windows <4: 4.0.1 crashed (access violation) opening CZIs on the
-    # Windows CI runners, twice; 3.3.1 never has.  Windows only: 3.3.1 has no
-    # Intel-Mac wheel for Python 3.12.  Lift once a 4.x passes Windows CI.
-    "aicspylibczi>=3.3.1,<4; sys_platform == 'win32'",
-    "aicspylibczi>=3.3.1; sys_platform != 'win32'",
+    "aicspylibczi>=0.0.0",
     "asciitree>=0.3.3",
     "bfio>=0.0.0",
     "bioformats_jar>=0.0.0",
