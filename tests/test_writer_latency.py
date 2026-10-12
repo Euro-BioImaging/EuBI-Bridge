@@ -22,6 +22,9 @@ from eubi_bridge.core.writers import write_with_queue_async
 RNG = np.random.default_rng(2)
 #: the old code needed >= 2 s for any base-layer write
 LIMIT_S = 0.9
+#: a fixed wait slows EVERY run, a busy CI machine only some (a Windows runner
+#: once took 2.09 s for one tiny write): judge the fastest of a few runs
+RUNS = 3
 
 
 def _base(tmp_path, data, name, **kw):
@@ -39,10 +42,14 @@ def test_base_layer_write_ends_with_the_last_region(tmp_path, region_mb, verbose
     import zarr
     data = RNG.integers(0, 4000, (2, 96, 80)).astype("u2")
     _base(tmp_path, data, "warm.zarr")                      # imports, first tensorstore open
-    out, seconds = _base(tmp_path, data, "out.zarr", region_size_mb=region_mb,
-                         verbose=verbose)
-    np.testing.assert_array_equal(zarr.open_array(out, mode="r")[:], data)
-    assert seconds < LIMIT_S, f"a tiny write took {seconds:.2f} s"
+    times = []
+    for i in range(RUNS):
+        out, seconds = _base(tmp_path, data, f"out{i}.zarr", region_size_mb=region_mb,
+                             verbose=verbose)
+        np.testing.assert_array_equal(zarr.open_array(out, mode="r")[:], data)
+        times.append(seconds)
+    assert min(times) < LIMIT_S, \
+        f"every tiny write took long: {', '.join(f'{t:.2f}' for t in times)} s"
 
 
 def test_conversion_has_no_fixed_wait(tmp_path):
