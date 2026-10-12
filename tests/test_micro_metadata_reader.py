@@ -17,11 +17,19 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from tests.conftest import requires_full  # noqa: E402
 
 pytest.importorskip("micro_reader")
 tifffile = pytest.importorskip("tifffile")
 
 from eubi_bridge.core import micro_source  # noqa: E402
+
+
+def _reader_source(arr):
+    """The reader's own source behind a DynamicArray: ``dyna_zarr.from_array`` keeps it
+    one level down, in its adapter (``arr._source._source``)."""
+    src = getattr(arr, "_source", None)
+    return getattr(src, "_source", src)
 
 RNG = np.random.default_rng(11)
 
@@ -94,7 +102,7 @@ def test_scenes_load_from_micro_reader_alone(tmp_path, monkeypatch):
         monkeypatch.setattr(data_manager, name, no_bio_formats)
     path, a, b = _ome_tiff(tmp_path)
     first, second = _load(path)
-    assert isinstance(first.array._source, MicroSource)
+    assert isinstance(_reader_source(first.array), MicroSource)
     np.testing.assert_array_equal(np.asarray(first.array), a[None])          # C Z Y X
     assert first.scaledict["x"] == 0.5 and first.scaledict["z"] == 2.0
     assert [c["label"] for c in first.channels] == ["DAPI", "GFP"]
@@ -107,6 +115,7 @@ def test_scenes_load_from_micro_reader_alone(tmp_path, monkeypatch):
     assert second.scaledict["x"] == 0.25 and second.origindict == {}
 
 
+@requires_full
 def test_a_file_micro_reader_does_not_take_falls_back_to_bio_formats(tmp_path, monkeypatch):
     """Per file: Bio-Formats metadata, and the standard pixel reader with it."""
     from ome_types import from_xml
@@ -124,8 +133,7 @@ def test_a_file_micro_reader_does_not_take_falls_back_to_bio_formats(tmp_path, m
     monkeypatch.setattr(MicroReader, "open", classmethod(lambda cls, *a, **k: None))
     first, _ = _load(path)
     assert calls == [path]
-    assert not hasattr(first.array, "_source") or \
-        not isinstance(first.array._source, micro_source.MicroSource)
+    assert not isinstance(_reader_source(first.array), micro_source.MicroSource)
     assert first.origindict == {}                # positions only from micro-reader
 
 
@@ -149,6 +157,7 @@ def _run_python(code: str, timeout=600) -> str:
     return result.stdout
 
 
+@requires_full
 def test_conversion_with_micro_metadata_starts_no_jvm(tmp_path):
     """End to end in a fresh process: no JVM, and the output carries the
     scales, the translation and the wavelengths."""
@@ -175,6 +184,7 @@ def test_conversion_with_micro_metadata_starts_no_jvm(tmp_path):
     assert "channel_wavelengths" in json.dumps(eubi)
 
 
+@requires_full
 def test_lazy_jvm_starts_on_first_java_use():
     """Lazy mode does not start the JVM, but the first Java use (as bfio /
     bioio-bioformats make it, through scyjava) starts it with the bundled
@@ -201,6 +211,7 @@ def _jvm_after(code: str) -> str:
                        + "\nimport jpype\nprint('JVM', jpype.isJVMStarted())\n")
 
 
+@requires_full
 def test_a_batch_from_the_gui_starts_no_jvm(tmp_path):
     """The GUI's conversion subprocess, given a batch: the readers ride in the
     table, not in its kwargs.  It used to start the JVM whenever the kwargs
@@ -226,6 +237,7 @@ def test_a_batch_from_the_gui_starts_no_jvm(tmp_path):
     assert "JVM False" in stdout
 
 
+@requires_full
 def test_table_rows_decide_whether_java_is_needed(tmp_path):
     """The config says bfio, every row of the table says micro: no JVM."""
     path, _, _ = _ome_tiff(tmp_path)

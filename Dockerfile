@@ -24,7 +24,7 @@
 FROM python:3.12-slim-bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG EUBI_VERSION=0.1.2
+ARG EUBI_VERSION=0.1.4
 
 LABEL org.opencontainers.image.title="EuBI-Bridge" \
       org.opencontainers.image.version="${EUBI_VERSION}" \

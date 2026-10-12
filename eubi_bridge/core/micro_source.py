@@ -40,8 +40,11 @@ CHECK_SIDE = 64
 
 #: files kept open per process, least recently used closed first: an
 #: aggregative input of thousands of files must not hold them all open (each
-#: holds a handle per reading thread; "Too many open files" at ~500 of 2347)
-MAX_OPEN_FILES = 32
+#: holds a handle per reading thread; "Too many open files" at ~500 of 2347).
+#: 128 keeps a slab of planes open while a memory-bounded write visits each y/x
+#: tile of it (dyna write_levels: slabs of e.g. 96 planes); at 32, every file was
+#: opened again for every tile (2347 files x 4 tiles: 6.7 min instead of ~1.3).
+MAX_OPEN_FILES = 128
 
 
 class _Open:
@@ -88,19 +91,34 @@ def _using(path: str, tiles: str):
             _evict()
 
 
-def set_read_concurrency(n: int, memory: Optional[str] = None) -> None:
-    """micro-reader's decode threads in this process (``micro_read_concurrency``):
+def set_read_concurrency(n: int) -> None:
+    """micro-reader's decode threads in this process (``decode_threads``):
     one pool shared by all region reads, so this caps the CPU spent reading
-    without changing how many regions the writer keeps in flight.  *memory*
-    (``memory_per_worker``, e.g. "3GB") is micro-reader's decoding budget:
-    a compressed block larger than memory / n is streamed, or refused with a
-    clear error where its codec cannot stream, instead of running the worker
-    out of memory."""
+    without changing how many regions the writer keeps in flight. Its memory
+    is set per file, once the file is open (:func:`set_read_memory`)."""
     import micro_reader
     if micro_reader.decode_threads() != int(n):
         micro_reader.set_decode_threads(int(n))
-    if memory:
-        micro_reader.set_memory_limit(memory)
+
+
+_read_memory_lock = threading.Lock()
+_read_memory = (0, 0)
+
+
+def set_read_memory(decode_mb: float, cache_mb: float) -> None:
+    """micro-reader's decoding limit and its caches' limit in this process
+    (``core/memory.reader_share``). Process-wide: scenes and files read at once
+    in this process get the largest any of them needs."""
+    global _read_memory
+    import micro_reader
+    with _read_memory_lock:
+        decode = max(_read_memory[0], int(decode_mb * 2**20))
+        cache = max(_read_memory[1], int(cache_mb * 2**20))
+        if (decode, cache) != _read_memory:
+            micro_reader.set_memory_limit(decode)
+            if hasattr(micro_reader, "set_cache_limit"):     # micro-reader with shared caches
+                micro_reader.set_cache_limit(cache)
+            _read_memory = (decode, cache)
 
 
 def close_all() -> None:
@@ -118,7 +136,8 @@ class MicroSource:
     where the image is (picklable, deep-copyable); each read borrows the open
     file from the process's bounded cache, reopening it if it was closed."""
 
-    def __init__(self, path: str, tiles: str, index: int, shape, dtype, level: int = 0):
+    def __init__(self, path: str, tiles: str, index: int, shape, dtype, level: int = 0,
+                 read_unit=None):
         self.path, self.tiles, self.index = path, tiles, int(index)
         #: resolution level of the image (0: full resolution)
         self.level = int(level)
@@ -127,6 +146,11 @@ class MicroSource:
         self.ndim = len(self.shape)
         # any rectangle can be read: a whole plane is advertised as one chunk
         self.chunks = (1, 1, 1, self.shape[3], self.shape[4])
+        #: what reading part of it really decodes, as micro-reader reports it for this
+        #: T C Z Y X view: None when any rectangle is read exactly (uncompressed),
+        #: else the smallest block the backend decodes at once (a compressed strip or
+        #: tile, an IMS chunk). dyna's writer plans its y/x tiles from it.
+        self.read_unit = None if read_unit is None else tuple(int(n) for n in read_unit)
 
     def __getitem__(self, key):
         with _using(self.path, self.tiles) as entry:
@@ -156,7 +180,7 @@ def micro_array(path: str, scene: int, tile: Optional[int], *, as_mosaic: bool =
     whole image (``set_tile`` is a no-op there).
     """
     import micro_reader
-    from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+    from dyna_zarr import from_array
     tiles = "stitched" if as_mosaic else "separate"
     try:
         with _using(path, tiles) as entry:
@@ -173,7 +197,7 @@ def micro_array(path: str, scene: int, tile: Optional[int], *, as_mosaic: bool =
 def _find(f, path: str, tiles: str, scene: int, tile: Optional[int], *, view: int,
           illumination: int, rotation: int, phase: int):
     """``micro_array``'s lookup in the open file *f*."""
-    from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+    from dyna_zarr import from_array
     scenes = sorted({k["scene"] for k in f.indices})
     if not 0 <= scene < len(scenes):
         return None, f"scene index {scene}: micro-reader has {len(scenes)} scenes"
@@ -197,8 +221,9 @@ def _find(f, path: str, tiles: str, scene: int, tile: Optional[int], *, view: in
         return None, f"micro-reader has {len(found)} images indexed {want}"
     image = found[0]
     view_ = image.as_axes(STANDARD, samples="channels")
-    source = MicroSource(path, tiles, f.images.index(image), view_.shape, view_.dtype)
-    return DynamicArray(source), ""
+    source = MicroSource(path, tiles, f.images.index(image), view_.shape, view_.dtype,
+                         read_unit=view_.read_unit)
+    return from_array(source), ""
 
 
 def _window(arr, t, c, z, ny, nx) -> np.ndarray:
@@ -423,11 +448,12 @@ class MicroReader:
     def get_resolution_level_dask_data(self, level: int):
         """Resolution *level* of the current selection, as T C Z Y X (as
         eubi-bridge's Imaris reader offers its levels)."""
-        from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+        from dyna_zarr import from_array
         image, index = self._image(with_index=True)
         view = image.resolutions[level].as_axes(STANDARD, samples="channels")
-        return DynamicArray(MicroSource(self._path, self._tiles, index,
-                                        view.shape, view.dtype, level=level))
+        return from_array(MicroSource(self._path, self._tiles, index,
+                                      view.shape, view.dtype, level=level,
+                                      read_unit=view.read_unit))
 
     # -- the image the selection means -----------------------------------------
 

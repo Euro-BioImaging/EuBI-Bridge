@@ -58,17 +58,24 @@ def _config_to_react(cfg: dict) -> dict:
 
     return {
         "cluster": {
-            "maxWorkers":           cluster.get("max_workers", 4),
+            "maxProcesses":           cluster.get("max_processes", 4),
             "queueSize":            cluster.get("queue_size", 4),
-            "maxConcurrency":       cluster.get("max_concurrency", 4),
+            "maxThreads":       cluster.get("max_threads", 4),
             "maxConcurrentScenes":  cluster.get("max_concurrent_scenes", 1),
-            "regionSizeMb":         float(cluster.get("region_size_mb", 256)),
-            "memoryPerWorker":      _parse_memory_gb(cluster.get("memory_per_worker", "4GB"), 4.0),
-            "useLocalDask":         cluster.get("on_local_cluster", False),
+            "regionSizeMb":         _auto_or_float(cluster.get("region_size_mb", "auto")),
+            "memoryBudget":         _auto_or_gb(cluster.get("memory_budget", "auto")),
+            "slurmWorkerMemory":    _parse_memory_gb(cluster.get("slurm_worker_memory", "3GB"), 3.0),
+            "decodeMemory":         _auto_or_gb(cluster.get("decode_memory", "auto")),
             "useSlurm":             cluster.get("on_slurm", False),
             "jvmMemory":            _parse_jvm_gb(cluster.get("jvm_memory", "2g"), 2.0),
-            "bfReadConcurrency":    cluster.get("bf_read_concurrency", 4),
-            "microReadConcurrency": cluster.get("micro_read_concurrency", 4),
+            "bioformatsThreads":    cluster.get("bioformats_threads", 4),
+            "decodeThreads": cluster.get("decode_threads", 4),
+            "maxConcurrentDownscaleLayers": cluster.get("max_concurrent_downscale_layers", 3),
+            "slurmTime":            cluster.get("slurm_time") or "24:00:00",
+            "slurmAccount":         cluster.get("slurm_account") or "",
+            "slurmPartition":       cluster.get("slurm_partition") or "",
+            "slurmWorkerTimeout":   cluster.get("slurm_worker_timeout") or 300,
+            "slurmSifPath":         cluster.get("slurm_sif_path") or "",
         },
         "reader": {
             "readAsMosaic":         readers.get("as_mosaic", False),
@@ -87,6 +94,7 @@ def _config_to_react(cfg: dict) -> dict:
             "sampleIndex":          str(readers.get("sample_index", 0)),
             "forceBioformats":      readers.get("force_bioformats", False),
             "useMicroReader":       readers.get("pixel_reader", "micro") == "micro",
+            "microCheckPixels":     readers.get("micro_check_pixels", False),
         },
         "conversion": {
             "zarrFormat":           conv.get("zarr_format", 2),
@@ -96,11 +104,13 @@ def _config_to_react(cfg: dict) -> dict:
             "verbose":              conv.get("verbose", False),
             "overwrite":            conv.get("overwrite", False),
             "squeezeDimensions":    conv.get("squeeze", True),
+            "writer":               conv.get("writer", "auto") or "auto",
+            "ioBackend":            conv.get("io_backend", "tensorstore") or "tensorstore",
+            "exportAcquisitionMetadata": conv.get("export_acquisition_metadata"),
             "saveOmeXml":           conv.get("save_omexml", True),
             # Stored under 'metadata' now; 'conversion' is the pre-move fallback.
             "overrideChannelNames": meta.get("override_channel_names",
                                              conv.get("override_channel_names", False)),
-            "skipDask":             conv.get("skip_dask", False),
             "autoChunk":            conv.get("auto_chunk", True),
             "targetChunkSizeMb":    conv.get("target_chunk_mb", 1),
             "chunkTime":            conv.get("time_chunk", 1),
@@ -215,20 +225,27 @@ def _react_to_config(data: dict) -> dict:
 
     return {
         "cluster": {
-            "on_local_cluster":                cluster_d.get("useLocalDask", False),
-            "on_slurm":                        cluster_d.get("useSlurm", False),
             "use_threading":                   False,
-            "max_workers":                     cluster_d.get("maxWorkers", 4),
+            "max_processes":                     cluster_d.get("maxProcesses", 4),
             "queue_size":                      cluster_d.get("queueSize", 4),
-            "region_size_mb":                  float(cluster_d.get("regionSizeMb", 256)),
-            "max_concurrency":                 cluster_d.get("maxConcurrency", 4),
+            "region_size_mb":                  _float_or_auto(cluster_d.get("regionSizeMb", 0)),
+            "max_threads":                 cluster_d.get("maxThreads", 4),
             "max_concurrent_scenes":           cluster_d.get("maxConcurrentScenes", 1),
-            "memory_per_worker":               _gb_to_memory_str(cluster_d.get("memoryPerWorker", 4)),
+            "on_slurm":                        cluster_d.get("useSlurm", False),
+            "memory_budget":                   _gb_or_auto(cluster_d.get("memoryBudget", 0)),
+            "slurm_worker_memory":             _gb_to_memory_str(cluster_d.get("slurmWorkerMemory", 3), "3GB"),
+            "decode_memory":                   _gb_or_auto(cluster_d.get("decodeMemory", 0)),
             "tensorstore_data_copy_concurrency": 4,
             "max_retries":                     10,
             "jvm_memory":                      _gb_to_jvm_str(cluster_d.get("jvmMemory", 2)),
-            "bf_read_concurrency":             cluster_d.get("bfReadConcurrency", 4),
-            "micro_read_concurrency":          cluster_d.get("microReadConcurrency", 4),
+            "bioformats_threads":             cluster_d.get("bioformatsThreads", 4),
+            "decode_threads":          cluster_d.get("decodeThreads", 4),
+            "max_concurrent_downscale_layers": cluster_d.get("maxConcurrentDownscaleLayers", 3),
+            "slurm_time":                      cluster_d.get("slurmTime") or "24:00:00",
+            "slurm_account":                   cluster_d.get("slurmAccount") or None,
+            "slurm_partition":                 cluster_d.get("slurmPartition") or None,
+            "slurm_worker_timeout":            cluster_d.get("slurmWorkerTimeout") or 300,
+            "slurm_sif_path":                  cluster_d.get("slurmSifPath") or None,
         },
         "readers": {
             "as_mosaic":            reader_d.get("readAsMosaic", False),
@@ -243,6 +260,7 @@ def _react_to_config(data: dict) -> dict:
             "sample_index":         _parse_int(reader_d.get("sampleIndex", "0")),
             "force_bioformats":     reader_d.get("forceBioformats", False),
             "pixel_reader":         "micro" if reader_d.get("useMicroReader", True) else "standard",
+            "micro_check_pixels":   bool(reader_d.get("microCheckPixels", False)),
         },
         "conversion": {
             "zarr_format":           conv_d.get("zarrFormat", 2),
@@ -264,10 +282,12 @@ def _react_to_config(data: dict) -> dict:
             "overwrite":             conv_d.get("overwrite", False),
             "save_omexml":           conv_d.get("saveOmeXml", True),
             "squeeze":               conv_d.get("squeezeDimensions", True),
-            "skip_dask":             conv_d.get("skipDask", False),
             "verbose":               conv_d.get("verbose", False),
             "dimension_order":       "tczyx",
             "dtype":                 conv_d.get("dataType", "auto") or "auto",
+            "writer":                conv_d.get("writer", "auto") or "auto",
+            "io_backend":            conv_d.get("ioBackend", "tensorstore") or "tensorstore",
+            "export_acquisition_metadata": conv_d.get("exportAcquisitionMetadata"),
             "time_range":            None,
             "channel_range":         None,
             "z_range":               None,
@@ -373,8 +393,41 @@ def _parse_jvm_gb(value, default: float = 2.0) -> float:
         return default
 
 
+def _auto_or_gb(value) -> float:
+    """A config memory size ("auto" or e.g. "16GB") as the GUI's GB (0 = auto)."""
+    if value is None or str(value).strip().lower() == "auto":
+        return 0.0
+    return _parse_memory_gb(value, 0.0)
+
+
+def _auto_or_float(value) -> float:
+    """A config number or "auto" as the GUI's value (0 = auto)."""
+    if value is None or str(value).strip().lower() == "auto":
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _gb_or_auto(val) -> str:
+    """The GUI's GB (0 = auto) as a config memory size."""
+    try:
+        return "auto" if float(val or 0) <= 0 else _gb_to_memory_str(val)
+    except (TypeError, ValueError):
+        return "auto"
+
+
+def _float_or_auto(val):
+    """The GUI's value (0 = auto) as a config number or "auto"."""
+    try:
+        return "auto" if float(val or 0) <= 0 else float(val)
+    except (TypeError, ValueError):
+        return "auto"
+
+
 def _gb_to_memory_str(val, default: str = "4GB") -> str:
-    """Float GB → '4GB' or '4.5GB' string for Dask memory_per_worker."""
+    """Float GB → '4GB' or '4.5GB' string (memory_budget, slurm_worker_memory)."""
     try:
         gb = float(val)
         return f"{int(gb)}GB" if gb == int(gb) else f"{gb:.1f}GB"
@@ -422,6 +475,23 @@ def action_get(config_path: str | None) -> None:
     print(json.dumps(result))
 
 
+#: config section -> the page's section name
+_GUI_SECTION = {"cluster": "cluster", "readers": "reader", "conversion": "conversion"}
+#: (config section, page key, config key): kept from the file when a payload omits them
+_KEPT_WHEN_ABSENT = (
+    ("conversion", "writer", "writer"),
+    ("conversion", "ioBackend", "io_backend"),
+    ("conversion", "exportAcquisitionMetadata", "export_acquisition_metadata"),
+    ("readers", "microCheckPixels", "micro_check_pixels"),
+    ("cluster", "maxConcurrentDownscaleLayers", "max_concurrent_downscale_layers"),
+    ("cluster", "slurmTime", "slurm_time"),
+    ("cluster", "slurmAccount", "slurm_account"),
+    ("cluster", "slurmPartition", "slurm_partition"),
+    ("cluster", "slurmWorkerTimeout", "slurm_worker_timeout"),
+    ("cluster", "slurmSifPath", "slurm_sif_path"),
+)
+
+
 def action_save(config_path: str, react_json_str: str) -> None:
     from eubi_bridge.ebridge import EuBIBridge
 
@@ -435,6 +505,13 @@ def action_save(config_path: str, react_json_str: str) -> None:
     if "channelLabels" not in react_data.get("metadata", {}):
         new_cfg["metadata"]["channel_labels"] = (
             bridge.config.get("metadata", {}).get("channel_labels", ""))
+    # Likewise every setting a payload leaves out (a page that predates it): the file's
+    # value is kept rather than reset to the default.
+    stored = bridge.config
+    for section, gui_key, key in _KEPT_WHEN_ABSENT:
+        if gui_key not in react_data.get(_GUI_SECTION[section], {}):
+            if key in stored.get(section, {}):
+                new_cfg.setdefault(section, {})[key] = stored[section][key]
     bridge.config = new_cfg  # setter writes to JSON immediately
 
     result = _config_to_react(bridge.config)

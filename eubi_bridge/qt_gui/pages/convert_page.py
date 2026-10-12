@@ -68,13 +68,14 @@ from eubi_bridge.qt_gui.widgets.log_widget import LogWidget
 from eubi_bridge.qt_gui.widgets.sidebar_browser import SidebarBrowser
 from eubi_bridge.qt_gui.workers.conversion_worker import ConversionWorker
 
-# Pre-import dask_jobqueue in the main thread so its module-level
+# Pre-import dask_jobqueue (SLURM) in the main thread so its module-level
 # signal.signal() call (in dask_jobqueue/runner.py) never runs inside a
 # QThread, which would raise "signal only works in main thread".
 try:
     import dask_jobqueue as _dask_jobqueue  # noqa: F401
 except Exception:
     pass
+
 
 
 # ── Small helpers ─────────────────────────────────────────────────────────────
@@ -131,27 +132,40 @@ def _cluster_summary(c: dict) -> str:
                    f"account {c['slurmAccount']}" if c.get("slurmAccount") else "",
                    f"time {c.get('slurmTime') or '24:00:00'}"]
         where = "SLURM (" + ", ".join(d for d in details if d) + ")"
-    elif c.get("useLocalDask"):
-        where = "a local Dask cluster"
     else:
         where = "this machine"
 
-    work = [f"{c.get('maxWorkers', 4)} workers",
+    work = [f"{c.get('maxProcesses', 4)} processes",
             f"queue {c.get('queueSize', 4)}",
-            f"concurrency {c.get('maxConcurrency', 4)}",
+            f"{c.get('maxThreads', 4)} threads per process",
             f"{c.get('maxConcurrentScenes', 1)} scene(s) at a time",
             f"{c.get('maxConcurrentDownscaleLayers', 3)} downscale layers",
-            f"{float(c.get('regionSizeMb', 256.0)):g} MB regions"]
-    if c.get("useSlurm") or c.get("useLocalDask"):
-        work.append(f"{float(c.get('memoryPerWorker', 4.0)):g} GB per worker")
+            (f"{float(c.get('regionSizeMb') or 0):g} MB regions"
+             if float(c.get('regionSizeMb') or 0) > 0 else "regions auto"),
+            (f"memory budget {float(c.get('memoryBudget') or 0):g} GB"
+             if float(c.get('memoryBudget') or 0) > 0 else "memory budget auto")]
 
-    bioformats = (f"{c.get('bfReadConcurrency', 4)} concurrent reads · "
+    from eubi_bridge.utils.capabilities import has_bioformats
+    if not has_bioformats():            # eubi-bridge-lite: one reader, no Java
+        return (f"Runs on {where}\n"
+                + " · ".join(work) + "\n"
+                + f"Reading: {c.get('decodeThreads', 4)} decode threads per process")
+    bioformats = (f"{c.get('bioformatsThreads', 4)} threads · "
                   f"{float(c.get('jvmMemory', 2.0)):g} GB JVM")
-    micro = f"\nmicro-reader: {c.get('microReadConcurrency', 4)} read threads per worker"
+    micro = f"\nmicro-reader: {c.get('decodeThreads', 4)} decode threads per process"
     return (f"Runs on {where}\n"
             + " · ".join(work) + "\n"
             + f"Bio-Formats: {bioformats}" + micro)
 
+
+
+def _zarrista_available() -> bool:
+    """dyna-zarr's optional zarrista backend is installed (offered as a byte backend)."""
+    try:
+        from dyna_zarr.backends.zarrista_backend import ZARRISTA_AVAILABLE
+        return bool(ZARRISTA_AVAILABLE)
+    except Exception:                                       # noqa: BLE001
+        return False
 
 class ConvertPage(QWidget):
     """Full conversion page."""
@@ -341,31 +355,34 @@ class ConvertPage(QWidget):
     def _build_cluster_tab(self):
         self._cluster_scroll, lay = self._scrolled_tab("Cluster")
 
-        _, self._max_workers = _labeled_spin("Max Workers:", 1, 256, 4)
-        self._max_workers.setToolTip(
-            "Maximum number of parallel worker processes used for conversion.\n"
+        _, self._max_processes = _labeled_spin("Max Processes:", 1, 256, 4)
+        self._max_processes.setToolTip(
+            "Images converted at once, each in its own worker process.\n"
             "Higher values speed up batch jobs but consume more CPU and RAM."
         )
-        lay.addLayout(_row(QLabel("Max Workers:"), self._max_workers))
+        lay.addLayout(_row(QLabel("Max Processes:"), self._max_processes))
 
         _, self._queue_size = _labeled_spin("Queue Size:", 1, 500, 4)
         self._queue_size.setToolTip(
-            "Maximum number of conversion jobs that can be queued at once.\n"
-            "Jobs beyond this limit are held until a worker slot opens."
+            "eubi-bridge's own writer (Writer: eubi) only: how many read regions may\n"
+            "wait for writing in each conversion. The ozp writer has no queue: each\n"
+            "thread reads and writes its own region."
         )
         lay.addLayout(_row(QLabel("Queue Size:"), self._queue_size))
 
-        _, self._max_concurrency = _labeled_spin("Max Concurrency:", 1, 128, 4)
-        self._max_concurrency.setToolTip(
-            "Maximum number of chunk-write operations allowed to run concurrently\n"
-            "inside a single worker. Reduce if you hit memory or I/O bottlenecks."
+        _, self._max_threads = _labeled_spin("Max Threads:", 1, 128, 4)
+        self._max_threads.setToolTip(
+            "Threads per conversion, each reading and writing one region at a\n"
+            "time. Scenes converted at once share them. Reduce if you hit memory\n"
+            "or I/O bottlenecks."
         )
-        lay.addLayout(_row(QLabel("Max Concurrency:"), self._max_concurrency))
+        lay.addLayout(_row(QLabel("Max Threads:"), self._max_threads))
 
         _, self._max_concurrent_downscale_layers = _labeled_spin("Max Concurrent Downscale Layers:", 1, 16, 3)
         self._max_concurrent_downscale_layers.setToolTip(
-            "How many pyramid levels to downscale simultaneously. "
-            "Reduce for large 3D datasets to avoid OOM errors."
+            "eubi-bridge's own writer (Writer: eubi) only: how many pyramid levels to\n"
+            "downscale simultaneously. Reduce for large 3D datasets to avoid OOM errors.\n"
+            "The ozp writer writes all levels from one read, within the memory budget."
         )
         lay.addLayout(_row(QLabel("Max Concurrent Downscale Layers:"), self._max_concurrent_downscale_layers))
 
@@ -376,38 +393,31 @@ class ConvertPage(QWidget):
         )
         lay.addLayout(_row(QLabel("Max Concurrent Scenes:"), self._max_concurrent_scenes))
 
+        self._memory_budget = QDoubleSpinBox()
+        self._memory_budget.setRange(0.0, 4096.0)
+        self._memory_budget.setSpecialValueText("auto")       # 0 = auto
+        self._memory_budget.setValue(0.0)
+        self._memory_budget.setSingleStep(1.0)
+        self._memory_budget.setDecimals(1)
+        self._memory_budget.setToolTip(
+            "The memory the whole run may use on this machine, in GB.\n"
+            "auto: half the RAM that is free when the run starts.\n"
+            "It is shared out between the conversions running at once, and in each\n"
+            "between reading and the scenes converted at once."
+        )
+        lay.addLayout(_form_row("Memory Budget (GB):", self._memory_budget))
+
         self._region_size_mb = QDoubleSpinBox()
-        self._region_size_mb.setRange(1.0, 65536.0)
-        self._region_size_mb.setValue(256.0)
+        self._region_size_mb.setRange(0.0, 65536.0)
+        self._region_size_mb.setSpecialValueText("auto")      # 0 = auto
+        self._region_size_mb.setValue(0.0)
         self._region_size_mb.setSingleStep(32.0)
         self._region_size_mb.setDecimals(1)
         self._region_size_mb.setToolTip(
-            "Size (in MB) of each read region when streaming pixel data from disk.\n"
-            "Larger values can improve throughput at the cost of peak memory usage."
+            "Size (in MB) of each read region.\n"
+            "auto: worked out from the memory budget (8 to 256 MB)."
         )
         lay.addLayout(_form_row("Region Size (MB):", self._region_size_mb))
-
-        self._memory_per_worker = QDoubleSpinBox()
-        self._memory_per_worker.setRange(0.5, 1024.0)
-        self._memory_per_worker.setValue(4.0)
-        self._memory_per_worker.setSingleStep(1.0)
-        self._memory_per_worker.setDecimals(1)
-        self._memory_per_worker.setToolTip(
-            "Memory (GB) requested per worker when using a Local Dask cluster or SLURM.\n"
-            "Has no effect when running without a distributed cluster."
-        )
-        # Memory/Worker only applies to the LocalCluster / SLURM backends, so the
-        # row is wrapped in a container and shown only when one of them is active.
-        self._memory_row = QWidget()
-        self._memory_row.setLayout(_form_row("Memory/Worker (GB):", self._memory_per_worker))
-        lay.addWidget(self._memory_row)
-
-        self._use_local_dask = QCheckBox("Use Local Dask")
-        self._use_local_dask.setToolTip(
-            "Spin up a Dask LocalCluster on this machine to parallelize conversion\n"
-            "across multiple CPU cores. Useful for large files on a workstation."
-        )
-        lay.addWidget(self._use_local_dask)
 
         self._use_slurm = QCheckBox("Use SLURM")
         self._use_slurm.setToolTip(
@@ -415,13 +425,6 @@ class ConvertPage(QWidget):
             "Configure partition, account, and time limit in the fields below."
         )
         lay.addWidget(self._use_slurm)
-
-        def _update_memory_visibility(*_):
-            self._memory_row.setVisible(
-                self._use_local_dask.isChecked() or self._use_slurm.isChecked())
-        self._use_local_dask.toggled.connect(_update_memory_visibility)
-        self._use_slurm.toggled.connect(_update_memory_visibility)
-        _update_memory_visibility()
 
         # SLURM-specific fields, wrapped in containers so setVisible hides label too
         def _slurm_row(label: str, widget: QWidget) -> QWidget:
@@ -470,8 +473,17 @@ class ConvertPage(QWidget):
         self._slurm_worker_timeout.setToolTip("Seconds to wait for SLURM workers to start.")
         _slurm_row_timeout = _slurm_row("Worker Start Timeout:", self._slurm_worker_timeout)
 
+        self._slurm_worker_memory = QDoubleSpinBox()
+        self._slurm_worker_memory.setRange(0.5, 4096.0)
+        self._slurm_worker_memory.setValue(3.0)
+        self._slurm_worker_memory.setSingleStep(1.0)
+        self._slurm_worker_memory.setDecimals(1)
+        self._slurm_worker_memory.setToolTip(
+            "Memory of each SLURM worker job, in GB: its conversions share it.")
+        _slurm_row_memory = _slurm_row("Worker Memory (GB):", self._slurm_worker_memory)
+
         self._slurm_rows = (_slurm_row_partition, _slurm_row_account, _slurm_row_time,
-                            _slurm_row_sif, _slurm_row_timeout)
+                            _slurm_row_sif, _slurm_row_timeout, _slurm_row_memory)
 
         def _toggle_slurm(checked: bool):
             for w in self._slurm_rows:
@@ -479,9 +491,10 @@ class ConvertPage(QWidget):
         self._use_slurm.toggled.connect(_toggle_slurm)
         _toggle_slurm(False)
 
+
         # ── Bio-Formats group ─────────────────────────────────────────────────
         bf_group = QGroupBox("Bio-Formats Settings")
-        self._bf_group = bf_group                   # disabled in eubi-bridge-lite
+        self._bf_group = bf_group                   # hidden in eubi-bridge-lite
         bf_lay = QVBoxLayout(bf_group)
         bf_lay.setSpacing(6)
 
@@ -495,12 +508,12 @@ class ConvertPage(QWidget):
         note.setStyleSheet("color: gray; font-style: italic;")
         bf_lay.addWidget(note)
 
-        _, self._bf_read_concurrency = _labeled_spin("BF Read Concurrency:", 1, 64, 4)
-        self._bf_read_concurrency.setToolTip(
+        _, self._bioformats_threads = _labeled_spin("Bio-Formats Threads:", 1, 64, 4)
+        self._bioformats_threads.setToolTip(
             "Number of tile-read calls that Bio-Formats issues concurrently.\n"
             "Increase for fast NVMe storage; keep low for network file systems."
         )
-        bf_lay.addLayout(_row(QLabel("BF Read Concurrency:"), self._bf_read_concurrency))
+        bf_lay.addLayout(_row(QLabel("Bio-Formats Threads:"), self._bioformats_threads))
 
         self._jvm_memory = QDoubleSpinBox()
         self._jvm_memory.setRange(0.5, 512.0)
@@ -517,6 +530,7 @@ class ConvertPage(QWidget):
 
         # ── micro-reader group ────────────────────────────────────────────────
         micro_group = QGroupBox("micro-reader Settings")
+        self._micro_group = micro_group             # "Reading" in eubi-bridge-lite
         micro_lay = QVBoxLayout(micro_group)
         micro_lay.setSpacing(6)
 
@@ -526,16 +540,39 @@ class ConvertPage(QWidget):
         )
         micro_note.setWordWrap(True)
         micro_note.setStyleSheet("color: gray; font-style: italic;")
+        self._micro_note = micro_note               # hidden in eubi-bridge-lite
         micro_lay.addWidget(micro_note)
 
-        _, self._micro_read_concurrency = _labeled_spin("Micro Read Concurrency:", 1, 64, 4)
-        self._micro_read_concurrency.setToolTip(
+        _, self._decode_threads = _labeled_spin("Decode Threads:", 1, 64, 4)
+        self._decode_threads.setToolTip(
             "Threads micro-reader reads and decodes with in each worker process,\n"
             "shared by all region reads. It caps the CPU spent reading; how many\n"
             "regions are in flight is still set by the cluster settings above."
         )
-        micro_lay.addLayout(_row(QLabel("Micro Read Concurrency:"), self._micro_read_concurrency))
-        self._micro_read_concurrency.setEnabled(False)   # until ticked in the Reader tab
+        self._decode_threads_label = QLabel("Decode Threads:")
+        micro_lay.addLayout(_row(self._decode_threads_label, self._decode_threads))
+        self._decode_threads.setEnabled(False)   # until ticked in the Reader tab
+
+        self._decode_memory = QDoubleSpinBox()
+        self._decode_memory.setRange(0.0, 1024.0)
+        self._decode_memory.setSpecialValueText("auto")       # 0 = auto
+        self._decode_memory.setValue(0.0)
+        self._decode_memory.setSingleStep(0.5)
+        self._decode_memory.setDecimals(2)
+        self._decode_memory.setToolTip(
+            "Memory for decoding, per worker process, in GB.\n"
+            "auto: what the file's compressed blocks need (at least 64 MB, normally\n"
+            "at most a quarter of the process's share of the memory budget)."
+        )
+        micro_lay.addLayout(_form_row("Decode Memory (GB):", self._decode_memory))
+        self._decode_memory.setEnabled(False)    # until ticked in the Reader tab
+
+        self._micro_check_pixels = QCheckBox("Check pixels against the standard reader")
+        self._micro_check_pixels.setToolTip(
+            "Also read every file with the format's usual reader and compare its pixels\n"
+            "with micro-reader's (slower; for checking a new format or file).")
+        micro_lay.addWidget(self._micro_check_pixels)
+        self._micro_check_pixels.setEnabled(False)  # until ticked in the Reader tab
 
         lay.addWidget(micro_group)
 
@@ -687,19 +724,22 @@ class ConvertPage(QWidget):
             other_lay.addLayout(_form_row(label, edit))
         lay.addWidget(other_group)
 
-        # ── Separator ─────────────────────────────────────────────────────────
+        # ── Reader Backend ────────────────────────────────────────────────────
+        # One widget: eubi-bridge-lite has one reader and hides it whole.
+        self._reader_backend = QWidget()
+        backend_lay = QVBoxLayout(self._reader_backend)
+        backend_lay.setContentsMargins(0, 0, 0, 0)
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setFrameShadow(QFrame.Shadow.Sunken)
-        lay.addWidget(sep)
+        backend_lay.addWidget(sep)
 
-        # ── Reader Backend ────────────────────────────────────────────────────
         self._force_bioformats = QCheckBox("Force Bio-Formats (bfio tiled reader)")
         self._force_bioformats.setToolTip(
             "Force the bfio tiled reader even for natively-supported formats (CZI, ND2, LIF…).\n"
             "Useful when the native reader gives incorrect results."
         )
-        lay.addWidget(self._force_bioformats)
+        backend_lay.addWidget(self._force_bioformats)
 
         self._use_micro_reader = QCheckBox("Read pixels with micro-reader")
         self._use_micro_reader.setToolTip(
@@ -708,11 +748,16 @@ class ConvertPage(QWidget):
             "warning in the log. Its read concurrency is in the Cluster tab."
         )
         self._use_micro_reader.setChecked(True)
-        self._use_micro_reader.toggled.connect(self._micro_read_concurrency.setEnabled)
+        self._use_micro_reader.toggled.connect(self._decode_threads.setEnabled)
+        self._use_micro_reader.toggled.connect(self._decode_memory.setEnabled)
+        self._use_micro_reader.toggled.connect(self._micro_check_pixels.setEnabled)
         # ticked by default: the concurrency is live from the start, not only
         # after the box is toggled (setChecked above ran before this connection)
-        self._micro_read_concurrency.setEnabled(self._use_micro_reader.isChecked())
-        lay.addWidget(self._use_micro_reader)
+        self._decode_threads.setEnabled(self._use_micro_reader.isChecked())
+        self._decode_memory.setEnabled(self._use_micro_reader.isChecked())
+        self._micro_check_pixels.setEnabled(self._use_micro_reader.isChecked())
+        backend_lay.addWidget(self._use_micro_reader)
+        lay.addWidget(self._reader_backend)
 
         lay.addStretch()
 
@@ -747,17 +792,12 @@ class ConvertPage(QWidget):
                 "Write a copy of the source OME-XML metadata as a sidecar\n"
                 ".xml file alongside the OME-Zarr output."
             ),
-            "_skip_dask": (
-                "Read and write data synchronously without Dask.\n"
-                "Useful for small files or when Dask overhead outweighs its benefit."
-            ),
         }
         for attr, label in [
             ("_verbose",    "Verbose"),
             ("_overwrite",  "Overwrite"),
             ("_squeeze",    "Squeeze Dimensions"),
             ("_save_omexml", "Save OME-XML"),
-            ("_skip_dask",  "Skip Dask"),
         ]:
             cb = QCheckBox(label)
             cb.setToolTip(_cb_tooltips[attr])
@@ -765,6 +805,50 @@ class ConvertPage(QWidget):
             lay.addWidget(cb)
         self._squeeze.setChecked(True)
         self._save_omexml.setChecked(True)
+
+        self._export_acquisition = QComboBox()
+        for label, value in (("auto", None), ("on", True), ("off", False)):
+            self._export_acquisition.addItem(label, value)
+        self._export_acquisition.setToolTip(
+            "Write acquisition details OME-Zarr has no field for (view and illumination\n"
+            "indices, objective NA, emission per channel) into the output's\n"
+            "'eubi_bridge' attributes.\n"
+            "auto: on when a conversion splits one acquisition into several outputs\n"
+            "(views, illuminations), so the pieces stay related.")
+        lay.addLayout(_form_row("Acquisition Metadata:", self._export_acquisition))
+
+        # Writer: which engine writes the OME-Zarr, and with which byte backend
+        writer_group = QGroupBox("Writer")
+        writer_lay = QVBoxLayout(writer_group)
+        self._writer = QComboBox()
+        for w in ("auto", "ozp", "eubi"):
+            self._writer.addItem(w)
+        self._writer.setToolTip(
+            "Which engine writes the OME-Zarr.\n"
+            "ozp: ome_zarr_pyramid on dyna-zarr - all resolution levels from one read\n"
+            "of the source, within the memory budget.\n"
+            "eubi: eubi-bridge's own writer.\n"
+            "auto (recommended): ozp, and eubi only where ozp cannot write the output\n"
+            "yet. Both give the same pixels.")
+        writer_lay.addLayout(_form_row("Writer:", self._writer))
+        self._io_backend = QComboBox()
+        self._io_backend.addItem("tensorstore")
+        if _zarrista_available():
+            self._io_backend.addItem("zarrista")
+        self._io_backend.setToolTip(
+            "How the ozp writer writes the bytes: TensorStore (default) or zarrista\n"
+            "(Rust, via zarrs). Both write big shards chunk by chunk within the\n"
+            "memory budget. eubi-bridge's own writer always uses TensorStore.")
+        self._io_backend_row = _form_row("Byte Backend:", self._io_backend)
+        writer_lay.addLayout(self._io_backend_row)
+        self._writer.currentTextChanged.connect(self._on_writer_changed)
+        lay.addWidget(writer_group)
+        # one choice only (zarrista not installed): nothing to choose, so not shown
+        self._io_backend.setVisible(self._io_backend.count() > 1)
+        for i in range(self._io_backend_row.count()):
+            w = self._io_backend_row.itemAt(i).widget()
+            if w is not None:
+                w.setVisible(self._io_backend.count() > 1)
 
         # Compression
         comp_group = QGroupBox("Compression")
@@ -1186,7 +1270,11 @@ class ConvertPage(QWidget):
             "stage position. 'bfio' uses Bio-Formats via a Java bridge; 'bioio' is the\n"
             "pure-Python successor."
         )
-        lay.addLayout(_form_row("Metadata Reader:", self._metadata_reader))
+        self._metadata_reader_row = QWidget()      # hidden in eubi-bridge-lite
+        reader_row = _form_row("Metadata Reader:", self._metadata_reader)
+        reader_row.setContentsMargins(0, 0, 0, 0)
+        self._metadata_reader_row.setLayout(reader_row)
+        lay.addWidget(self._metadata_reader_row)
 
         self._channel_intensity = QComboBox()
         self._channel_intensity.addItems(["from_datatype", "from_array"])
@@ -1549,15 +1637,15 @@ class ConvertPage(QWidget):
             lambda: self._tabs.setCurrentWidget(self._cluster_scroll))
         cluster_lay.addWidget(self._edit_cluster_btn, 0, Qt.AlignmentFlag.AlignTop)
         lay.addWidget(cluster_box)
-        for spin in (self._max_workers, self._queue_size, self._max_concurrency,
+        for spin in (self._max_processes, self._queue_size, self._max_threads,
                      self._max_concurrent_downscale_layers,
                      self._max_concurrent_scenes, self._region_size_mb,
-                     self._memory_per_worker, self._slurm_worker_timeout,
-                     self._bf_read_concurrency, self._jvm_memory,
-                     self._micro_read_concurrency):
+                     self._memory_budget, self._slurm_worker_timeout,
+                     self._slurm_worker_memory, self._decode_memory,
+                     self._bioformats_threads, self._jvm_memory,
+                     self._decode_threads):
             spin.valueChanged.connect(self._update_batch_cluster_summary)
-        for box in (self._use_local_dask, self._use_slurm):
-            box.toggled.connect(self._update_batch_cluster_summary)
+        self._use_slurm.toggled.connect(self._update_batch_cluster_summary)
         for edit in (self._slurm_partition, self._slurm_account,
                      self._slurm_time, self._slurm_sif_path):
             edit.textChanged.connect(self._update_batch_cluster_summary)
@@ -2250,23 +2338,24 @@ class ConvertPage(QWidget):
     def _load_config_to_ui(self, cfg: dict):
         """Populate all UI controls from a camelCase config dict."""
         c = cfg.get("cluster", {})
-        self._max_workers.setValue(c.get("maxWorkers", 4))
+        self._max_processes.setValue(c.get("maxProcesses", 4))
         self._queue_size.setValue(c.get("queueSize", 4))
-        self._max_concurrency.setValue(c.get("maxConcurrency", 4))
+        self._max_threads.setValue(c.get("maxThreads", 4))
         self._max_concurrent_downscale_layers.setValue(c.get("maxConcurrentDownscaleLayers", 3))
         self._max_concurrent_scenes.setValue(c.get("maxConcurrentScenes", 1))
-        self._region_size_mb.setValue(float(c.get("regionSizeMb", 256.0)))
-        self._memory_per_worker.setValue(float(c.get("memoryPerWorker", 4.0)))
-        self._use_local_dask.setChecked(c.get("useLocalDask", False))
+        self._region_size_mb.setValue(float(c.get("regionSizeMb") or 0.0))
+        self._memory_budget.setValue(float(c.get("memoryBudget") or 0.0))
+        self._slurm_worker_memory.setValue(float(c.get("slurmWorkerMemory") or 3.0))
+        self._decode_memory.setValue(float(c.get("decodeMemory") or 0.0))
         self._use_slurm.setChecked(c.get("useSlurm", False))
         self._slurm_partition.setText(c.get("slurmPartition", ""))
         self._slurm_account.setText(c.get("slurmAccount", ""))
         self._slurm_time.setText(c.get("slurmTime", "24:00:00"))
         self._slurm_sif_path.setText(c.get("slurmSifPath", ""))
         self._slurm_worker_timeout.setValue(int(c.get("slurmWorkerTimeout", 300) or 300))
-        self._bf_read_concurrency.setValue(c.get("bfReadConcurrency", 4))
+        self._bioformats_threads.setValue(c.get("bioformatsThreads", 4))
         self._jvm_memory.setValue(float(c.get("jvmMemory", 2.0)))
-        self._micro_read_concurrency.setValue(c.get("microReadConcurrency", 4))
+        self._decode_threads.setValue(c.get("decodeThreads", 4))
 
         r = cfg.get("reader", {})
         self._read_all_scenes.setChecked(r.get("readAllScenes", True))
@@ -2285,6 +2374,7 @@ class ConvertPage(QWidget):
         self._sample_index.setText(str(r.get("sampleIndex", "0")))
         self._force_bioformats.setChecked(r.get("forceBioformats", False))
         self._use_micro_reader.setChecked(r.get("useMicroReader", True))
+        self._micro_check_pixels.setChecked(r.get("microCheckPixels", False))
 
         conv = cfg.get("conversion", {})
         # Prefer the OME-Zarr version; fall back to the (deprecated) zarrFormat
@@ -2303,9 +2393,14 @@ class ConvertPage(QWidget):
         self._verbose.setChecked(conv.get("verbose", False))
         self._overwrite.setChecked(conv.get("overwrite", False))
         self._squeeze.setChecked(conv.get("squeezeDimensions", True))
+        idx = self._writer.findText(conv.get("writer", "auto") or "auto")
+        self._writer.setCurrentIndex(max(0, idx))
+        idx = self._io_backend.findText(conv.get("ioBackend", "tensorstore") or "tensorstore")
+        self._io_backend.setCurrentIndex(max(0, idx))   # zarrista not installed: tensorstore
+        idx = self._export_acquisition.findData(conv.get("exportAcquisitionMetadata"))
+        self._export_acquisition.setCurrentIndex(max(0, idx))
         self._save_omexml.setChecked(conv.get("saveOmeXml", True))
         self._override_channel_names.setChecked(conv.get("overrideChannelNames", False))
-        self._skip_dask.setChecked(conv.get("skipDask", False))
         self._auto_chunk.setChecked(conv.get("autoChunk", True))
         self._target_chunk_mb.setValue(float(conv.get("targetChunkSizeMb", 1.0)))
         for dim, key in [("t", "chunkTime"), ("c", "chunkChannel"), ("z", "chunkZ"), ("y", "chunkY"), ("x", "chunkX")]:
@@ -2384,59 +2479,69 @@ class ConvertPage(QWidget):
         # a config may ask for what this installation cannot do
         self._apply_capabilities()
 
+    def _on_writer_changed(self, writer: str) -> None:
+        """eubi-bridge's own writer writes with TensorStore only, and only it uses the
+        queue and concurrent-downscale-layers settings (Cluster tab)."""
+        if writer == "eubi":
+            self._io_backend.setCurrentText("tensorstore")
+        self._io_backend.setEnabled(writer != "eubi")
+        for spin in (getattr(self, "_queue_size", None),
+                     getattr(self, "_max_concurrent_downscale_layers", None)):
+            if spin is not None:
+                spin.setEnabled(writer == "eubi")
+
     def _apply_capabilities(self) -> None:
-        """Disable what this installation cannot do, saying why.
+        """Fit the page to what this installation can do.
 
-        eubi-bridge-lite has neither Bio-Formats (the bfio / bioio metadata
-        readers, the standard pixel readers, forced Bio-Formats and its
-        settings) nor a dask cluster (local dask, SLURM).  Called once the
-        tabs are built, and again after a config is loaded."""
-        from eubi_bridge.utils.capabilities import has_bioformats, has_cluster
-        why = "Needs the full eubi-bridge: pip install eubi-bridge"
-
-        def explain(widget):
-            tip = widget.toolTip()
-            if not tip.startswith(why):
-                widget.setToolTip(why + ("\n\n" + tip if tip else ""))
+        eubi-bridge-lite has one reader and no Bio-Formats: the reader and
+        metadata-reader choices, forced Bio-Formats and its settings are
+        hidden, not shown disabled -- there is nothing to choose, and nothing
+        about Bio-Formats or micro-reader is the user's concern (Bugra,
+        2026-10-05).  Without dask-jobqueue (lite), SLURM is hidden the same
+        way.  Called once the tabs are built, and again after a config is
+        loaded (which may ask for Bio-Formats or SLURM)."""
+        from eubi_bridge.utils.capabilities import has_bioformats, has_slurm
 
         if not has_bioformats():
-            model = self._metadata_reader.model()
-            for i in range(self._metadata_reader.count()):
-                if self._metadata_reader.itemText(i) != "micro":
-                    model.item(i).setEnabled(False)
-                    model.item(i).setToolTip(why)
             self._metadata_reader.setCurrentText("micro")
             self._use_micro_reader.setChecked(True)
             self._force_bioformats.setChecked(False)
-            for widget in (self._use_micro_reader, self._force_bioformats, self._bf_group):
-                widget.setEnabled(False)
-                explain(widget)
-        if not has_cluster():
-            for box in (self._use_local_dask, self._use_slurm):
-                box.setChecked(False)
-                box.setEnabled(False)
-                explain(box)
+            self._micro_check_pixels.setChecked(False)
+            for widget in (self._reader_backend, self._metadata_reader_row,
+                           self._bf_group, self._micro_note, self._micro_check_pixels):
+                widget.setVisible(False)
+            self._micro_group.setTitle("Reading")
+            self._decode_threads_label.setText("Read Threads:")
+            self._decode_threads.setToolTip(
+                "Threads each worker reads and decodes with, shared by all region\n"
+                "reads. It caps the CPU spent reading; how many regions are in flight\n"
+                "is still set by the cluster settings above.")
+        if not has_slurm():
+            self._use_slurm.setChecked(False)        # also hides the SLURM rows
+            self._use_slurm.setVisible(False)
+        self._on_writer_changed(self._writer.currentText())
 
     def _ui_cluster_config(self) -> dict:
         """The Cluster tab's controls as a camelCase config section."""
         return {
-            "maxWorkers":          self._max_workers.value(),
+            "maxProcesses":          self._max_processes.value(),
             "queueSize":           self._queue_size.value(),
-            "maxConcurrency":      self._max_concurrency.value(),
+            "maxThreads":      self._max_threads.value(),
             "maxConcurrentDownscaleLayers": self._max_concurrent_downscale_layers.value(),
             "maxConcurrentScenes": self._max_concurrent_scenes.value(),
             "regionSizeMb":        self._region_size_mb.value(),
-            "memoryPerWorker":     self._memory_per_worker.value(),
-            "useLocalDask":        self._use_local_dask.isChecked(),
+            "memoryBudget":        self._memory_budget.value(),
+            "slurmWorkerMemory":   self._slurm_worker_memory.value(),
+            "decodeMemory":        self._decode_memory.value(),
             "useSlurm":            self._use_slurm.isChecked(),
             "slurmPartition":      self._slurm_partition.text().strip(),
             "slurmAccount":        self._slurm_account.text().strip(),
             "slurmTime":           self._slurm_time.text().strip() or "24:00:00",
             "slurmSifPath":        self._slurm_sif_path.text().strip() or None,
             "slurmWorkerTimeout":  self._slurm_worker_timeout.value(),
-            "bfReadConcurrency":   self._bf_read_concurrency.value(),
+            "bioformatsThreads":   self._bioformats_threads.value(),
             "jvmMemory":           self._jvm_memory.value(),
-            "microReadConcurrency": self._micro_read_concurrency.value(),
+            "decodeThreads": self._decode_threads.value(),
         }
 
     def _ui_to_config(self) -> dict:
@@ -2460,16 +2565,19 @@ class ConvertPage(QWidget):
                 "sampleIndex":       self._sample_index.text().strip(),
                 "forceBioformats":   self._force_bioformats.isChecked(),
                 "useMicroReader":    self._use_micro_reader.isChecked(),
+                "microCheckPixels":  self._micro_check_pixels.isChecked(),
             },
             "conversion": {
                 "omeZarrVersion":       self._ome_zarr_version.currentText(),
+                "writer":               self._writer.currentText(),
+                "ioBackend":            self._io_backend.currentText(),
+                "exportAcquisitionMetadata": self._export_acquisition.currentData(),
                 "dataType":             self._data_type.currentText(),
                 "verbose":              self._verbose.isChecked(),
                 "overwrite":            self._overwrite.isChecked(),
                 "squeezeDimensions":    self._squeeze.isChecked(),
                 "saveOmeXml":           self._save_omexml.isChecked(),
                 "overrideChannelNames": self._override_channel_names.isChecked(),
-                "skipDask":             self._skip_dask.isChecked(),
                 "autoChunk":            self._auto_chunk.isChecked(),
                 "targetChunkSizeMb":    self._target_chunk_mb.value(),
                 "chunkTime":    self._chunk_spins["t"].value(),

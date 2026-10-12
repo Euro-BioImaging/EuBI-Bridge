@@ -2,7 +2,7 @@
 
 bioio-nd2's dask array is not thread-safe: read from several threads at once
 it returns wrong pixels without an error, or crashes the process (seen with 4
-threads on real files).  eubi-bridge reads regions with 2 x max_concurrency
+threads on real files).  eubi-bridge reads regions with 2 x max_threads
 threads, and stays correct only because ``writers._read_region`` serialises
 reads of *resource-backed* dask arrays through a per-array lock -- a lock
 added for Bio-Formats that also covers bioio-nd2, because both return a
@@ -18,9 +18,15 @@ from __future__ import annotations
 import threading
 import time
 
-import dask.array as da
 import numpy as np
 import pytest
+
+from tests.conftest import full_installed  # noqa: E402
+
+if not full_installed():
+    pytest.skip("needs the full eubi-bridge (dask / bioio)", allow_module_level=True)
+
+import dask.array as da  # noqa: E402
 
 rbda = pytest.importorskip("resource_backed_dask_array")
 from resource_backed_dask_array import ResourceBackedDaskArray, resource_backed_dask_array  # noqa: E402

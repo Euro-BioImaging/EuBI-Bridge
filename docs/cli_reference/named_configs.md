@@ -72,7 +72,7 @@ Click any command card below to expand its full parameter reference.
     Typical use: propagate default-config edits to a named config:
 
     ```shell
-    eubi configure cluster --max_workers 64   # edits .eubi_config.json
+    eubi configure cluster --max_processes 64   # edits .eubi_config.json
     eubi update_config hpc                     # copies it to hpc.json
     ```
 

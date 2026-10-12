@@ -42,29 +42,35 @@ def _model(paths=("/d/a.tif", "/d/b.tif"), **downscaling):
 class TestPixelReaderPerRow:
     """The pixel reader is chosen per conversion, like the metadata reader:
     a column in the queue table, editable in Edit Cells (it used to be a
-    run-level setting, taken from the form for every row)."""
+    run-level setting, taken from the form for every row).  eubi-bridge-lite
+    has one reader: neither column exists there (Bugra, 2026-10-05)."""
 
     def test_it_is_editable_per_row(self):
         from eubi_bridge.qt_gui.core.batch import spec_for, uneditable_reason
+        from eubi_bridge.utils.capabilities import has_bioformats
+        if not has_bioformats():
+            assert spec_for("pixel_reader") is None and spec_for("metadata_reader") is None
+            return
         assert uneditable_reason("pixel_reader") is None
         spec = spec_for("pixel_reader")
         assert spec.kind == "choice" and spec.tab == "Reader"
-        from eubi_bridge.utils.capabilities import has_bioformats
-        # the standard readers only where they are installed (not in lite)
-        assert spec.choices == (("micro", "standard") if has_bioformats() else ("micro",))
+        assert spec.choices == ("micro", "standard")
 
     def test_a_row_override_reaches_its_conversion(self):
-        from eubi_bridge.qt_gui.core.batch import spec_for
-        choices = spec_for("pixel_reader").choices
-        if len(choices) < 2:
+        from eubi_bridge.utils.capabilities import has_bioformats
+        if not has_bioformats():
             pytest.skip("one pixel reader installed (lite): nothing to override")
-        value = choices[-1]                                      # 'standard'
         model = _model()
-        model.update_cells([1], "pixel_reader", value)
+        model.update_cells([1], "pixel_reader", "standard")
         assert "pixel_reader" in model.columns()
         table = model.to_table()
-        assert table.loc[1, "pixel_reader"] == value
+        assert table.loc[1, "pixel_reader"] == "standard"
         assert pd.isna(table.loc[0, "pixel_reader"])          # the form's value
+
+
+#: the example column for explicit values: a choice both installations have
+#: (config value 'from_dtype')
+KEY = "channel_intensity_limits"
 
 
 class TestExplicitValuesAreShown:
@@ -74,15 +80,15 @@ class TestExplicitValuesAreShown:
 
     def test_setting_the_config_value_shows_it(self):
         model = _model()
-        same = model.config_value("pixel_reader")                # 'micro'
-        model.update_cells([0], "pixel_reader", same)
-        assert model.cell(model.rows[0], "pixel_reader") == same
-        assert model.cell(model.rows[1], "pixel_reader") is None  # untouched: inherits
-        assert "pixel_reader" in model.columns()
-        assert model.to_table().loc[0, "pixel_reader"] == same
-        model.reset_cells([0], "pixel_reader")
-        assert model.cell(model.rows[0], "pixel_reader") is None
-        assert "pixel_reader" not in model.columns()
+        same = model.config_value(KEY)                # 'from_dtype'
+        model.update_cells([0], KEY, same)
+        assert model.cell(model.rows[0], KEY) == same
+        assert model.cell(model.rows[1], KEY) is None  # untouched: inherits
+        assert KEY in model.columns()
+        assert model.to_table().loc[0, KEY] == same
+        model.reset_cells([0], KEY)
+        assert model.cell(model.rows[0], KEY) is None
+        assert KEY not in model.columns()
 
     def test_an_added_parameter_is_written_as_shown(self):
         """Edit Cells -> Add parameter -> OK, leaving the value it shows."""
@@ -90,18 +96,18 @@ class TestExplicitValuesAreShown:
             pytest.skip("Qt is not available")
         from eubi_bridge.qt_gui.widgets.batch_cell_editor import BatchCellEditor
         model = _model()
-        dlg = BatchCellEditor(model, [0, 1], ["pixel_reader"], added=["pixel_reader"])
-        shown = dlg._fields["pixel_reader"].value()
-        assert dlg.apply() == ["pixel_reader"]
-        assert [model.cell(r, "pixel_reader") for r in model.rows] == [shown, shown]
+        dlg = BatchCellEditor(model, [0, 1], [KEY], added=[KEY])
+        shown = dlg._fields[KEY].value()
+        assert dlg.apply() == [KEY]
+        assert [model.cell(r, KEY) for r in model.rows] == [shown, shown]
 
     def test_an_explicit_value_survives_the_csv(self, tmp_path):
         from eubi_bridge.qt_gui.core.batch import BatchModel
         model = _model()
-        model.update_cells([0], "pixel_reader", model.config_value("pixel_reader"))
+        model.update_cells([0], KEY, model.config_value(KEY))
         back = BatchModel.load(model.save(str(tmp_path / "batch.csv")))
-        assert back.cell(back.rows[0], "pixel_reader") == "micro"
-        assert "pixel_reader" in back.columns()
+        assert back.cell(back.rows[0], KEY) == "from_dtype"
+        assert KEY in back.columns()
 
 
 def _qt() -> bool:

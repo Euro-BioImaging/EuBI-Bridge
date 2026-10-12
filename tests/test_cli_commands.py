@@ -32,7 +32,7 @@ if str(_DOCS_SCRIPTS) not in sys.path:
 
 from eubi_bridge.ebridge import EuBIBridge
 from gen_cli_ref import (
-    _parse_args_section, _FIELD_HINTS, _resolve_method, COMMAND_GROUPS,
+    _parse_args_section, _FIELD_HINTS, _HIDDEN_PARAMS, _resolve_method, COMMAND_GROUPS,
 )
 
 ALL_COMMANDS = [cmd for group in COMMAND_GROUPS.values() for cmd in group]
@@ -60,7 +60,9 @@ def test_signature_doc_parity(name):
     assert method is not None, f"Command {name!r} could not be resolved"
 
     sig = inspect.signature(method)
-    params = [p for p in sig.parameters if p not in ("self", "args", "kwargs")]
+    # hidden: deprecated names, accepted but deliberately left out of the reference
+    params = [p for p in sig.parameters
+              if p not in ("self", "args", "kwargs") and p not in _HIDDEN_PARAMS]
 
     doc = inspect.getdoc(method) or ""
     documented = set(_parse_args_section(doc))
@@ -106,11 +108,11 @@ def test_show_config_default(bridge, capsys):
 
 def test_reset_config_roundtrip(bridge):
     # Mutate, then reset, and confirm defaults are restored.
-    default_workers = bridge.root_defaults["cluster"]["max_workers"]
-    bridge.configure.cluster(max_workers=99)
-    assert bridge.config["cluster"]["max_workers"] == 99
+    default_workers = bridge.root_defaults["cluster"]["max_processes"]
+    bridge.configure.cluster(max_processes=99)
+    assert bridge.config["cluster"]["max_processes"] == 99
     bridge.reset_config()
-    assert bridge.config["cluster"]["max_workers"] == default_workers
+    assert bridge.config["cluster"]["max_processes"] == default_workers
 
 
 # ---------------------------------------------------------------------------
@@ -118,18 +120,18 @@ def test_reset_config_roundtrip(bridge):
 # ---------------------------------------------------------------------------
 
 def test_configure_cluster_persists(bridge):
-    bridge.configure.cluster(max_workers=8, queue_size=8)
+    bridge.configure.cluster(max_processes=8, queue_size=8)
     cfg = json.loads(bridge._get_json_path().read_text())
-    assert cfg["cluster"]["max_workers"] == 8
+    assert cfg["cluster"]["max_processes"] == 8
     assert cfg["cluster"]["queue_size"] == 8
 
 
 def test_configure_omitted_args_unchanged(bridge):
     """Omitted args (the 'default' sentinel) must not overwrite existing values."""
-    bridge.configure.cluster(max_workers=8)
-    bridge.configure.cluster(queue_size=16)  # max_workers omitted
+    bridge.configure.cluster(max_processes=8)
+    bridge.configure.cluster(queue_size=16)  # max_processes omitted
     cfg = bridge.config["cluster"]
-    assert cfg["max_workers"] == 8   # preserved
+    assert cfg["max_processes"] == 8   # preserved
     assert cfg["queue_size"] == 16
 
 
@@ -149,7 +151,7 @@ def test_configure_invalid_value_rejected(bridge):
 # ---------------------------------------------------------------------------
 
 def test_named_config_save_list_delete(bridge):
-    bridge.configure.cluster(max_workers=32)
+    bridge.configure.cluster(max_processes=32)
     bridge.save_as("hpc")
     assert "hpc" in bridge.list_configs()
     bridge.delete_config("hpc")
@@ -157,12 +159,12 @@ def test_named_config_save_list_delete(bridge):
 
 
 def test_with_config_overrides_defaults(bridge):
-    bridge.configure.cluster(max_workers=64)
+    bridge.configure.cluster(max_processes=64)
     bridge.save_as("hpc")
     # mutate the active config away from hpc
-    bridge.configure.cluster(max_workers=4)
+    bridge.configure.cluster(max_processes=4)
     hpc_bridge = bridge.with_config("hpc")
-    assert hpc_bridge.config["cluster"]["max_workers"] == 64
+    assert hpc_bridge.config["cluster"]["max_processes"] == 64
 
 
 def test_with_config_missing_raises(bridge):
@@ -171,7 +173,7 @@ def test_with_config_missing_raises(bridge):
 
 
 def test_update_config_create(bridge):
-    bridge.configure.cluster(max_workers=16)
+    bridge.configure.cluster(max_processes=16)
     bridge.update_config("profileA", create=True)
     assert "profileA" in bridge.list_configs()
 

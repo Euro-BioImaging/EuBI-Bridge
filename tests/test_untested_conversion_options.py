@@ -1,9 +1,7 @@
 """Conversion options that no suite exercised.
 
 A coverage sweep before 0.1.3 found two with no test anywhere:
-
-``on_local_cluster``  -- routes the whole conversion through a Dask
-LocalCluster instead of the process pool, a different execution backend.
+``on_local_cluster`` (retired since: tests/test_cluster_settings_retired.py) and
 ``export_acquisition_metadata`` -- writes acquisition details NGFF has no
 field for into a namespaced attrs block, and defaults to *auto*, so its
 behaviour changes with the shape of the conversion rather than being fixed.
@@ -40,43 +38,6 @@ def _only_store(out: Path) -> Path:
     stores = list(out.glob("*.zarr"))
     assert stores, f"no store produced under {out}"
     return stores[0]
-
-
-class TestLocalClusterBackend:
-    """The Dask LocalCluster path, chosen by on_local_cluster=True."""
-
-    def test_a_conversion_completes(self, single_tiff, tmp_path):
-        from eubi_bridge.ebridge import EuBIBridge
-        out = tmp_path / "out"
-        EuBIBridge().to_zarr(str(single_tiff), str(out),
-                             on_local_cluster=True, verbose=False)
-        assert _only_store(out).exists()
-
-    def test_it_produces_the_same_shape_as_the_default_backend(
-            self, single_tiff, tmp_path):
-        """Choosing a backend must not change the data it writes."""
-        import zarr
-        from eubi_bridge.ebridge import EuBIBridge
-
-        plain = tmp_path / "plain"
-        EuBIBridge().to_zarr(str(single_tiff), str(plain), verbose=False)
-        clustered = tmp_path / "clustered"
-        EuBIBridge().to_zarr(str(single_tiff), str(clustered),
-                             on_local_cluster=True, verbose=False)
-
-        a = zarr.open_array(str(_only_store(plain) / "0"), mode="r")
-        b = zarr.open_array(str(_only_store(clustered) / "0"), mode="r")
-        assert a.shape == b.shape
-        assert np.array_equal(a[...], b[...])
-
-    def test_it_is_refused_with_concatenation(self, single_tiff, tmp_path):
-        """ClusterConfig rejects the combination rather than failing mid-run."""
-        from eubi_bridge.ebridge import EuBIBridge
-        with pytest.raises(Exception):
-            EuBIBridge().to_zarr(
-                str(single_tiff.parent), str(tmp_path / "out"),
-                concatenation_axes="z", z_tag="_z",
-                on_local_cluster=True, verbose=False)
 
 
 class TestExportAcquisitionMetadata:

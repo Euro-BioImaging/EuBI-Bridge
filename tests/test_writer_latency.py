@@ -55,10 +55,10 @@ def test_conversion_has_no_fixed_wait(tmp_path):
     tifffile.imwrite(source, RNG.integers(0, 255, (2, 64, 64)).astype("u1"),
                      imagej=True, metadata={"axes": "CYX"})
     EuBIBridge().to_zarr(str(source), str(tmp_path / "warm"), verbose=False,
-                         use_threading=True, max_workers=1)
+                         use_threading=True, max_processes=1)
     t0 = time.perf_counter()
     EuBIBridge().to_zarr(str(source), str(tmp_path / "out"), verbose=False,
-                         use_threading=True, max_workers=1)
+                         use_threading=True, max_processes=1)
     seconds = time.perf_counter() - t0
     assert list((tmp_path / "out").glob("*.zarr"))
     # measured: ~2.5 s now (metadata, JVM reuse), ~5.5 s with the polling writers

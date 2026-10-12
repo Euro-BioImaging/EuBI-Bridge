@@ -26,6 +26,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from tests.conftest import requires_full  # noqa: E402
 
 NAME = "S=2_2x2_CH=1.czi"           # 2 scenes x 2x2 tiles, 1 channel
 URL = f"https://zenodo.org/api/records/7015307/files/{NAME}/content"
@@ -63,6 +64,7 @@ def zeiss_mosaic() -> str:
     return str(path)
 
 
+@requires_full
 def test_tiles_are_read_individually(zeiss_mosaic):
     """aicspylibczi's native reading, on a real ZEN-written file."""
     from eubi_bridge.core.czi_reader import read_czi
@@ -89,8 +91,8 @@ def test_conversion_writes_one_output_per_tile(zeiss_mosaic, tmp_path):
 
 
 def test_conversion_stitches_the_mosaic(zeiss_mosaic, tmp_path):
+    import micro_reader
     import zarr
-    from eubi_bridge.core.czi_reader import read_czi
     from eubi_bridge.ebridge import EuBIBridge
 
     out = tmp_path / "stitched"
@@ -100,6 +102,7 @@ def test_conversion_stitches_the_mosaic(zeiss_mosaic, tmp_path):
     assert len(stores) == 1
     stitched = zarr.open_group(str(stores[0]), mode="r")["0"]
     # A 2x2 mosaic is larger than one tile in both Y and X.
-    tile_shape = read_czi(zeiss_mosaic, as_mosaic=False).get_image_dask_data().shape
+    with micro_reader.open(zeiss_mosaic) as czi:          # tiles separate
+        tile_shape = czi.images[0].shape
     assert stitched.shape[-2] > tile_shape[-2]
     assert stitched.shape[-1] > tile_shape[-1]

@@ -274,6 +274,18 @@ def _normalize_dtype(dtype, arr) -> np.dtype:
         return np.dtype(dtype)
 
 
+def _clip_shards(shards, chunks, shape) -> tuple:
+    """Shards no bigger than the array, rounded up to whole chunks.
+
+    A shard must hold a whole number of chunks, so it is capped at the chunk count
+    that covers the array: a shard past the array's end only holds empty chunk slots.
+    The same rule for every level (it used to apply to downscaled levels only, not to
+    level 0) and the one ome_zarr_pyramid / dyna-zarr use.
+    """
+    return tuple(int(c * max(1, min(int(v) // c, -(-int(s) // c))))
+                 for v, c, s in zip(shards, chunks, shape))
+
+
 def _align_shards(shards, chunks) -> tuple:
     """Return a shard tuple whose every element is a multiple of the matching chunk size."""
     if shards is None:
@@ -517,7 +529,7 @@ def _read_region(arr, region_slice):
         Region data as numpy array.
     """
     try:
-        from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+        from dyna_zarr import DynamicArray
         
         if isinstance(arr, DynamicArray):
             # Zero-copy direct read (optimal for zarr/tensorstore backends)
@@ -1173,9 +1185,7 @@ async def write_pyramid_single_pass_async(
             # the level extent (e.g. 553 with 112-px chunks) breaks that, so
             # cap it at the chunk count needed to cover the level instead; an
             # edge shard may overhang the array, as edge chunks do.
-            shards = tuple(
-                int(c * max(1, min(int(v) // c, -(-int(s) // c))))
-                for v, c, s in zip(output_shards, chunks, shape))
+            shards = _clip_shards(output_shards, chunks, shape)
         _create_zarr_array(
             store_path=str(path),
             shape=tuple(int(v) for v in shape),
@@ -1412,7 +1422,7 @@ async def store_multiscale_async(
                                                   shardcoefs))
     else:
         shards = chunks
-    shards = tuple(int(item) for item in shards)
+    shards = _clip_shards(shards, chunks, arr.shape)
     ###
     # Make (or overwrite) the top-level group
 
@@ -1611,7 +1621,7 @@ async def store_existing_pyramid_async(
             shards = tuple(int(c * s) for c, s in zip(chunks, output_shard_coefficients))
         else:
             shards = chunks
-        shards = tuple(int(item) for item in shards)
+        shards = _clip_shards(shards, chunks, arr.shape)
 
         store_path = store_join(outpath, key)
         scale = pyr.meta.get_scale(key)

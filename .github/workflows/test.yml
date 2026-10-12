@@ -102,6 +102,82 @@ jobs:
         name: codecov-${{ matrix.os }}-py${{ matrix.python-version }}
       continue-on-error: true
 
+  lite:
+    # eubi-bridge-lite: the wheel tools/build_lite.py builds, installed ALONE
+    # (none of the Bio-Formats / dask stack), on every Python lite supports.
+    # The tests run from a copy outside the source tree, so the installed
+    # package is the one tested; tests that need the full stack skip
+    # (tests/conftest.py: requires_full).
+    name: Lite on Python ${{ matrix.python-version }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.11', '3.12', '3.13', '3.14']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache downloaded test data
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/eubi-bridge-test-data
+        key: eubi-test-data-v1
+
+    - name: Install Qt system libraries (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0
+
+    - name: Build eubi-bridge-lite
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip build
+        python tools/build_lite.py --outdir dist-lite
+        ls -l dist-lite
+
+    - name: Install the lite wheel alone
+      shell: bash
+      run: |
+        python -m pip install dist-lite/*.whl pytest
+        python - <<'PY'
+        import importlib.util, sys
+        full = ("bioio_base", "bfio", "scyjava", "jpype", "dask", "distributed",
+                "dask_jobqueue", "aicspylibczi", "pylibCZIrw", "nd2", "readlif")
+        present = [m for m in full if importlib.util.find_spec(m)]
+        if present:
+            sys.exit(f"eubi-bridge-lite pulled in the full stack: {present}")
+        import eubi_bridge
+        assert eubi_bridge.__distribution__ == "eubi-bridge-lite", eubi_bridge.__distribution__
+        print("lite", eubi_bridge.__version__, "from", eubi_bridge.__file__)
+        PY
+        eubi version
+
+    - name: Verify the GUI test stack is usable
+      run: |
+        python -c "from PyQt6.QtWidgets import QApplication; QApplication([]); print('[SUCCESS] Qt initialised')"
+
+    - name: Copy the tests out of the source tree
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/lite-run/docs"
+        cp -r tests "$RUNNER_TEMP/lite-run/"
+        cp -r docs/scripts "$RUNNER_TEMP/lite-run/docs/"
+
+    - name: Run the tests against the installed lite package
+      working-directory: ${{ runner.temp }}/lite-run
+      run: |
+        python -m pytest tests -v --tb=short --color=yes -rs
+
   lint:
     name: Lint with Pylance
     runs-on: ubuntu-latest

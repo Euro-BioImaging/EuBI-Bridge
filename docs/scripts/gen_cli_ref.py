@@ -31,6 +31,7 @@ from eubi_bridge.core.config_models import (
     DownscaleConfig,
     MetadataConfig,
     ReaderConfig,
+    RENAMED_SETTINGS,
     SUPPORTED_COMPRESSORS_V2,
     SUPPORTED_COMPRESSORS_V3,
 )
@@ -84,9 +85,16 @@ KWARGS_SECTIONS: dict[str, Any] = {
     "Concatenation overrides": ConcatenationConfig,
 }
 
-# Deprecated parameters: still accepted (so old configs and scripts keep
-# working) but no longer documented, since they have no effect.
-_HIDDEN_PARAMS: frozenset[str] = frozenset({"bf_tile_size_mb"})
+# Not documented: deprecated parameters, still accepted so old configs and
+# scripts keep working but without effect (bf_tile_size_mb, and
+# config_models.RETIRED_SETTINGS: skip_dask, on_local_cluster), the old names
+# of renamed settings (config_models.RENAMED_SETTINGS: documented under their
+# new names), and ones eubi sets itself (concurrent_jobs: how many conversions
+# the dispatcher runs at once, for the region budget).
+_HIDDEN_PARAMS: frozenset[str] = frozenset({
+    "bf_tile_size_mb", "skip_dask", "concurrent_jobs", "on_local_cluster",
+    "process_memory_mb",
+    *RENAMED_SETTINGS})
 
 # All field names covered by config models — used to exclude duplicates from
 # the "CLI-only options" section (they already appear in the override sections).
@@ -100,12 +108,16 @@ _ALL_CONFIG_FIELDS: frozenset[str] = frozenset(
 # any method docstring (supplementary layer).
 _FIELD_HINTS: dict[str, str] = {
     # ClusterConfig
-    "max_workers": "Number of parallel file-level worker processes.",
+    "max_processes": "Images converted at once, one per worker process (formerly `max_workers`).",
     "queue_size": "Internal write-queue depth per worker.",
-    "region_size_mb": "Region size in MB for spatial partitioning.",
-    "memory_per_worker": "Memory limit for SLURM / LocalCluster workers.",
-    "max_concurrency": "TensorStore write concurrency per worker.",
-    "max_concurrent_scenes": "Parallel scenes per file (default 1).",
+    "region_size_mb": "Size of one read region in MB, or `auto` (default): each scene's write budget over 3 x its threads, 8 to 256 MB.",
+    "memory_budget": "The memory the whole run may use on this machine, e.g. `16GB`, or `auto` (default): half the RAM free when it starts. Shared out between the conversions running at once, and in each between reading and the scenes converted at once.",
+    "decode_memory": "micro-reader's decoding memory per process, e.g. `1GB`, or `auto` (default): what the file's compressed blocks need.",
+    "slurm_worker_memory": "Each SLURM worker's memory (the SLURM job's), shared by its conversions (formerly `memory_per_worker`).",
+    "max_threads": "Threads per conversion, each reading and writing one region at a time; scenes converted at once share them (formerly `max_concurrency`).",
+    "max_concurrent_scenes": "Parallel scenes per file (default 1); they share `max_threads`.",
+    "decode_threads": "micro-reader's decode threads per worker process (formerly `micro_read_concurrency`).",
+    "bioformats_threads": "Threads for parallel Bio-Formats tile reads (formerly `bf_read_concurrency`).",
     "tensorstore_data_copy_concurrency": "TensorStore internal copy threads.",
     "max_retries": "Retries on a broken worker process.",
     "on_slurm": "Submit to a SLURM cluster.",
@@ -118,9 +130,11 @@ _FIELD_HINTS: dict[str, str] = {
     "slurm_sif_path": "Path to an Apptainer/Singularity `.sif` image to run SLURM workers inside (optional).",
     "max_concurrent_downscale_layers": "How many pyramid levels are downscaled in parallel per file (default 1 = sequential, lowest memory).",
     # ConversionConfig
+    "writer": "Which engine writes the OME-Zarr: `auto` (default: `ozp`, and `eubi` only where ozp cannot write the output yet), `ozp` (ome_zarr_pyramid on dyna-zarr) or `eubi` (eubi-bridge's own writer).",
+    "io_backend": "The bytes backend of the `ozp` writer: `tensorstore` (default) or `zarrista` (`pip install \"dyna-zarr[zarrista]\"`). With either, shards larger than the region budget are written chunk by chunk in bounded memory (local outputs).",
     "ome_zarr_version": "OME-Zarr (NGFF) version to write: `0.4` (backed by Zarr v2) or `0.5` (backed by Zarr v3, which enables sharding). This is the preferred control and supersedes `zarr_format` — the underlying zarr container format is derived from it.",
     "zarr_format": "**Deprecated** — use `ome_zarr_version` instead. Zarr container version: `2` = OME-Zarr 0.4 (classic chunk-based); `3` = OME-Zarr 0.5 (sharding support).",
-    "skip_dask": "Read TIFF files via zarr's native aszarr backend instead of dask. Faster for large TIFFs; ignored for non-TIFF formats.",
+    "skip_dask": "**Deprecated** and ignored: micro-reader reads without dask. Accepted so existing scripts keep working.",
     "auto_chunk": "Auto-compute chunk shape to approximate `target_chunk_mb`. When `False`, the manual `*_chunk` values below are used.",
     "target_chunk_mb": "Target uncompressed chunk size in MB when `auto_chunk=True`.",
     "time_chunk": "Chunk size along the time axis. Applies only when `auto_chunk=False`.",
@@ -252,11 +266,11 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "create": "eubi update_config hpc --create",
     "series": "eubi show_pixel_meta /data/input --series 2",
     # ── ClusterConfig (to_zarr context) ──────────────────────────────────────
-    "max_workers": "eubi to_zarr /data/input /data/output --max_workers 8",
+    "max_processes": "eubi to_zarr /data/input /data/output --max_processes 8",
     "max_retries": "eubi to_zarr /data/input /data/output --max_retries 3",
     "queue_size": "eubi to_zarr /data/input /data/output --queue_size 8",
     "region_size_mb": "eubi to_zarr /data/input /data/output --region_size_mb 512",
-    "max_concurrency": "eubi to_zarr /data/input /data/output --max_concurrency 8",
+    "max_threads": "eubi to_zarr /data/input /data/output --max_threads 8",
     "max_concurrent_scenes": "eubi to_zarr /data/input /data/output --max_concurrent_scenes 2",
     "use_threading": "eubi to_zarr /data/input /data/output --use_threading",
     "on_slurm": [
@@ -264,7 +278,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
         "eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount --slurm_partition gpu",
     ],
     "on_local_cluster": "eubi to_zarr /data/input /data/output --on_local_cluster",
-    "memory_per_worker": "eubi to_zarr /data/input /data/output --memory_per_worker 8GB",
+    "memory_budget": "eubi to_zarr /data/input /data/output --memory_budget 16GB",
     "tensorstore_data_copy_concurrency": "eubi to_zarr /data/input /data/output --tensorstore_data_copy_concurrency 8",
     "slurm_time": "eubi to_zarr /data/input /data/output --on_slurm --slurm_time 48:00:00",
     "slurm_account": "eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount",
@@ -473,9 +487,9 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
         "z_unit": "eubi update_pixel_meta /data/output --z_scale 0.5 --z_unit micrometer",
         "y_unit": "eubi update_pixel_meta /data/output --y_scale 0.25 --y_unit micrometer",
         "x_unit": "eubi update_pixel_meta /data/output --x_scale 0.25 --x_unit micrometer",
-        "max_workers": [
+        "max_processes": [
             "# Update 8 OME-Zarr stores in parallel",
-            "eubi update_pixel_meta /data/output --max_workers 8",
+            "eubi update_pixel_meta /data/output --max_processes 8",
         ],
     },
 
@@ -511,9 +525,9 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
             "# Let the viewer decide (OMERO-style auto-scaling)",
             "eubi update_channel_meta /data/output --channel_intensity_limits auto",
         ],
-        "max_workers": [
+        "max_processes": [
             "# Update 8 OME-Zarr stores in parallel",
-            "eubi update_channel_meta /data/output --max_workers 8",
+            "eubi update_channel_meta /data/output --max_processes 8",
         ],
     },
 
@@ -554,9 +568,9 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
 
     # ── configure_cluster ─────────────────────────────────────────────────────
     "configure.cluster": {
-        "max_workers": [
-            "# Set the default number of parallel worker processes",
-            "eubi configure cluster --max_workers 8",
+        "max_processes": [
+            "# Convert 8 images at once, each in its own worker process",
+            "eubi configure cluster --max_processes 8",
         ],
         "queue_size": [
             "# Allow each worker to buffer more write tasks",
@@ -566,13 +580,17 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
             "# Process larger spatial regions per task (reduces overhead on large arrays)",
             "eubi configure cluster --region_size_mb 512",
         ],
-        "memory_per_worker": [
-            "# Allocate 8 GB per worker (relevant for SLURM / LocalCluster)",
-            "eubi configure cluster --memory_per_worker 8GB",
+        "memory_budget": [
+            "# Let the whole run use at most 16 GB of this machine's memory",
+            "eubi configure cluster --memory_budget 16GB",
         ],
-        "max_concurrency": [
-            "# Allow TensorStore to issue 8 write operations concurrently per worker",
-            "eubi configure cluster --max_concurrency 8",
+        "slurm_worker_memory": [
+            "# Each SLURM worker job gets 8 GB",
+            "eubi configure cluster --slurm_worker_memory 8GB",
+        ],
+        "max_threads": [
+            "# Read and write 8 regions at once in each conversion (one per thread)",
+            "eubi configure cluster --max_threads 8",
         ],
         "max_concurrent_scenes": [
             "# Convert 2 scenes within a single file simultaneously",
@@ -618,6 +636,10 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
 
     # ── configure_conversion ──────────────────────────────────────────────────
     "configure.conversion": {
+        "writer": [
+            "# Always use eubi-bridge's own writer",
+            "eubi configure conversion --writer eubi",
+        ],
         "ome_zarr_version": [
             "# Default to OME-Zarr 0.5 (Zarr v3, enables sharding)",
             "eubi configure conversion --ome_zarr_version 0.5",

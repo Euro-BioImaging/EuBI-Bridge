@@ -26,8 +26,40 @@ def _load_the_system_cpp_runtime():
 
 _load_the_system_cpp_runtime()
 
-try:
-    from importlib.metadata import version as _metadata_version
-    __version__ = _metadata_version("eubi_bridge")
-except Exception:
-    __version__ = "0.0.0+dev"
+def _installed_distribution():
+    """(distribution name, version) of the installed package: eubi-bridge,
+    or eubi-bridge-lite (the same package without Bio-Formats and dask)."""
+    from importlib.metadata import PackageNotFoundError, version
+    for name in ("eubi_bridge", "eubi-bridge-lite"):
+        try:
+            return name.replace("_", "-"), version(name)
+        except PackageNotFoundError:
+            continue
+    return None, "0.0.0+dev"
+
+
+#: "eubi-bridge" or "eubi-bridge-lite" (None when not installed, e.g. a source checkout)
+__distribution__, __version__ = _installed_distribution()
+
+
+def _warn_if_both_installed() -> None:
+    """eubi-bridge and eubi-bridge-lite are the same package with different
+    dependencies: they install the same files, so uninstalling either one
+    deletes files the other needs.  The way out is to remove both."""
+    from importlib.metadata import PackageNotFoundError, version
+    installed = []
+    for name in ("eubi_bridge", "eubi-bridge-lite"):
+        try:
+            version(name)
+            installed.append(name)
+        except PackageNotFoundError:
+            pass
+    if len(installed) == 2:
+        import warnings
+        warnings.warn(
+            "eubi-bridge and eubi-bridge-lite are both installed, and removing just "
+            "one would break the other. Run pip uninstall -y eubi-bridge "
+            "eubi-bridge-lite, then install the one you want.", stacklevel=2)
+
+
+_warn_if_both_installed()

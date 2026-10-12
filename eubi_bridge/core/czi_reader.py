@@ -465,7 +465,7 @@ class CZIReader(ImageReader):
         when the reader moves on (see the multi-scene lazy-reader issue).
         """
         from bioio_czi.pylibczirw_reader import reader as prr
-        from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+        from dyna_zarr import from_array
 
         img = self.img
         rects = img._scenes_bounding_rectangle
@@ -495,7 +495,7 @@ class CZIReader(ImageReader):
             for d in ('V', 'H', 'I', 'R')
             if prr.size(img._total_bounding_box, d) > 1
         }
-        return DynamicArray(_CziRegionSource(
+        return from_array(_CziRegionSource(
             self._path, scene, origin, shape,
             prr.PIXEL_DICT[img._pixel_types[0]], fixed_plane, samples))
 

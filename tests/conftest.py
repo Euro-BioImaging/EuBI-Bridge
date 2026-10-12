@@ -57,6 +57,23 @@ requires_qt = pytest.mark.skipif(
 )
 
 
+def full_installed() -> bool:
+    """The full eubi-bridge's stack (Bio-Formats / bioio, dask) is installed:
+    False in eubi-bridge-lite."""
+    from eubi_bridge.utils.capabilities import has_bioformats, has_dask
+    return has_bioformats() and has_dask()
+
+
+#: For tests of what only the full eubi-bridge has (Bio-Formats metadata, the
+#: standard pixel readers, eubi's own dask readers, the JVM), or that use it as
+#: a reference: they skip in eubi-bridge-lite, whose CI job runs the whole
+#: suite against the installed lite wheel.
+requires_full = pytest.mark.skipif(
+    not full_installed(),
+    reason="needs the full eubi-bridge (Bio-Formats / dask), not eubi-bridge-lite",
+)
+
+
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line(

@@ -30,7 +30,7 @@ Then install EuBI-Bridge via pip in the conda environment:
 
 ```bash
 conda activate eubizarr
-pip install --no-cache-dir "eubi-bridge==0.1.3"
+pip install --no-cache-dir "eubi-bridge==0.1.4"
 eubi reset_config   # see "After installing or upgrading" below
 ```
 
@@ -42,7 +42,7 @@ version 3.11 or 3.12:
 ```bash
 python -m venv venv # Python must be either version 3.11 or 3.12.
 source venv/bin/activate
-pip install "eubi-bridge==0.1.3" # installs both GUI and CLI
+pip install "eubi-bridge==0.1.4" # installs both GUI and CLI
 eubi reset_config   # see "After installing or upgrading" below
 ```
 
@@ -50,7 +50,7 @@ eubi reset_config   # see "After installing or upgrading" below
 libraries it needs at runtime**, so the graphical interface may fail to start. See
 [Linux: the GUI does not start](#linux-the-gui-does-not-start) below for the fix.
 The command-line interface is unaffected.
-
+ 
 ### After installing or upgrading
 
 Run this once:
@@ -68,6 +68,15 @@ used EuBI-Bridge before, you keep the old defaults until you reset it.
 - It overwrites your default settings. Run `eubi show_config` first if you
   want to note them down. Configurations you saved under a name are kept.
 - On a fresh install it does no harm.
+
+Some settings have new names. The old names still work.
+
+- `max_workers` is now `max_processes`.
+- `max_concurrency` is now `max_threads`.
+- `micro_read_concurrency` is now `decode_threads`.
+- `bf_read_concurrency` is now `bioformats_threads`.
+- `memory_per_worker` is now `slurm_worker_memory` (SLURM only). On your own computer,
+  use `memory_budget` (see [Speed and memory](#speed-and-memory)).
 
 ### Troubleshooting
 
@@ -112,7 +121,7 @@ then try the following:
 ```bash
 # In the `eubizarr` environment
 mamba install cmake zlib boost # preinstall dependencies that can help build from source
-pip install --no-cache-dir "eubi-bridge==0.1.3" # try installing again with the dependencies available
+pip install --no-cache-dir "eubi-bridge==0.1.4" # try installing again with the dependencies available
 eubi reset_config
 ```
 
@@ -134,7 +143,7 @@ https://github.com/user-attachments/assets/0a474606-d443-40f0-8f36-23053c61cc81
 
 ### 2. Choosing conversion parameters
 
-Work through the parameter tabs. The tabs cover different parameter categories ranging from resource allocation, through reader options, chunking, sharding and compression, downscaling, channel and pixel metadata overrides, and more. Each field explains itself on hover, and settings can be saved to a configuration file for reuse.
+Work through the parameter tabs. The tabs cover different parameter categories ranging from resource allocation, through reader options, chunking, sharding and compression, downscaling, channel and pixel metadata overrides, and more. Each field explains itself on hover, and settings can be saved to a configuration file for reuse. The Cluster tab sets how many images and threads run at once and how much memory the conversion may use (see [Speed and memory](#speed-and-memory)).
 
 https://github.com/user-attachments/assets/c7e3ab3b-37cf-4565-a37a-f2b6fa985961
 
@@ -404,6 +413,36 @@ Output:
 blueredchannels_timeseries_nested_concat_zarr
 └── BlueRed_cset-T_tset.zarr
 ```
+
+## Speed and memory
+
+EuBI-Bridge reads each image once and writes all resolution levels from that read. It
+stays within the memory you give it, however large the images are.
+
+You set three things:
+
+- `--max_processes`: how many images are converted at once, each in its own process.
+- `--max_threads`: how many parts of an image each conversion works on at once.
+- `--memory_budget`: how much memory the whole run may use, for example `16GB`. The
+  default, `auto`, is half of the memory that is free when the run starts.
+
+```bash
+eubi to_zarr input_dir output_dir --max_processes 4 --max_threads 4 --memory_budget 8GB
+```
+
+For example, 2347 TIFF planes (17.6 GB) were converted into a 6-level OME-Zarr 0.5 with
+large shards in about 1.3 minutes with `--memory_budget 1.5GB`, using less than 1 GB.
+
+Set them once with `eubi configure cluster`, or in the Cluster tab of the graphical
+interface. On a SLURM cluster, `--slurm_worker_memory` sets the memory of each worker
+job instead.
+
+The OME-Zarr is written by [ome_zarr_pyramid](https://pypi.org/project/ome_zarr_pyramid/)
+by default. If you need to, you can choose:
+
+- `--writer eubi`: EuBI-Bridge's own writer. It gives the same pixels.
+- `--io_backend zarrista`: write with the Rust-based zarrista library. Install it with
+  `pip install "dyna-zarr[zarrista]"`.
 
 ## Additional Notes
 

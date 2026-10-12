@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, ValidationInfo, field_validator,
+                      model_validator)
 
 # ---------------------------------------------------------------------------
 # Compression constants
@@ -79,6 +80,90 @@ OME_ZARR_VERSIONS: Dict[str, int] = {"0.4": 2, "0.5": 3}
 _zarr_format_deprecation_warned = False
 _bf_tile_size_deprecation_warned = False
 
+#: Settings that no longer have any effect: still accepted, so existing
+#: configs, saved batches and scripts keep working, warned about once each,
+#: and ignored.  name -> why.
+RETIRED_SETTINGS: Dict[str, str] = {
+    # micro-reader, the default reader, creates no dask arrays (2026-10-05)
+    "skip_dask": "micro-reader reads without dask",
+    # the local dask cluster backend (2026-10-05): the process pool does the
+    # same job.  (SLURM stays, in the full eubi-bridge.)
+    "on_local_cluster": "conversions run in this machine's own worker processes",
+}
+_retired_warned: set = set()
+
+
+def warn_retired(name: str, value) -> None:
+    """Warn once per retired setting, when it is given a value that would
+    have done something (None, False and 'default' would not have)."""
+    if value is None or value is False or value == "default" or name in _retired_warned:
+        return
+    _retired_warned.add(name)
+    _logger.warning(
+        f"DEPRECATION: '{name}' is no longer used and is ignored: "
+        f"{RETIRED_SETTINGS[name]}. Remove it from your config, batch or script; "
+        f"it will be rejected in a future release.")
+
+
+#: Settings renamed to the names the whole ecosystem uses (dyna-zarr, ome-zarr-
+#: pyramid, tilewise-ccl, ...; 2026-10-08): old -> new, same meaning. The old names
+#: still work in configs, the CLI, batches and scripts: a saved config is updated
+#: once, when it is loaded; anywhere else they are warned about once each.
+RENAMED_SETTINGS: Dict[str, str] = {
+    "max_workers": "max_processes",
+    "max_concurrency": "max_threads",
+    "micro_read_concurrency": "decode_threads",
+    "bf_read_concurrency": "bioformats_threads",
+    # memory_budget (2026-10-08) is the whole run's memory on this machine; the old
+    # per-process setting lives on as the SLURM worker's memory
+    "memory_per_worker": "slurm_worker_memory",
+}
+_renamed_warned: set = set()
+
+
+def rename_settings(params: dict) -> dict:
+    """*params* with the old names of renamed settings replaced by the new ones
+    (RENAMED_SETTINGS), warning once per old name. Given both, the new one wins."""
+    if not isinstance(params, dict) or not RENAMED_SETTINGS.keys() & params.keys():
+        return params
+    out = dict(params)
+    for old, new in RENAMED_SETTINGS.items():
+        if old not in out:
+            continue
+        value = out.pop(old)
+        if new in out:
+            msg = f"'{old}' and its new name '{new}' were both given; '{new}' is used"
+        else:
+            out[new] = value
+            msg = f"'{old}' is now called '{new}' (same meaning); please use the new name"
+        if old not in _renamed_warned:
+            _renamed_warned.add(old)
+            _logger.warning(f"DEPRECATION: {msg}.")
+    return out
+
+
+def rename_config_keys(config: dict) -> bool:
+    """Rename old keys in a config's ``cluster`` section in place (the value kept);
+    True when something was renamed."""
+    section = config.get("cluster") if isinstance(config, dict) else None
+    if not isinstance(section, dict):
+        return False
+    renamed = [old for old in RENAMED_SETTINGS if old in section]
+    for old in renamed:
+        value = section.pop(old)
+        section.setdefault(RENAMED_SETTINGS[old], value)
+    if renamed:
+        _logger.info("Config: renamed " + ", ".join(
+            f"'{old}' to '{RENAMED_SETTINGS[old]}'" for old in renamed) + " (same meaning).")
+    return bool(renamed)
+
+
+def drop_retired(params: dict) -> dict:
+    """*params* without the retired settings, warning about any given a value."""
+    for name in RETIRED_SETTINGS.keys() & params.keys():
+        warn_retired(name, params[name])
+    return {k: v for k, v in params.items() if k not in RETIRED_SETTINGS}
+
 
 def resolve_ome_zarr_target(ome_zarr_version, zarr_format=2, warn: bool = False) -> Tuple[str, int]:
     """Resolve the effective ``(ome_zarr_version, zarr_format)`` for an output.
@@ -128,31 +213,81 @@ class ClusterConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    on_local_cluster: bool = False
+    # RETIRED (2026-10-05): accepted and ignored (RETIRED_SETTINGS); the
+    # process pool does the same job.
+    on_local_cluster: Optional[bool] = None
+    # SLURM through dask-jobqueue: the full eubi-bridge only (lite refuses it)
     on_slurm: bool = False
     use_threading: bool = False
-    max_workers: int = Field(default=4, ge=1, le=256)
-    # Conversions that actually run at once: min(max_workers, the number of
+    # Conversions at once, one image (output) each, in separate processes
+    # (threads with use_threading). Was max_workers (RENAMED_SETTINGS).
+    max_processes: int = Field(default=4, ge=1, le=256)
+    # Conversions that actually run at once: min(max_processes, the number of
     # jobs / output groups), set by the dispatcher (not a user setting).
-    # None: max_workers.  The region budget divides RAM among these only.
+    # None: max_processes.  The region budget divides RAM among these only.
     concurrent_jobs: Optional[int] = Field(default=None, ge=1)
     queue_size: int = Field(default=4, ge=1, le=4096)
-    region_size_mb: int = Field(default=256, gt=0)
-    max_concurrency: int = Field(default=4, ge=1)
+    # 'auto': a scene's write budget over 3 x its threads, 8..256 MB (core/memory.py)
+    region_size_mb: Union[float, str] = "auto"
+    # Threads per conversion, each reading and writing one region at a time;
+    # scenes converted at once share them. Was max_concurrency.
+    max_threads: int = Field(default=4, ge=1)
     max_concurrent_scenes: int = Field(default=1, ge=1)
-    memory_per_worker: str = "3GB"
+    # The memory the whole run may use on this machine: "16GB", or "auto" = half the
+    # RAM free when it starts. Shared out by core/memory.py (processes, what each
+    # already holds, reading, scenes). Replaces memory_per_worker (2026-10-08).
+    memory_budget: str = "auto"
+    # micro-reader's decoding memory per process: "auto" (what the file's decode unit
+    # needs, core/memory.reader_share) or e.g. "1GB"
+    decode_memory: str = "auto"
+    # SLURM: each worker's (SLURM job's) memory; its conversions share it
+    slurm_worker_memory: str = "3GB"
+    # One conversion process's memory in MB, resolved once by the dispatcher before
+    # the pool starts (not a user setting). None: worked out by the worker.
+    process_memory_mb: Optional[float] = Field(default=None, gt=0)
     tensorstore_data_copy_concurrency: int = Field(default=4, ge=1)
     max_retries: int = Field(default=10, ge=0, le=100)
-    bf_read_concurrency: Optional[int] = Field(default=4, ge=1)
+    # Bio-Formats read threads (dask's pool for its tile reads). Was
+    # bf_read_concurrency.
+    bioformats_threads: Optional[int] = Field(default=4, ge=1)
     # micro-reader's decode threads per worker process when
-    # readers.pixel_reader='micro' (its region reads share one pool)
-    micro_read_concurrency: int = Field(default=4, ge=1)
+    # readers.pixel_reader='micro' (its region reads share one pool). Was
+    # micro_read_concurrency.
+    decode_threads: int = Field(default=4, ge=1)
     # DEPRECATED, ignored.  Bio-Formats images are now read one writer region
     # at a time, so region_size_mb sets the read size and the JVM-heap limit is
     # applied automatically.  Still accepted so existing configs, saved batches
-    # and scripts keep working; remove in the release after 0.1.3.
+    # and scripts keep working: retired settings warn, never fail (Bugra,
+    # 2026-10-05).
     bf_tile_size_mb: Optional[float] = Field(default=None, gt=0.0)
     jvm_memory: Optional[str] = "1g"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _renamed(cls, data):
+        return rename_settings(data) if isinstance(data, dict) else data
+
+    @field_validator('memory_budget', 'decode_memory', 'slurm_worker_memory', mode='before')
+    @classmethod
+    def _memory_size(cls, v, info: ValidationInfo):
+        from eubi_bridge.core.memory import is_auto, parse_mb
+        if info.field_name != 'slurm_worker_memory' and is_auto(v):
+            return "auto"
+        if isinstance(v, (int, float)):
+            v = f"{v}MB"
+        parse_mb(v)                                   # a clear error for a bad size
+        return str(v).strip()
+
+    @field_validator('region_size_mb', mode='before')
+    @classmethod
+    def _region_size(cls, v):
+        from eubi_bridge.core.memory import is_auto
+        if is_auto(v):
+            return "auto"
+        mb = float(v)
+        if mb <= 0:
+            raise ValueError(f"region_size_mb must be > 0 or 'auto', got {v!r}")
+        return mb
 
     @field_validator('bf_tile_size_mb')
     @classmethod
@@ -183,6 +318,12 @@ class ClusterConfig(BaseModel):
     slurm_partition: Optional[str] = None
     slurm_worker_timeout: int = Field(default=300, gt=0)
     slurm_sif_path: Optional[str] = None   # Apptainer SIF for workers
+
+    @field_validator("on_local_cluster")
+    @classmethod
+    def _retired(cls, v, info: ValidationInfo):
+        warn_retired(info.field_name, v)
+        return None
     max_concurrent_downscale_layers: int = Field(default=3, gt=0)
 
 
@@ -286,7 +427,11 @@ class ConversionConfig(BaseModel):
     # set to a recognised version; None falls back to zarr_format (deprecated).
     ome_zarr_version: Optional[str] = None
     zarr_format: Literal[2, 3] = 2
-    skip_dask: bool = False
+    # DEPRECATED, ignored (2026-10-05).  micro-reader, the default reader,
+    # creates no dask arrays, so there is nothing to skip; the option only
+    # sent TIFFs past micro-reader, to eubi's own TIFF route.  Still accepted
+    # so existing configs, saved batches and scripts keep working.
+    skip_dask: Optional[bool] = None
     auto_chunk: bool = True
     target_chunk_mb: float = Field(default=1.0, gt=0.0)
     time_chunk: int = Field(default=1, ge=1)
@@ -319,6 +464,16 @@ class ConversionConfig(BaseModel):
     # 'auto' is the on-disk sentinel; _collect_params converts it to None at
     # runtime — we accept both here so JSON round-trips work unchanged.
     dtype: Optional[str] = "auto"
+    # Which writer stores the output: ome_zarr_pyramid on dyna-zarr ('ozp';
+    # core/ozp_writer.py) or eubi-bridge's own ('eubi').  'auto' (default) is
+    # 'ozp' wherever it applies and 'eubi' where ozp cannot write the output yet
+    # (kept resolution levels not named 0..n-1); an explicit 'ozp' refuses those.
+    writer: Literal['auto', 'eubi', 'ozp'] = 'auto'
+    # The bytes backend of the ozp writer (dyna-zarr): TensorStore, or zarrista (Rust,
+    # zarrs; `pip install "dyna-zarr[zarrista]"`, which installs zarrista-bounded). With
+    # either, shards larger than the region budget are written chunk by chunk in bounded
+    # memory (local outputs). eubi-bridge's own writer only writes with TensorStore.
+    io_backend: Literal['tensorstore', 'zarrista'] = 'tensorstore'
 
     @field_validator("compressor_params", mode="before")
     @classmethod
@@ -364,6 +519,12 @@ class ConversionConfig(BaseModel):
                 f"Supported across v2+v3: {_ANY_LABEL}."
             )
         return v
+
+    @field_validator("skip_dask")
+    @classmethod
+    def _retired(cls, v):
+        warn_retired("skip_dask", v)
+        return None
 
     @field_validator("ome_zarr_version", mode="before")
     @classmethod
@@ -759,16 +920,6 @@ class AggregativeConversionJob(BaseModel):
 
     # Pass-through kwargs not covered by any model field
     extra: dict = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _validate_backend_compat(self) -> "AggregativeConversionJob":
-        """on_local_cluster is incompatible with concatenation_axes."""
-        if self.cluster.on_local_cluster:
-            raise ValueError(
-                "on_local_cluster=True is not compatible with concatenation_axes. "
-                "Use on_slurm=True or remove on_local_cluster."
-            )
-        return self
 
     @model_validator(mode="after")
     def _validate_tags_for_axes(self) -> "AggregativeConversionJob":
