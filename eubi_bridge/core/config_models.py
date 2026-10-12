@@ -37,6 +37,29 @@ BLOSC_CNAMES: frozenset[str] = frozenset(
     {"lz4", "lz4hc", "blosclz", "snappy", "zlib", "zstd"}
 )
 
+
+def _check_blosc_cname(cname: str) -> None:
+    """Refuse a blosc cname that is unknown, or missing from the installed blosc
+    build. Current numcodecs builds ship without snappy: TensorStore still writes
+    it, but the chunks can then not be read back, so it is refused here, before
+    any worker starts (dyna-zarr refuses it too, deep inside the write)."""
+    if cname not in BLOSC_CNAMES:
+        raise ValueError(
+            f"Invalid blosc cname '{cname}'. "
+            f"Choose from {sorted(BLOSC_CNAMES)}."
+        )
+    try:
+        from numcodecs.blosc import list_compressors
+        available = set(list_compressors())
+    except Exception:
+        return
+    if cname not in available:
+        raise ValueError(
+            f"blosc cname '{cname}' is not available in the installed blosc "
+            f"library, so the output could not be read back. "
+            f"Choose from {sorted(available)}."
+        )
+
 # numcodecs class names for zarr v2
 _CODEC_CLASS_V2: dict = {
     "blosc": "Blosc",
@@ -569,11 +592,7 @@ class ConversionConfig(BaseModel):
         # Blosc param checks
         if name == "blosc" and self.compressor_params:
             cname = self.compressor_params.get("cname", "lz4")
-            if cname not in BLOSC_CNAMES:
-                raise ValueError(
-                    f"Invalid blosc cname '{cname}'. "
-                    f"Choose from {sorted(BLOSC_CNAMES)}."
-                )
+            _check_blosc_cname(cname)
             clevel = self.compressor_params.get("clevel", 5)
             if not (0 <= int(clevel) <= 9):
                 raise ValueError(f"blosc clevel must be 0–9, got {clevel}.")
@@ -725,11 +744,7 @@ class CompressorConfig(BaseModel):
     def _validate_blosc_params(self) -> "CompressorConfig":
         if self.name and self.name.lower() == "blosc" and self.params:
             cname = self.params.get("cname", "lz4")
-            if cname not in BLOSC_CNAMES:
-                raise ValueError(
-                    f"Invalid blosc cname '{cname}'. "
-                    f"Choose from {sorted(BLOSC_CNAMES)}."
-                )
+            _check_blosc_cname(cname)
             clevel = self.params.get("clevel", 5)
             if not (0 <= int(clevel) <= 9):
                 raise ValueError(f"blosc clevel must be 0–9, got {clevel}.")
