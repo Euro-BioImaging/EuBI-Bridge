@@ -44,9 +44,21 @@ BLOSC_CNAMES: frozenset[str] = frozenset(
 _limited_cname_warned: set = set()
 
 
+def dyna_writes_limited_cnames() -> bool:
+    """Whether the installed dyna-zarr writes a blosc cname that numcodecs lacks
+    (with its ``LimitedReaderSupportWarning``, dyna-zarr > 0.1.0). dyna-zarr
+    0.1.0 refuses it inside the write, so eubi then refuses it up front."""
+    try:
+        import dyna_zarr
+    except Exception:
+        return False
+    return hasattr(dyna_zarr, "LimitedReaderSupportWarning")
+
+
 def _check_blosc_cname(cname: str) -> None:
-    """Refuse an unknown blosc cname. Warn, once per name and process, about one
-    that common OME-Zarr readers cannot decode (dyna-zarr warns too, in the write)."""
+    """Refuse an unknown blosc cname. A known one that numcodecs lacks (snappy):
+    warn once per name and process when dyna-zarr writes it, refuse it when the
+    installed dyna-zarr cannot (dyna-zarr warns too, in the write)."""
     if cname not in BLOSC_CNAMES:
         raise ValueError(
             f"Invalid blosc cname '{cname}'. "
@@ -57,6 +69,12 @@ def _check_blosc_cname(cname: str) -> None:
         available = set(list_compressors())
     except Exception:
         return
+    if cname not in available and not dyna_writes_limited_cnames():
+        raise ValueError(
+            f"blosc cname '{cname}' is not available in the installed blosc "
+            f"library, and the installed dyna-zarr does not write it. "
+            f"Choose from {sorted(available)}."
+        )
     if cname not in available and cname not in _limited_cname_warned:
         _limited_cname_warned.add(cname)
         _logger.warning(

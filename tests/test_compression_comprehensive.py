@@ -339,12 +339,31 @@ class TestCompressionZarrV2:
         numcodecs (zarr-python, ome-zarr-py, napari-ome-zarr) ships blosc without
         snappy since 0.9.0 and cannot decode it; eubi's writers (TensorStore,
         zarrista) write and read it. So the conversion runs, warns, and every
-        level reads back through dyna equal to the same conversion with lz4.
+        level reads back through dyna equal to the same conversion with lz4 --
+        with a dyna-zarr that writes it (> 0.1.0). dyna-zarr 0.1.0 refuses it in
+        the write, so eubi refuses it up front instead.
         """
-        import json
-
         import zarr
         from dyna_zarr.io import io as dyna_io
+
+        from eubi_bridge.core.config_models import dyna_writes_limited_cnames
+
+        try:
+            from numcodecs.blosc import list_compressors
+            numcodecs_has_snappy = 'snappy' in list_compressors()
+        except ImportError:
+            numcodecs_has_snappy = True
+
+        if not numcodecs_has_snappy and not dyna_writes_limited_cnames():
+            # dyna-zarr 0.1.0 refuses snappy in the write: eubi refuses it up
+            # front, with a clear message, and writes nothing
+            out = tmp_path / f"v{zarr_format}_snappy.zarr"
+            with pytest.raises(RuntimeError, match="does not write it"):
+                run_eubi_command([
+                    str(imagej_tiff_czyx), str(out), '--zarr_format', zarr_format,
+                    '--compressor', 'blosc', '--compressor_params', '{cname:snappy}'])
+            assert not out.exists()
+            return
 
         def convert(cname):
             out = tmp_path / f"v{zarr_format}_{cname}.zarr"
@@ -358,12 +377,8 @@ class TestCompressionZarrV2:
 
         snappy, log = convert('snappy')
         lz4, _ = convert('lz4')
-        try:
-            from numcodecs.blosc import list_compressors
-            if 'snappy' not in list_compressors():
-                assert "COMPRESSOR SUPPORT IS LIMITED" in log
-        except ImportError:
-            pass
+        if not numcodecs_has_snappy:
+            assert "COMPRESSOR SUPPORT IS LIMITED" in log
 
         gr = zarr.open_group(lz4, mode='r')
         paths = [d['path'] for d in
