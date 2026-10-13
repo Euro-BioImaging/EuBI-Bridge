@@ -8,6 +8,8 @@ Tests various compression codecs with different parameters:
   * Zstd levels: -131072 to 22 (default 0)
   
 - Zarr v3: blosc (with cname: lz4, lz4hc, blosclz, zlib, zstd, snappy), zstd, gzip, none
+- blosc 'snappy' converts with a loud warning: zarr-python (numcodecs) cannot
+  decode it, eubi's writers (TensorStore, zarrista) can
   * Blosc shuffle modes: enum (noshuffle, shuffle, bitshuffle)
   * GZip level: 0-9 (default 5, different from v2!)
   * Zstd level: -131072 to 22 (default 0)
@@ -34,18 +36,6 @@ from tests.validation_utils import (
     get_actual_zarr_path,
     compare_pixel_data,
 )
-
-try:
-    from numcodecs.blosc import list_compressors as _blosc_compressors
-    BLOSC_AVAILABLE = set(_blosc_compressors())
-except Exception:
-    BLOSC_AVAILABLE = None
-
-
-def _blosc_cname_missing(cname: str) -> bool:
-    """Current numcodecs builds ship blosc without snappy; eubi refuses it."""
-    return BLOSC_AVAILABLE is not None and cname not in BLOSC_AVAILABLE
-
 
 def run_eubi_command(args: list) -> subprocess.CompletedProcess:
     """Helper to run eubi CLI command."""
@@ -189,28 +179,20 @@ class TestCompressionZarrV2:
         assert validate_zarr_format(output) == 2
         validate_compression(output, 'blosc')
     
-    @pytest.mark.parametrize("cname", ['lz4', 'zstd', 'zlib', 'snappy', 'blosclz'])
+    @pytest.mark.parametrize("cname", ['lz4', 'zstd', 'zlib', 'blosclz'])
     def test_v2_blosc_inner_codecs(self, imagej_tiff_czyx, tmp_path, cname):
         """Test Zarr v2 Blosc with different inner compression libraries.
-        
-        Note: 'snappy' is v2-specific (not supported in v3 BloscCodec).
-        A cname missing from the installed blosc build is refused up front.
+        ('snappy': see test_blosc_snappy_converts_with_a_loud_warning.)
         """
         output = tmp_path / f"output_v2_blosc_{cname}.zarr"
-        args = [
+
+        run_eubi_command([
             str(imagej_tiff_czyx),
             str(output),
             '--zarr_format', '2',
             '--compressor', 'blosc',
             '--compressor_params', f'{{cname:{cname}}}'
-        ]
-        if _blosc_cname_missing(cname):
-            with pytest.raises(RuntimeError, match="not available in the installed blosc"):
-                run_eubi_command(args)
-            assert not output.exists()
-            return
-
-        run_eubi_command(args)
+        ])
 
         assert validate_zarr_exists(output)
         assert validate_zarr_format(output) == 2
@@ -349,32 +331,49 @@ class TestCompressionZarrV2:
         assert validate_zarr_format(output) == 2
         validate_compression(output, 'lzma')
     
-    def test_v2_blosc_snappy(self, imagej_tiff_czyx, tmp_path):
-        """Test Zarr v2 Blosc with snappy inner codec (v2-only, not guaranteed in v3).
-        
-        Note: current numcodecs builds ship blosc without snappy. TensorStore
-        would still write it, but the chunks could not be read back, so eubi
-        refuses it before converting. This test documents that rule.
+    @pytest.mark.parametrize("zarr_format", ['2', '3'])
+    def test_blosc_snappy_converts_with_a_loud_warning(self, imagej_tiff_czyx,
+                                                       tmp_path, zarr_format):
+        """blosc 'snappy' is supported, with a loud warning.
+
+        numcodecs (zarr-python, ome-zarr-py, napari-ome-zarr) ships blosc without
+        snappy since 0.9.0 and cannot decode it; eubi's writers (TensorStore,
+        zarrista) write and read it. So the conversion runs, warns, and every
+        level reads back through dyna equal to the same conversion with lz4.
         """
-        output = tmp_path / "output_v2_blosc_snappy.zarr"
-        args = [
-            str(imagej_tiff_czyx),
-            str(output),
-            '--zarr_format', '2',
-            '--compressor', 'blosc',
-            '--compressor_params', '{cname:snappy}'
-        ]
-        if _blosc_cname_missing('snappy'):
-            with pytest.raises(RuntimeError, match="not available in the installed blosc"):
-                run_eubi_command(args)
-            assert not output.exists()
-            return
+        import json
 
-        run_eubi_command(args)
+        import zarr
+        from dyna_zarr.io import io as dyna_io
 
-        assert validate_zarr_exists(output)
-        assert validate_zarr_format(output) == 2
-        validate_compression(output, 'blosc')
+        def convert(cname):
+            out = tmp_path / f"v{zarr_format}_{cname}.zarr"
+            res = run_eubi_command([
+                str(imagej_tiff_czyx), str(out),
+                '--zarr_format', zarr_format,
+                '--compressor', 'blosc',
+                '--compressor_params', f'{{cname:{cname}}}'
+            ])
+            return get_actual_zarr_path(out), res.stdout + res.stderr
+
+        snappy, log = convert('snappy')
+        lz4, _ = convert('lz4')
+        try:
+            from numcodecs.blosc import list_compressors
+            if 'snappy' not in list_compressors():
+                assert "COMPRESSOR SUPPORT IS LIMITED" in log
+        except ImportError:
+            pass
+
+        gr = zarr.open_group(lz4, mode='r')
+        paths = [d['path'] for d in
+                 (gr.attrs.get('ome', gr.attrs))['multiscales'][0]['datasets']]
+        for p in paths:
+            meta = (snappy / p / ('.zarray' if zarr_format == '2' else 'zarr.json'))
+            assert 'snappy' in meta.read_text()
+            got = np.asarray(dyna_io.read(str(snappy / p)))
+            want = np.asarray(gr[p][:])
+            assert np.array_equal(got, want), p
 
 
 class TestCompressionZarrV3:
@@ -447,7 +446,7 @@ class TestCompressionZarrV3:
         """Test Zarr v3 Blosc with different inner compression libraries.
         
         Zarr v3 BloscCodec supports: lz4, lz4hc, zstd, zlib, blosclz, snappy
-        (lz4hc tests codec variant support; snappy can be tested separately if needed)
+        ('snappy': see test_blosc_snappy_converts_with_a_loud_warning).
         """
         output = tmp_path / f"output_v3_blosc_{cname}.zarr"
         

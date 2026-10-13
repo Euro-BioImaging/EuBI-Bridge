@@ -55,8 +55,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        echo "Installing eubi_bridge with all extras..."
-        pip install -e ".[all]" -v
+        # eubi_bridge + its [test] extra. There is no "all" extra (pip only warned and
+        # installed the base package); [flow]/[annotate]/[deep] point at packages that
+        # are not on PyPI, so they are left out on purpose.
+        echo "Installing eubi_bridge with the test extra..."
+        pip install -e ".[test]" -v
         echo "Installing additional test dependencies..."
         pip install pytest pytest-cov numpy tifffile imageio-ffmpeg zarr
         echo "Verifying installation..."
@@ -71,7 +74,7 @@ jobs:
         echo "Contents of Scripts directory (if it exists):"
         python -c "import os, sys; scripts_dir = os.path.join(sys.prefix, 'Scripts'); print([f for f in os.listdir(scripts_dir) if 'eubi' in f.lower() or f.endswith('.exe')] if os.path.exists(scripts_dir) else 'Scripts directory does not exist (normal on Unix platforms)')"
         echo "Reinstalling with verbose to check for setup.py entry_points..."
-        pip install -e ".[all]" --force-reinstall --no-cache-dir 2>&1 | head -100
+        pip install -e ".[test]" --force-reinstall --no-cache-dir 2>&1 | head -100
         echo "Checking for eubi again after reinstall..."
         python -c "import shutil; eubi = shutil.which('eubi'); print(f'After reinstall, eubi found: {eubi}')"
     
@@ -193,7 +196,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        pip install -e ".[all]" --no-build-isolation -v
+        pip install -e ".[test]" --no-build-isolation -v
         pip install pylint
     
     - name: Verify eubi executable is accessible
@@ -240,8 +243,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        echo "Installing eubi_bridge with all extras..."
-        pip install -e ".[all]" -v
+        # eubi_bridge + its [test] extra. There is no "all" extra (pip only warned and
+        # installed the base package); [flow]/[annotate]/[deep] point at packages that
+        # are not on PyPI, so they are left out on purpose.
+        echo "Installing eubi_bridge with the test extra..."
+        pip install -e ".[test]" -v
         echo "Installing additional test dependencies..."
         pip install pytest pytest-cov numpy tifffile imageio-ffmpeg zarr
         echo "Verifying installation..."

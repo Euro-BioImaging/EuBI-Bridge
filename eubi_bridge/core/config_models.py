@@ -33,16 +33,20 @@ SUPPORTED_COMPRESSORS_V3: frozenset[str] = frozenset(
 # Union — used when zarr_format is not known at validation time.
 SUPPORTED_COMPRESSORS_ANY: frozenset[str] = SUPPORTED_COMPRESSORS_V2 | SUPPORTED_COMPRESSORS_V3
 
+# Every name here is written AND read by both writers (TensorStore and zarrista
+# bundle their own c-blosc). 'snappy' is the exception for OTHER readers:
+# numcodecs (zarr-python, ome-zarr-py, napari-ome-zarr) ships blosc without it
+# since 0.9.0 and cannot decode it, so choosing it is warned about loudly.
 BLOSC_CNAMES: frozenset[str] = frozenset(
     {"lz4", "lz4hc", "blosclz", "snappy", "zlib", "zstd"}
 )
 
+_limited_cname_warned: set = set()
+
 
 def _check_blosc_cname(cname: str) -> None:
-    """Refuse a blosc cname that is unknown, or missing from the installed blosc
-    build. Current numcodecs builds ship without snappy: TensorStore still writes
-    it, but the chunks can then not be read back, so it is refused here, before
-    any worker starts (dyna-zarr refuses it too, deep inside the write)."""
+    """Refuse an unknown blosc cname. Warn, once per name and process, about one
+    that common OME-Zarr readers cannot decode (dyna-zarr warns too, in the write)."""
     if cname not in BLOSC_CNAMES:
         raise ValueError(
             f"Invalid blosc cname '{cname}'. "
@@ -53,11 +57,14 @@ def _check_blosc_cname(cname: str) -> None:
         available = set(list_compressors())
     except Exception:
         return
-    if cname not in available:
-        raise ValueError(
-            f"blosc cname '{cname}' is not available in the installed blosc "
-            f"library, so the output could not be read back. "
-            f"Choose from {sorted(available)}."
+    if cname not in available and cname not in _limited_cname_warned:
+        _limited_cname_warned.add(cname)
+        _logger.warning(
+            f"COMPRESSOR SUPPORT IS LIMITED: blosc cname '{cname}' is written and "
+            f"read by EuBI-Bridge, but many OME-Zarr readers cannot open it: "
+            f"zarr-python and the tools built on it (ome-zarr-py, napari-ome-zarr) "
+            f"cannot decode it. Use 'lz4' (similar speed) or 'zstd' for outputs "
+            f"others will open."
         )
 
 # numcodecs class names for zarr v2

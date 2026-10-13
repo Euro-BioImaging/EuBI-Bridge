@@ -184,6 +184,17 @@ def _start_jvm_now(jvm_memory: Optional[str] = None) -> None:
     if scyjava.jvm_started():
         return
 
+    # Let the process exit without destroying the JVM. JPype's default destroys it at
+    # exit, which waits for every non-daemon Java thread; Bio-Formats can leave one
+    # running (seen with an OIR file), so a worker process that had started Java never
+    # exited and the conversion never ended (eubi-bridge 0.1.4). eubi-bridge only READS
+    # through Java and writes from Python, so nothing in the JVM needs a clean shutdown.
+    try:
+        import jpype
+        jpype.config.destroy_jvm = False
+    except ImportError:
+        pass
+
     # Get bundled JARs directory
     pkg_dir = pathlib.Path(__file__).resolve().parent.parent
     jars_dir = pkg_dir / "bioformats"
