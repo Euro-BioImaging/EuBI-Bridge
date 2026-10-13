@@ -36,6 +36,7 @@ except ImportError as _qt_error:  # pragma: no cover - headless environment
     def pyqtSignal(*_args, **_kwargs):  # type: ignore[no-redef]
         return None
 
+from eubi_bridge.core.config_models import parse_scale
 from eubi_bridge.qt_gui.workers._conv_subprocess import (
     _conversion_subprocess,
     _kill_process_tree,
@@ -126,6 +127,21 @@ def _split_patterns(patterns_str: str):
         return None
     parts = [p.strip() for p in patterns_str.split(",") if p.strip()]
     return parts or None
+
+
+def scale_override_problems(config: dict) -> list[str]:
+    """Why the form's physical scale overrides cannot be used, one line per field
+    (empty when they can, or when the override is off)."""
+    meta = config.get("metadata", {})
+    if not meta.get("overridePhysicalScale", False):
+        return []
+    problems = []
+    for ax in ("time", "z", "y", "x"):
+        try:
+            parse_scale(meta.get(f"scale{ax.capitalize()}"), f"{ax.capitalize()} scale")
+        except ValueError as exc:
+            problems.append(str(exc))
+    return problems
 
 
 def _build_kwargs(config: dict) -> dict:
@@ -271,11 +287,11 @@ def _build_kwargs(config: dict) -> dict:
         for ax in ("time", "z", "y", "x"):
             key  = f"scale{ax.capitalize()}"
             ukey = f"unit{ax.capitalize()}"
-            if meta_config.get(key, ""):
-                try:
-                    kwargs[f"{ax}_scale"] = float(meta_config[key])
-                except ValueError:
-                    pass
+            # a value that is not a plain number raises: dropping it while still
+            # applying the unit wrote e.g. "1.0 minute" for "30 min" (0.1.3)
+            scale = parse_scale(meta_config.get(key), f"{ax.capitalize()} scale")
+            if scale is not None:
+                kwargs[f"{ax}_scale"] = scale
             unit_default = "second" if ax == "time" else "micrometer"
             if meta_config.get(ukey, "") and meta_config[ukey] != unit_default:
                 kwargs[f"{ax}_unit"] = meta_config[ukey]
@@ -327,6 +343,11 @@ class ConversionWorker(QThread):
             input_path = config.get("inputPath", "")
         output_path = config.get("outputPath", "")
 
+        try:
+            to_zarr_kwargs = _build_kwargs(config)
+        except ValueError as exc:            # a setting the run cannot use, e.g. a scale
+            self.failed.emit(str(exc))
+            return
         call_args = {
             "input_path":         input_path,
             "output_path":        output_path or None,
@@ -335,7 +356,7 @@ class ConversionWorker(QThread):
             # The concatenation settings live in to_zarr_kwargs, which is also
             # where a batch row's own values arrive; duplicating them here
             # would pass each one to to_zarr twice.
-            "to_zarr_kwargs":     _build_kwargs(config),
+            "to_zarr_kwargs":     to_zarr_kwargs,
         }
 
         # Emit startup info before spawning

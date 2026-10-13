@@ -66,7 +66,10 @@ from eubi_bridge.qt_gui.core.config import (
 )
 from eubi_bridge.qt_gui.widgets.log_widget import LogWidget
 from eubi_bridge.qt_gui.widgets.sidebar_browser import SidebarBrowser
-from eubi_bridge.qt_gui.workers.conversion_worker import ConversionWorker
+from eubi_bridge.qt_gui.workers.conversion_worker import (
+    ConversionWorker,
+    scale_override_problems,
+)
 
 # Pre-import dask_jobqueue (SLURM) in the main thread so its module-level
 # signal.signal() call (in dask_jobqueue/runner.py) never runs inside a
@@ -2289,7 +2292,9 @@ class ConvertPage(QWidget):
             self._batch_status.setText("Batch is empty, so there is nothing to run.")
             return
 
-        problems = self._batch.validate()
+        self._sync_batch_cluster()
+        problems = self._batch.validate() + scale_override_problems(
+            self._batch.base_config or self._ui_to_config())
         if problems:
             self._batch_status.setText(
                 f"Cannot run: {len(problems)} problem(s); see the Log sub-tab.")
@@ -2302,8 +2307,7 @@ class ConvertPage(QWidget):
         # The batch baseline is the global config for the run; each row overrides
         # it.  The rows are passed as a table rather than written to a CSV first,
         # so saving stays a deliberate act instead of a step every run performs.
-        # Its cluster section is refreshed from the Cluster tab first.
-        self._sync_batch_cluster()
+        # Its cluster section was refreshed from the Cluster tab above.
         cfg = deepcopy(self._batch.base_config or self._ui_to_config())
         cfg["inputTable"]     = self._batch.to_table()
         cfg["inputPaths"]     = []
@@ -2851,6 +2855,11 @@ class ConvertPage(QWidget):
         input_paths = selected
 
         cfg = self._ui_to_config()
+        problems = scale_override_problems(cfg)
+        if problems:
+            for problem in problems:
+                self._log.append_line(f"ERROR: {problem}")
+            return
         cfg["inputPaths"]      = input_paths
         cfg["inputPath"]       = ""
         cfg["outputPath"]      = output_path

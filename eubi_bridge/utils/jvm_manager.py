@@ -164,6 +164,32 @@ def soft_start_jvm(jvm_memory: Optional[str] = None) -> str:
     return JVM_STARTED
 
 
+_reference_queue_hook = False
+
+
+def _stop_reference_queue() -> None:
+    """Stop JPype's reference queue thread (the one Java thread that calls into
+    Python). Destroying the JVM stops it; without that (``destroy_jvm=False``) it kept
+    running while Python shut down and, on Linux, could abort the exiting process
+    ("FATAL: exception not rethrown", about 1 exit in 5 when it was busy)."""
+    try:
+        import jpype
+        if jpype.isJVMStarted():
+            jpype.JClass("org.jpype.ref.JPypeReferenceQueue").getInstance().stop()
+    except Exception:                                    # noqa: BLE001 - exiting anyway
+        pass
+
+
+def _stop_reference_queue_at_exit() -> None:
+    """Register `_stop_reference_queue` once. Registered after JPype's own exit
+    handler, so it runs before it (atexit runs last-registered first)."""
+    global _reference_queue_hook
+    if not _reference_queue_hook:
+        import atexit
+        atexit.register(_stop_reference_queue)
+        _reference_queue_hook = True
+
+
 def _start_jvm_now(jvm_memory: Optional[str] = None) -> None:
     """Start JVM with bundled JARs only, bypassing Maven/JGO entirely.
 
@@ -191,7 +217,9 @@ def _start_jvm_now(jvm_memory: Optional[str] = None) -> None:
     # through Java and writes from Python, so nothing in the JVM needs a clean shutdown.
     try:
         import jpype
+        import jpype.config
         jpype.config.destroy_jvm = False
+        _stop_reference_queue_at_exit()
     except ImportError:
         pass
 

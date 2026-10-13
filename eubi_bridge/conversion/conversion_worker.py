@@ -18,7 +18,7 @@ import pandas as pd
 
 # Add these imports at the top of conversion_worker.py
 from eubi_bridge.conversion.worker_init import safe_worker_wrapper
-from eubi_bridge.core.config_models import ChunkConfig, ConversionJob
+from eubi_bridge.core.config_models import ChunkConfig, ConversionJob, parse_scale
 from eubi_bridge.core.data_manager import ArrayManager
 from eubi_bridge.core.writers import (store_exists,
                                       store_existing_pyramid_async,
@@ -166,7 +166,9 @@ def _axis_metadata_kwargs(job: ConversionJob) -> Dict:
     """
     stored = {k: v for k, v in job.metadata.model_dump().items()
               if (k.endswith(('_scale', '_unit')) and v is not None)}
-    stored.update(job.extra)
+    # extra skips the config model, so its scales get the same one-notation check
+    stored.update({k: parse_scale(v, k) if k.endswith('_scale') else v
+                   for k, v in job.extra.items()})
     return stored
 
 

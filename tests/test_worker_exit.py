@@ -9,6 +9,7 @@ a worker that has not exited a while after all work is done.
 """
 import asyncio
 import multiprocessing as mp
+import subprocess
 import sys
 import textwrap
 import time
@@ -38,6 +39,43 @@ def test_the_jvm_is_not_destroyed_at_exit(monkeypatch):
     jvm_manager._start_jvm_now()
     assert started
     assert jpype.config.destroy_jvm is False
+
+
+def test_the_reference_queue_stop_runs_before_jpypes_exit_handler(monkeypatch):
+    """Without destroying the JVM, JPype's reference queue thread kept calling into
+    Python while it shut down, and on Linux about 1 exit in 5 aborted ("FATAL: exception
+    not rethrown"). The stop is registered after JPype's handler, so it runs first."""
+    pytest.importorskip("jpype")
+    import atexit
+    from eubi_bridge.utils import jvm_manager
+    registered = []
+    monkeypatch.setattr(atexit, "register", lambda fn, *a, **k: registered.append(fn) or fn)
+    monkeypatch.setattr(jvm_manager, "_reference_queue_hook", False)
+    jvm_manager._stop_reference_queue_at_exit()
+    jvm_manager._stop_reference_queue_at_exit()               # once only
+    assert registered == [jvm_manager._stop_reference_queue]
+
+
+def test_the_reference_queue_is_stopped_when_a_java_process_exits():
+    pytest.importorskip("jpype")
+    from eubi_bridge.utils import jvm_manager
+    if not list((Path(jvm_manager.__file__).resolve().parents[1] / "bioformats").glob("*.jar")):
+        pytest.skip("no bundled Bio-Formats JARs (eubi-bridge-lite)")
+    # registered before eubi's hook, so it runs after it (atexit: last in, first out)
+    code = textwrap.dedent('''
+        import atexit, jpype
+        def report():
+            queue = jpype.JClass("org.jpype.ref.JPypeReferenceQueue").getInstance()
+            print("queue running", queue.isRunning(), flush=True)
+        atexit.register(report)
+        from eubi_bridge.utils.jvm_manager import _start_jvm_now
+        _start_jvm_now()
+        jpype.JClass("java.util.ArrayList")().add(jpype.JString("x"))
+    ''')
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                            timeout=300, cwd=str(_ROOT))
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+    assert "queue running False" in result.stdout
 
 
 def test_a_worker_that_never_exits_does_not_hang_the_run(tmp_path, monkeypatch):

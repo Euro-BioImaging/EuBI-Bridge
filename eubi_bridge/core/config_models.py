@@ -6,6 +6,8 @@ normalisation only.
 """
 from __future__ import annotations
 
+import math
+import re
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import (BaseModel, ConfigDict, Field, ValidationInfo, field_validator,
@@ -127,6 +129,45 @@ OME_ZARR_VERSIONS: Dict[str, int] = {"0.4": 2, "0.5": 3}
 
 _zarr_format_deprecation_warned = False
 _bf_tile_size_deprecation_warned = False
+
+#: a physical scale written as text: digits, with '.' as the decimal point
+_SCALE_TEXT = re.compile(r"\d+\.?\d*|\.\d+")
+
+
+def parse_scale(value: Any, name: str = "scale") -> Optional[float]:
+    """A physical scale (a pixel size or time step) given by a user, or None when blank.
+
+    One notation only: digits, with '.' as the decimal point (``0.26``, ``1800``,
+    ``1000000``). Everything else is refused with an error naming the setting, never
+    dropped: a unit or other text (``30 min``; the unit is set separately), a comma
+    (``0,5`` or ``1,000,000``: decimal or thousands separator depending on the
+    country), spaces inside, underscores, exponents, and values that are not above 0.
+    A number (not text) is taken as it is; NaN, a blank table cell, means blank.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{name}: {value!r} is not a number")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if not _SCALE_TEXT.fullmatch(text):
+            raise ValueError(
+                f"{name}: {value!r} is not a plain number. Write digits with '.' as the "
+                f"decimal point and nothing else: no unit, spaces, commas or other "
+                f"separators (e.g. 0.26, 1800 or 1000000). The unit is chosen separately.")
+        number = float(text)
+    else:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name}: {value!r} is not a number") from None
+        if math.isnan(number):              # a blank cell of a table read by pandas
+            return None
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{name}: must be a number above 0, got {value!r}")
+    return number
 
 #: Settings that no longer have any effect: still accepted, so existing
 #: configs, saved batches and scripts keep working, warned about once each,
@@ -705,6 +746,11 @@ class MetadataConfig(BaseModel):
     y_unit:     Optional[str] = None
     x_unit:     Optional[str] = None
 
+    @field_validator('time_scale', 'z_scale', 'y_scale', 'x_scale', mode='before')
+    @classmethod
+    def _one_number_notation(cls, v, info: ValidationInfo):
+        return parse_scale(v, info.field_name)
+
 
 class ConcatenationConfig(BaseModel):
     """Aggregative (concatenation) parameters persisted in the config file.
@@ -1203,6 +1249,12 @@ class MetadataUpdateConfig(BaseModel):
     z_unit:    Optional[str] = None
     y_unit:    Optional[str] = None
     x_unit:    Optional[str] = None
+
+    @field_validator('time_scale', 'channel_scale', 'z_scale', 'y_scale', 'x_scale',
+                     mode='before')
+    @classmethod
+    def _one_number_notation(cls, v, info: ValidationInfo):
+        return parse_scale(v, info.field_name)
 
     # Crop ranges as (start, stop) — None → no crop on that axis
     time_range:    Optional[Tuple[int, int]] = None
