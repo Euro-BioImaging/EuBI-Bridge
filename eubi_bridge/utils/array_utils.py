@@ -350,6 +350,23 @@ def autocompute_chunk_shape(
                 if chunk_shape[i] > 1:
                     chunk_shape[i] -= 1
 
+        # Window-friendly edges: a multiple of 32 (a power of two below that), rounded
+        # down so the chunk stays within the budget; an edge spanning the whole axis is
+        # kept. Downscale windows are powers of two: with 101^3 (the 1 MB uint8 cube)
+        # no tile edge short of lcm(101, 32) = 3232 aligns with both, so a memory-bounded
+        # writer could not tile the deep levels and re-read level 0 for them.
+        for i in spatial_indices:
+            c = chunk_shape[i]
+            if c >= array_shape[i]:
+                continue
+            chunk_shape[i] = (c // 32) * 32 if c >= 32 else 1 << (int(c).bit_length() - 1)
+        # give back what rounding down took, in steps of 32, innermost (x) first
+        for i in reversed(spatial_indices):
+            while (32 <= chunk_shape[i] and chunk_shape[i] + 32 <= array_shape[i]
+                   and np.prod([chunk_shape[j] + (32 if j == i else 0)
+                                for j in spatial_indices]) <= max_elements):
+                chunk_shape[i] += 32
+
     return tuple(chunk_shape)
 
 

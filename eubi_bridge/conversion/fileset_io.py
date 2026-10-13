@@ -14,7 +14,7 @@ from eubi_bridge.core.data_manager import (ArrayManager,  # , prune_seriesfix
                                            ChannelIterator)
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.optional_deps import is_dask_array
-from eubi_bridge.external.dyna_zarr import operations as ops, DynamicArray
+from dyna_zarr import operations as ops, DynamicArray
 
 if TYPE_CHECKING:
     import dask.array as da

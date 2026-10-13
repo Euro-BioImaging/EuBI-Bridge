@@ -51,4 +51,5 @@ def require(module: str, feature: str) -> ModuleType:
         package = module.partition(".")[0]
         raise ImportError(
             f"{feature} needs {package}, which eubi-bridge-lite does not include. "
-            f"Install the full eubi-bridge: pip install eubi-bridge") from exc
+            f"Needs the full eubi-bridge: pip uninstall eubi-bridge-lite, then "
+            f"pip install eubi-bridge.") from exc

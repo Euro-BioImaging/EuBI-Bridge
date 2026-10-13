@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from tests.conftest import requires_full  # noqa: E402
 
 from eubi_bridge.core import czi_reader
 from eubi_bridge.core.czi_reader import _CziRegionSource
@@ -123,6 +124,7 @@ class TestBackendRouting:
         assert self._backend(path, view_index="all",
                              illumination_index="all") == "pylibczirw"
 
+    @requires_full
     def test_individual_tiles_still_use_aicspylibczi(self, tmp_path,
                                                      monkeypatch):
         """Only the routing decision is tested here, so aicspylibczi is stubbed.

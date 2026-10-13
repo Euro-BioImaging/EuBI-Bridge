@@ -29,6 +29,25 @@ def _patched_version(package_name):
 
 importlib.metadata.version = _patched_version
 
+def write_ome_tiff(path, img, dim_order, channel_names, channel_colors_hex,
+                   physical_pixel_sizes):
+    """An OME-TIFF with channel names / colours and pixel sizes, written with
+    tifffile -- which eubi-bridge-lite has, unlike bioio's OmeTiffWriter, so
+    these fixtures serve the lite tests too.  Colours as OME stores them (and
+    bioio wrote them): signed 32-bit RGBA, alpha 255.  *physical_pixel_sizes*
+    is (z, y, x)."""
+    import tifffile
+    colors = []
+    for rgb in channel_colors_hex:
+        rgba = (rgb << 8) | 0xFF
+        colors.append(rgba - 2**32 if rgba >= 2**31 else rgba)
+    z, y, x = physical_pixel_sizes
+    tifffile.imwrite(str(path), img, ome=True, photometric="minisblack", metadata={
+        "axes": dim_order,
+        "PhysicalSizeZ": z, "PhysicalSizeY": y, "PhysicalSizeX": x,
+        "Channel": {"Name": list(channel_names), "Color": colors},
+    })
+
 
 @pytest.fixture
 def tmp_test_data():
@@ -174,8 +193,6 @@ def imagej_tiff_tczyx(tmp_test_data):
 @pytest.fixture
 def ome_tiff_3ch(tmp_test_data):
     """Create OME-TIFF with 3 channels (GFP, mCherry, Hoechst)."""
-    from bioio_ome_tiff.writers import OmeTiffWriter
-    from bioio_base.types import PhysicalPixelSizes
     
     # Create image data: CZYX format
     shape = (3, 4, 128, 128)  # C=3, Z=4, Y=128, X=128
@@ -183,20 +200,11 @@ def ome_tiff_3ch(tmp_test_data):
     
     channel_names = ['GFP', 'mCherry', 'Hoechst']
     channel_colors_hex = [0x00FF00, 0xFF0000, 0x0000FF]  # Green, Red, Blue
-    # Convert hex to RGB triplets for OmeTiffWriter
-    channel_colors = [[((c >> 16) & 0xFF), ((c >> 8) & 0xFF), (c & 0xFF)] for c in channel_colors_hex]
     
     path = tmp_test_data / "ome_3ch.ome.tif"
     
-    # Use OmeTiffWriter to properly create OME-TIFF with metadata
-    OmeTiffWriter.save(
-        img,
-        str(path),
-        dim_order='CZYX',
-        channel_names=channel_names,
-        channel_colors=channel_colors,
-        physical_pixel_sizes=PhysicalPixelSizes(Z=0.66, Y=0.33, X=0.33),
-    )
+    write_ome_tiff(path, img, 'CZYX', channel_names, channel_colors_hex,
+                   (0.66, 0.33, 0.33))
     
     return path, channel_names, [f"{c:06X}" for c in channel_colors_hex]
 
@@ -204,27 +212,17 @@ def ome_tiff_3ch(tmp_test_data):
 @pytest.fixture
 def ome_tiff_2ch_categorical(tmp_test_data):
     """Create OME-TIFF with 2 channels using categorical names (gfp, mcherry)."""
-    from bioio_ome_tiff.writers import OmeTiffWriter
-    from bioio_base.types import PhysicalPixelSizes
     
     shape = (2, 3, 256, 256)  # C=2, Z=3, Y=256, X=256
     img = create_synthetic_image_czyx(shape, dtype=np.uint8)
     
     channel_names = ['gfp', 'mcherry']
     channel_colors_hex = [0x00FF00, 0xFF0000]  # Green, Red
-    # Convert hex to RGB triplets for OmeTiffWriter
-    channel_colors = [[((c >> 16) & 0xFF), ((c >> 8) & 0xFF), (c & 0xFF)] for c in channel_colors_hex]
     
     path = tmp_test_data / "ome_2ch_categorical.ome.tif"
     
-    OmeTiffWriter.save(
-        img,
-        str(path),
-        dim_order='CZYX',
-        channel_names=channel_names,
-        channel_colors=channel_colors,
-        physical_pixel_sizes=PhysicalPixelSizes(Z=0.5, Y=0.25, X=0.25),
-    )
+    write_ome_tiff(path, img, 'CZYX', channel_names, channel_colors_hex,
+                   (0.5, 0.25, 0.25))
     
     return path, channel_names, [f"{c:06X}" for c in channel_colors_hex]
 
@@ -232,27 +230,17 @@ def ome_tiff_2ch_categorical(tmp_test_data):
 @pytest.fixture
 def ome_tiff_single_ch(tmp_test_data):
     """Create single-channel OME-TIFF."""
-    from bioio_ome_tiff.writers import OmeTiffWriter
-    from bioio_base.types import PhysicalPixelSizes
     
     shape = (1, 5, 256, 256)  # C=1, Z=5, Y=256, X=256
     img = create_synthetic_image_czyx(shape, dtype=np.uint16)
     
     channel_names = ['ProLong']
     channel_colors_hex = [0x808080]  # Gray
-    # Convert hex to RGB triplets for OmeTiffWriter
-    channel_colors = [[((c >> 16) & 0xFF), ((c >> 8) & 0xFF), (c & 0xFF)] for c in channel_colors_hex]
     
     path = tmp_test_data / "ome_1ch.ome.tif"
     
-    OmeTiffWriter.save(
-        img,
-        str(path),
-        dim_order='CZYX',
-        channel_names=channel_names,
-        channel_colors=channel_colors,
-        physical_pixel_sizes=PhysicalPixelSizes(Z=1.0, Y=0.5, X=0.5),
-    )
+    write_ome_tiff(path, img, 'CZYX', channel_names, channel_colors_hex,
+                   (1.0, 0.5, 0.5))
     
     return path, channel_names, [f"{c:06X}" for c in channel_colors_hex]
 
@@ -260,27 +248,17 @@ def ome_tiff_single_ch(tmp_test_data):
 @pytest.fixture
 def ome_tiff_tczyx(tmp_test_data):
     """Create 5D OME-TIFF with time dimension."""
-    from bioio_ome_tiff.writers import OmeTiffWriter
-    from bioio_base.types import PhysicalPixelSizes
     
     shape = (2, 2, 3, 256, 256)  # T=2, C=2, Z=3, Y=256, X=256
     img = create_synthetic_image_tczyx(shape, dtype=np.uint8)
     
     channel_names = ['GFP', 'Brightfield']
     channel_colors_hex = [0x00FF00, 0xFFFFFF]  # Green, White
-    # Convert hex to RGB triplets for OmeTiffWriter
-    channel_colors = [[((c >> 16) & 0xFF), ((c >> 8) & 0xFF), (c & 0xFF)] for c in channel_colors_hex]
     
     path = tmp_test_data / "ome_tczyx.ome.tif"
     
-    OmeTiffWriter.save(
-        img,
-        str(path),
-        dim_order='TCZYX',
-        channel_names=channel_names,
-        channel_colors=channel_colors,
-        physical_pixel_sizes=PhysicalPixelSizes(Z=0.5, Y=0.2, X=0.2),
-    )
+    write_ome_tiff(path, img, 'TCZYX', channel_names, channel_colors_hex,
+                   (0.5, 0.2, 0.2))
     
     return path, channel_names, [f"{c:06X}" for c in channel_colors_hex]
 
@@ -381,8 +359,6 @@ def aggregative_zc_concat_files(tmp_test_data):
 @pytest.fixture
 def aggregative_ome_channel_merge_files(tmp_test_data):
     """Create OME-TIFF files for testing channel metadata merging in aggregative mode."""
-    from bioio_ome_tiff.writers import OmeTiffWriter
-    from bioio_base.types import PhysicalPixelSizes
     
     files = []
     
@@ -392,29 +368,16 @@ def aggregative_ome_channel_merge_files(tmp_test_data):
     
     channel_names1 = ['GFP', 'mCherry']
     channel_colors1_hex = [0x00FF00, 0xFF0000]
-    channel_colors1 = [[(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF] for c in channel_colors1_hex]
     
     path1 = tmp_test_data / "ome_t01.ome.tif"
-    OmeTiffWriter.save(
-        img1, str(path1),
-        dim_order='CZYX',
-        channel_names=channel_names1,
-        channel_colors=channel_colors1,
-        physical_pixel_sizes=PhysicalPixelSizes(Z=0.5, Y=0.33, X=0.33),
-    )
+    write_ome_tiff(path1, img1, 'CZYX', channel_names1, channel_colors1_hex, (0.5, 0.33, 0.33))
     files.append(path1)
     
     # File 2: 2 channels (GFP, mCherry) at timepoint 2
     img2 = create_synthetic_image_czyx(shape1, dtype=np.uint8, seed=2)
     
     path2 = tmp_test_data / "ome_t02.ome.tif"
-    OmeTiffWriter.save(
-        img2, str(path2),
-        dim_order='CZYX',
-        channel_names=channel_names1,
-        channel_colors=channel_colors1,
-        physical_pixel_sizes=PhysicalPixelSizes(Z=0.5, Y=0.33, X=0.33),
-    )
+    write_ome_tiff(path2, img2, 'CZYX', channel_names1, channel_colors1_hex, (0.5, 0.33, 0.33))
     files.append(path2)
     
     return tmp_test_data, files

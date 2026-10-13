@@ -132,33 +132,6 @@ class TestWriterReadsEachPixelOnce:
         assert largest <= region_mb * 1024 ** 2 + 64 * 700 * data.itemsize
 
 
-class TestRegionBudget:
-    def _clus(self, **kw):
-        from eubi_bridge.core.config_models import ClusterConfig
-        return ClusterConfig(**{"region_size_mb": 256, "max_workers": 4,
-                                "max_concurrency": 2, "queue_size": 4, **kw})
-
-    def test_kept_when_everything_fits(self, monkeypatch):
-        from eubi_bridge.conversion import conversion_worker as cw
-        monkeypatch.setattr(cw.psutil, "virtual_memory",
-                            lambda: type("M", (), {"available": 64 * 1024 ** 3})())
-        assert cw._region_budget_mb(self._clus()) == 256
-
-    def test_lowered_when_regions_in_flight_exceed_half_the_ram(self,
-                                                               monkeypatch):
-        from eubi_bridge.conversion import conversion_worker as cw
-        monkeypatch.setattr(cw.psutil, "virtual_memory",
-                            lambda: type("M", (), {"available": 8 * 1024 ** 3})())
-        # 4 workers x (3 x 2 + 4) = 40 regions in flight; half of 8 GB / 40.
-        assert cw._region_budget_mb(self._clus()) == pytest.approx(4096 / 40)
-
-    def test_never_below_the_floor(self, monkeypatch):
-        from eubi_bridge.conversion import conversion_worker as cw
-        monkeypatch.setattr(cw.psutil, "virtual_memory",
-                            lambda: type("M", (), {"available": 64 * 1024 ** 2})())
-        assert cw._region_budget_mb(self._clus()) == cw._MIN_REGION_MB
-
-
 class _Unpicklable(Exception):
     """Stands in for a JPype Java exception, which pickle cannot look up."""
 

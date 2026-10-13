@@ -117,7 +117,10 @@ def main():
         "channel_labels",              # "idx,label;..." format
         "channel_colors",              # "idx,RRGGBB;..." format
         "concatenation_axes",          # axis string, e.g. "tc"
-        "memory_per_worker",           # size string, e.g. "8GB"
+        "memory_per_worker",           # size string, e.g. "8GB" (old name of
+        "slurm_worker_memory",         #   slurm_worker_memory)
+        "memory_budget",               # size string or "auto"
+        "decode_memory",
     )
 
     # JVM is now lazily initialized only when needed (in to_zarr, show_pixel_meta, etc.)

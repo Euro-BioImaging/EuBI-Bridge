@@ -11,9 +11,9 @@ import json
 import os
 from pathlib import Path
 
-import dask.array as da
 import numpy as np
 import pytest
+from tests.conftest import requires_full  # noqa: E402
 
 from eubi_bridge.core.sample_channels import (SamplesAsChannels, expand_channel_metadata,
                                               fold_dask)
@@ -34,7 +34,9 @@ def _omero_channels(store: Path):
 
 # -- the shared helper --------------------------------------------------------------
 
+@requires_full
 def test_fold_dask_is_channel_major_and_lazy():
+    import dask.array as da
     data = np.arange(2 * 3 * 2 * 4 * 5 * 3).reshape(2, 3, 2, 4, 5, 3)
     folded = fold_dask(da.from_array(data, chunks=(1, 1, 1, 4, 5, 3)))
     assert isinstance(folded, da.Array)
@@ -103,10 +105,12 @@ class _FakeBioioImage:
         self.scenes = ("0",)
 
     def get_image_dask_data(self, order):
+        import dask.array as da
         arr = da.from_array(self.data)
         return arr if order == "TCZYXS" else arr[..., 0]
 
 
+@requires_full
 @pytest.mark.parametrize("channels", [2, 1])
 def test_bioio_reader_keeps_every_sample(channels):
     from eubi_bridge.core.pff_reader import BioIOReader
@@ -129,6 +133,7 @@ def _write_two_channel_rgb_czi(path):
     return _channels_major(rgb[None, :, None])                  # (1, 6, 1, H, W)
 
 
+@requires_full
 @pytest.mark.parametrize("as_mosaic", [False, True])
 def test_czi_two_rgb_channels_keep_every_sample(tmp_path, as_mosaic):
     from eubi_bridge.core.czi_reader import read_czi

@@ -132,11 +132,10 @@ These are stored in the configuration file but can also be supplied directly to 
 
 | Argument               | Type     | Description                                  |
 |------------------------|----------|----------------------------------------------|
-| `--max_concurrency`       | `str`    | Maximum concurrent writes **per OME-Zarr group** |
+| `--max_processes`     | `int`   | Images converted at once, each in its own worker process (formerly `--max_workers`) |
+| `--max_threads`       | `int`    | Threads per conversion, each reading and writing one region at a time; scenes converted at once share them (formerly `--max_concurrency`) |
 | `--max_retries`             | `int`    | Number of retries attempted for certain types of errors    |
-| `--max_workers`     | `int`   | Maximum number of processors for **input collection** |
-| `--memory_per_worker`  | `int`   | Memory allocated per worker |
-| `--on_local_cluster`           | `bool`   | Use local dask cluster for parallelisation |
+| `--memory_budget`  | `str`   | The memory the whole run may use on this machine, e.g. `16GB`, or `auto` (default: half the free RAM) |
 | `--on_slurm`           | `bool`   | Enable SLURM-based execution                 |
 | `--queue_size`           | `int`   | Queue size for the concurrent writes |
 | `--region_size_mb`           | `int`   | Megabytes to calculate unit write-region |
@@ -186,6 +185,7 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--dtype`              | `str`  | `auto` keeps the source dtype; pass a NumPy dtype (e.g. `uint8`) to cast on write |
 | `--metadata_reader`    | `str`  | Metadata extraction backend: `micro` (default; Bio-Formats only as a per-file fallback), `bfio` or `bioio` |
 | `--save_omexml`        | `bool` | Save a companion OME-XML sidecar file                    |
+| `--writer`             | `str`  | Which engine writes the OME-Zarr: `auto` (default; ome_zarr_pyramid on dyna-zarr, or eubi-bridge's own writer where that cannot write the output yet), `ozp` or `eubi`. Both give the same output |
 
 #### Downscale Parameters
 
@@ -203,10 +203,10 @@ These are stored in the configuration file but can also be supplied directly to 
 
 #### Examples
 
-**Run with 8 workers and limit memory per worker:**
+**Run 8 conversions at once within 10 GB of memory:**
 
 ```bash
-eubi to_zarr /path/to/input_dir /path/to/output_dir --max_workers 8 --memory_per_worker 10GB
+eubi to_zarr /path/to/input_dir /path/to/output_dir --max_processes 8 --memory_budget 10GB
 ```
 
 **Specify output chunk size:**
@@ -314,7 +314,7 @@ Set cluster defaults using any of the [cluster parameters](#cluster-parameters).
 #### Example
 
 ```bash
-eubi configure cluster --memory_per_worker 10GB
+eubi configure cluster --memory_budget 10GB
 ```
 
 ### `eubi configure conversion`

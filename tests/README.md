@@ -166,11 +166,11 @@ Parameter combinations, edge cases, and constraints:
 **TestConcurrencyParameters**
 - `test_single_worker` — Single-worker sequential processing
 - `test_multiple_workers` — Multi-worker parallelism
-- `test_max_concurrency` — Concurrent write limits
+- `test_max_threads` — Threads per conversion
 
 **TestMemoryConstraints**
 - `test_region_size_limit` — Memory region size control
-- `test_skip_dask` — Direct array processing
+- `test_skip_dask` — still accepted though retired (see test_skip_dask_retired.py)
 
 **TestAxisOrdering**
 - `test_5d_to_4d_via_squeeze` — Dimension reduction via squeeze
@@ -313,9 +313,9 @@ pytest tests/test_unary_conversions.py -v
 
 ### Concurrency & Memory
 - ✅ Single vs multiple workers
-- ✅ max_concurrency parameter
+- ✅ max_threads parameter
 - ✅ region_size_mb limit
-- ✅ skip_dask option
+- ✅ skip_dask option (retired: accepted, ignored)
 
 ## What is not included here:
 

@@ -35,6 +35,17 @@ from tests.validation_utils import (
     compare_pixel_data,
 )
 
+try:
+    from numcodecs.blosc import list_compressors as _blosc_compressors
+    BLOSC_AVAILABLE = set(_blosc_compressors())
+except Exception:
+    BLOSC_AVAILABLE = None
+
+
+def _blosc_cname_missing(cname: str) -> bool:
+    """Current numcodecs builds ship blosc without snappy; eubi refuses it."""
+    return BLOSC_AVAILABLE is not None and cname not in BLOSC_AVAILABLE
+
 
 def run_eubi_command(args: list) -> subprocess.CompletedProcess:
     """Helper to run eubi CLI command."""
@@ -182,18 +193,25 @@ class TestCompressionZarrV2:
     def test_v2_blosc_inner_codecs(self, imagej_tiff_czyx, tmp_path, cname):
         """Test Zarr v2 Blosc with different inner compression libraries.
         
-        Note: 'snappy' is v2-specific (not supported in v3 BloscCodec)
+        Note: 'snappy' is v2-specific (not supported in v3 BloscCodec).
+        A cname missing from the installed blosc build is refused up front.
         """
         output = tmp_path / f"output_v2_blosc_{cname}.zarr"
-        
-        run_eubi_command([
+        args = [
             str(imagej_tiff_czyx),
             str(output),
             '--zarr_format', '2',
             '--compressor', 'blosc',
             '--compressor_params', f'{{cname:{cname}}}'
-        ])
-        
+        ]
+        if _blosc_cname_missing(cname):
+            with pytest.raises(RuntimeError, match="not available in the installed blosc"):
+                run_eubi_command(args)
+            assert not output.exists()
+            return
+
+        run_eubi_command(args)
+
         assert validate_zarr_exists(output)
         assert validate_zarr_format(output) == 2
         validate_compression(output, 'blosc')
@@ -334,19 +352,26 @@ class TestCompressionZarrV2:
     def test_v2_blosc_snappy(self, imagej_tiff_czyx, tmp_path):
         """Test Zarr v2 Blosc with snappy inner codec (v2-only, not guaranteed in v3).
         
-        Note: 'snappy' is supported in numcodecs Blosc for v2, but v3 support is uncertain.
-        This test documents v2 snappy availability.
+        Note: current numcodecs builds ship blosc without snappy. TensorStore
+        would still write it, but the chunks could not be read back, so eubi
+        refuses it before converting. This test documents that rule.
         """
         output = tmp_path / "output_v2_blosc_snappy.zarr"
-        
-        run_eubi_command([
+        args = [
             str(imagej_tiff_czyx),
             str(output),
             '--zarr_format', '2',
             '--compressor', 'blosc',
             '--compressor_params', '{cname:snappy}'
-        ])
-        
+        ]
+        if _blosc_cname_missing('snappy'):
+            with pytest.raises(RuntimeError, match="not available in the installed blosc"):
+                run_eubi_command(args)
+            assert not output.exists()
+            return
+
+        run_eubi_command(args)
+
         assert validate_zarr_exists(output)
         assert validate_zarr_format(output) == 2
         validate_compression(output, 'blosc')

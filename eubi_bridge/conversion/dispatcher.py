@@ -2,14 +2,14 @@
 
 Receives pre-validated :class:`~eubi_bridge.core.config_models.ConversionJob`
 objects from ``ConversionManager`` in ``ebridge.py`` and dispatches them to
-the appropriate execution backend (ProcessPool, ThreadPool, LocalCluster,
-SLURM).
+the execution backend: a ProcessPool, a ThreadPool, or SLURM (through
+dask-jobqueue; the full eubi-bridge only).  (The dask LocalCluster backend was
+retired on 2026-10-05.)
 
 Responsibilities:
 - Pool lifecycle management (create, stagger, gather, shutdown)
 - Retry / fallback on BrokenProcessPool
 - Failure reporting
-- Backend selection (local / SLURM / Dask LocalCluster)
 
 What this module does NOT do:
 - Parameter merging or CSV triage  (done in ebridge.py)
@@ -72,10 +72,10 @@ def _report_failures(results: list, label: str = "Main") -> None:
 def _build_executor(cluster, use_threading: bool) -> tuple:
     """Return (executor_cls, executor_kwargs) from a ClusterConfig."""
     if use_threading:
-        return ThreadPoolExecutor, {"max_workers": cluster.max_workers}
+        return ThreadPoolExecutor, {"max_workers": cluster.max_processes}
     ctx = mp.get_context("spawn")
     return ProcessPoolExecutor, {
-        "max_workers": cluster.max_workers,
+        "max_workers": cluster.max_processes,
         "mp_context": ctx,
         "initializer": initialize_worker_process,
         "initargs": (cluster.tensorstore_data_copy_concurrency,),
@@ -157,10 +157,20 @@ def dispatch_unary_jobs(jobs: list) -> list:
     if not jobs:
         return []
     # the conversions that will run at once: the region budget is shared by
-    # these, not by max_workers
-    running = min(jobs[0].cluster.max_workers, len(jobs))
+    # these, not by max_processes
+    running = min(jobs[0].cluster.max_processes, len(jobs))
+    # each conversion's memory, resolved HERE, once, before the pool starts (a worker
+    # measuring the free RAM would see the others): the run's memory_budget over the
+    # conversions running at once, or on SLURM one worker job's memory each
+    from eubi_bridge.core.memory import main_process_mb, process_mb
+    first = jobs[0].cluster
+    # worker processes: this (main) process's memory comes out of the run's budget
+    # first; threads: it is each conversion's own baseline (measured in the worker)
+    per_process = process_mb(first, 1 if first.on_slurm else running,
+                             0.0 if first.use_threading else main_process_mb())
     jobs = [job.model_copy(update={
-                'cluster': job.cluster.model_copy(update={'concurrent_jobs': running})})
+                'cluster': job.cluster.model_copy(update={
+                    'concurrent_jobs': running, 'process_memory_mb': per_process})})
             for job in jobs]
     cluster       = jobs[0].cluster
     use_threading = cluster.use_threading
@@ -171,13 +181,10 @@ def dispatch_unary_jobs(jobs: list) -> list:
 
     if cluster.on_slurm:
         return asyncio.run(_dispatch_unary_with_slurm(jobs))
-    elif cluster.on_local_cluster:
-        return asyncio.run(_dispatch_unary_with_local_cluster(jobs))
-    else:
-        exc_cls, exc_kw = _build_executor(cluster, use_threading)
-        return asyncio.run(
-            _dispatch(jobs, unary_worker_sync, exc_cls, exc_kw, use_threading)
-        )
+    exc_cls, exc_kw = _build_executor(cluster, use_threading)
+    return asyncio.run(
+        _dispatch(jobs, unary_worker_sync, exc_cls, exc_kw, use_threading)
+    )
 
 
 async def _dispatch_unary_with_slurm(jobs: list) -> list:
@@ -188,7 +195,7 @@ async def _dispatch_unary_with_slurm(jobs: list) -> list:
     cfg = jobs[0].cluster
     cluster_kwargs = dict(
         cores=1, processes=1,
-        memory=cfg.memory_per_worker, walltime=cfg.slurm_time,
+        memory=cfg.slurm_worker_memory, walltime=cfg.slurm_time,
         job_extra_directives=[
             '--job-name=eubi_conversion',
             '--output=slurm-%j.out',
@@ -202,12 +209,12 @@ async def _dispatch_unary_with_slurm(jobs: list) -> list:
         cluster_kwargs['python'] = f"apptainer exec --bind /usr/lib64:/usr/lib64 --bind /etc/slurm:/etc/slurm --bind /etc/munge:/etc/munge --bind /run/munge:/run/munge --bind /etc/passwd:/etc/passwd --bind /etc/group:/etc/group {cfg.slurm_sif_path} python"
 
     slurm_cluster = SLURMCluster(**cluster_kwargs)
-    slurm_cluster.scale(cfg.max_workers)
+    slurm_cluster.scale(cfg.max_processes)
     try:
         with slurm_cluster:
             with Client(slurm_cluster) as client:
                 logger.info(f"Cluster dashboard: {client.dashboard_link}")
-                client.wait_for_workers(cfg.max_workers,
+                client.wait_for_workers(cfg.max_processes,
                                         timeout=cfg.slurm_worker_timeout)
                 client.run(_slurm_worker_init,
                            cfg.tensorstore_data_copy_concurrency)
@@ -224,24 +231,6 @@ async def _dispatch_unary_with_slurm(jobs: list) -> list:
     return results
 
 
-async def _dispatch_unary_with_local_cluster(jobs: list) -> list:
-    """Submit unary jobs to a local Dask cluster."""
-    from dask.distributed import Client, LocalCluster
-
-    cfg = jobs[0].cluster
-    with LocalCluster(n_workers=cfg.max_workers,
-                      memory_limit=cfg.memory_per_worker) as lc:
-        with Client(lc) as client:
-            client.run(_slurm_worker_init,
-                       cfg.tensorstore_data_copy_concurrency)
-            futures = [
-                client.submit(unary_worker_sync, j, pure=False)
-                for j in jobs
-            ]
-            results = list(client.gather(futures))
-
-    _report_failures(results, "LocalCluster")
-    return results
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +243,7 @@ def _build_aggregative_plan(
     concatenation_axes,
     common_dir: str,
     output_path: str,
-    max_workers: int = 4,
+    max_processes: int = 4,
     time_tag=None,
     channel_tag=None,
     z_tag=None,
@@ -302,13 +291,17 @@ def _build_aggregative_plan(
         # that is what keeps sibling outputs apart when one run produces several
         # groups.  The group is therefore prefixed rather than replacing it.
         name     = prefix_with_group(name, aggregative_group)
-        full_out = os.path.join(output_path, name)
+        # store_join, not os.path.join: on Windows the latter put a backslash into
+        # a remote key (".../out\\name.zarr"), so an S3 output landed beside, not
+        # under, the requested prefix
+        from eubi_bridge.core.writers import store_join
+        full_out = store_join(output_path, name)
         if full_out not in file_groups:
             file_groups[full_out] = {'source_files': []}
         file_groups[full_out]['source_files'].append(src_path)
 
     n_outputs    = len(file_groups)
-    file_workers = min(n_outputs, max_workers)
+    file_workers = min(n_outputs, max_processes)
 
     outputs = [
         AggregativeOutputInfo(output_path=out_path, source_files=grp['source_files'])
@@ -335,7 +328,7 @@ def dispatch_aggregative_job(
     If *plan* is supplied (from :meth:`ConversionManager.validate_aggregative`)
     the pre-computed group assignments and worker counts are used directly,
     skipping re-planning.  Without a plan the dispatcher computes both from
-    the job's ``max_workers`` and the number of output groups it finds.
+    the job's ``max_processes`` and the number of output groups it finds.
     """
     runner = (
         run_aggregative_with_slurm
@@ -402,7 +395,7 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
     """
     df = take_filepaths(input_path, **global_kwargs)
 
-    max_workers   = int(global_kwargs.get("max_workers", 4))
+    max_workers   = int(global_kwargs.get("max_processes", 4))
     use_threading = global_kwargs.get("use_threading", False)
     tsc           = global_kwargs.get('tensorstore_data_copy_concurrency', 1)
 
@@ -544,9 +537,9 @@ async def run_aggregative_with_slurm(input_path, output_path, **kwargs):
     from dask.distributed import Client
     from dask_jobqueue import SLURMCluster
 
-    max_workers     = int(kwargs.get('max_workers', 4))
+    max_workers     = int(kwargs.get('max_processes', 4))
     slurm_time      = kwargs.get('slurm_time', '24:00:00')
-    slurm_mem       = kwargs.get('memory_per_worker', '8GB')
+    slurm_mem       = kwargs.get('slurm_worker_memory', '3GB')
     slurm_account   = kwargs.get('slurm_account', None)
     slurm_partition = kwargs.get('slurm_partition', None)
     slurm_sif_path  = kwargs.get('slurm_sif_path', None)
@@ -574,9 +567,10 @@ async def run_aggregative_with_slurm(input_path, output_path, **kwargs):
             logger.info(f"Cluster dashboard: {client.dashboard_link}")
             client.wait_for_workers(1, timeout=worker_timeout)
             client.run(_slurm_worker_init, tsc)
+            # the whole aggregative run is this one SLURM job: its memory is the run's
             future = client.submit(
                 _aggregative_slurm_task, input_path, output_path,
-                dict(kwargs), pure=False, retries=0,
+                {**kwargs, 'memory_budget': slurm_mem}, pure=False, retries=0,
             )
             logger.info("Aggregative SLURM job submitted; waiting...")
             result = client.gather(future)
@@ -605,7 +599,7 @@ async def run_conversions_with_concatenation(
     If *plan* is provided the pre-computed group assignments and worker
     counts are used directly (no re-planning, no header reads).  Without a
     plan the groups are derived via pure filename matching and worker counts
-    are auto-computed from ``max_workers`` ÷ ``n_outputs``.
+    are auto-computed from ``max_processes`` ÷ ``n_outputs``.
 
     Each group is dispatched to a pool worker (ProcessPool by default;
     ThreadPool when ``use_threading=True``).  Workers run their own complete
@@ -671,7 +665,7 @@ async def run_conversions_with_concatenation(
             concatenation_axes=concatenation_axes,
             common_dir=common_dir,
             output_path=output_path,
-            max_workers=cluster_cfg.max_workers,
+            max_processes=cluster_cfg.max_processes,
 
             time_tag=time_tag, channel_tag=channel_tag,
             z_tag=z_tag, y_tag=y_tag, x_tag=x_tag,
@@ -704,11 +698,23 @@ async def run_conversions_with_concatenation(
         os.environ['EUBI_JVM_MEMORY'] = str(jvm_memory)
 
     use_threading = kwargs.get('use_threading', False)
+    if not use_threading and mp.current_process().daemon:
+        # A dask worker (SLURM: dask-jobqueue's nanny starts it daemonic) cannot start
+        # child processes ("daemonic processes are not allowed to have children"), so
+        # the output groups run in threads there.
+        logger.info("Running the output groups in threads: this process is a "
+                    "daemon (a dask worker) and cannot start a process pool.")
+        use_threading = True
     # Cap the pool at file_workers.
     pool_cluster = ClusterConfig(**{**{k: v for k, v in kwargs.items()
                                        if k in ClusterConfig.model_fields},
-                                   'max_workers': file_workers})
+                                   'max_processes': file_workers})
     exc_cls, exc_kw = _build_executor(pool_cluster, use_threading)
+    # each output group's memory: the run's budget over the groups written at once,
+    # resolved here, before the pool starts
+    from eubi_bridge.core.memory import main_process_mb, process_mb
+    per_process = process_mb(pool_cluster.model_copy(update={'on_slurm': False}),
+                             file_workers, 0.0 if use_threading else main_process_mb())
 
     loop = asyncio.get_running_loop()
     pool = None
@@ -718,7 +724,8 @@ async def run_conversions_with_concatenation(
             loop.run_in_executor(
                 pool, aggregative_worker_from_paths,
                 # one output group per worker: file_workers write at once
-                file_paths, out_path, {**job_kwargs, 'concurrent_jobs': file_workers},
+                file_paths, out_path, {**job_kwargs, 'concurrent_jobs': file_workers,
+                                       'process_memory_mb': per_process},
             )
             for out_path, file_paths in groups.items()
         ]

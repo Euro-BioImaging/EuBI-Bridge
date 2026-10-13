@@ -35,7 +35,7 @@ async def run_updates_on_filepaths(
     df = take_filepaths(input_path, **global_kwargs)
 
     # --- Setup concurrency ---
-    max_workers = int(global_kwargs.get("max_workers", 4))
+    max_workers = int(global_kwargs.get("max_processes", 4))
     loop = asyncio.get_running_loop()
 
     def _run_one(row):

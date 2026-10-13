@@ -28,6 +28,10 @@ from eubi_bridge.core.config_models import (
     ClusterConfig,
     ConcatenationConfig,
     ConversionConfig,
+    drop_retired,
+    rename_config_keys,
+    rename_settings,
+    RENAMED_SETTINGS,
     resolve_ome_zarr_target,
     DownscaleConfig,
     MetadataConfig,
@@ -50,7 +54,7 @@ def _normalise_row_overrides(overrides: dict) -> dict:
     ``np.dtype()`` verbatim and raise ``TypeError: data type 'auto' not
     understood``.
     """
-    normalised = dict(overrides)
+    normalised = rename_settings(dict(overrides))
     if normalised.get('dtype') == 'auto':
         normalised['dtype'] = None
     # n_layers='auto' means "detect the layer count", which the config models
@@ -177,20 +181,21 @@ class ConfigManager:
 
     _ROOT_DEFAULTS: dict = dict(
         cluster=dict(
-            on_local_cluster=False,
             on_slurm=False,
             use_threading=False,
-            max_workers=4,
+            max_processes=4,
             queue_size=4,
-            region_size_mb=256,
-            max_concurrency=4,
+            region_size_mb='auto',
+            max_threads=4,
             max_concurrent_scenes=1,
             max_concurrent_downscale_layers=3,
-            memory_per_worker='3GB',
+            memory_budget='auto',
+            decode_memory='auto',
+            slurm_worker_memory='3GB',
             tensorstore_data_copy_concurrency=4,
             max_retries=10,
-            bf_read_concurrency=4,
-            micro_read_concurrency=4,
+            bioformats_threads=4,
+            decode_threads=4,
             jvm_memory='1g',
             slurm_time='24:00:00',
             slurm_account=None,
@@ -217,7 +222,6 @@ class ConfigManager:
             verbose=False,
             ome_zarr_version=None,
             zarr_format=2,
-            skip_dask=False,
             auto_chunk=True,
             target_chunk_mb=1,
             time_chunk=1,
@@ -243,6 +247,8 @@ class ConfigManager:
             export_acquisition_metadata=None,
             squeeze=True,
             dtype='auto',
+            writer='auto',
+            io_backend='tensorstore',
         ),
         downscale=dict(
             time_scale_factor=1,
@@ -344,6 +350,10 @@ class ConfigManager:
             # section that already exists.  Without the key-level pass a field
             # added after the file was written would stay absent forever, since
             # every existing config already has the section it belongs to.
+            # Renamed settings (config_models.RENAMED_SETTINGS): the value is kept
+            # under its new name, before the backfill below adds the default.
+            if rename_config_keys(config):
+                dirty = True
             for section, defaults in self._ROOT_DEFAULTS.items():
                 if section not in config:
                     config[section] = dict(defaults)
@@ -369,8 +379,11 @@ class ConfigManager:
 
     #: Settings that no longer have any effect, removed from a config on load.
     #: bf_tile_size_mb: Bio-Formats images are read one region at a time since
-    #: 0.1.3, so region_size_mb sets the read size.
-    _RETIRED_KEYS = (('cluster', 'bf_tile_size_mb'),)
+    #: 0.1.3, so region_size_mb sets the read size.  The rest
+    #: (config_models.RETIRED_SETTINGS, 2026-10-05): micro-reader reads without
+    #: dask; the local dask cluster backend is gone.
+    _RETIRED_KEYS = (('cluster', 'bf_tile_size_mb'), ('conversion', 'skip_dask'),
+                     ('cluster', 'on_local_cluster'))
 
     #: Settings that used to live in another section.  Their old copies are left
     #: in place rather than moved automatically: silently relocating a value the
@@ -442,6 +455,7 @@ class ConfigManager:
 
         Converts ``dtype='auto'`` → ``None`` at runtime.
         """
+        overrides = rename_settings(overrides)
         params = {}
         for key in self.config[param_type]:
             params[key] = overrides[key] if key in overrides else self.config[param_type][key]
@@ -452,11 +466,11 @@ class ConfigManager:
     # ── configure_* ───────────────────────────────────────────────────────
 
     def configure_cluster(self,
-                          max_workers: int = 'default',
+                          max_processes: int = 'default',
                           queue_size: int = 'default',
                           region_size_mb: int = 'default',
-                          memory_per_worker: str = 'default',
-                          max_concurrency: int = 'default',
+                          memory_budget: str = 'default',
+                          max_threads: int = 'default',
                           max_concurrent_scenes: int = 'default',
                           max_concurrent_downscale_layers: int = 'default',
                           on_local_cluster: bool = 'default',
@@ -464,22 +478,32 @@ class ConfigManager:
                           use_threading: bool = 'default',
                           tensorstore_data_copy_concurrency: int = 'default',
                           max_retries: int = 'default',
-                          bf_read_concurrency: int = 'default',
-                          micro_read_concurrency: int = 'default',
+                          bioformats_threads: int = 'default',
+                          decode_threads: int = 'default',
+                          decode_memory: str = 'default',
                           bf_tile_size_mb: float = 'default',
                           jvm_memory: str = 'default',
                           slurm_time: str = 'default',
                           slurm_account: str = 'default',
                           slurm_partition: str = 'default',
                           slurm_worker_timeout: int = 'default',
-                          slurm_sif_path: str = 'default') -> None:
-        """Update cluster parameters. Omitted arguments keep their current values."""
-        params = {k: v for k, v in locals().items() if k != 'self'}
+                          slurm_sif_path: str = 'default',
+                          slurm_worker_memory: str = 'default',
+                          **kwargs) -> None:
+        """Update cluster parameters. Omitted arguments keep their current values.
+        The old names of renamed settings (``max_workers``, ``max_concurrency``,
+        ``micro_read_concurrency``, ``bf_read_concurrency``) still work."""
+        params = {k: v for k, v in locals().items() if k not in ('self', 'kwargs')}
+        unknown = set(kwargs) - set(RENAMED_SETTINGS)
+        if unknown:
+            raise TypeError(f"configure_cluster got unknown setting(s): {sorted(unknown)}")
+        params.update(rename_settings({k: v for k, v in kwargs.items() if v != 'default'}))
         if params.pop('bf_tile_size_mb') != 'default':
             logger.warning(
                 "DEPRECATION: 'bf_tile_size_mb' is no longer used and was not saved. "
                 "Bio-Formats images are read one region at a time, so "
                 "'region_size_mb' now sets the read size.")
+        params = drop_retired(params)                  # warned about, not saved
         for key, val in params.items():
             if key in self.config['cluster'] and val != 'default':
                 self.config['cluster'][key] = val
@@ -536,9 +560,12 @@ class ConfigManager:
                              export_acquisition_metadata: bool = 'default',
                              squeeze: bool = 'default',
                              dtype: str = 'default',
-                             verbose: bool = 'default') -> None:
+                             verbose: bool = 'default',
+                             writer: str = 'default',
+                             io_backend: str = 'default') -> None:
         """Update conversion parameters. Omitted arguments keep their current values."""
         params = {k: v for k, v in locals().items() if k != 'self'}
+        params = drop_retired(params)                  # warned about, not saved
         for key, val in params.items():
             if key in self.config['conversion'] and val != 'default':
                 self.config['conversion'][key] = val
@@ -905,18 +932,18 @@ class ConfigureGroup:
     Each subcommand updates only the arguments you pass; omitted arguments keep
     their current values.  Example::
 
-        eubi configure cluster --max_workers 8
+        eubi configure cluster --max_processes 8
     """
 
     def __init__(self, config: 'ConfigManager'):
         self._cfg = config
 
     def cluster(self,
-                max_workers: int = 'default',
+                max_processes: int = 'default',
                 queue_size: int = 'default',
                 region_size_mb: int = 'default',
-                memory_per_worker: str = 'default',
-                max_concurrency: int = 'default',
+                memory_budget: str = 'default',
+                max_threads: int = 'default',
                 max_concurrent_scenes: int = 'default',
                 max_concurrent_downscale_layers: int = 'default',
                 on_local_cluster: bool = 'default',
@@ -924,43 +951,61 @@ class ConfigureGroup:
                 use_threading: bool = 'default',
                 tensorstore_data_copy_concurrency: int = 'default',
                 max_retries: int = 'default',
-                bf_read_concurrency: int = 'default',
-                micro_read_concurrency: int = 'default',
+                bioformats_threads: int = 'default',
+                decode_threads: int = 'default',
+                decode_memory: str = 'default',
                 bf_tile_size_mb: float = 'default',
                 jvm_memory: str = 'default',
                 slurm_time: str = 'default',
                 slurm_account: str = 'default',
                 slurm_partition: str = 'default',
                 slurm_worker_timeout: int = 'default',
-                slurm_sif_path: str = 'default') -> None:
+                slurm_sif_path: str = 'default',
+                slurm_worker_memory: str = 'default',
+                **kwargs) -> None:
         """Update cluster / concurrency parameters. Omitted arguments keep their current values.
 
         Args:
-            max_workers: Number of parallel file-level worker processes (default 4).
+            max_processes: Images converted at once, one per worker process
+                (default 4). Formerly ``max_workers``.
             queue_size: Internal write-queue depth per worker (default 4).
-            region_size_mb: Region size in MB for spatial partitioning (default 256).
-            memory_per_worker: Memory limit accepted by SLURM / LocalCluster,
-                e.g. ``'8GB'`` (default ``'1GB'``).
-            max_concurrency: TensorStore write concurrency per worker (default 4).
-            max_concurrent_scenes: Parallel scenes within one file (default 1).
-                Increase only when writing a multi-scene file to a large store.
+            region_size_mb: Size of one read region in MB, or ``'auto'`` (default):
+                each scene's write budget over 3 x its threads, 8 to 256 MB.
+            memory_budget: The memory the whole run may use on this machine, e.g.
+                ``'16GB'``, or ``'auto'`` (default): half the RAM free when it starts.
+                eubi shares it out: between the conversions running at once, then in
+                each between what the process already holds, reading
+                (``decode_memory``) and the scenes converted at once.
+            max_threads: Threads per conversion, each reading and writing one
+                region at a time (default 4). Scenes converted at once share them.
+                Formerly ``max_concurrency``.
+            max_concurrent_scenes: Parallel scenes within one file (default 1);
+                they share ``max_threads``. Increase only when writing a
+                multi-scene file to a large store.
             max_concurrent_downscale_layers: Number of downscaled pyramid layers
                 written concurrently per scene (default 3).
-            on_local_cluster: Use a Dask LocalCluster backend (default False).
-            on_slurm: Submit jobs to a SLURM cluster (default False).
+            on_local_cluster: DEPRECATED and ignored: conversions run in this
+                machine's worker processes.
+            on_slurm: Submit jobs to a SLURM cluster (default False; the full
+                eubi-bridge only).
             use_threading: Use ThreadPool instead of ProcessPool (default False).
             tensorstore_data_copy_concurrency: TensorStore internal copy threads
                 (default 4).
             max_retries: Retries on broken worker process (default 10).
-            bf_read_concurrency: Dask thread count for parallel bfio tile reads
-                (default 4).  ``None`` lets dask choose (cpu_count).
-            micro_read_concurrency: micro-reader's decode threads per worker
-                process, used with ``readers(pixel_reader='micro')`` (default 4).
+            bioformats_threads: Threads for parallel Bio-Formats tile reads
+                (default 4).  ``None`` lets dask choose (cpu_count). Formerly
+                ``bf_read_concurrency``.
+            decode_threads: micro-reader's decode threads per worker process,
+                used with ``readers(pixel_reader='micro')`` (default 4). Formerly
+                ``micro_read_concurrency``.
+            decode_memory: micro-reader's decoding memory per process, e.g. ``'1GB'``,
+                or ``'auto'`` (default): what the file's decode unit needs, at least
+                64 MB and normally at most a quarter of the process's memory.
             bf_tile_size_mb: DEPRECATED and ignored. Bio-Formats images are now
                 read one region at a time, so ``region_size_mb`` sets the read
                 size. Accepted for now so existing scripts keep working.
             jvm_memory: Maximum JVM heap for Bio-Formats, e.g. ``'8GB'``, ``'4GB'``.
-                Accepts ``'NGB'`` / ``'NMB'`` (like memory_per_worker) and normalises
+                Accepts ``'NGB'`` / ``'NMB'`` (like memory_budget) and normalises
                 internally to JVM format (``'Ng'`` / ``'Nm'``).  Default ``'2g'``.
             slurm_time: SLURM job wall-clock limit, e.g. ``'24:00:00'`` (used only
                 when on_slurm=True).
@@ -970,8 +1015,12 @@ class ConfigureGroup:
                 (default 300).
             slurm_sif_path: Path to an Apptainer/Singularity SIF image to run
                 workers in (default None).
+            slurm_worker_memory: Each SLURM worker's memory, e.g. ``'8GB'`` (default
+                ``'3GB'``; used only when on_slurm=True): the SLURM job's memory, shared
+                by its conversions. Formerly ``memory_per_worker``.
         """
-        return self._cfg.configure_cluster(**{k: v for k, v in locals().items() if k != 'self'})
+        args = {k: v for k, v in locals().items() if k not in ('self', 'kwargs')}
+        return self._cfg.configure_cluster(**args, **kwargs)
 
     def readers(self,
                 as_mosaic: bool = 'default',
@@ -1044,7 +1093,9 @@ class ConfigureGroup:
                    export_acquisition_metadata: bool = 'default',
                    squeeze: bool = 'default',
                    dtype: str = 'default',
-                   verbose: bool = 'default') -> None:
+                   verbose: bool = 'default',
+                   writer: str = 'default',
+                   io_backend: str = 'default') -> None:
         """Update Zarr conversion parameters. Omitted arguments keep their current values.
 
         Args:
@@ -1054,6 +1105,8 @@ class ConfigureGroup:
             zarr_format: DEPRECATED zarr container version — ``2`` (default) or
                 ``3``.  Used only when ``ome_zarr_version`` is unset/unrecognised;
                 prefer ``ome_zarr_version``.
+            skip_dask: DEPRECATED and ignored: micro-reader reads without dask.
+                Accepted for now so existing scripts keep working.
             auto_chunk: Auto-compute chunk shape from array size (default True).
             target_chunk_mb: Target chunk size in MB when auto_chunk is True.
             time_chunk / channel_chunk / z_chunk / y_chunk / x_chunk:
@@ -1079,6 +1132,18 @@ class ConfigureGroup:
                 splits an acquisition into several containers, since that is when
                 the relationship between the pieces would otherwise be lost.
             verbose: Log verbose progress output (default False).
+            writer: Which engine writes the OME-Zarr: ``'auto'`` (default),
+                ``'ozp'`` or ``'eubi'``. ``'ozp'`` is ome_zarr_pyramid on dyna-zarr:
+                the same output as eubi-bridge's own writer (``'eubi'``), with all
+                levels from one read of the source and lower peak memory.
+                ``'auto'`` uses ``'ozp'``, and ``'eubi'`` only where ozp cannot write
+                the output yet (kept resolution levels not named 0..n-1).
+            io_backend: The bytes backend of the ``'ozp'`` writer:
+                ``'tensorstore'`` (default) or ``'zarrista'`` (Rust, via zarrs;
+                ``pip install "dyna-zarr[zarrista]"``). With either, shards larger than
+                the region budget are written chunk by chunk in bounded memory (local
+                outputs).
+                Not available with ``writer='eubi'``.
         """
         return self._cfg.configure_conversion(**{k: v for k, v in locals().items() if k != 'self'})
 
@@ -1229,7 +1294,7 @@ class ConversionManager:
                 x_tag: Union[str, tuple] = None,
                 concatenation_axes: Union[int, tuple, str] = None,
                 aggregative_group: str = None,
-                max_workers: int = None,
+                max_processes: int = None,
                 max_retries: int = None,
                 tensorstore_data_copy_concurrency: int = None,
                 use_threading: bool = None,
@@ -1257,7 +1322,7 @@ class ConversionManager:
 
         # Collect CLI overrides (explicit non-None args take priority)
         cli_kwargs = {k: v for k, v in dict(
-            max_workers=max_workers,
+            max_processes=max_processes,
             max_retries=max_retries,
             tensorstore_data_copy_concurrency=tensorstore_data_copy_concurrency,
             use_threading=use_threading,
@@ -1265,6 +1330,12 @@ class ConversionManager:
             on_local_cluster=on_local_cluster,
         ).items() if v is not None}
         cli_kwargs.update(kwargs)
+        # Retired settings (config_models.RETIRED_SETTINGS): warned about once
+        # here, then dropped, so no job -- and no worker process -- sees them
+        cli_kwargs = drop_retired(cli_kwargs)
+        # Renamed settings (config_models.RENAMED_SETTINGS): the old names work
+        cli_kwargs = rename_settings(cli_kwargs)
+        kwargs = {k: v for k, v in rename_settings(kwargs).items() if k in cli_kwargs}
 
         # Build effective params (config defaults merged with CLI overrides).
         # Pydantic validates each section — catches bad CLI values early (Path 1).
@@ -1294,7 +1365,6 @@ class ConversionManager:
         for reader in sorted(row_readers, key=str):
             check_run(metadata_reader=reader,
                       pixel_reader=readers_p.get('pixel_reader'),
-                      on_local_cluster=cluster_p.get('on_local_cluster', False),
                       on_slurm=cluster_p.get('on_slurm', False),
                       force_bioformats=any_forced)
         # With micro-reader's metadata (and so its pixels) nothing may need
@@ -1592,14 +1662,14 @@ class ConversionManager:
 
         common_dir  = os.path.commonpath(filepaths_accepted)
         output_base = output_path or common_dir
-        max_workers = cluster_p.get('max_workers', 4)
+        max_processes = cluster_p.get('max_processes', 4)
 
         return _build_aggregative_plan(
             filepaths_accepted,
             concatenation_axes=concat_p['concatenation_axes'],
             common_dir=common_dir,
             output_path=output_base,
-            max_workers=max_workers,
+            max_processes=max_processes,
             time_tag=concat_p['time_tag'],
             channel_tag=concat_p['channel_tag'],
             z_tag=concat_p['z_tag'],
@@ -1723,7 +1793,7 @@ class MetadataManager:
                 **cluster_p, **readers_p, **conversion_p,
                 'series': series,
                 'use_threading': True,
-                'max_workers': min(16, max(8, len(df['input_path']) if df is not None else 8)),
+                'max_processes': min(16, max(8, len(df['input_path']) if df is not None else 8)),
             }
             extra = {k: v for k, v in kwargs.items() if k not in combined}
             from eubi_bridge.conversion.dispatcher import run_metadata_collection_from_filepaths
@@ -1859,7 +1929,7 @@ class EuBIBridge:
         sections.  Bound to the active config so it composes with
         ``with_config``::
 
-            eubi configure cluster --max_workers 8
+            eubi configure cluster --max_processes 8
             eubi with_config hpc configure conversion --zarr_format 3
         """
         return ConfigureGroup(self._cfg)
@@ -1907,7 +1977,7 @@ class EuBIBridge:
 
         Typical use: propagate default-config edits to a named config::
 
-            eubi configure cluster --max_workers 64   # edits .eubi_config.json
+            eubi configure cluster --max_processes 64   # edits .eubi_config.json
             eubi update_config hpc                     # copies it to hpc.json
 
         Note: ``with_config hpc configure cluster ...`` already writes directly
@@ -1993,7 +2063,7 @@ class EuBIBridge:
         x_tag: Union[str, tuple] = None,
         concatenation_axes: Union[int, tuple, str] = None,
         aggregative_group: Optional[str] = None,
-        max_workers: int = None,
+        max_processes: int = None,
         max_retries: int = None,
         tensorstore_data_copy_concurrency: int = None,
         use_threading: bool = None,
@@ -2017,12 +2087,13 @@ class EuBIBridge:
             x_tag: Filename tag identifying the x axis.
             concatenation_axes: Axes to concatenate across files, e.g. ``'tc'``.
                 If omitted the config value is used; ``None`` means unary conversion.
-            max_workers: Override the configured max_workers for this run.
+            max_processes: Override the configured max_processes (images converted
+                at once) for this run. Formerly ``max_workers``, which still works.
             max_retries: Override the configured max_retries.
             tensorstore_data_copy_concurrency: TensorStore internal copy threads.
             use_threading: Use a ThreadPool instead of a ProcessPool.
-            on_slurm: Submit jobs to a SLURM cluster.
-            on_local_cluster: Use a Dask LocalCluster.
+            on_slurm: Submit jobs to a SLURM cluster (the full eubi-bridge only).
+            on_local_cluster: DEPRECATED and ignored.
             aggregative_group: Name prefixed to the concatenated output, so
                 several concatenated outputs stay distinguishable.  In a
                 conversion table, rows sharing this value are concatenated
@@ -2040,7 +2111,7 @@ class EuBIBridge:
             time_tag, channel_tag, z_tag, y_tag, x_tag,
             concatenation_axes=concatenation_axes,
             aggregative_group=aggregative_group,
-            max_workers=max_workers, max_retries=max_retries,
+            max_processes=max_processes, max_retries=max_retries,
             tensorstore_data_copy_concurrency=tensorstore_data_copy_concurrency,
             use_threading=use_threading, on_slurm=on_slurm,
             on_local_cluster=on_local_cluster, plan=plan, **kwargs,
@@ -2130,6 +2201,7 @@ class EuBIBridge:
         z_unit: str = None,
         y_unit: str = None,
         x_unit: str = None,
+        max_processes: Optional[int] = None,
         max_workers: Optional[int] = None,
     ) -> None:
         """Update pixel-scale and unit metadata on existing OME-Zarr files.
@@ -2149,9 +2221,11 @@ class EuBIBridge:
                 ``nanometer``).
             y_unit: Physical unit for the y axis.
             x_unit: Physical unit for the x axis.
-            max_workers: Number of files to process in parallel.
+            max_processes: Number of files to process in parallel. Formerly
+                ``max_workers``, which still works.
         """
-        kwargs = {k: v for k, v in dict(max_workers=max_workers).items() if v is not None}
+        kwargs = rename_settings({k: v for k, v in dict(
+            max_processes=max_processes, max_workers=max_workers).items() if v is not None})
         return self._meta.update_pixel_meta(
             input_path, includes, excludes,
             time_scale, z_scale, y_scale, x_scale,
@@ -2165,6 +2239,7 @@ class EuBIBridge:
         channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = "from_dtype",
         includes: Optional[str] = None,
         excludes: Optional[str] = None,
+        max_processes: Optional[int] = None,
         max_workers: Optional[int] = None,
     ) -> None:
         """Update channel label, color, and intensity metadata.
@@ -2177,17 +2252,20 @@ class EuBIBridge:
                 ``'from_array'``, or ``'auto'``.
             includes: Comma-separated filename patterns to include.
             excludes: Comma-separated filename patterns to exclude.
-            max_workers: Number of files to process in parallel.
+            max_processes: Number of files to process in parallel. Formerly
+                ``max_workers``, which still works.
         """
-        kwargs = {k: v for k, v in dict(max_workers=max_workers).items() if v is not None}
+        kwargs = rename_settings({k: v for k, v in dict(
+            max_processes=max_processes, max_workers=max_workers).items() if v is not None})
         return self._meta.update_channel_meta(
             input_path, channel_labels, channel_colors,
             channel_intensity_limits, includes, excludes, **kwargs)
 
     def version(self) -> None:
         """Display the installed EuBI-Bridge version."""
-        from importlib.metadata import version as _v
-        _console.print(f"EuBI-Bridge [bold cyan]{_v('eubi_bridge')}[/bold cyan]")
+        from eubi_bridge import __distribution__, __version__
+        lite = " (eubi-bridge-lite)" if __distribution__ == "eubi-bridge-lite" else ""
+        _console.print(f"EuBI-Bridge [bold cyan]{__version__}[/bold cyan]{lite}")
 
     # ── workflow sub-namespace ────────────────────────────────────────────
 

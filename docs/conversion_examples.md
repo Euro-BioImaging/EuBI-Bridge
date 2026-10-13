@@ -315,12 +315,12 @@ eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_conca
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr "medium_dataset/PK2*.ome.tiff" $HOME/codash_output/multidim_dataset_concat_filtered_zarr --channel_tag ch --concatenation_axes c --skip_dask
+eubi to_zarr "medium_dataset/PK2*.ome.tiff" $HOME/codash_output/multidim_dataset_concat_filtered_zarr --channel_tag ch --concatenation_axes c
 ```
 
 **Windows:**
 ```cmd
-eubi to_zarr "medium_dataset\PK2*.ome.tiff" %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr --channel_tag ch --concatenation_axes c --skip_dask
+eubi to_zarr "medium_dataset\PK2*.ome.tiff" %USERPROFILE%\codash_output\multidim_dataset_concat_filtered_zarr --channel_tag ch --concatenation_axes c
 ```
 
 ### Aggregation with Full Metadata Override

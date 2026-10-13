@@ -22,6 +22,9 @@ from eubi_bridge.core.writers import write_with_queue_async
 RNG = np.random.default_rng(2)
 #: the old code needed >= 2 s for any base-layer write
 LIMIT_S = 0.9
+#: a fixed wait slows EVERY run, a busy CI machine only some (a Windows runner
+#: once took 2.09 s for one tiny write): judge the fastest of a few runs
+RUNS = 3
 
 
 def _base(tmp_path, data, name, **kw):
@@ -39,10 +42,14 @@ def test_base_layer_write_ends_with_the_last_region(tmp_path, region_mb, verbose
     import zarr
     data = RNG.integers(0, 4000, (2, 96, 80)).astype("u2")
     _base(tmp_path, data, "warm.zarr")                      # imports, first tensorstore open
-    out, seconds = _base(tmp_path, data, "out.zarr", region_size_mb=region_mb,
-                         verbose=verbose)
-    np.testing.assert_array_equal(zarr.open_array(out, mode="r")[:], data)
-    assert seconds < LIMIT_S, f"a tiny write took {seconds:.2f} s"
+    times = []
+    for i in range(RUNS):
+        out, seconds = _base(tmp_path, data, f"out{i}.zarr", region_size_mb=region_mb,
+                             verbose=verbose)
+        np.testing.assert_array_equal(zarr.open_array(out, mode="r")[:], data)
+        times.append(seconds)
+    assert min(times) < LIMIT_S, \
+        f"every tiny write took long: {', '.join(f'{t:.2f}' for t in times)} s"
 
 
 def test_conversion_has_no_fixed_wait(tmp_path):
@@ -55,10 +62,10 @@ def test_conversion_has_no_fixed_wait(tmp_path):
     tifffile.imwrite(source, RNG.integers(0, 255, (2, 64, 64)).astype("u1"),
                      imagej=True, metadata={"axes": "CYX"})
     EuBIBridge().to_zarr(str(source), str(tmp_path / "warm"), verbose=False,
-                         use_threading=True, max_workers=1)
+                         use_threading=True, max_processes=1)
     t0 = time.perf_counter()
     EuBIBridge().to_zarr(str(source), str(tmp_path / "out"), verbose=False,
-                         use_threading=True, max_workers=1)
+                         use_threading=True, max_processes=1)
     seconds = time.perf_counter() - t0
     assert list((tmp_path / "out").glob("*.zarr"))
     # measured: ~2.5 s now (metadata, JVM reuse), ~5.5 s with the polling writers

@@ -81,7 +81,7 @@ class TestUneditableReason:
     def test_dim_ranges_are_batch_wide(self, key):
         assert "whole batch" in uneditable_reason(key)
 
-    @pytest.mark.parametrize("key", ["max_workers", "on_slurm", "jvm_memory"])
+    @pytest.mark.parametrize("key", ["max_processes", "on_slurm", "jvm_memory"])
     def test_cluster_settings_rejected(self, key):
         assert "cluster" in uneditable_reason(key)
 
@@ -122,7 +122,7 @@ class TestUpdateCells:
 
     def test_rejects_cluster_key(self, batch):
         with pytest.raises(KeyError):
-            batch.update_cells([0], "max_workers", 8)
+            batch.update_cells([0], "max_processes", 8)
 
     def test_rejects_unstorable_value(self, batch):
         with pytest.raises(ValueError):
@@ -291,7 +291,7 @@ class TestGroupedSpecs:
 
     def test_tabs_follow_form_order(self):
         result = grouped_specs(
-            ["metadata_reader", "dtype", "scene_index", "y_scale_factor"])
+            ["channel_intensity_limits", "dtype", "scene_index", "y_scale_factor"])
         assert [tab for tab, _ in result] == [
             "Reader", "Conversion", "Downscaling", "Metadata"]
 
@@ -403,9 +403,9 @@ class TestBlockedReporting:
         model.add(base, ["a.tif"], "/out")
 
         variant = deepcopy(base)
-        variant["cluster"] = {"bfReadConcurrency": 8, "jvmMemory": 8}
+        variant["cluster"] = {"bioformatsThreads": 8, "jvmMemory": 8}
         blocked = model.add(variant, ["b.tif"], "/out2")
-        assert "bf_read_concurrency" in blocked
+        assert "bioformats_threads" in blocked
         assert "jvm_memory" in blocked
 
     def test_legitimate_override_is_not_blocked(self):

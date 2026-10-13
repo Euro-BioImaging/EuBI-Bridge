@@ -203,12 +203,12 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--max_workers</code></summary>
+    <summary><code>--max_processes</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Number of files to process in parallel.</p>
+    <p>Number of files to process in parallel. Formerly `max_workers`, which still works.</p>
     <pre><code># Update 8 OME-Zarr stores in parallel
-    eubi update_pixel_meta /data/output --max_workers 8
+    eubi update_pixel_meta /data/output --max_processes 8
     </code></pre>
     </details>
 
@@ -302,12 +302,12 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--max_workers</code></summary>
+    <summary><code>--max_processes</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Number of files to process in parallel.</p>
+    <p>Number of files to process in parallel. Formerly `max_workers`, which still works.</p>
     <pre><code># Update 8 OME-Zarr stores in parallel
-    eubi update_channel_meta /data/output --max_workers 8
+    eubi update_channel_meta /data/output --max_processes 8
     </code></pre>
     </details>
 

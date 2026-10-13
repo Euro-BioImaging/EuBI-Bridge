@@ -255,7 +255,7 @@ class TestConcurrencyParameters:
         run_eubi_command([
             str(imagej_tiff_czyx),
             str(output),
-            '--max_workers', '1'
+            '--max_processes', '1'
         ])
         
         assert validate_zarr_exists(output)
@@ -267,19 +267,19 @@ class TestConcurrencyParameters:
         run_eubi_command([
             str(imagej_tiff_czyx),
             str(output),
-            '--max_workers', '4'
+            '--max_processes', '4'
         ])
         
         assert validate_zarr_exists(output)
     
-    def test_max_concurrency(self, imagej_tiff_czyx, tmp_path):
+    def test_max_threads(self, imagej_tiff_czyx, tmp_path):
         """Test concurrent write limits."""
         output = tmp_path / "output.zarr"
         
         run_eubi_command([
             str(imagej_tiff_czyx),
             str(output),
-            '--max_concurrency', '2'
+            '--max_threads', '2'
         ])
         
         assert validate_zarr_exists(output)
@@ -301,7 +301,8 @@ class TestMemoryConstraints:
         assert validate_zarr_exists(output)
     
     def test_skip_dask(self, imagej_tiff_czyx, tmp_path):
-        """Test skip_dask option for direct array processing."""
+        """skip_dask is retired but still accepted: old scripts keep working
+        (tests/test_skip_dask_retired.py)."""
         output = tmp_path / "output.zarr"
         
         run_eubi_command([

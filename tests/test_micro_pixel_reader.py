@@ -11,12 +11,20 @@ import pickle
 
 import numpy as np
 import pytest
+from tests.conftest import requires_full  # noqa: E402
 
 pytest.importorskip("micro_reader")
 tifffile = pytest.importorskip("tifffile")
 
 from eubi_bridge.core import micro_source  # noqa: E402
 from eubi_bridge.core.micro_source import micro_array, swap_in, verify  # noqa: E402
+
+
+def _reader_source(arr):
+    """The reader's own source behind a DynamicArray: ``dyna_zarr.from_array`` keeps it
+    one level down, in its adapter (``arr._source._source``)."""
+    src = getattr(arr, "_source", None)
+    return getattr(src, "_source", src)
 
 RNG = np.random.default_rng(5)
 
@@ -120,7 +128,7 @@ def test_micro_source_survives_pickling_and_deep_copy(tmp_path):
     import copy
     path, a, _ = _two_series(tmp_path)
     arr, _ = micro_array(path, 0, None)
-    source = arr._source
+    source = _reader_source(arr)
     source[0, 0, 0, 0:2, 0:2]                                     # opened in this process
     micro_source.close_all()                                      # clones reopen it
     for clone in (pickle.loads(pickle.dumps(source)), copy.deepcopy(source)):
@@ -155,6 +163,7 @@ def test_conversion_writes_the_same_pixels_with_both_readers(tmp_path):
     assert written["micro"].size == data.size
 
 
+@requires_full
 @pytest.mark.parametrize("reader,expect_micro", [("micro", True), ("standard", False)])
 def test_loaded_scenes_hold_micro_reader_arrays(tmp_path, reader, expect_micro):
     """The layer the writer reads from: with pixel_reader='micro' each scene
@@ -174,7 +183,7 @@ def test_loaded_scenes_hold_micro_reader_arrays(tmp_path, reader, expect_micro):
     scenes = list(asyncio.run(load()).values())
     assert len(scenes) == 2
     for mgr in scenes:
-        assert isinstance(getattr(mgr.array, "_source", None), MicroSource) == expect_micro
+        assert isinstance(_reader_source(mgr.array), MicroSource) == expect_micro
     np.testing.assert_array_equal(np.asarray(scenes[0].array), a.transpose(1, 0, 2, 3)[None])
 
 
@@ -182,18 +191,18 @@ def test_loaded_scenes_hold_micro_reader_arrays(tmp_path, reader, expect_micro):
 
 def test_gui_config_maps_both_ways():
     """The tick is a reader setting, the concurrency a cluster one, in the
-    GUI as in the backend (readers.pixel_reader, cluster.micro_read_concurrency)."""
+    GUI as in the backend (readers.pixel_reader, cluster.decode_threads)."""
     from eubi_bridge.qt_gui.server.config_manager import _config_to_react, _react_to_config
     from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
-    gui = {"cluster": {"microReadConcurrency": 6}, "reader": {"useMicroReader": True}}
+    gui = {"cluster": {"decodeThreads": 6}, "reader": {"useMicroReader": True}}
     backend = _react_to_config(gui)
     assert backend["readers"]["pixel_reader"] == "micro"
-    assert backend["cluster"]["micro_read_concurrency"] == 6
+    assert backend["cluster"]["decode_threads"] == 6
     back = _config_to_react(backend)
     assert back["reader"]["useMicroReader"] is True
-    assert back["cluster"]["microReadConcurrency"] == 6
+    assert back["cluster"]["decodeThreads"] == 6
     kwargs = _build_kwargs(gui)
-    assert kwargs["pixel_reader"] == "micro" and kwargs["micro_read_concurrency"] == 6
+    assert kwargs["pixel_reader"] == "micro" and kwargs["decode_threads"] == 6
     unset = _react_to_config({"cluster": {}, "reader": {}})
     assert unset["readers"]["pixel_reader"] == "micro"          # the default (2026-10-04)
     off = _react_to_config({"cluster": {}, "reader": {"useMicroReader": False}})
@@ -217,29 +226,29 @@ def page():
 def test_gui_tick_enables_concurrency_and_is_saved(page):
     # ticked by default (2026-10-04), with its concurrency live from the start
     assert page._use_micro_reader.isChecked()
-    assert page._micro_read_concurrency.isEnabled()
+    assert page._decode_threads.isEnabled()
     page._use_micro_reader.setChecked(False)
-    assert not page._micro_read_concurrency.isEnabled()
+    assert not page._decode_threads.isEnabled()
     page._use_micro_reader.setChecked(True)
-    assert page._micro_read_concurrency.isEnabled()
-    page._micro_read_concurrency.setValue(8)
+    assert page._decode_threads.isEnabled()
+    page._decode_threads.setValue(8)
     config = page._ui_to_config()
     assert config["reader"]["useMicroReader"] is True
-    assert config["cluster"]["microReadConcurrency"] == 8
+    assert config["cluster"]["decodeThreads"] == 8
     page._use_micro_reader.setChecked(False)
     assert page._ui_to_config()["reader"]["useMicroReader"] is False
-    assert not page._micro_read_concurrency.isEnabled()
+    assert not page._decode_threads.isEnabled()
 
 
 def test_gui_loads_the_tick_from_a_saved_config(page):
-    page._load_config_to_ui({"cluster": {"microReadConcurrency": 5},
+    page._load_config_to_ui({"cluster": {"decodeThreads": 5},
                              "reader": {"useMicroReader": True}})
     assert page._use_micro_reader.isChecked()
-    assert page._micro_read_concurrency.value() == 5
-    assert page._micro_read_concurrency.isEnabled()
+    assert page._decode_threads.value() == 5
+    assert page._decode_threads.isEnabled()
 
 
-def test_micro_read_concurrency_sets_the_decode_pool():
+def test_decode_threads_sets_the_decode_pool():
     import micro_reader
     from eubi_bridge.core.micro_source import set_read_concurrency
     old = micro_reader.decode_threads()
@@ -311,7 +320,7 @@ def test_aggregative_conversion_reads_with_micro_reader(tmp_path, monkeypatch):
     for reader in ("standard", "micro"):
         out = tmp_path / reader
         EuBIBridge().to_zarr(str(folder), str(out), concatenation_axes="z", z_tag="cell_",
-                             pixel_reader=reader, use_threading=True, max_workers=1,
+                             pixel_reader=reader, use_threading=True, max_processes=1,
                              verbose=False)
         (store,) = out.glob("*.zarr")
         written[reader] = np.asarray(zarr.open_group(str(store), mode="r")["0"])
@@ -382,6 +391,7 @@ def _read(path, **kwargs):
     return asyncio.run(read_single_image(path, **kwargs))
 
 
+@requires_full
 def test_micro_reader_replaces_the_standard_reader(tmp_path):
     from eubi_bridge.core.micro_source import MicroReader
     path, a, b = _two_series(tmp_path)
@@ -406,6 +416,7 @@ def test_rgb_samples_become_channels_with_their_layout(tmp_path):
     np.testing.assert_array_equal(arr[0, :, 0], rgb.transpose(0, 3, 1, 2).reshape(6, 12, 14))
 
 
+@requires_full
 def test_tiles_outside_czi_keep_the_standard_reader(tmp_path):
     from eubi_bridge.core.micro_source import MicroReader
     path = str(tmp_path / "tiles.tif")
@@ -448,6 +459,7 @@ def test_rgb_channel_count_may_or_may_not_include_samples(tmp_path):
                                                   _ome((1, 5, 1, 12, 14, "uint8")))
 
 
+@requires_full
 def test_scenes_load_without_opening_the_standard_reader(tmp_path, monkeypatch):
     """The layer the writer reads from, with the standard TIFF reader made to
     fail: pixel_reader='micro' must not need it."""
@@ -474,10 +486,11 @@ def test_scenes_load_without_opening_the_standard_reader(tmp_path, monkeypatch):
 
     scenes = list(asyncio.run(load()).values())
     assert len(scenes) == 2
-    assert all(isinstance(m.array._source, MicroSource) for m in scenes)
+    assert all(isinstance(_reader_source(m.array), MicroSource) for m in scenes)
     np.testing.assert_array_equal(np.asarray(scenes[0].array), a.transpose(1, 0, 2, 3)[None])
 
 
+@requires_full
 def test_disagreement_with_the_metadata_keeps_the_standard_reader(tmp_path):
     """tifffile's own multi-series TIFF: micro-reader sees 2 scenes, Bio-Formats
     (the metadata) 8.  Who is right is not micro-reader's call: the file is
@@ -574,7 +587,7 @@ def test_keep_existing_resolutions_copies_the_stored_levels(tmp_path):
     out = tmp_path / "out"
     EuBIBridge().to_zarr(str(source), str(out), pixel_reader="micro",
                          keep_existing_resolutions=True, verbose=False,
-                         use_threading=True, max_workers=1)
+                         use_threading=True, max_processes=1)
     written, scales = _written_levels(out)
     assert len(written) == 3
     for mine, stored in zip(written, levels):
@@ -588,7 +601,7 @@ def test_without_keep_existing_the_pyramid_is_computed(tmp_path):
     levels = _pyramid_ome_tiff(str(source))
     out = tmp_path / "out"
     EuBIBridge().to_zarr(str(source), str(out), pixel_reader="micro", verbose=False,
-                         use_threading=True, max_workers=1)
+                         use_threading=True, max_processes=1)
     written, _ = _written_levels(out)
     np.testing.assert_array_equal(written[0], levels[0])
     assert not np.array_equal(written[1], levels[1])           # computed, not the stored level
@@ -596,6 +609,7 @@ def test_without_keep_existing_the_pyramid_is_computed(tmp_path):
 
 # -- Imaris: micro-reader through IMSImageMeta -----------------------------------------
 
+@requires_full
 def test_imaris_reads_with_micro_reader_and_keeps_its_levels(tmp_path):
     """Imaris has its own route (IMSImageMeta, native metadata), which used to
     bypass pixel_reader: the base array and the kept levels must come from
@@ -616,9 +630,9 @@ def test_imaris_reads_with_micro_reader_and_keeps_its_levels(tmp_path):
         return mgr
 
     mgr = asyncio.run(load(pixel_reader="micro", keep_existing_resolutions=True))
-    assert isinstance(mgr.array._source, MicroSource)
+    assert isinstance(_reader_source(mgr.array), MicroSource)
     levels = list(mgr.pyr.layers.values())
-    assert len(levels) == 2 and all(isinstance(lv._source, MicroSource) for lv in levels)
+    assert len(levels) == 2 and all(isinstance(_reader_source(lv), MicroSource) for lv in levels)
     np.testing.assert_array_equal(np.asarray(levels[0]), data)
     np.testing.assert_array_equal(np.asarray(levels[1]), data[:, :, :, ::2, ::2])
     standard = asyncio.run(load(pixel_reader="standard"))

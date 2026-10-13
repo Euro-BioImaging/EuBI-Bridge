@@ -1,15 +1,13 @@
 """What this installation of eubi-bridge can do.
 
 eubi-bridge-lite installs neither the Bio-Formats stack (bfio / bioio /
-scyjava, the JVM) nor dask, distributed and dask-jobqueue; the full
-eubi-bridge installs all of them.  Everything reads micro-reader by default
-(``metadata_reader='micro'``, ``pixel_reader='micro'``); the rest of the stack
-is needed only for what micro-reader does not cover:
-
-- the Bio-Formats metadata readers (``metadata_reader='bfio'`` / ``'bioio'``),
-  the standard pixel readers (``pixel_reader='standard'``), and a file
-  micro-reader does not read (it falls back to them);
-- a dask cluster (``on_local_cluster``) or SLURM (``on_slurm``).
+scyjava, the JVM) nor dask; the full eubi-bridge installs both.  Everything
+reads micro-reader by default (``metadata_reader='micro'``,
+``pixel_reader='micro'``); the rest of the stack is needed only for what
+micro-reader does not cover: the Bio-Formats metadata readers
+(``metadata_reader='bfio'`` / ``'bioio'``), the standard pixel readers
+(``pixel_reader='standard'``), a file micro-reader does not read (it falls
+back to them), and SLURM (``on_slurm``, through dask-jobqueue).
 
 In lite, asking for those raises ``NeedsFullEubiBridge``, which says what to
 install, before any work starts -- not an ImportError from deep inside.
@@ -18,7 +16,9 @@ from __future__ import annotations
 
 from eubi_bridge.utils.optional_deps import is_installed
 
-INSTALL_FULL = "Install the full eubi-bridge: pip install eubi-bridge"
+#: the two packages share their files: lite must go before the full one comes
+INSTALL_FULL = ("Needs the full eubi-bridge: pip uninstall eubi-bridge-lite, "
+                "then pip install eubi-bridge.")
 
 
 #: the modules the Bio-Formats path imports
@@ -39,14 +39,13 @@ def has_dask() -> bool:
     return is_installed("dask")
 
 
-def has_cluster() -> bool:
-    """A local dask cluster and SLURM (dask-jobqueue) are possible."""
+def has_slurm() -> bool:
+    """SLURM through dask-jobqueue is possible (the full eubi-bridge)."""
     return all(is_installed(m) for m in ("dask", "distributed", "dask_jobqueue"))
 
 
 def check_run(metadata_reader: str = "micro", pixel_reader: str = "micro",
-              on_local_cluster: bool = False, on_slurm: bool = False,
-              force_bioformats: bool = False) -> None:
+              on_slurm: bool = False, force_bioformats: bool = False) -> None:
     """Raise ``NeedsFullEubiBridge`` if a conversion with these settings
     needs what this installation lacks; nothing to check in the full one."""
     missing = []
@@ -59,19 +58,18 @@ def check_run(metadata_reader: str = "micro", pixel_reader: str = "micro",
                            "use pixel_reader='micro'")
         if force_bioformats:
             missing.append("force_bioformats=True (Bio-Formats)")
-    if (on_local_cluster or on_slurm) and not has_cluster():
-        missing.append(("on_slurm=True" if on_slurm else "on_local_cluster=True")
-                       + " (dask distributed / dask-jobqueue)")
+    if on_slurm and not has_slurm():
+        missing.append("on_slurm=True (SLURM)")
     if missing:
         raise NeedsFullEubiBridge(
-            "This conversion needs what eubi-bridge-lite does not include:\n  - "
+            "This conversion uses what eubi-bridge-lite does not include:\n  - "
             + "\n  - ".join(missing) + f"\n{INSTALL_FULL}")
 
 
 def micro_reader_declined(path: str) -> NeedsFullEubiBridge:
     """The error for a file micro-reader does not read, where the fallback
-    (Bio-Formats) is not installed."""
+    (Bio-Formats) is not installed: worded for the lite user, who has one
+    reader and need not know its name."""
     return NeedsFullEubiBridge(
-        f"{path}: micro-reader does not read this file, and Bio-Formats -- which "
-        f"eubi-bridge falls back to for such files -- is not installed "
-        f"(eubi-bridge-lite). {INSTALL_FULL}")
+        f"{path}: eubi-bridge-lite cannot read this file. The full eubi-bridge "
+        f"can: pip uninstall eubi-bridge-lite, then pip install eubi-bridge.")

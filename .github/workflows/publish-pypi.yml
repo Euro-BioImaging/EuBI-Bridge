@@ -1,25 +1,35 @@
 name: Publish to PyPI
 
-# Manual "Run workflow" button (Actions tab). Builds the source distribution
-# (sdist) and publishes it to PyPI via Trusted Publishing (OIDC) — no token is
-# stored in the repo.
+# Manual "Run workflow" button (Actions tab). Publishes eubi-bridge and
+# eubi-bridge-lite to PyPI via Trusted Publishing (OIDC) -- no token is stored
+# in the repo. Both come from the same commit and the same version (the one in
+# pyproject.toml): bump it before running, and make sure that version isn't
+# already on PyPI (PyPI rejects re-uploads of an existing version). If one of
+# the two uploads fails, re-run with only that package selected.
 #
-# Only the sdist is published (not a wheel): the custom build backend
-# (_build_backend.py) bundles a platform-specific JDK at build time, so a
-# CI-built wheel would be Linux-only and break Windows/macOS installs. The
-# sdist carries no JDK (only the Bio-Formats JARs); the correct per-platform
-# JDK is fetched when each user installs.
+# eubi-bridge: only the sdist is published (not a wheel). The custom build
+# backend (_build_backend.py) bundles a platform-specific JDK at build time,
+# so a CI-built wheel would be Linux-only and break Windows/macOS installs.
+# The sdist carries no JDK (only the Bio-Formats JARs); the correct
+# per-platform JDK is fetched when each user installs.
 #
-# The published version is whatever is in pyproject.toml — bump it before
-# running, and make sure that version isn't already on PyPI (PyPI rejects
-# re-uploads of an existing version).
+# eubi-bridge-lite: the same eubi_bridge package without Bio-Formats, built
+# by tools/build_lite.py as a pure wheel (py3-none-any, no JDK, no JARs) and
+# an sdist.
 
 on:
   workflow_dispatch:
+    inputs:
+      packages:
+        description: Which packages to publish
+        type: choice
+        options: [both, eubi-bridge, eubi-bridge-lite]
+        default: both
 
 jobs:
   build:
-    name: Build sdist
+    name: Build eubi-bridge (sdist)
+    if: inputs.packages != 'eubi-bridge-lite'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,8 +49,43 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
+  build-lite:
+    name: Build eubi-bridge-lite (wheel + sdist)
+    if: inputs.packages != 'eubi-bridge'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build & check
+        run: |
+          python -m pip install --upgrade build twine
+          python tools/build_lite.py --outdir dist-lite
+          twine check dist-lite/*
+
+      - name: The wheel is pure and carries no Bio-Formats
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          (wheel,) = glob.glob("dist-lite/*.whl")
+          if not wheel.endswith("-py3-none-any.whl"):
+              sys.exit(f"not a pure wheel: {wheel}")
+          names = zipfile.ZipFile(wheel).namelist()
+          if any("/bioformats/" in n for n in names):
+              sys.exit("the lite wheel contains Bio-Formats files")
+          print(wheel, len(names), "files")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lite-dist
+          path: dist-lite/*
+
   publish:
-    name: Publish to PyPI
+    name: Publish eubi-bridge
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -54,4 +99,21 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         # No password/token: authenticates via OIDC Trusted Publishing.
-        # Uploads everything in dist/ (the sdist) to https://upload.pypi.org/legacy/
+
+  publish-lite:
+    name: Publish eubi-bridge-lite
+    needs: build-lite
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write          # Trusted Publishing: a publisher for the
+                               # eubi-bridge-lite project, this workflow file
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lite-dist
+          path: dist-lite
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-lite/

@@ -234,10 +234,10 @@ def test_downscale_methods(tmp_path, method):
 # ===========================================================================
 
 @pytest.mark.parametrize("opt", [
-    ("--max_workers", "2"),
+    ("--max_processes", "2"),
     ("--queue_size", "8"),
     ("--region_size_mb", "128"),
-    ("--max_concurrency", "2"),
+    ("--max_threads", "2"),
     ("--max_concurrent_scenes", "2"),
     ("--use_threading", "True"),
     ("--tensorstore_data_copy_concurrency", "2"),

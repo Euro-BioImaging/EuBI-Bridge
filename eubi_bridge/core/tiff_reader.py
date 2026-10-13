@@ -17,7 +17,7 @@ import zarr
 from eubi_bridge.core.reader_interface import ImageReader
 from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.logging_config import get_logger
-from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+from dyna_zarr import DynamicArray, from_array
 
 if TYPE_CHECKING:
     import dask.array as da
@@ -114,8 +114,8 @@ class TIFFDynaZarrReader(ImageReader):
             raise IndexError(f"Scene index {scene_index} out of range [0, {self.n_scenes})")
         
         # Import dyna_zarr operations
-        from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
-        from eubi_bridge.external.dyna_zarr import operations
+        from dyna_zarr import DynamicArray, from_array
+        from dyna_zarr import operations
         
         self.series = scene_index
         self.tiff_file_series = self.tiff_file.series[scene_index]
@@ -167,7 +167,7 @@ class TIFFDynaZarrReader(ImageReader):
             from eubi_bridge.core.sample_channels import SamplesAsChannels
             dyna_array = self._normalize_to_tczyx(dyna_array, processed_axes, 'TCZYXS')
             self._sample_layout = (dyna_array.shape[1], dyna_array.shape[5])
-            dyna_array = DynamicArray(SamplesAsChannels(dyna_array))
+            dyna_array = from_array(SamplesAsChannels(dyna_array))
         else:
             self._sample_layout = None
             dyna_array = self._normalize_to_tczyx(dyna_array, processed_axes)
@@ -310,7 +310,7 @@ class TIFFDynaZarrReader(ImageReader):
         Input: 'TZYX' → expand to 'TCZYX' (add C as singleton dimension)
         Input: 'TZCYX' → transpose to 'TCZYX'
         """
-        from eubi_bridge.external.dyna_zarr import operations
+        from dyna_zarr import operations
         
         current_axes = tiff_axes
 

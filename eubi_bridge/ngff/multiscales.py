@@ -27,8 +27,8 @@ from eubi_bridge.core.scale import Downscaler
 from eubi_bridge.ngff import defaults
 from eubi_bridge.utils.json_utils import make_json_safe
 from eubi_bridge.utils.logging_config import get_logger
-from eubi_bridge.external.dyna_zarr import operations as ops
-from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
+from dyna_zarr import operations as ops
+from dyna_zarr import DynamicArray
 from eubi_bridge.utils.optional_deps import is_dask_array, require
 
 if TYPE_CHECKING:

@@ -15,7 +15,6 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-import psutil
 
 # Add these imports at the top of conversion_worker.py
 from eubi_bridge.conversion.worker_init import safe_worker_wrapper
@@ -418,41 +417,70 @@ def _maybe_compute_bfio_array(manager: ArrayManager, region_size_mb: float) -> N
     )
 
 
-#: Smallest region the RAM cap below may impose; below this, per-region
-#: overhead dominates and the conversion would crawl rather than fit.
-_MIN_REGION_MB = 16.0
+def _threads_per_scene(clus) -> int:
+    """A conversion's ``max_threads``, shared by the scenes it converts at once
+    (``max_concurrent_scenes``): raising the scenes never raises the threads."""
+    scenes = max(1, int(clus.max_concurrent_scenes or 1))
+    return max(1, int(clus.max_threads or 1) // scenes)
 
 
-def _region_budget_mb(clus) -> float:
-    """``region_size_mb``, capped so every region in flight fits in RAM.
-
-    Each writer holds up to ``2 * max_concurrency`` regions being read,
-    ``queue_size`` waiting and ``max_concurrency`` being written, and that per
-    concurrent scene in every conversion running at once -- ``concurrent_jobs``,
-    which the dispatcher sets to min(max_workers, the number of jobs): one
-    concatenated output keeps one worker busy, not ``max_workers``.  The
-    configured size is kept when all of those fit in half the available
-    memory; otherwise it is lowered.
-    """
-    configured = float(clus.region_size_mb)
-    concurrency = max(1, int(clus.max_concurrency or 1))
-    queued = max(1, int(clus.queue_size or 1))
-    running = getattr(clus, 'concurrent_jobs', None) or clus.max_workers
-    in_flight = (max(1, int(running or 1))
-                 * max(1, int(clus.max_concurrent_scenes or 1))
-                 * (3 * concurrency + queued))
+def _unit_mb(arr) -> Optional[float]:
+    """The size of the source's native decode unit in MB (a whole compressed plane,
+    tile or strip), or None when it is not known."""
     try:
-        available_mb = psutil.virtual_memory().available / 1024 ** 2
-    except Exception:                                       # noqa: BLE001
-        return configured
-    cap = max(_MIN_REGION_MB, 0.5 * available_mb / in_flight)
-    if configured <= cap:
-        return configured
+        from dyna_zarr._read_cost import read_unit
+        unit = read_unit(arr)
+        if unit is None:
+            return None
+        return float(np.prod(unit)) * np.dtype(arr.dtype).itemsize / 2 ** 20
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def _memory_plan(manager: ArrayManager, job: ConversionJob) -> tuple:
+    """``(scene write budget, region size)`` in MB, from the run's memory budget
+    (core/memory.py): this process's share, minus what it already holds and the
+    reader's share (applied to micro-reader here), over the scenes at once."""
+    from eubi_bridge.core import memory
+    clus = job.cluster
+    process = clus.process_memory_mb or memory.process_mb(clus)
+    micro = job.readers.pixel_reader == 'micro' or job.metadata.metadata_reader == 'micro'
+    if micro:
+        decode, cache = memory.reader_share(process, clus.decode_memory, clus.decode_threads,
+                                            _unit_mb(manager.array))
+        from eubi_bridge.core.micro_source import set_read_memory
+        set_read_memory(decode, cache)
+        reader = decode + cache
+    else:                                                    # Bio-Formats: the JVM heap
+        reader = memory.parse_mb(clus.jvm_memory or '1g')
+    held = memory.baseline_mb()
+    scenes = max(1, int(clus.max_concurrent_scenes or 1))
+    scene = memory.scene_mb(process, held, reader, scenes)
+    region = memory.region_mb(clus.region_size_mb, scene, _threads_per_scene(clus))
     logger.info(
-        f"region_size_mb={configured:g} lowered to {cap:.0f} MB so the "
-        f"{in_flight} regions that can be in flight at once fit in half the "
-        f"available RAM ({available_mb / 1024:.1f} GB)")
-    return cap
+        f"Memory: {process:.0f} MB for this conversion = {held:.0f} MB already held + "
+        f"{reader:.0f} MB reading + {scene:.0f} MB writing per scene ({scenes} at once); "
+        f"regions of {region:.0f} MB")
+    return scene, region
+
+
+#: settings of eubi-bridge's own writer that the ozp writer does not use
+_EUBI_WRITER_ONLY = ('queue_size', 'max_concurrent_downscale_layers',
+                     'tensorstore_data_copy_concurrency')
+_warned_unused: set = set()
+
+
+def _warn_unused_writer_settings(clus) -> None:
+    """Warn once for each eubi-writer setting set to a non-default value while the
+    ozp writer runs (it does nothing there; never fails: retired-settings rule)."""
+    for name in _EUBI_WRITER_ONLY:
+        default = type(clus).model_fields[name].default
+        if getattr(clus, name) != default and name not in _warned_unused:
+            _warned_unused.add(name)
+            logger.warning(
+                f"{name}={getattr(clus, name)} only applies to eubi-bridge's own writer "
+                f"(writer='eubi'); the ozp writer ignores it. Its parallelism is "
+                f"max_threads, its memory memory_budget.")
 
 
 async def _process_single_scene(manager: ArrayManager, output_path: str,
@@ -479,9 +507,35 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             logger.info(f"The manager array shape before preparation: "
                         f"{manager.array.shape if manager.array is not None else 'N/A'}")
         await _prepare_manager(manager, job)
-        region_size_mb = _region_budget_mb(clus)
+        scene_budget_mb, region_size_mb = _memory_plan(manager, job)
         _maybe_compute_bfio_array(manager, region_size_mb)
         update_channels = meta.channel_intensity_limits == 'from_array'
+        keep_levels = (ds.keep_existing_resolutions and manager.pyr is not None
+                       and len(manager.pyr.layers) > 1)
+        from eubi_bridge.core.ozp_writer import resolve_writer
+        writer = resolve_writer(conv.writer, manager.pyr if keep_levels else None)
+        if conv.io_backend != 'tensorstore' and writer != 'ozp':
+            # an explicit backend request is never dropped silently
+            raise ValueError(
+                f"io_backend={conv.io_backend!r} needs the ozp writer, but this "
+                f"conversion uses eubi-bridge's own writer (writer={conv.writer!r}"
+                f"{', which chose eubi for kept resolution levels not named 0..n-1' if conv.writer == 'auto' else ''}"
+                f"). Use io_backend='tensorstore', or writer='ozp'.")
+        io_kw = {'io_backend': conv.io_backend} if writer == 'ozp' else {}
+        # max_threads, shared by the scenes converted at once (each writer's own name)
+        threads = _threads_per_scene(clus)
+        thread_kw = ({'max_threads': threads} if writer == 'ozp'
+                     else {'max_concurrency': threads})
+        if writer == 'ozp':
+            # the memory this scene's write may add (core/memory.py), on both byte
+            # backends: dyna caps its threads by it and tiles big shards in y/x within
+            # it (local zarr v3 outputs)
+            io_kw['memory_budget_mb'] = scene_budget_mb
+            _warn_unused_writer_settings(clus)
+        # writer='ozp' measures them while it writes level 0 (dyna's io.Extrema), so
+        # the output is not read a second time to compute them afterwards
+        windows_in_write = update_channels and writer == 'ozp'
+        window_kw = {'window_from_data': True} if windows_in_write else {}
 
         # Windows must describe the dtype actually written, not the source: a
         # uint16 -> uint8 conversion would otherwise advertise 0-65535 for uint8
@@ -506,18 +560,23 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
             logger.info(f"The manager array shape before storing: "
                         f"{manager.array.shape if manager.array is not None else 'N/A'}")
 
-        # bf_read_concurrency caps dask's thread pool → caps peak concurrent open
+        # bioformats_threads caps dask's thread pool → caps peak concurrent open
         # BioReader instances (one per thread via thread-local cache).  Without this,
         # dask defaults to cpu_count threads, potentially opening cpu_count readers
         # per series and exhausting JVM heap.
         dask_kw = {}
-        if clus.bf_read_concurrency is not None:
-            dask_kw['num_workers'] = clus.bf_read_concurrency
+        if clus.bioformats_threads is not None:
+            dask_kw['num_workers'] = clus.bioformats_threads
         with dask_config(**dask_kw):
-            if ds.keep_existing_resolutions and manager.pyr is not None and len(manager.pyr.layers) > 1:
+            if keep_levels:
                 logger.info(f"Preserving {len(manager.pyr.layers)} existing resolution levels "
                             f"from source for {output_path}")
-                await store_existing_pyramid_async(
+                if writer == 'ozp':
+                    from eubi_bridge.core.ozp_writer import store_existing_pyramid_ozp
+                    store_existing = store_existing_pyramid_ozp
+                else:
+                    store_existing = store_existing_pyramid_async
+                await store_existing(
                     pyr=manager.pyr,
                     output_path=output_path,
                     axes=manager.axes,
@@ -530,19 +589,27 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     output_chunks=parse_chunks(manager, job),
                     output_shard_coefficients=parse_shard_coefs(manager, job),
                     overwrite=conv.overwrite,
-                    max_concurrency=clus.max_concurrency,
+                    **thread_kw,
                     region_size_mb=region_size_mb,
                     queue_size=clus.queue_size,
                     verbose=conv.verbose,
                     compressor=conv.compressor,
                     compressor_params=conv.compressor_params,
                     dtype=conv.dtype,
+                    target_chunk_mb=conv.target_chunk_mb,
+                    **window_kw,
+                    **io_kw,
                 )
             else:
                 if ds.keep_existing_resolutions:
                     logger.info(f"keep_existing_resolutions is set but no existing multiscale "
                                 f"pyramid was found for {output_path}; rebuilding pyramid normally")
-                await store_multiscale_async(
+                if writer == 'ozp':
+                    from eubi_bridge.core.ozp_writer import store_multiscale_ozp
+                    store = store_multiscale_ozp
+                else:
+                    store = store_multiscale_async
+                await store(
                     arr=manager.array,
                     dtype=conv.dtype,
                     output_path=output_path,
@@ -562,7 +629,7 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     min_dimension_size=ds.min_dimension_size,
                     scale_factors=parse_scale_factors(manager, job),
                     smart_scale_factor=parse_smart_scale_factors(manager, job),
-                    max_concurrency=clus.max_concurrency,
+                    **thread_kw,
                     max_concurrent_downscale_layers=clus.max_concurrent_downscale_layers,
                     region_size_mb=region_size_mb,
                     compute_batch_size=job.extra.get('compute_batch_size', 4),
@@ -572,13 +639,18 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
                     compressor=conv.compressor,
                     compressor_params=conv.compressor_params,
                     downscale_method=ds.downscale_method,
+                    # it was never passed, so auto-chunking always used 1 MB
+                    target_chunk_mb=conv.target_chunk_mb,
+                    **window_kw,
+                    **io_kw,
                 )
 
-        if conv.save_omexml or update_channels:
-            out_mgr = ArrayManager(output_path, skip_dask=conv.skip_dask)
+        measure_after = update_channels and not windows_in_write
+        if conv.save_omexml or measure_after:
+            out_mgr = ArrayManager(output_path)
             await out_mgr.init()
 
-            if update_channels:
+            if measure_after:
                 out_mgr.fill_default_meta()
                 await out_mgr.sync_pyramid(save_changes=False)
                 # No squeeze here: the output is already written, squeezed or
@@ -672,11 +744,10 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
     """Open the input file, load all requested scenes/tiles/views/illuminations."""
     if job.readers.pixel_reader == 'micro' or job.metadata.metadata_reader == 'micro':
         from eubi_bridge.core.micro_source import set_read_concurrency
-        set_read_concurrency(job.cluster.micro_read_concurrency, job.cluster.memory_per_worker)
+        set_read_concurrency(job.cluster.decode_threads)
     manager = ArrayManager(
         job.input_path,
         metadata_reader=job.metadata.metadata_reader,
-        skip_dask=job.conversion.skip_dask,
         force_bioformats=job.readers.force_bioformats,
         as_mosaic=job.readers.as_mosaic,
         keep_existing_resolutions=job.downscale.keep_existing_resolutions,
@@ -883,7 +954,7 @@ async def aggregative_worker(manager: ArrayManager,
         output_path=output_path_full,
         kwargs=kwargs,
     )
-    sem = asyncio.Semaphore(job.cluster.max_concurrency)
+    sem = asyncio.Semaphore(job.cluster.max_concurrent_scenes)
     await _process_single_scene(manager, output_path_full, job, sem)
 
 
@@ -896,6 +967,8 @@ def unary_worker_sync(job: ConversionJob) -> dict:
     dedicated thread that has no event loop of its own.
     """
     import concurrent.futures
+    from eubi_bridge.core.memory import baseline_mb
+    baseline_mb()            # what this process holds before it reads anything
 
     if job.conversion.verbose:
         logger.info(f"[Worker] Processing: {job.input_path}")
@@ -981,11 +1054,10 @@ async def _aggregative_group_pipeline(
         pixel_reader, micro_check_pixels = 'micro', False
     if pixel_reader == 'micro':
         from eubi_bridge.core.micro_source import set_read_concurrency
-        set_read_concurrency(job_kwargs.get('micro_read_concurrency', 4),
-                             job_kwargs.get('memory_per_worker'))
+        set_read_concurrency(job_kwargs.get('decode_threads', 4))
 
     await base.read_dataset(
-        readers_params={'aszarr': job_kwargs.get('skip_dask', False)},
+        readers_params={'aszarr': False},
         pixel_reader=pixel_reader,
         micro_check_pixels=micro_check_pixels,
     )
@@ -1023,6 +1095,8 @@ def aggregative_worker_from_paths(
     Each subprocess starts its own JVM instance — no shared reader state.
     """
     import concurrent.futures
+    from eubi_bridge.core.memory import baseline_mb
+    baseline_mb()            # what this process holds before it reads anything
 
     soft_start_jvm()
 

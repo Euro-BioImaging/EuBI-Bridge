@@ -16,12 +16,12 @@ Click any command card below to expand its full parameter reference.
     <summary>Optional arguments</summary>
 
     <details>
-    <summary><code>--max_workers</code></summary>
+    <summary><code>--max_processes</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Number of parallel file-level worker processes (default 4).</p>
-    <pre><code># Set the default number of parallel worker processes
-    eubi configure cluster --max_workers 8
+    <p>Images converted at once, one per worker process (default 4). Formerly `max_workers`.</p>
+    <pre><code># Convert 8 images at once, each in its own worker process
+    eubi configure cluster --max_processes 8
     </code></pre>
     </details>
 
@@ -39,29 +39,29 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--region_size_mb</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Region size in MB for spatial partitioning (default 256).</p>
+    <p>Size of one read region in MB, or `'auto'` (default): each scene's write budget over 3 x its threads, 8 to 256 MB.</p>
     <pre><code># Process larger spatial regions per task (reduces overhead on large arrays)
     eubi configure cluster --region_size_mb 512
     </code></pre>
     </details>
 
     <details>
-    <summary><code>--memory_per_worker</code></summary>
+    <summary><code>--memory_budget</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Memory limit accepted by SLURM / LocalCluster, e.g. `'8GB'` (default `'1GB'`).</p>
-    <pre><code># Allocate 8 GB per worker (relevant for SLURM / LocalCluster)
-    eubi configure cluster --memory_per_worker 8GB
+    <p>The memory the whole run may use on this machine, e.g. `'16GB'`, or `'auto'` (default): half the RAM free when it starts.</p>
+    <pre><code># Let the whole run use at most 16 GB of this machine's memory
+    eubi configure cluster --memory_budget 16GB
     </code></pre>
     </details>
 
     <details>
-    <summary><code>--max_concurrency</code></summary>
+    <summary><code>--max_threads</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>TensorStore write concurrency per worker (default 4).</p>
-    <pre><code># Allow TensorStore to issue 8 write operations concurrently per worker
-    eubi configure cluster --max_concurrency 8
+    <p>Threads per conversion, each reading and writing one region at a time (default 4). Scenes converted at once share them. Formerly `max_concurrency`.</p>
+    <pre><code># Read and write 8 regions at once in each conversion (one per thread)
+    eubi configure cluster --max_threads 8
     </code></pre>
     </details>
 
@@ -69,7 +69,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--max_concurrent_scenes</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Parallel scenes within one file (default 1). Increase only when writing a multi-scene file to a large store.</p>
+    <p>Parallel scenes within one file (default 1); they share `max_threads`. Increase only when writing a multi-scene file to a large store.</p>
     <pre><code># Convert 2 scenes within a single file simultaneously
     eubi configure cluster --max_concurrent_scenes 2
     </code></pre>
@@ -85,22 +85,11 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--on_local_cluster</code></summary>
-    <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p><strong>Valid values:</strong>&nbsp; `--on_local_cluster` to enable &nbsp;·&nbsp; `--on_local_cluster False` to disable</p>
-    <p>Use a Dask LocalCluster backend (default False).</p>
-    <pre><code># Use a Dask LocalCluster as the scheduler
-    eubi configure cluster --on_local_cluster
-    </code></pre>
-    </details>
-
-    <details>
     <summary><code>--on_slurm</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p><strong>Valid values:</strong>&nbsp; `--on_slurm` to enable &nbsp;·&nbsp; `--on_slurm False` to disable</p>
-    <p>Submit jobs to a SLURM cluster (default False).</p>
+    <p>Submit jobs to a SLURM cluster (default False; the full eubi-bridge only).</p>
     <pre><code># Submit workers to SLURM and set partition + account
     eubi configure cluster --on_slurm --slurm_account myaccount --slurm_partition gpu
     </code></pre>
@@ -138,17 +127,31 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--bf_read_concurrency</code></summary>
+    <summary><code>--bioformats_threads</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Dask thread count for parallel bfio tile reads (default 4).  `None` lets dask choose (cpu_count).</p>
+    <p>Threads for parallel Bio-Formats tile reads (default 4).  `None` lets dask choose (cpu_count). Formerly `bf_read_concurrency`.</p>
+    </details>
+
+    <details>
+    <summary><code>--decode_threads</code></summary>
+    <p><strong>Type:</strong>&nbsp; `int`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>micro-reader's decode threads per worker process, used with `readers(pixel_reader='micro')` (default 4). Formerly `micro_read_concurrency`.</p>
+    </details>
+
+    <details>
+    <summary><code>--decode_memory</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>micro-reader's decoding memory per process, e.g. `'1GB'`,</p>
     </details>
 
     <details>
     <summary><code>--jvm_memory</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Maximum JVM heap for Bio-Formats, e.g. `'8GB'`, `'4GB'`. Accepts `'NGB'` / `'NMB'` (like memory_per_worker) and normalises internally to JVM format (`'Ng'` / `'Nm'`).  Default `'2g'`.</p>
+    <p>Maximum JVM heap for Bio-Formats, e.g. `'8GB'`, `'4GB'`. Accepts `'NGB'` / `'NMB'` (like memory_budget) and normalises internally to JVM format (`'Ng'` / `'Nm'`).  Default `'2g'`.</p>
     </details>
 
     <details>
@@ -200,6 +203,16 @@ Click any command card below to expand its full parameter reference.
     </code></pre>
     </details>
 
+    <details>
+    <summary><code>--slurm_worker_memory</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Each SLURM worker's memory, e.g. `'8GB'` (default `'3GB'`; used only when on_slurm=True): the SLURM job's memory, shared by its conversions. Formerly `memory_per_worker`.</p>
+    <pre><code># Each SLURM worker job gets 8 GB
+    eubi configure cluster --slurm_worker_memory 8GB
+    </code></pre>
+    </details>
+
 
     </details>
 
@@ -234,17 +247,6 @@ Click any command card below to expand its full parameter reference.
     <p>DEPRECATED zarr container version — `2` (default) or `3`.  Used only when `ome_zarr_version` is unset/unrecognised; prefer `ome_zarr_version`.</p>
     <pre><code># Deprecated — prefer 'ome_zarr_version'. Switch to Zarr v3 (supports sharding)
     eubi configure conversion --zarr_format 3
-    </code></pre>
-    </details>
-
-    <details>
-    <summary><code>--skip_dask</code></summary>
-    <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p><strong>Valid values:</strong>&nbsp; `--skip_dask` to enable &nbsp;·&nbsp; `--skip_dask False` to disable</p>
-    <p>Read TIFF files via zarr's native aszarr backend instead of dask. Faster for large TIFFs; ignored for non-TIFF formats.</p>
-    <pre><code># Use zarr's native TIFF backend instead of dask (faster for large TIFFs)
-    eubi configure conversion --skip_dask
     </code></pre>
     </details>
 
@@ -505,6 +507,23 @@ Click any command card below to expand its full parameter reference.
     <pre><code># Enable verbose per-chunk progress logging
     eubi configure conversion --verbose
     </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--writer</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Which engine writes the OME-Zarr: `'auto'` (default), `'ozp'` or `'eubi'`. `'ozp'` is ome_zarr_pyramid on dyna-zarr: the same output as eubi-bridge's own writer (`'eubi'`), with all levels from one read of the source and lower peak memory. `'auto'` uses `'ozp'`, and `'eubi'` only where ozp cannot write the output yet (kept resolution levels not named 0..n-1).</p>
+    <pre><code># Always use eubi-bridge's own writer
+    eubi configure conversion --writer eubi
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--io_backend</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>The bytes backend of the `'ozp'` writer: `'tensorstore'` (default) or `'zarrista'` (Rust, via zarrs; `pip install "dyna-zarr[zarrista]"`). With either, shards larger than the region budget are written chunk by chunk in bounded memory (local outputs). Not available with `writer='eubi'`.</p>
     </details>
 
 
@@ -806,6 +825,21 @@ Click any command card below to expand its full parameter reference.
     </code></pre>
     </details>
 
+    <details>
+    <summary><code>--pixel_reader</code></summary>
+    <p><strong>Type:</strong>&nbsp; `str`</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>`'micro'` (default): read the pixels with micro-reader (a file it does not read falls back to the standard reader with a warning), or `'standard'`.</p>
+    </details>
+
+    <details>
+    <summary><code>--micro_check_pixels</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Valid values:</strong>&nbsp; `--micro_check_pixels` to enable &nbsp;·&nbsp; `--micro_check_pixels False` to disable</p>
+    <p>with `pixel_reader='micro'`, also open the standard reader and compare its pixels with micro-reader's (slower; default False: checked against the metadata only).</p>
+    </details>
+
 
     </details>
 
@@ -823,9 +857,9 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--metadata_reader</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `micro`</p>
-    <p>Metadata backend — `'micro'` (default: micro-reader reads metadata and pixels; a file it does not read falls back to Bio-Formats, which starts Java only then), `'bfio'` or `'bioio'`.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bfio
+    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p>Metadata backend — `'micro'` (default): micro-reader's metadata, and its pixels with it (no JVM unless a file falls back to Bio-Formats; also writes the stage position as the NGFF translation and wavelengths in the `eubi_bridge` attributes); `'bfio'` or `'bioio'`.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
     </code></pre>
     </details>
 

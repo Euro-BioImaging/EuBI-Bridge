@@ -133,8 +133,8 @@ def read_image_sync(path: str, **kwargs) -> ImageReader:
     """
     try:
         asyncio.get_running_loop()
-        # Already inside a running event loop (e.g. Dask distributed worker or
-        # the outer asyncio.run inside _aggregative_slurm_task). Run the
+        # Already inside a running event loop (e.g. a worker that runs its
+        # own asyncio loop). Run the
         # coroutine in a brand-new thread that has no event loop of its own.
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:

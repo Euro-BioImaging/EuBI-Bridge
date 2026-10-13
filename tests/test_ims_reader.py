@@ -11,6 +11,7 @@ import asyncio
 import h5py
 import numpy as np
 import pytest
+from tests.conftest import requires_full  # noqa: E402
 
 from eubi_bridge.core.data_manager import IMSImageMeta, _build_ims_omemeta
 from eubi_bridge.core.ims_reader import IMSReader, read_ims
@@ -62,6 +63,7 @@ def synthetic_ims_file(tmp_test_data):
     return path
 
 
+@requires_full
 def test_read_ims_basic(synthetic_ims_file):
     reader = read_ims(str(synthetic_ims_file))
     assert isinstance(reader, IMSReader)
@@ -77,6 +79,7 @@ def test_n_resolution_levels(synthetic_ims_file):
     assert reader.n_resolution_levels == 2
 
 
+@requires_full
 def test_get_resolution_level_dask_data(synthetic_ims_file):
     reader = read_ims(str(synthetic_ims_file))
     level0 = reader.get_resolution_level_dask_data(0)
@@ -85,6 +88,7 @@ def test_get_resolution_level_dask_data(synthetic_ims_file):
     assert level1.shape == (1, 2, 2, 8, 8)
 
 
+@requires_full
 def test_ims_image_meta_basic(synthetic_ims_file):
     meta = IMSImageMeta(str(synthetic_ims_file))
     asyncio.run(meta.read_dataset())
@@ -105,6 +109,7 @@ def test_ims_image_meta_basic(synthetic_ims_file):
     assert meta.arraydata.shape == (1, 2, 4, 16, 16)
 
 
+@requires_full
 def test_ims_image_meta_keep_existing_resolutions(synthetic_ims_file):
     meta = IMSImageMeta(str(synthetic_ims_file), keep_existing_resolutions=True)
     asyncio.run(meta.read_dataset())
@@ -124,6 +129,7 @@ def test_ims_image_meta_keep_existing_resolutions(synthetic_ims_file):
         assert scale1[i] == pytest.approx(scale0[i] * factor)
 
 
+@requires_full
 def test_ims_image_meta_without_keep_existing_resolutions_single_layer(synthetic_ims_file):
     meta = IMSImageMeta(str(synthetic_ims_file), keep_existing_resolutions=False)
     asyncio.run(meta.read_dataset())
@@ -173,6 +179,7 @@ def _write_padded_ims(path, n_resolution_levels=2, n_channels=2):
     return real_levels
 
 
+@requires_full
 def test_padding_is_cropped_at_every_level(tmp_test_data):
     path = tmp_test_data / "padded.ims"
     real_levels = _write_padded_ims(path)
@@ -183,6 +190,7 @@ def test_padding_is_cropped_at_every_level(tmp_test_data):
         np.testing.assert_array_equal(data[0], real)
 
 
+@requires_full
 def test_padded_array_matches_its_metadata(tmp_test_data):
     """Pixel sizes were always right (extent / real size, as Bio-Formats);
     only the array was too large for them."""

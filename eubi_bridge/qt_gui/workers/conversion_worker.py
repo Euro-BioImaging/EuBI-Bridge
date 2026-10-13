@@ -53,12 +53,28 @@ _ANSI_ESC = _re.compile(
 # ── Config helpers ────────────────────────────────────────────────────────────
 
 def _gb_to_memory_str(val) -> str:
-    """Float GB → '4GB' or '4.5GB' string for Dask memory_per_worker."""
+    """Float GB → '4GB' or '4.5GB' string (memory_budget, slurm_worker_memory)."""
     try:
         gb = float(val)
         return f"{int(gb)}GB" if gb == int(gb) else f"{gb:.1f}GB"
     except (TypeError, ValueError):
         return str(val) if val else "4GB"
+
+
+def _gb_or_auto(val) -> str:
+    """The GUI's GB (0 = auto) as a config memory size."""
+    try:
+        return "auto" if float(val or 0) <= 0 else _gb_to_memory_str(val)
+    except (TypeError, ValueError):
+        return "auto"
+
+
+def _float_or_auto(val):
+    """The GUI's value (0 = auto) as a config number or "auto"."""
+    try:
+        return "auto" if float(val or 0) <= 0 else float(val)
+    except (TypeError, ValueError):
+        return "auto"
 
 
 def _gb_to_jvm_str(val) -> str:
@@ -154,25 +170,26 @@ def _build_kwargs(config: dict) -> dict:
     illu_idx   = "all" if reader_config.get("readAllIlluminations", True)  else _parse_index(reader_config.get("illuminationIndices", "0"))
 
     kwargs: dict = {
-        "max_workers":              cluster_config.get("maxWorkers", 4),
+        "max_processes":              cluster_config.get("maxProcesses", 4),
         "queue_size":               cluster_config.get("queueSize", 10),
-        "region_size_mb":           cluster_config.get("regionSizeMb", 64),
-        "max_concurrency":          cluster_config.get("maxConcurrency", 4),
+        "region_size_mb":           _float_or_auto(cluster_config.get("regionSizeMb", 0)),
+        "max_threads":          cluster_config.get("maxThreads", 4),
         "max_concurrent_downscale_layers": cluster_config.get("maxConcurrentDownscaleLayers", 3),
         "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 1),
-        "memory_per_worker":        _gb_to_memory_str(cluster_config.get("memoryPerWorker", 4)),
-        "jvm_memory":               _gb_to_jvm_str(cluster_config.get("jvmMemory", 2)),
-        "bf_read_concurrency":      cluster_config.get("bfReadConcurrency", 4),
-        "micro_read_concurrency":   cluster_config.get("microReadConcurrency", 4),
-        "pixel_reader":             ("micro" if reader_config.get("useMicroReader", True)
-                                     else "standard"),
-        "on_local_cluster":         cluster_config.get("useLocalDask", False),
+        "memory_budget":            _gb_or_auto(cluster_config.get("memoryBudget", 0)),
+        "slurm_worker_memory":      _gb_to_memory_str(cluster_config.get("slurmWorkerMemory", 3)),
+        "decode_memory":            _gb_or_auto(cluster_config.get("decodeMemory", 0)),
         "on_slurm":                 cluster_config.get("useSlurm", False),
         "slurm_partition":          cluster_config.get("slurmPartition") or None,
         "slurm_account":            cluster_config.get("slurmAccount") or None,
         "slurm_time":               cluster_config.get("slurmTime", "24:00:00"),
         "slurm_sif_path":           cluster_config.get("slurmSifPath") or None,
         "slurm_worker_timeout":     cluster_config.get("slurmWorkerTimeout", 300),
+        "jvm_memory":               _gb_to_jvm_str(cluster_config.get("jvmMemory", 2)),
+        "bioformats_threads":      cluster_config.get("bioformatsThreads", 4),
+        "decode_threads":   cluster_config.get("decodeThreads", 4),
+        "pixel_reader":             ("micro" if reader_config.get("useMicroReader", True)
+                                     else "standard"),
         "scene_index":              scene_idx,
         "mosaic_tile_index":        mosaic_idx,
         "as_mosaic":                reader_config.get("readAsMosaic", False),
@@ -184,6 +201,7 @@ def _build_kwargs(config: dict) -> dict:
         "rotation_index":           _parse_index(reader_config.get("rotationIndex", "0")),
         "sample_index":             _parse_index(reader_config.get("sampleIndex", "0")),
         "force_bioformats":         reader_config.get("forceBioformats", False),
+        "micro_check_pixels":       bool(reader_config.get("microCheckPixels", False)),
         "verbose":                  conv_config.get("verbose", False),
         "zarr_format":              zarr_format,
         "ome_zarr_version":         ome_zarr_version,
@@ -212,8 +230,10 @@ def _build_kwargs(config: dict) -> dict:
         "channel_colors":           meta_config.get("channelColors", ""),
         "save_omexml":              conv_config.get("saveOmeXml", True),
         "squeeze":                  conv_config.get("squeezeDimensions", True),
-        "skip_dask":                conv_config.get("skipDask", False),
         "dtype":                    conv_config.get("dataType", "auto") or "auto",
+        "writer":                   conv_config.get("writer", "auto") or "auto",
+        "io_backend":               conv_config.get("ioBackend", "tensorstore") or "tensorstore",
+        "export_acquisition_metadata": conv_config.get("exportAcquisitionMetadata"),
         "n_layers":                 None if downscale_config.get("autoDetectLayers", True) else downscale_config.get("numLayers", 4),
         "min_dimension_size":       downscale_config.get("minDimSize", 64),
         "downscale_method":         downscale_config.get("downscaleMethod", "simple"),
@@ -325,7 +345,7 @@ class ConversionWorker(QThread):
             self.log_line.emit(f"Input: {input_path}")
         self.log_line.emit(f"Output: {output_path}")
         self.log_line.emit(f"Zarr Format: v{call_args['to_zarr_kwargs'].get('zarr_format', 2)}")
-        self.log_line.emit(f"Max Workers: {call_args['to_zarr_kwargs'].get('max_workers', 4)}")
+        self.log_line.emit(f"Max processes: {call_args['to_zarr_kwargs'].get('max_processes', 4)}")
         self.log_line.emit("Starting conversion...")
 
         ctx          = multiprocessing.get_context("spawn")

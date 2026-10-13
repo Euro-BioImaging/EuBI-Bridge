@@ -6,9 +6,15 @@ pre-built multi-layer ``Pyramid`` verbatim, without recomputing levels via
 
 import asyncio
 
-import dask.array as da
 import numpy as np
 import pytest
+
+from tests.conftest import full_installed  # noqa: E402
+
+if not full_installed():
+    pytest.skip("needs the full eubi-bridge (dask / bioio)", allow_module_level=True)
+
+import dask.array as da  # noqa: E402
 
 from eubi_bridge.core import writers
 from eubi_bridge.core.writers import store_existing_pyramid_async

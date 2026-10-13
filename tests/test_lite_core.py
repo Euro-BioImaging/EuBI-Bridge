@@ -41,9 +41,6 @@ STANDARD_ONLY = (
     "bfio", "scyjava", "jpype", "bioformats_jar", "install_jdk",
     "aicspylibczi", "pylibCZIrw", "nd2", "readlif", "imageio", "imageio_ffmpeg", "matplotlib",
 )
-#: modules that are not part of eubi-bridge's code paths: the Streamlit views
-#: (streamlit is not a dependency at all)
-NOT_CORE = ("eubi_bridge.views",)
 #: where a lite run may try to import the standard stack: eubi-bridge's probes,
 #: and libraries' own optional imports (which they handle themselves)
 PROBES = ("utils/optional_deps.py:", "third-party:")
@@ -119,8 +116,6 @@ def test_every_module_imports_without_the_standard_stack():
         import eubi_bridge
         failed = {{}}
         for info in pkgutil.walk_packages(eubi_bridge.__path__, "eubi_bridge."):
-            if info.name.startswith({NOT_CORE!r}):
-                continue
             try:
                 importlib.import_module(info.name)
             except BaseException as exc:
@@ -171,8 +166,13 @@ def test_a_mosaic_splits_into_placed_tiles_without_the_standard_stack(zeiss_mosa
              mosaic_tile_index="all")
     stores = sorted(out.glob("*.zarr"))
     assert len(stores) == 4
-    boxes = czi_mosaic_tile_origins(zeiss_mosaic)            # pixels, from aicspylibczi
     placed = {int(s.stem.rsplit("_tile", 1)[1]): _transforms(s) for s in stores}
+    # every tile has a place of its own
+    assert len({tuple(t["translation"][-2:]) for t in placed.values()}) == 4
+    from eubi_bridge.utils.optional_deps import is_installed
+    if not is_installed("aicspylibczi"):
+        return                    # lite: aicspylibczi, the reference, is not there
+    boxes = czi_mosaic_tile_origins(zeiss_mosaic)            # pixels, from aicspylibczi
     for m, transforms in placed.items():
         for axis, k in (("y", -2), ("x", -1)):
             step = transforms["scale"][k]
@@ -219,6 +219,7 @@ def test_a_conversion_with_the_defaults_needs_no_standard_stack(tmp_path):
 
 @pytest.mark.parametrize("options, says", [
     ({"metadata_reader": "bfio"}, "metadata_reader='bfio'"),
+    ({"force_bioformats": True}, "force_bioformats=True"),
     ({"on_slurm": True}, "on_slurm=True"),
 ])
 def test_lite_refuses_the_full_stack_clearly(tmp_path, options, says):
@@ -227,7 +228,7 @@ def test_lite_refuses_the_full_stack_clearly(tmp_path, options, says):
                             expect_ok=False, **options)
     assert result.returncode != 0
     assert "NeedsFullEubiBridge" in result.stderr and says in result.stderr
-    assert "pip install eubi-bridge" in result.stderr
+    assert "pip uninstall eubi-bridge-lite, then pip install eubi-bridge" in result.stderr
 
 
 def test_a_file_micro_reader_does_not_read_is_refused_by_name(tmp_path):
@@ -236,8 +237,10 @@ def test_a_file_micro_reader_does_not_read_is_refused_by_name(tmp_path):
     source.write_bytes(b"not read by micro-reader" * 8)
     result = _convert_fresh(tmp_path, source, tmp_path / "out", expect_ok=False)
     assert result.returncode != 0
-    assert "micro-reader does not read this file" in result.stderr
-    assert "img.dv" in result.stderr and "pip install eubi-bridge" in result.stderr
+    assert "eubi-bridge-lite cannot read this file" in result.stderr
+    assert "img.dv" in result.stderr
+    assert "pip uninstall eubi-bridge-lite, then pip install eubi-bridge" in result.stderr
+    assert "micro-reader" not in result.stderr.split("NeedsFullEubiBridge")[-1]
 
 
 def test_imaris_goes_through_micro_reader_and_keeps_its_pyramid(tmp_path):
@@ -295,11 +298,11 @@ def test_the_gui_tests_pass_without_the_standard_stack():
     assert " passed" in result.stdout and " error" not in result.stdout
 
 
-def test_batch_columns_offer_only_what_lite_can_do():
+def test_batch_has_no_reader_columns_in_lite():
+    """One reader: nothing to choose per row (Bugra, 2026-10-05)."""
     out = _check(_run_lite("""
         from eubi_bridge.qt_gui.core import batch
-        specs = {p.key: p for p in batch._PARAM_SPECS}
-        print(specs["metadata_reader"].choices, specs["pixel_reader"].choices,
-              "force_bioformats" in specs)
+        specs = {p.key for p in batch._PARAM_SPECS}
+        print(sorted(specs & {"metadata_reader", "pixel_reader", "force_bioformats"}))
     """))
-    assert out.strip().splitlines()[-1] == "('micro',) ('micro',) False"
+    assert out.strip().splitlines()[-1] == "[]"

@@ -43,8 +43,8 @@ from eubi_bridge.core.czi_reader import CZIReader
 from eubi_bridge.core.readers import (
     read_metadata_via_bfio, read_metadata_via_bioio_bioformats,
     read_metadata_via_extension, read_single_image)
-from eubi_bridge.external.dyna_zarr.dynamic_array import DynamicArray
-from eubi_bridge.external.dyna_zarr import operations as ops
+from dyna_zarr import DynamicArray, from_array
+from dyna_zarr import operations as ops
 from eubi_bridge.utils.optional_deps import is_dask_array
 from eubi_bridge.ngff.defaults import default_axes, scale_map, unit_map
 from eubi_bridge.ngff.multiscales import Pyramid
@@ -344,7 +344,7 @@ def _build_bioformats_array(path: str, series: int, shape, dtype) -> DynamicArra
     """
     logger.info("Bio-Formats lazy read: shape=(T=%d,C=%d,Z=%d,Y=%d,X=%d) dtype=%s; "
                 "each writer region is read as one rectangle", *shape, dtype)
-    return DynamicArray(_BioFormatsSource(path, series, shape, dtype))
+    return from_array(_BioFormatsSource(path, series, shape, dtype))
 
 
 # ---------------------------------------------------------------------------

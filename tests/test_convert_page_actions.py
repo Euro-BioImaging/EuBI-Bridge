@@ -339,24 +339,33 @@ class TestBatchClusterSettings:
     def test_a_run_uses_the_cluster_tab(self, page, tmp_path, started):
         from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
         _queue(page, tmp_path, 2)
-        page._max_workers.setValue(9)          # changed after rows were added
+        page._max_processes.setValue(9)          # changed after rows were added
         page._jvm_memory.setValue(6.0)
 
         page._on_batch_run()
 
         assert len(started) == 1
         kwargs = _build_kwargs(started[0])
-        assert kwargs["max_workers"] == 9
+        assert kwargs["max_processes"] == 9
         assert kwargs["jvm_memory"] == _build_kwargs(
             {"cluster": {"jvmMemory": 6.0}})["jvm_memory"]
 
     def test_the_summary_follows_the_cluster_tab(self, page):
-        page._max_workers.setValue(9)
+        page._max_processes.setValue(9)
+        page._memory_budget.setValue(6.0)
+        text = page._batch_cluster_summary.text()
+        assert "9 processes" in text
+        assert "memory budget 6 GB" in text
+        page._memory_budget.setValue(0.0)
+        assert "memory budget auto" in page._batch_cluster_summary.text()
+
+    def test_the_summary_shows_slurm(self, page):
+        from eubi_bridge.utils.capabilities import has_slurm
+        if not has_slurm():
+            pytest.skip("lite: no SLURM")
         page._use_slurm.setChecked(True)
         page._slurm_partition.setText("gpu")
-        text = page._batch_cluster_summary.text()
-        assert "9 workers" in text
-        assert "SLURM (partition gpu" in text
+        assert "SLURM (partition gpu" in page._batch_cluster_summary.text()
 
     def test_the_edit_button_opens_the_cluster_tab(self, page):
         page._batch_mode.setChecked(True)      # the Batch tab is attached
@@ -371,19 +380,19 @@ class TestBatchClusterSettings:
         from eubi_bridge.qt_gui.core.batch import CONFIG_SNAPSHOT_NAME
         from eubi_bridge.qt_gui.pages import convert_page
         _queue(page, tmp_path, 2)
-        page._max_workers.setValue(3)
+        page._max_processes.setValue(3)
         page._read_as_mosaic.setChecked(False)
         written = page._batch_save_to(str(tmp_path / "batch.csv"))
         snapshot = json.loads(
             (Path(written).parent / CONFIG_SNAPSHOT_NAME).read_text())
-        assert snapshot["cluster"]["maxWorkers"] == 3   # recorded for reference
+        assert snapshot["cluster"]["maxProcesses"] == 3   # recorded for reference
 
-        page._max_workers.setValue(12)
+        page._max_processes.setValue(12)
         page._read_as_mosaic.setChecked(True)
         monkeypatch.setattr(convert_page.QFileDialog, "getOpenFileName",
                             staticmethod(lambda *a, **k: (written, "")))
         page._on_batch_load()
 
-        assert page._max_workers.value() == 12          # Cluster tab kept
+        assert page._max_processes.value() == 12          # Cluster tab kept
         assert not page._read_as_mosaic.isChecked()     # rest restored
-        assert page._batch.base_config["cluster"]["maxWorkers"] == 12
+        assert page._batch.base_config["cluster"]["maxProcesses"] == 12

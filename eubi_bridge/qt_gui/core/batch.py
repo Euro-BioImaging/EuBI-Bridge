@@ -73,10 +73,11 @@ _HARMLESS_WHEN_ABSENT = frozenset({"target_chunk_mb"})
 # batch runs in a single process against a single cluster, so these can only ever
 # take the baseline's value; offering them per row would be meaningless.
 _CLUSTER_KEYS = frozenset({
-    "max_workers", "queue_size", "region_size_mb", "max_concurrency",
+    "max_processes", "queue_size", "region_size_mb", "max_threads",
     "max_concurrent_downscale_layers", "max_concurrent_scenes",
-    "memory_per_worker", "jvm_memory", "bf_read_concurrency",
-    "micro_read_concurrency",
+    "memory_budget", "slurm_worker_memory", "decode_memory", "memory_per_worker",
+    "jvm_memory", "bioformats_threads",
+    "decode_threads",
     "on_local_cluster", "on_slurm", "slurm_partition", "slurm_account",
     "slurm_time", "slurm_sif_path", "slurm_worker_timeout",
 })
@@ -206,12 +207,13 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
     *([ParamSpec("force_bioformats", "Force Bio-Formats", "bool", tab="Reader")]
       if _BIOFORMATS else []),
     # chosen per conversion, like the metadata reader ('micro' with micro-reader's
-    # metadata either way); the standard readers only in the full eubi-bridge
-    ParamSpec("pixel_reader", "Pixel reader", "choice",
-              ("micro", "standard") if _BIOFORMATS else ("micro",), tab="Reader",
-              tooltip="'micro': read the pixels with micro-reader (a file it does not "
-                      "read falls back to the standard reader); 'standard': the "
-                      "format's usual reader."),
+    # metadata either way).  Lite has one reader: nothing to choose, no column.
+    *([ParamSpec("pixel_reader", "Pixel reader", "choice", ("micro", "standard"),
+                 tab="Reader",
+                 tooltip="'micro': read the pixels with micro-reader (a file it does "
+                         "not read falls back to the standard reader); 'standard': "
+                         "the format's usual reader.")]
+      if _BIOFORMATS else []),
 
     # ---- Conversion tab (group order follows the form) ----
     ParamSpec("compressor", "Compressor", "choice",
@@ -246,7 +248,6 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec("save_omexml", "Save OME-XML", "bool", tab="Conversion"),
     ParamSpec("override_channel_names", "Override channel names", "bool",
               tab="Conversion"),
-    ParamSpec("skip_dask", "Skip dask", "bool", tab="Conversion"),
     ParamSpec("verbose", "Verbose", "bool", tab="Conversion"),
 
     # ---- Downscaling tab ----
@@ -290,9 +291,9 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec("channel_intensity_limits", "Channel intensity limits", "choice",
               _literal_options(MetadataConfig, "channel_intensity_limits"),
               tab="Metadata"),
-    ParamSpec("metadata_reader", "Metadata reader", "choice",
-              ("micro", "bfio", "bioio", "bioformats") if _BIOFORMATS else ("micro",),
-              tab="Metadata"),
+    *([ParamSpec("metadata_reader", "Metadata reader", "choice",
+                 ("micro", "bfio", "bioio", "bioformats"), tab="Metadata")]
+      if _BIOFORMATS else []),                     # lite: one reader, no column
     # Edited as raw text here rather than with a colour picker: a batch row is
     # one cell, and the CLI's own format is the clearest thing to show.
     ParamSpec("channel_colors", "Channel colours", "text", tab="Metadata",
@@ -462,6 +463,24 @@ def make_baseline(persisted: dict, ui_config: dict) -> dict:
 
 DEFAULT_BATCH_NAME = "batch.csv"
 CONFIG_SNAPSHOT_NAME = "batch_config.json"
+
+#: Cluster settings renamed in 2026-10 (config_models.RENAMED_SETTINGS), as the
+#: GUI's config snapshot spells them: a batch saved before keeps its values.
+_RENAMED_UI_KEYS = {"maxWorkers": "maxProcesses", "maxConcurrency": "maxThreads",
+                    "microReadConcurrency": "decodeThreads",
+                    "bfReadConcurrency": "bioformatsThreads",
+                    "memoryPerWorker": "slurmWorkerMemory"}
+
+
+def _renamed_snapshot(config: Any) -> Any:
+    """A saved batch's config snapshot with renamed cluster keys under their new
+    names (the value kept)."""
+    cluster = config.get("cluster") if isinstance(config, dict) else None
+    if isinstance(cluster, dict):
+        for old, new in _RENAMED_UI_KEYS.items():
+            if old in cluster:
+                cluster.setdefault(new, cluster.pop(old))
+    return config
 
 
 # ── value serialisation ───────────────────────────────────────────────────────
@@ -1172,7 +1191,7 @@ class BatchModel:
         snapshot = os.path.join(base_dir, CONFIG_SNAPSHOT_NAME)
         if os.path.exists(snapshot):
             with open(snapshot, encoding="utf-8") as fh:
-                model._base_config = json.load(fh)
+                model._base_config = _renamed_snapshot(json.load(fh))
 
         return model
 
