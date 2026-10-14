@@ -57,7 +57,7 @@ eubi to_zarr "multichannel_timeseries/Channel1*" multichannel_timeseries_channel
 This produces:
 
 ```bash
-multichannel_timeseries_zarr
+multichannel_timeseries_channel1_zarr
 ├── Channel1-T0001.zarr
 ├── Channel1-T0002.zarr
 ├── Channel1-T0003.zarr
@@ -79,7 +79,7 @@ eubi to_zarr multichannel_timeseries multichannel_timeseries_concat_zarr --chann
 Output:  
 
 ```bash
-multichannel_timeseries_time-concat_zarr
+multichannel_timeseries_concat_zarr
 ├── Channel1-T_tset.zarr
 └── Channel2-T_tset.zarr
 ```  
@@ -174,7 +174,7 @@ in quotes as shown in the example above.
 For datasets where channel names are categorical such as in:
 
 ```bash
-blueredchannel_timeseries
+blueredchannels_timeseries
 ├── Blue-T0001.tif
 ├── Blue-T0002.tif
 ├── Blue-T0003.tif

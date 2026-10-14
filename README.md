@@ -6,7 +6,7 @@ EuBI-Bridge is a tool for **distributed conversion of microscopy image collectio
 
 A key feature of EuBI-Bridge is **aggregative conversion**, which combines multiple input images along user-specified axes into a single OME-Zarr container. This is particularly useful when images belong to the same multidimensional dataset but are stored as separate, unlinked files. By aggregating these files during conversion, EuBI-Bridge can reconstruct the intended multidimensional dataset.
 
-EuBI-Bridge is built on several powerful libraries, including `zarr`, `tensorstore` and `dask`, among others.
+EuBI-Bridge is built on several powerful libraries, including `zarr`, `tensorstore` and `dask`, among others. OME-Zarr output is written by [ome_zarr_pyramid](https://pypi.org/project/ome-zarr-pyramid/) on [dyna-zarr](https://pypi.org/project/dyna-zarr/), region by region within a memory budget.
 
 Input files are read with [micro-reader](https://pypi.org/project/micro-reader/) by default. It reads the common microscopy formats without Java. If a file cannot be read by `micro-reader`, EuBI-Bridge falls back to other readers (such as `bioio`- and `Bio-Formats`-based readers) for that particular file. Java only starts when this happens. 
 
@@ -30,7 +30,7 @@ Then install EuBI-Bridge via pip in the conda environment:
 
 ```bash
 conda activate eubizarr
-pip install --no-cache-dir "eubi-bridge==0.1.4"
+pip install --no-cache-dir "eubi-bridge==0.1.5"
 eubi reset_config   # see "After installing or upgrading" below
 ```
 
@@ -42,7 +42,7 @@ version 3.11 or 3.12:
 ```bash
 python -m venv venv # Python must be either version 3.11 or 3.12.
 source venv/bin/activate
-pip install "eubi-bridge==0.1.4" # installs both GUI and CLI
+pip install "eubi-bridge==0.1.5" # installs both GUI and CLI
 eubi reset_config   # see "After installing or upgrading" below
 ```
 
@@ -51,6 +51,18 @@ libraries it needs at runtime**, so the graphical interface may fail to start. S
 [Linux: the GUI does not start](#linux-the-gui-does-not-start) below for the fix.
 The command-line interface is unaffected.
  
+### Without Java: eubi-bridge-lite
+
+`eubi-bridge-lite` is the same tool without Bio-Formats, Java and dask: a smaller
+install that works on any Python from 3.11. It converts the formats micro-reader
+reads; there is no Bio-Formats fallback for other files. The CLI and the GUI are both
+included.
+
+```bash
+pip install "eubi-bridge-lite==0.1.5"
+eubi reset_config
+```
+
 ### After installing or upgrading
 
 Run this once:
@@ -121,7 +133,7 @@ then try the following:
 ```bash
 # In the `eubizarr` environment
 mamba install cmake zlib boost # preinstall dependencies that can help build from source
-pip install --no-cache-dir "eubi-bridge==0.1.4" # try installing again with the dependencies available
+pip install --no-cache-dir "eubi-bridge==0.1.5" # try installing again with the dependencies available
 eubi reset_config
 ```
 

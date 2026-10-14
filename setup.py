@@ -45,9 +45,9 @@ setup(
     python_requires='>=3.11,<3.13',
     entry_points={
         'console_scripts': [
+            # must match [project.scripts] in pyproject.toml, which takes precedence
             "eubi = eubi_bridge.cli:main",
-            "eubi-gui = eubi_bridge.app:main",
-            "eubi-gui-react = eubi_bridge.gui_react:main"
+            "eubi-gui = eubi_bridge.qt_gui.app:main",
         ]
     },
 )

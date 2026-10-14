@@ -1,17 +1,26 @@
-"""
-EuBI-Bridge Comprehensive Test Suite
+# EuBI-Bridge test suite
 
-A complete test suite for the eubi-bridge API functionality covering most major parameters, conversion modes, and edge cases.
+Tests for the eubi-bridge API, CLI and GUI: conversion modes, parameters, readers,
+metadata and edge cases.
 
 ## Scope & Current Coverage
 
-**Current Test Coverage:**
-- **Input Formats:** TIFF and OME-TIFF only
-- **API Functionality:** Core conversion, metadata handling, and parameter interactions
-- **Test Count:** 58 passing tests across 4 test modules
+- **Test count:** about 965 tests in 48 modules (`pytest tests --collect-only -q`).
+- **Input formats:** TIFF / OME-TIFF fixtures written on the fly, plus CZI, IMS, ND2 and
+  RGB inputs; the micro-reader pixel and metadata paths; small public sample files the
+  tests download themselves (e.g. a Zeiss CZI mosaic from Zenodo 7015307, verified by MD5).
+- **Areas:** unary and aggregative conversion, the CLI (`test_cli_*`), the Qt GUI
+  (`test_gui_*`, `test_inspect_page`, `test_convert_page_actions`, batch mode), the
+  ozp writer, memory budget, renamed / retired settings, and eubi-bridge-lite
+  (`test_lite_*`).
+- **Markers:** `realdata` (real-microscopy conversion audit; needs the `EUBI_TEST_DATA`
+  directory, skipped when the files are absent) and `requires_full` (needs the full
+  eubi-bridge with Bio-Formats / dask; skipped in eubi-bridge-lite). Both are in
+  `conftest.py`.
 
-**Note:** This test suite currently validates eubi-bridge functionality using TIFF inputs.
-Future expansion will include testing with proprietary microscopy formats (see Future Testing below).
+The sections below describe the original core modules (`test_unary_conversions`,
+`test_ome_metadata_parsing`, `test_aggregative_conversions`, `test_parameter_interactions`)
+and their shared fixtures and validators in detail.
 
 ## Test Organization
 
@@ -49,9 +58,13 @@ Shared helper functions for validating zarr output:
 - `validate_channel_metadata()` — Check OMERO channel info
 - `validate_pixel_scales()` — Verify pixel scale values
 - `validate_pixel_units()` — Check unit strings
+- `validate_pixel_data_range()` — Check the stored value range
 - `validate_downscaling_pyramid()` — Verify pyramid layers
+- `validate_sharding_metadata()` — Check the zarr v3 sharding codec
 - `validate_compression()` — Check compressor codec
+- `validate_squeezed_dimensions()` — Check which singleton axes were dropped
 - `compare_pixel_data()` — Compare arrays with tolerance
+- `compare_zarr_v2_vs_v3()` — Compare a v2 and a v3 output of the same input
 
 ### 3. Test Modules
 
@@ -228,18 +241,15 @@ No pre-baked test data files are stored in the repository.
 ### GitHub Actions Workflow (.github/workflows/test.yml)
 
 **Triggers:**
-- Push to main/develop branches
-- Pull requests to main/develop
+- Push and pull requests to `main`, `develop` and `bf_bundled`
 - Daily schedule (2 AM UTC)
-
-**Matrices:**
-- OS: Ubuntu-latest, macOS-latest
-- Python: 3.11, 3.12
+- Manual run (`workflow_dispatch`, any branch)
 
 **Jobs:**
-1. **test** — Run pytest suite on all OS/Python combinations
-2. **lint** — Pylint checks on Python 3.12
-3. **integration-test** — Full integration tests on Ubuntu
+1. **test** — the full suite (and a coverage run) on Ubuntu, macOS and Windows,
+   Python 3.11 and 3.12, with the GUI tests on Qt's offscreen platform
+2. **lite** — builds the eubi-bridge-lite wheel, installs it alone and runs the suite
+   against it (full-stack tests skip) on Ubuntu, macOS and Windows, Python 3.11-3.14
 
 **Coverage:**
 - Codecov upload on successful test completion
@@ -248,8 +258,8 @@ No pre-baked test data files are stored in the repository.
 ### Local Testing Before Commit
 
 ```bash
-# Install test dependencies
-pip install pytest pytest-cov numpy tifffile imageio
+# Install eubi-bridge with its test dependencies
+pip install -e ".[test]"
 
 # Run full test suite
 pytest tests/ -v --tb=short
@@ -264,7 +274,7 @@ pytest tests/test_unary_conversions.py -v
 ## Parameter Coverage Matrix
 
 ### Zarr Configuration
-- ✅ zarr_format (2, 3)
+- ✅ ome_zarr_version (0.4, 0.5); the older `zarr_format` (2, 3) is deprecated
 - ✅ auto_chunk (True/False)
 - ✅ Manual chunks (time_chunk, channel_chunk, z_chunk, y_chunk, x_chunk)
 - ✅ Zarr v3 sharding coefficients (planned)
@@ -319,11 +329,10 @@ pytest tests/test_unary_conversions.py -v
 
 ## What is not included here:
 
-1. **Proprietary Microscopy Formats** - No input formats other than TIFF and OME-TIFF tested
-2. **Sharding Validation** — Detailed sharding codec inspection
-3. **Memory Profiling** — Memory usage isn't explicitly validated, only parameters
-4. **Performance** — No performance benchmarks (CI optimized for speed, not realism)
-5. **Remote Storage** — S3 paths not tested (would require S3 mock or credentials)
+1. **Large proprietary datasets** — only small fixtures and public samples; the `realdata` audit runs locally
+2. **Memory Profiling** — memory is tested through the budget logic, not measured per run
+3. **Performance** — No performance benchmarks (CI optimized for speed, not realism)
+4. **Remote Storage** — S3 paths not tested (would require S3 mock or credentials)
 
 ## Future Enhancements
 
@@ -341,7 +350,7 @@ These formats will enable comprehensive validation of:
 - [ ] Performance benchmarking suite
 - [ ] Remote storage (S3) integration tests with actual S3 or S3-compatible backend
 - [ ] Complex aggregative scenarios (>2 axes)
-- [ ] Distributed execution tests (dask cluster)
+- [ ] Distributed execution tests (SLURM; the local dask cluster is retired)
 - [ ] Stress tests (very large images)
 
 ## Debugging Tests
@@ -371,13 +380,12 @@ print(f"Metadata: {gr.attrs}")
 
 ## Test Statistics
 
-- **Total Tests**: ~48
-- **Test Modules**: 5
-- **Test Classes**: 20+
-- **Fixture Functions**: 13
-- **Validation Functions**: 20+
-- **CI Platforms**: 2 (Ubuntu, macOS)
-- **Python Versions**: 2 (3.11, 3.12)
+- **Total Tests**: about 965 (2026-10-14)
+- **Test Modules**: 48
+- **Fixture Functions**: 20 in `conftest_fixtures.py`
+- **Validation Functions**: 16 in `validation_utils.py`
+- **CI Platforms**: 3 (Ubuntu, macOS, Windows)
+- **Python Versions**: 3.11, 3.12 (full); 3.11-3.14 (lite)
 
 ## Authors
 

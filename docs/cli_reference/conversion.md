@@ -224,7 +224,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--jvm_memory</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; `1g`</p>
-    <p>—</p>
+    <p>Maximum JVM heap for Bio-Formats, e.g. `8GB` or `4GB` (default `1g`).</p>
     </details>
 
     <details>
@@ -497,7 +497,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--compressor</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; `blosc`</p>
-    <p><strong>Valid values:</strong>&nbsp; v2: `blosc`, `bz2`, `gzip`, `none`, `zstd`; v3: `blosc`, `crc32ccodec`, `gzip`, `none`, `sharding`, `zstd`</p>
+    <p><strong>Valid values:</strong>&nbsp; v2: `blosc`, `bz2`, `gzip`, `none`, `zstd`; v3: `blosc`, `gzip`, `none`, `zstd`</p>
     <p>Compression codec.</p>
     <pre><code>eubi to_zarr /data/input /data/output --compressor zstd
     </code></pre>
@@ -536,7 +536,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--export_acquisition_metadata</code></summary>
     <p><strong>Type:</strong>&nbsp; `bool` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>—</p>
+    <p>Write acquisition metadata NGFF has no field for (view / illumination indices, objective NA, per-channel emission) into the `eubi_bridge` attributes. Unset = automatic: on when one acquisition is split into several outputs.</p>
     </details>
 
     <details>
@@ -842,7 +842,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--pixel_reader</code></summary>
     <p><strong>Type:</strong>&nbsp; `standard` or `micro`</p>
     <p><strong>Default:</strong>&nbsp; `micro`</p>
-    <p>—</p>
+    <p>Where the pixels come from: `micro` (micro-reader, the default; a file it does not read falls back to the standard reader with a warning) or `standard` (the format's usual reader).</p>
     </details>
 
     <details>
@@ -850,7 +850,7 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
     <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--micro_check_pixels` to enable &nbsp;·&nbsp; `--micro_check_pixels False` to disable</p>
-    <p>—</p>
+    <p>With `pixel_reader micro`: also open the standard reader and compare its pixels with micro-reader's. Slower; for checking a new format.</p>
     </details>
 
     <details>
@@ -885,9 +885,9 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--metadata_reader</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `micro`</p>
-    <p><strong>Valid values:</strong>&nbsp; `bfio` · `bioformats`</p>
-    <p>Backend used to read OME-XML pixel metadata.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
+    <p><strong>Valid values:</strong>&nbsp; `micro` (default) · `bfio` · `bioio`</p>
+    <p>Where the image metadata comes from: `micro` (micro-reader, the default; a file it does not read falls back to the standard reader), `bfio` or `bioio`.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bfio
     </code></pre>
     </details>
 
@@ -915,14 +915,14 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--channel_colors</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `""`</p>
-    <p>—</p>
+    <p>Per-channel colour overrides as `"0,FF0000;1,00FF00"`. Channels left out keep their source colour, or get one automatically.</p>
     </details>
 
     <details>
     <summary><code>--channel_labels</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `""`</p>
-    <p>—</p>
+    <p>Per-channel name overrides as `"0,DAPI;1,GFP"`.</p>
     </details>
 
     <details>
@@ -930,7 +930,7 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `float` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
     <p><strong>Valid values:</strong>&nbsp; > 0</p>
-    <p>—</p>
+    <p>Physical size of one time step. Unset keeps what the source file states.</p>
     </details>
 
     <details>
@@ -938,7 +938,7 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `float` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
     <p><strong>Valid values:</strong>&nbsp; > 0</p>
-    <p>—</p>
+    <p>Physical pixel size along z (e.g. `0.5`). Unset keeps the source value.</p>
     </details>
 
     <details>
@@ -946,7 +946,7 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `float` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
     <p><strong>Valid values:</strong>&nbsp; > 0</p>
-    <p>—</p>
+    <p>Physical pixel size along y. Unset keeps the source value.</p>
     </details>
 
     <details>
@@ -954,35 +954,35 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `float` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
     <p><strong>Valid values:</strong>&nbsp; > 0</p>
-    <p>—</p>
+    <p>Physical pixel size along x. Unset keeps the source value.</p>
     </details>
 
     <details>
     <summary><code>--time_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>—</p>
+    <p>Unit for `time_scale` (e.g. `second`).</p>
     </details>
 
     <details>
     <summary><code>--z_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>—</p>
+    <p>Unit for `z_scale` (e.g. `micrometer`).</p>
     </details>
 
     <details>
     <summary><code>--y_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>—</p>
+    <p>Unit for `y_scale`.</p>
     </details>
 
     <details>
     <summary><code>--x_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>—</p>
+    <p>Unit for `x_scale`.</p>
     </details>
 
 
@@ -1262,7 +1262,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--jvm_memory</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; `1g`</p>
-    <p>—</p>
+    <p>Maximum JVM heap for Bio-Formats, e.g. `8GB` or `4GB` (default `1g`).</p>
     </details>
 
     <details>
@@ -1440,7 +1440,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--pixel_reader</code></summary>
     <p><strong>Type:</strong>&nbsp; `standard` or `micro`</p>
     <p><strong>Default:</strong>&nbsp; `micro`</p>
-    <p>—</p>
+    <p>Where the pixels come from: `micro` (micro-reader, the default; a file it does not read falls back to the standard reader with a warning) or `standard` (the format's usual reader).</p>
     </details>
 
     <details>
@@ -1448,7 +1448,7 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
     <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--micro_check_pixels` to enable &nbsp;·&nbsp; `--micro_check_pixels False` to disable</p>
-    <p>—</p>
+    <p>With `pixel_reader micro`: also open the standard reader and compare its pixels with micro-reader's. Slower; for checking a new format.</p>
     </details>
 
     <details>
@@ -1544,7 +1544,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--aggregative_group</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>—</p>
+    <p>Name prefixed to the concatenated output. In a conversion table, rows sharing this value are concatenated together; a blank one converts on its own. Keep it short (it becomes part of the file name).</p>
     </details>
 
 

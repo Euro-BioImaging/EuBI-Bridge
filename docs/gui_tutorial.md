@@ -1,4 +1,8 @@
 # EuBI-Bridge Conversion Examples for GUI
+
+> **Historical:** a one-off workshop sheet for the BAND desktop; not part of the published site
+> (`exclude_docs` in `properdocs.yml`). See [gui.md](gui.md) for the current GUI.
+
 **This tutorial is to be followed on the [Bioimage Analysis Desktop (BAND)](https://band.vm.fedcloud.eu/#/desktop-manager)**
 
 **Activate the conda environment:**
