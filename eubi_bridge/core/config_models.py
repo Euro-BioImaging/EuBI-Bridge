@@ -6,6 +6,8 @@ normalisation only.
 """
 from __future__ import annotations
 
+import math
+import re
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import (BaseModel, ConfigDict, Field, ValidationInfo, field_validator,
@@ -33,16 +35,32 @@ SUPPORTED_COMPRESSORS_V3: frozenset[str] = frozenset(
 # Union — used when zarr_format is not known at validation time.
 SUPPORTED_COMPRESSORS_ANY: frozenset[str] = SUPPORTED_COMPRESSORS_V2 | SUPPORTED_COMPRESSORS_V3
 
+# Every name here is written AND read by both writers (TensorStore and zarrista
+# bundle their own c-blosc). 'snappy' is the exception for OTHER readers:
+# numcodecs (zarr-python, ome-zarr-py, napari-ome-zarr) ships blosc without it
+# since 0.9.0 and cannot decode it, so choosing it is warned about loudly.
 BLOSC_CNAMES: frozenset[str] = frozenset(
     {"lz4", "lz4hc", "blosclz", "snappy", "zlib", "zstd"}
 )
 
+_limited_cname_warned: set = set()
+
+
+def dyna_writes_limited_cnames() -> bool:
+    """Whether the installed dyna-zarr writes a blosc cname that numcodecs lacks
+    (with its ``LimitedReaderSupportWarning``, dyna-zarr > 0.1.0). dyna-zarr
+    0.1.0 refuses it inside the write, so eubi then refuses it up front."""
+    try:
+        import dyna_zarr
+    except Exception:
+        return False
+    return hasattr(dyna_zarr, "LimitedReaderSupportWarning")
+
 
 def _check_blosc_cname(cname: str) -> None:
-    """Refuse a blosc cname that is unknown, or missing from the installed blosc
-    build. Current numcodecs builds ship without snappy: TensorStore still writes
-    it, but the chunks can then not be read back, so it is refused here, before
-    any worker starts (dyna-zarr refuses it too, deep inside the write)."""
+    """Refuse an unknown blosc cname. A known one that numcodecs lacks (snappy):
+    warn once per name and process when dyna-zarr writes it, refuse it when the
+    installed dyna-zarr cannot (dyna-zarr warns too, in the write)."""
     if cname not in BLOSC_CNAMES:
         raise ValueError(
             f"Invalid blosc cname '{cname}'. "
@@ -53,11 +71,20 @@ def _check_blosc_cname(cname: str) -> None:
         available = set(list_compressors())
     except Exception:
         return
-    if cname not in available:
+    if cname not in available and not dyna_writes_limited_cnames():
         raise ValueError(
             f"blosc cname '{cname}' is not available in the installed blosc "
-            f"library, so the output could not be read back. "
+            f"library, and the installed dyna-zarr does not write it. "
             f"Choose from {sorted(available)}."
+        )
+    if cname not in available and cname not in _limited_cname_warned:
+        _limited_cname_warned.add(cname)
+        _logger.warning(
+            f"COMPRESSOR SUPPORT IS LIMITED: blosc cname '{cname}' is written and "
+            f"read by EuBI-Bridge, but many OME-Zarr readers cannot open it: "
+            f"zarr-python and the tools built on it (ome-zarr-py, napari-ome-zarr) "
+            f"cannot decode it. Use 'lz4' (similar speed) or 'zstd' for outputs "
+            f"others will open."
         )
 
 # numcodecs class names for zarr v2
@@ -102,6 +129,45 @@ OME_ZARR_VERSIONS: Dict[str, int] = {"0.4": 2, "0.5": 3}
 
 _zarr_format_deprecation_warned = False
 _bf_tile_size_deprecation_warned = False
+
+#: a physical scale written as text: digits, with '.' as the decimal point
+_SCALE_TEXT = re.compile(r"\d+\.?\d*|\.\d+")
+
+
+def parse_scale(value: Any, name: str = "scale") -> Optional[float]:
+    """A physical scale (a pixel size or time step) given by a user, or None when blank.
+
+    One notation only: digits, with '.' as the decimal point (``0.26``, ``1800``,
+    ``1000000``). Everything else is refused with an error naming the setting, never
+    dropped: a unit or other text (``30 min``; the unit is set separately), a comma
+    (``0,5`` or ``1,000,000``: decimal or thousands separator depending on the
+    country), spaces inside, underscores, exponents, and values that are not above 0.
+    A number (not text) is taken as it is; NaN, a blank table cell, means blank.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{name}: {value!r} is not a number")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if not _SCALE_TEXT.fullmatch(text):
+            raise ValueError(
+                f"{name}: {value!r} is not a plain number. Write digits with '.' as the "
+                f"decimal point and nothing else: no unit, spaces, commas or other "
+                f"separators (e.g. 0.26, 1800 or 1000000). The unit is chosen separately.")
+        number = float(text)
+    else:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name}: {value!r} is not a number") from None
+        if math.isnan(number):              # a blank cell of a table read by pandas
+            return None
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{name}: must be a number above 0, got {value!r}")
+    return number
 
 #: Settings that no longer have any effect: still accepted, so existing
 #: configs, saved batches and scripts keep working, warned about once each,
@@ -680,6 +746,11 @@ class MetadataConfig(BaseModel):
     y_unit:     Optional[str] = None
     x_unit:     Optional[str] = None
 
+    @field_validator('time_scale', 'z_scale', 'y_scale', 'x_scale', mode='before')
+    @classmethod
+    def _one_number_notation(cls, v, info: ValidationInfo):
+        return parse_scale(v, info.field_name)
+
 
 class ConcatenationConfig(BaseModel):
     """Aggregative (concatenation) parameters persisted in the config file.
@@ -1137,31 +1208,13 @@ class ChunkConfig(BaseModel):
 # MetadataUpdateConfig
 # ---------------------------------------------------------------------------
 
-def _coerce_range(v) -> Optional[Tuple[int, int]]:
-    """Coerce a range value: passthrough None/NaN, validate (start, stop) pair."""
-    if v is None:
-        return None
-    try:
-        import math
-        if math.isnan(float(v)):
-            return None
-    except (TypeError, ValueError):
-        pass
-    try:
-        start, stop = int(v[0]), int(v[1])
-    except (TypeError, ValueError, IndexError):
-        raise ValueError(f"Range must be a (start, stop) pair, got {v!r}")
-    if start >= stop:
-        raise ValueError(f"Range start {start} must be less than stop {stop}")
-    return (start, stop)
-
-
 class MetadataUpdateConfig(BaseModel):
     """Parameters for pixel-metadata and channel-metadata update operations.
 
     All scale / unit fields default to ``None`` meaning "keep the value already
-    stored in the file".  Range fields accept ``None`` (no crop on that axis) or
-    a ``(start, stop)`` int pair validated to have ``start < stop``.
+    stored in the file".  An update edits metadata only: squeeze and crop
+    change the arrays, so they belong to conversion, and callers that pass
+    them (whole config sections) have them ignored like any other extra key.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -1179,25 +1232,15 @@ class MetadataUpdateConfig(BaseModel):
     y_unit:    Optional[str] = None
     x_unit:    Optional[str] = None
 
-    # Crop ranges as (start, stop) — None → no crop on that axis
-    time_range:    Optional[Tuple[int, int]] = None
-    channel_range: Optional[Tuple[int, int]] = None
-    z_range:       Optional[Tuple[int, int]] = None
-    y_range:       Optional[Tuple[int, int]] = None
-    x_range:       Optional[Tuple[int, int]] = None
+    @field_validator('time_scale', 'channel_scale', 'z_scale', 'y_scale', 'x_scale',
+                     mode='before')
+    @classmethod
+    def _one_number_notation(cls, v, info: ValidationInfo):
+        return parse_scale(v, info.field_name)
 
     # Misc update options
-    squeeze:    bool = False
     save_omexml: bool = True
     series:      Union[int, str] = "all"
-
-    @field_validator(
-        "time_range", "channel_range", "z_range", "y_range", "x_range",
-        mode="before",
-    )
-    @classmethod
-    def _validate_range(cls, v):
-        return _coerce_range(v)
 
     def scales_for(self, manager) -> dict:
         """Merge explicit scale overrides with the manager's existing scaledict."""
@@ -1228,13 +1271,3 @@ class MetadataUpdateConfig(BaseModel):
             for ax in manager.axes
             if ax != "c"   # channel axis carries no physical unit
         }
-
-    def crop_slices(self) -> list:
-        """Return the list of (start, stop) ranges in tczyx order for manager.crop()."""
-        return [
-            self.time_range,
-            self.channel_range,
-            self.z_range,
-            self.y_range,
-            self.x_range,
-        ]

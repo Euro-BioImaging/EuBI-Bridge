@@ -2462,11 +2462,13 @@ class ArrayManager:
 
     # ── Pyramid / OME-XML I/O (async, genuine I/O) ───────────────────────
 
-    async def sync_pyramid(
-        self,
-        create_omexml_if_not_exists: bool = False,
-        save_changes: bool = False,
-    ) -> None:
+    async def sync_pyramid(self, save_changes: bool = False) -> None:
+        """Push the manager's scales, units and channels into its pyramid.
+
+        Writes no OME-XML: a caller that wants it calls ``save_omexml`` when its
+        ``save_omexml`` setting says so.  (Writing it here ignored that setting,
+        and a conversion rewrote the XML inside its OME-Zarr INPUT.)
+        """
         if self.state.pyr is None:
             raise RuntimeError("No pyramid — load data first.")
         pyr = self.state.pyr
@@ -2498,12 +2500,6 @@ class ArrayManager:
                     channel_names=[ch['label'] for ch in self.channels],
                 )
             self.state.omemeta = await asyncio.to_thread(_create)
-
-        try:
-            if pyr.gr is not None and ('OME' in list(pyr.gr.keys()) or create_omexml_if_not_exists):
-                await self.save_omexml(pyr.gr.store.root, overwrite=True)
-        except (OSError, AttributeError) as e:
-            logger.warning(f"Could not save OME-XML: {e}")
 
         if save_changes:
             await asyncio.to_thread(pyr.meta.save_changes)

@@ -2,7 +2,7 @@
 
 Command examples loosely organized by use case. Copy and paste these commands, adjusting input/output paths for your data.
 
-**Select your operating system below to see the correct syntax for your platform.**
+**Where the syntax differs, each example is shown for Unix/macOS and for Windows.**
 
 ## Table of Contents
 
@@ -30,11 +30,11 @@ eubi reset_config
 eubi show_config
 ```
 
-### Modify Conversion Settings
+### Modify Metadata Settings
 
 **Unix/macOS & Windows (same for both):**
 ```bash
-eubi configure conversion --channel_intensity_limits from_array
+eubi configure metadata --channel_intensity_limits from_array
 eubi show_config
 ```
 
@@ -108,7 +108,7 @@ eubi to_zarr small_dataset $HOME/codash_output/small_dataset_zarr_zstd --compres
 
 **Windows:**
 ```cmd
-eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_6_layers --compressor zstd --compressor_params {level:13}
+eubi to_zarr small_dataset %USERPROFILE%\codash_output\small_dataset_zarr_zstd --compressor zstd --compressor_params {level:13}
 ```
 
 ### NGFF v0.5 with Sharding
@@ -391,7 +391,7 @@ small_dataset/image2.czi,output/image2_zarr,1.0,1.0,micrometer,micrometer,"0,DAP
 
 ### Convert All Files in CSV
 
-**Unix/macOS & Windows:**
+**Unix/macOS:**
 ```bash
 eubi to_zarr selection.csv $HOME/codash_output/from_csv_zarr
 ```

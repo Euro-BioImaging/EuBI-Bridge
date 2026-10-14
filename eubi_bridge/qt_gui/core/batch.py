@@ -27,7 +27,7 @@ from copy import deepcopy
 from typing import Any, Iterable, NamedTuple
 
 from eubi_bridge.core.config_models import (
-    ConversionConfig, DownscaleConfig, MetadataConfig)
+    ConversionConfig, DownscaleConfig, MetadataConfig, parse_scale)
 from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
 from eubi_bridge.utils.capabilities import has_bioformats
 from eubi_bridge.utils.path_utils import (
@@ -1078,6 +1078,11 @@ class BatchModel:
                 problems.append(f"Row {i}: input does not exist: {src}")
             if not row.get("output_path"):
                 problems.append(f"Row {i}: no output path.")
+            for ax in ("time", "z", "y", "x"):       # a CSV row may hold any text
+                try:
+                    parse_scale(row.get(f"{ax}_scale"), f"{ax.capitalize()} scale")
+                except ValueError as exc:
+                    problems.append(f"Row {i}: {exc}")
 
         # Concatenation settings that will not take effect.  Checked here rather
         # than when a row is added because the queue can reach this state later

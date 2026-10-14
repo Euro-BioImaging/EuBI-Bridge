@@ -10,8 +10,10 @@ It can run on the command line or as part of a Python script.
 A key feature of EuBI-Bridge is **aggregative conversion**, which concatenates multiple images along specified dimensions—particularly 
 useful for handling large datasets stored as TIFF file collections.  
 
-EuBI-Bridge is built on several powerful libraries, including `zarr`, `bioio`, `dask-distributed` and `tensorstore`, among others. 
-Relying on `bioio` plugins for reading, EuBI-Bridge supports a wide range of input file formats. 
+Input files are read with [micro-reader](https://pypi.org/project/micro-reader/) by default, without Java. 
+A file micro-reader cannot read falls back to other readers (`bioio`- and Bio-Formats-based) for that file. 
+OME-Zarr output is written by `ome_zarr_pyramid` on `dyna-zarr`, region by region within a memory budget; 
+`dask-distributed` is used only for SLURM clusters.
 
 
 ---
@@ -24,6 +26,9 @@ Relying on `bioio` plugins for reading, EuBI-Bridge supports a wide range of inp
 - N-dimensional chunking/sharding
 - N-dimensional downscaling
 - Options for displaying/updating pixel metadata
+- A graphical interface (`eubi-gui`) next to the command line
+- Memory-bounded conversion within a memory budget (default: half the free RAM)
+- `eubi-bridge-lite`: the same tool without Java and Bio-Formats
 
 ---
 
@@ -43,7 +48,8 @@ Relying on `bioio` plugins for reading, EuBI-Bridge supports a wide range of inp
   <li>
     <p><strong>Activate the environment and install EuBI-Bridge via pip:</strong></p>
     <pre><code class="language-bash">conda activate eubizarr
-pip install --no-cache-dir eubi-bridge==0.1.4</code></pre>
+pip install --no-cache-dir eubi-bridge==0.1.5
+eubi reset_config</code></pre>
   </li>
 </ol>
 

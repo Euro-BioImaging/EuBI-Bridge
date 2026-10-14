@@ -75,35 +75,25 @@ Note that the pattern corresponding to the z axis is provided to the command via
 --- 
 ### `eubi to_zarr`
 
-Performs data conversion from supported input formats (including most BioFormats-compatible formats) to OME-Zarr. 
-It supports both **unary** and **aggregative** conversion modes, with options for filtering, metadata specification, downscaling, and distributed processing.
+Performs data conversion from supported input formats to OME-Zarr. Pixels and metadata are
+read with micro-reader by default; a file it does not read falls back to the standard
+readers (Bio-Formats among them). It supports both **unary** and **aggregative** conversion
+modes, with options for filtering, metadata specification, downscaling, and distributed processing.
 
 
-#### Non-configurable Parameters
+#### Command Arguments
 
-These must be provided directly via the CLI:
+These are given to the command only:
 
 | Argument               | Type                        | Description                     |
 |------------------------|-----------------------------|---------------------------------|
-| `input_path`           | `str` or `Path` (mandatory) | Path to input file or folder    |
-| `output_path`          | `str` or `Path` (mandatory) | Path to output folder           |
+| `input_path`           | `str` or `Path` (mandatory) | Path to an input file or folder, or a conversion table (`.csv`, `.tsv`, `.txt`, `.xlsx`) |
+| `output_path`          | `str` or `Path`             | Path to the output folder. Optional when `input_path` is a conversion table whose rows carry their own `output_path` |
 | `--includes`           | `str`                       | Include filter for filenames    |
 | `--excludes`           | `str`                       | Exclude filter for filenames    |
-| `--scene_index`        | `int` or `tuple`            | Scene(s) to be extracted        |
-| `--time_tag`           | `str` or `tuple`            | Time dimension tag              |
-| `--channel_tag`        | `str` or `tuple`            | Channel dimension tag           |
-| `--z_tag`              | `str` or `tuple`            | Z-dimension tag                 |
-| `--y_tag`              | `str` or `tuple`            | Y-dimension tag                 |
-| `--x_tag`              | `str` or `tuple`            | X-dimension tag                 |
-| `--concatenation_axes` | `int`, `tuple`, or `str`    | Axes for concatenating datasets |
-| `--time_scale`         | `int`, `float`              | Temporal increment              |
-| `--z_scale`            | `int`, `float`              | Z spatial increment             |
-| `--y_scale`            | `int`, `float`              | Y spatial increment             |
-| `--x_scale`            | `int`, `float`              | X spatial increment             |
-| `--time_unit`          | `str`                       | Temporal unit                   |
-| `--z_unit`             | `str`                       | Z spatial unit                  |
-| `--y_unit`             | `str`                       | Y spatial unit                  |
-| `--x_unit`             | `str`                       | X spatial unit                  |
+
+Everything else (scene selection, tags, scales and units, ...) is a setting: it can be
+passed to the command too, and is described under [Configurable Parameters](#configurable-parameters).
 
 #### Examples
 
@@ -136,9 +126,14 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--max_threads`       | `int`    | Threads per conversion, each reading and writing one region at a time; scenes converted at once share them (formerly `--max_concurrency`) |
 | `--max_retries`             | `int`    | Number of retries attempted for certain types of errors    |
 | `--memory_budget`  | `str`   | The memory the whole run may use on this machine, e.g. `16GB`, or `auto` (default: half the free RAM) |
+| `--max_concurrent_scenes` | `int` | Scenes of one file converted at once (default 1); they share `max_threads` |
+| `--decode_threads`     | `int`    | micro-reader's decode threads per worker process (formerly `--micro_read_concurrency`) |
+| `--decode_memory`      | `str`    | micro-reader's decoding memory per process, e.g. `1GB`, or `auto` (default) |
+| `--bioformats_threads` | `int`    | Threads for parallel Bio-Formats tile reads (formerly `--bf_read_concurrency`) |
+| `--jvm_memory`         | `str`    | Maximum JVM heap for Bio-Formats, e.g. `8GB` (default `1g`) |
 | `--on_slurm`           | `bool`   | Enable SLURM-based execution                 |
 | `--queue_size`           | `int`   | Queue size for the concurrent writes |
-| `--region_size_mb`           | `int`   | Megabytes to calculate unit write-region |
+| `--region_size_mb`           | `float` or `auto` | Size of one read region in MB; `auto` (default) sizes it from the memory budget (8 to 256 MB) |
 | `--tensorstore_data_copy_concurrency`  | `int`   | Tensorstore context parameter |
 | `--use_threading`           | `bool`   | Use multi-threading rather than multi-processing |
 
@@ -147,14 +142,19 @@ These are stored in the configuration file but can also be supplied directly to 
 
 | Parameter            | Type   | Description                        |
 |----------------------|--------|------------------------------------|
+| `pixel_reader`       | `str`  | Where the pixels come from: `micro` (default; a file micro-reader does not read falls back to the standard reader, with a warning) or `standard` |
+| `micro_check_pixels` | `bool` | With `pixel_reader micro`: also read with the standard reader and compare (slower; for checking a new format) |
+| `force_bioformats`   | `bool` | Use the Java Bio-Formats reader even for formats read natively; a fallback when a native read fails |
 | `as_mosaic`          | `bool` | Whether to stitch the mosaic tiles |
-| `view_index`         | `int`  | Index for view selection           |
+| `scene_index`        | `int`, `all` or a list | Scene(s) to convert, e.g. `0`, `all` or `0,2,4`; each becomes its own output |
+| `view_index`         | `int`, `all` or a list | View(s) to convert |
+| `illumination_index` | `int`, `all` or a list | Illumination(s) to convert |
 | `phase_index`        | `int`  | Index for phase selection          |
-| `illumination_index` | `int`  | Index for illumination selection   |
-| `scene_index`        | `int`  | Index for scene selection          |
 | `rotation_index`     | `int`  | Index for rotation selection       |
-| `mosaic_tile_index`  | `int`  | Index for mosaic tile selection    |
+| `mosaic_tile_index`  | `int`, `all` or a list | Mosaic tile(s) to convert when not stitching; each becomes its own output |
 | `sample_index`       | `int`  | Index for sample selection         |
+| `concat_views`       | `bool` | Stack the views along the channel axis into one output instead of one output per view |
+| `concat_illuminations` | `bool` | Stack the illuminations along the channel axis into one output instead of one output per illumination |
 
 
 #### Conversion Parameters
@@ -163,8 +163,10 @@ These are stored in the configuration file but can also be supplied directly to 
 |------------------------|--------|----------------------------------------------------------|
 | `--ome_zarr_version`   | `str`  | OME-Zarr (NGFF) version to write: `0.4` (Zarr v2) or `0.5` (Zarr v3). Preferred control. |
 | `--zarr_format`        | `int`  | **Deprecated** — Zarr container version (`2`=OME-Zarr 0.4, `3`=OME-Zarr 0.5). Use `--ome_zarr_version` instead. |
-| `--compressor`         | `str`  | Compression algorithm                                    |
+| `--compressor`         | `str`  | Compression algorithm. Avoid blosc's `snappy` codec: few OME-Zarr readers can read it, and eubi-bridge warns about it (or refuses it, with dyna-zarr 0.1.0) |
 | `--compressor_params`  | `dict` | Compressor parameters                                    |
+| `--auto_chunk`         | `bool` | Choose the chunk shape automatically, near `--target_chunk_mb` (default `True`); `False` uses the `*_chunk` values below |
+| `--target_chunk_mb`    | `float` | Target uncompressed chunk size in MB with `--auto_chunk` (default 1) |
 | `--time_chunk`         | `int`  | Output Zarr chunk size in the time dimension             |
 | `--channel_chunk`      | `int`  | Output Zarr chunk size in the channel dimension          |
 | `--z_chunk`            | `int`  | Output Zarr chunk size in the z dimension                |
@@ -183,9 +185,30 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--squeeze`            | `bool` | Drop the singlet dimensions from the output array        |
 | `--overwrite`          | `bool` | Overwrite existing Zarr data                             |
 | `--dtype`              | `str`  | `auto` keeps the source dtype; pass a NumPy dtype (e.g. `uint8`) to cast on write |
-| `--metadata_reader`    | `str`  | Metadata extraction backend: `micro` (default; Bio-Formats only as a per-file fallback), `bfio` or `bioio` |
 | `--save_omexml`        | `bool` | Save a companion OME-XML sidecar file                    |
+| `--export_acquisition_metadata` | `bool` | Write acquisition metadata NGFF has no field for (view / illumination indices, objective NA, wavelengths) into the `eubi_bridge` attributes; unset = on when one acquisition is split into several outputs |
 | `--writer`             | `str`  | Which engine writes the OME-Zarr: `auto` (default; ome_zarr_pyramid on dyna-zarr, or eubi-bridge's own writer where that cannot write the output yet), `ozp` or `eubi`. Both give the same output |
+| `--io_backend`         | `str`  | The bytes backend of the `ozp` writer: `tensorstore` (default) or `zarrista` (`pip install "dyna-zarr[zarrista]"`) |
+
+#### Metadata Parameters
+
+| Parameter                    | Type    | Description                                  |
+|------------------------------|---------|----------------------------------------------|
+| `--metadata_reader`          | `str`   | Where the metadata comes from: `micro` (default; a file micro-reader does not read falls back to the standard reader), `bfio` or `bioio` |
+| `--channel_labels`           | `str`   | Per-channel name overrides, e.g. `"0,DAPI;1,GFP"` |
+| `--channel_colors`           | `str`   | Per-channel colour overrides, e.g. `"0,FF0000;1,00FF00"`; channels left out keep their source colour |
+| `--channel_intensity_limits` | `str`   | Display-window limits: `from_dtype` (default), `from_array` (per-channel min/max of the data) or `auto` |
+| `--override_channel_names`   | `bool`  | Name the output channels after the `channel_tag` values (aggregative conversions) |
+| `--time_scale`, `--z_scale`, `--y_scale`, `--x_scale` | `float` | Physical size of a time step / pixel; unset keeps the source value |
+| `--time_unit`, `--z_unit`, `--y_unit`, `--x_unit` | `str` | Units for those scales, e.g. `second`, `micrometer` |
+
+#### Concatenation Parameters
+
+| Parameter              | Type                     | Description                     |
+|------------------------|--------------------------|---------------------------------|
+| `--concatenation_axes` | `str`                    | Axes to concatenate along, e.g. `z` or `tc`; enables aggregative conversion |
+| `--time_tag`, `--channel_tag`, `--z_tag`, `--y_tag`, `--x_tag` | `str` or a list | File-name patterns that give each file's place along that axis |
+| `--aggregative_group`  | `str`                    | Name prefixed to the concatenated output; in a conversion table, rows sharing it are concatenated together |
 
 #### Downscale Parameters
 
@@ -252,7 +275,9 @@ This will convert a subset of the input datasets (0-100 in the time range and 15
 
 ### `eubi update_pixel_meta`
 
-Performs in-place metadata update in the OME-Zarr datasets. Currently, pixel units and pixel scales are updateable metadata elements. 
+Performs in-place metadata update in the OME-Zarr datasets: pixel units and pixel scales.
+Channel names and colours are updated with `eubi update_channel_meta` (see the
+[CLI reference](cli_reference/metadata.md)).
 
 #### Parameters
 
@@ -304,7 +329,7 @@ with no subcommand to list the available sections:
 
 ```bash
 eubi configure
-# COMMANDS: cluster · conversion · downscale · readers · concatenation
+# COMMANDS: cluster · conversion · downscale · readers · metadata · concatenation
 ```
 
 ### `eubi configure cluster`
@@ -342,9 +367,29 @@ eubi configure downscale --z_scale_factor 1 --y_scale_factor 2 --x_scale_factor 
 Set reader defaults (scene / view / illumination / mosaic selection) using any of the
 [reader parameters](#readers-parameters).
 
+### `eubi configure metadata`
+
+Set metadata defaults (metadata reader, channel names / colours / display limits, pixel
+scales and units) using any of the [metadata parameters](#metadata-parameters).
+
+#### Example
+
+```bash
+eubi configure metadata --channel_intensity_limits from_array
+```
+
 ### `eubi configure concatenation`
 
-Set aggregative defaults (concatenation axes and filename tags).
+Set aggregative defaults using any of the [concatenation parameters](#concatenation-parameters).
+
+#### Example
+
+```bash
+eubi configure concatenation --concatenation_axes c --channel_tag raw,mask
+```
+
+Named configuration profiles (`save_as`, `with_config`, `list_configs`, ...),
+`validate_aggregative` and `version` are described in the [CLI reference](cli_reference/index.md).
 
 ---
 
@@ -360,15 +405,15 @@ Set aggregative defaults (concatenation axes and filename tags).
   <tbody>
     <tr>
       <td><code><nobr>eubi reset_config</nobr></code></td>
-      <td>Reset cluster/conversion/downscale parameters to installation defaults</td>
+      <td>Reset all settings (cluster, readers, conversion, downscale, metadata, concatenation) to installation defaults</td>
     </tr>
     <tr>
       <td><code><nobr>eubi show_config</nobr></code></td>
-      <td>Show current cluster/conversion/downscale settings</td>
+      <td>Show the current settings of all six sections</td>
     </tr>
     <tr>
       <td><code><nobr>eubi show_root_defaults</nobr></code></td>
-      <td>Show installation defaults for cluster/conversion/downscale parameters</td>
+      <td>Show the installation defaults of all six sections</td>
     </tr>
     <tr>
       <td><code><nobr>eubi show_configs</nobr></code></td>

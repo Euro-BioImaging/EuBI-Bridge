@@ -1,5 +1,16 @@
 # CLI API Audit — Findings Tracker
 
+> **Historical: the 2026-06-15 audit log (v0.1.2b6).** Status on 2026-10-14:
+> - **Fixed:** the `configure` group (now six subcommands, `metadata` added); the `n_layers`
+>   docstring; the named-config `Args:` sections; the `_view1_illu0` names (now `_view_concat` /
+>   `_illu_concat`); the CZI view / illumination collapse (the pylibCZIrw reader now exposes
+>   V/H/I/R itself; `needs_view_illu` below no longer exists).
+> - **Partly fixed:** a channel takes the first window's colour only when its label is blank.
+> - **Still open:** the grouped `a / b / c:` Args lines in `configure conversion`, and the
+>   `'default'` string used as a placeholder for int / bool parameters.
+> - Line numbers below are stale; the test data now lives in `Desktop/quarantine/temp/ome/input`.
+
+
 Working document for the `eubi` entrypoint audit (see plan: CLI API audit + documentation).
 One section per command group. Each command: **Status**, **Doc fixes**, **Behavior fixes**, and a
 group-level **Breaking changes** subsection (the audit trail for approved breaking changes).

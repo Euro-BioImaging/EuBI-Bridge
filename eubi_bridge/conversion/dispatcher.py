@@ -22,6 +22,7 @@ import math
 import multiprocessing as mp
 import os
 import re
+import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Union
@@ -69,6 +70,35 @@ def _report_failures(results: list, label: str = "Main") -> None:
         raise RuntimeError(f"{len(failed)}/{len(results)} tasks failed:\n{summary}")
 
 
+#: how long a worker process gets to exit once all work is done, before it is stopped
+_WORKER_EXIT_S = 30.0
+
+
+def _shutdown_pool(pool) -> None:
+    """Shut a pool down without waiting forever.
+
+    It is only called once every result is in. A ProcessPool worker that has not exited
+    within ``_WORKER_EXIT_S`` is stopped: a worker whose Java VM still runs threads (a
+    Bio-Formats read that failed half way leaves its reader open) never exits, and
+    ``shutdown(wait=True)`` then waited for it forever - the conversion had already
+    reported its error, but the run never ended (eubi-bridge 0.1.4)."""
+    if not isinstance(pool, ProcessPoolExecutor):
+        pool.shutdown(wait=True)
+        return
+    workers = list((getattr(pool, "_processes", None) or {}).values())
+    pool.shutdown(wait=False, cancel_futures=True)
+    deadline = time.monotonic() + _WORKER_EXIT_S
+    for worker in workers:
+        worker.join(max(0.0, deadline - time.monotonic()))
+    for worker in workers:
+        if worker.is_alive():
+            logger.warning(f"Worker process {worker.pid} had not exited {_WORKER_EXIT_S:.0f} s "
+                           f"after its work finished (e.g. a Java VM still running after a "
+                           f"failed Bio-Formats read); stopping it.")
+            worker.kill()
+            worker.join(5)
+
+
 def _build_executor(cluster, use_threading: bool) -> tuple:
     """Return (executor_cls, executor_kwargs) from a ClusterConfig."""
     if use_threading:
@@ -114,7 +144,7 @@ async def _dispatch(
             try:
                 return await loop.run_in_executor(temp, worker_fn, job)
             finally:
-                temp.shutdown(wait=True)
+                _shutdown_pool(temp)
 
     pool = None
     try:
@@ -132,7 +162,7 @@ async def _dispatch(
     finally:
         if pool is not None:
             try:
-                pool.shutdown(wait=True)
+                _shutdown_pool(pool)
             except Exception as e:
                 logger.warning(f"Error shutting down pool: {e}")
                 try:
@@ -431,7 +461,7 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
             try:
                 return await loop.run_in_executor(temp, metadata_reader_sync, ip, job_kw)
             finally:
-                temp.shutdown(wait=True)
+                _shutdown_pool(temp)
 
     pool = None
     try:
@@ -447,7 +477,7 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
     finally:
         if pool is not None:
             try:
-                pool.shutdown(wait=True)
+                _shutdown_pool(pool)
             except Exception as e:
                 logger.warning(f"Error shutting down meta pool: {e}")
                 try:
@@ -732,7 +762,7 @@ async def run_conversions_with_concatenation(
         results = await asyncio.gather(*tasks, return_exceptions=True)
     finally:
         if pool is not None:
-            pool.shutdown(wait=True)
+            _shutdown_pool(pool)
 
     _report_failures(list(results), "Aggregative")
     return results

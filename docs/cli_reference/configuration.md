@@ -151,7 +151,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--jvm_memory</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Maximum JVM heap for Bio-Formats, e.g. `'8GB'`, `'4GB'`. Accepts `'NGB'` / `'NMB'` (like memory_budget) and normalises internally to JVM format (`'Ng'` / `'Nm'`).  Default `'2g'`.</p>
+    <p>Maximum JVM heap for Bio-Formats, e.g. `'8GB'`, `'4GB'`. Accepts `'NGB'` / `'NMB'` (like memory_budget) and normalises internally to JVM format (`'Ng'` / `'Nm'`).  Default `'1g'`.</p>
     </details>
 
     <details>
@@ -797,7 +797,7 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p><strong>Valid values:</strong>&nbsp; `--force_bioformats` to enable &nbsp;·&nbsp; `--force_bioformats False` to disable</p>
-    <p>Force bfio tiled path even for natively-supported formats.</p>
+    <p>Force the Java Bio-Formats reader even for formats EuBI-Bridge reads natively (CZI, ND2, LIF, IMS...); a fallback when a native read fails.</p>
     <pre><code># Always route reads through the Java Bio-Formats reader
     eubi configure readers --force_bioformats
     </code></pre>
@@ -859,7 +859,7 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Metadata backend — `'micro'` (default): micro-reader's metadata, and its pixels with it (no JVM unless a file falls back to Bio-Formats; also writes the stage position as the NGFF translation and wavelengths in the `eubi_bridge` attributes); `'bfio'` or `'bioio'`.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --metadata_reader bioformats
+    <pre><code>eubi configure metadata --metadata_reader bfio
     </code></pre>
     </details>
 
@@ -869,7 +869,7 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p><strong>Valid values:</strong>&nbsp; `--override_channel_names` to enable &nbsp;·&nbsp; `--override_channel_names False` to disable</p>
     <p>Replace channel names with ones derived from the concatenation tag values (default False).</p>
-    <pre><code>eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --override_channel_names
+    <pre><code>eubi configure metadata --override_channel_names
     </code></pre>
     </details>
 
@@ -878,7 +878,7 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `Literal['from_dtype', 'from_array', 'auto']`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>How to set OMERO window limits — `'from_dtype'` (default) uses dtype min/max, `'from_array'` computes per-channel min/max from pixel data, `'auto'` lets the viewer decide.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --channel_intensity_limits from_array
+    <pre><code>eubi configure metadata --channel_intensity_limits from_array
     </code></pre>
     </details>
 
@@ -887,6 +887,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Per-channel colour overrides as `"0,FF0000;1,00FF00"`. Channels left out keep their source colour, or are given one automatically.</p>
+    <pre><code>eubi configure metadata --channel_colors "0,FF0000;1,00FF00"
+    </code></pre>
     </details>
 
     <details>
@@ -894,6 +896,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Per-channel name overrides as `"0,DAPI;1,GFP"`.</p>
+    <pre><code>eubi configure metadata --channel_labels "0,DAPI;1,GFP"
+    </code></pre>
     </details>
 
     <details>
@@ -901,6 +905,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `float`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Physical size of one time step. Unset keeps whatever the source file states.</p>
+    <pre><code>eubi configure metadata --time_scale 2.5 --time_unit second
+    </code></pre>
     </details>
 
     <details>
@@ -908,6 +914,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `float`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Physical pixel size along z (e.g. `0.5`). Unset keeps the source value.</p>
+    <pre><code>eubi configure metadata --z_scale 0.5 --z_unit micrometer
+    </code></pre>
     </details>
 
     <details>
@@ -915,6 +923,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `float`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Physical pixel size along y. Unset keeps the source value.</p>
+    <pre><code>eubi configure metadata --y_scale 0.1 --y_unit micrometer
+    </code></pre>
     </details>
 
     <details>
@@ -922,6 +932,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `float`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Physical pixel size along x. Unset keeps the source value.</p>
+    <pre><code>eubi configure metadata --x_scale 0.1 --x_unit micrometer
+    </code></pre>
     </details>
 
     <details>
@@ -929,6 +941,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Unit for `time_scale` (e.g. `'second'`).</p>
+    <pre><code>eubi configure metadata --time_unit second
+    </code></pre>
     </details>
 
     <details>
@@ -936,6 +950,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Unit for `z_scale` (e.g. `'micrometer'`).</p>
+    <pre><code>eubi configure metadata --z_unit micrometer
+    </code></pre>
     </details>
 
     <details>
@@ -943,6 +959,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Unit for `y_scale`.</p>
+    <pre><code>eubi configure metadata --y_unit micrometer
+    </code></pre>
     </details>
 
     <details>
@@ -950,6 +968,8 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
     <p>Unit for `x_scale`.</p>
+    <pre><code>eubi configure metadata --x_unit micrometer
+    </code></pre>
     </details>
 
 

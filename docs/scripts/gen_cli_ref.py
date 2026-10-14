@@ -158,7 +158,22 @@ _FIELD_HINTS: dict[str, str] = {
     "overwrite": "Overwrite existing output zarr if it already exists.",
     "override_channel_names": "Replace output channel labels with the `channel_tag` values. For aggregative conversions with a tuple `channel_tag` only.",
     "channel_intensity_limits": "Strategy for OMERO display-window limits.",
-    "metadata_reader": "Backend used to read OME-XML pixel metadata.",
+    "metadata_reader": "Where the image metadata comes from: `micro` (micro-reader, the default; a file it does not read falls back to the standard reader), `bfio` or `bioio`.",
+    "pixel_reader": "Where the pixels come from: `micro` (micro-reader, the default; a file it does not read falls back to the standard reader with a warning) or `standard` (the format's usual reader).",
+    "micro_check_pixels": "With `pixel_reader micro`: also open the standard reader and compare its pixels with micro-reader's. Slower; for checking a new format.",
+    "channel_colors": 'Per-channel colour overrides as `"0,FF0000;1,00FF00"`. Channels left out keep their source colour, or get one automatically.',
+    "channel_labels": 'Per-channel name overrides as `"0,DAPI;1,GFP"`.',
+    "jvm_memory": "Maximum JVM heap for Bio-Formats, e.g. `8GB` or `4GB` (default `1g`).",
+    "export_acquisition_metadata": "Write acquisition metadata NGFF has no field for (view / illumination indices, objective NA, per-channel emission) into the `eubi_bridge` attributes. Unset = automatic: on when one acquisition is split into several outputs.",
+    "aggregative_group": "Name prefixed to the concatenated output. In a conversion table, rows sharing this value are concatenated together; a blank one converts on its own. Keep it short (it becomes part of the file name).",
+    "time_scale": "Physical size of one time step. Unset keeps what the source file states.",
+    "z_scale": "Physical pixel size along z (e.g. `0.5`). Unset keeps the source value.",
+    "y_scale": "Physical pixel size along y. Unset keeps the source value.",
+    "x_scale": "Physical pixel size along x. Unset keeps the source value.",
+    "time_unit": "Unit for `time_scale` (e.g. `second`).",
+    "z_unit": "Unit for `z_scale` (e.g. `micrometer`).",
+    "y_unit": "Unit for `y_scale`.",
+    "x_unit": "Unit for `x_scale`.",
     "save_omexml": "Write a companion OME-XML sidecar file alongside the zarr.",
     "squeeze": "Remove length-1 dimensions before writing.",
     "dtype": "`auto` preserves the source dtype; pass any NumPy dtype string (e.g. `uint16`, `float32`) to cast on write.",
@@ -319,7 +334,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "dtype": "eubi to_zarr /data/input /data/output --dtype uint8",
     "squeeze": "eubi to_zarr /data/input /data/output --squeeze False",
     "channel_intensity_limits": "eubi to_zarr /data/input /data/output --channel_intensity_limits from_array",
-    "metadata_reader": "eubi to_zarr /data/input /data/output --metadata_reader bioformats",
+    "metadata_reader": "eubi to_zarr /data/input /data/output --metadata_reader bfio",
     "save_omexml": "eubi to_zarr /data/input /data/output --save_omexml False",
     "override_channel_names": "eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --override_channel_names",
     "verbose": "eubi to_zarr /data/input /data/output --verbose",
@@ -882,6 +897,21 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
     },
 
     # ── configure_concatenation ───────────────────────────────────────────────
+    "configure.metadata": {
+        "metadata_reader": "eubi configure metadata --metadata_reader bfio",
+        "override_channel_names": "eubi configure metadata --override_channel_names",
+        "channel_intensity_limits": "eubi configure metadata --channel_intensity_limits from_array",
+        "channel_colors": 'eubi configure metadata --channel_colors "0,FF0000;1,00FF00"',
+        "channel_labels": 'eubi configure metadata --channel_labels "0,DAPI;1,GFP"',
+        "time_scale": "eubi configure metadata --time_scale 2.5 --time_unit second",
+        "z_scale": "eubi configure metadata --z_scale 0.5 --z_unit micrometer",
+        "y_scale": "eubi configure metadata --y_scale 0.1 --y_unit micrometer",
+        "x_scale": "eubi configure metadata --x_scale 0.1 --x_unit micrometer",
+        "time_unit": "eubi configure metadata --time_unit second",
+        "z_unit": "eubi configure metadata --z_unit micrometer",
+        "y_unit": "eubi configure metadata --y_unit micrometer",
+        "x_unit": "eubi configure metadata --x_unit micrometer",
+    },
     "configure.concatenation": {
         "concatenation_axes": [
             "# Concatenate files along the channel axis",
@@ -1148,12 +1178,14 @@ def _constraints_for(fname: str, finfo: Any) -> str:
     """Return constraints string for a field, with special cases for known enums."""
     if fname == "compressor":
         v2 = ", ".join(f"`{c}`" for c in sorted(SUPPORTED_COMPRESSORS_V2) if c)
-        v3 = ", ".join(f"`{c}`" for c in sorted(SUPPORTED_COMPRESSORS_V3) if c)
+        # crc32ccodec and sharding are codecs zarr v3 stacks itself, not a choice
+        v3 = ", ".join(f"`{c}`" for c in sorted(SUPPORTED_COMPRESSORS_V3)
+                       if c and c not in ("crc32ccodec", "sharding"))
         return f"v2: {v2}; v3: {v3}"
     if fname == "channel_intensity_limits":
         return "`from_dtype` · `from_array` · `auto`"
     if fname == "metadata_reader":
-        return "`bfio` · `bioformats`"
+        return "`micro` (default) · `bfio` · `bioio`"
     if fname == "downscale_method":
         return "`simple` · `mean` · `median` · `min` · `max` · `mode`"
     return _constraints_str(finfo)

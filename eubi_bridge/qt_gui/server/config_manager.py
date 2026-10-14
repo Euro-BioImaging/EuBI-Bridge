@@ -17,6 +17,8 @@ import json
 import sys
 from pathlib import Path
 
+from eubi_bridge.core.config_models import parse_scale
+
 
 # ---------------------------------------------------------------------------
 # snake_case (ebridge.py) → camelCase (React GUI) mapping
@@ -320,10 +322,9 @@ def _react_to_config(data: dict) -> dict:
             # or unticked means "keep what the source file says".
             **{
                 f"{axis}_scale": (
-                    float(meta_d[f"scale{axis.capitalize()}"])
-                    if meta_d.get("overridePhysicalScale", False)
-                    and str(meta_d.get(f"scale{axis.capitalize()}", "")).strip()
-                    else None)
+                    parse_scale(meta_d.get(f"scale{axis.capitalize()}"),
+                                f"{axis.capitalize()} scale")
+                    if meta_d.get("overridePhysicalScale", False) else None)
                 for axis in ("time", "z", "y", "x")
             },
             **{

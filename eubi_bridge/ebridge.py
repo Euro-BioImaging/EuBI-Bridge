@@ -928,6 +928,7 @@ class ConfigureGroup:
     * ``downscale``     - pyramid level count and per-axis scale factors
     * ``readers``       - scene / view / illumination / mosaic selection
     * ``concatenation`` - aggregative axes and filename tags
+    * ``metadata``      - metadata reader, channel names / colours / limits, pixel scales and units
 
     Each subcommand updates only the arguments you pass; omitted arguments keep
     their current values.  Example::
@@ -1006,7 +1007,7 @@ class ConfigureGroup:
                 size. Accepted for now so existing scripts keep working.
             jvm_memory: Maximum JVM heap for Bio-Formats, e.g. ``'8GB'``, ``'4GB'``.
                 Accepts ``'NGB'`` / ``'NMB'`` (like memory_budget) and normalises
-                internally to JVM format (``'Ng'`` / ``'Nm'``).  Default ``'2g'``.
+                internally to JVM format (``'Ng'`` / ``'Nm'``).  Default ``'1g'``.
             slurm_time: SLURM job wall-clock limit, e.g. ``'24:00:00'`` (used only
                 when on_slurm=True).
             slurm_account: SLURM account/allocation to charge (default None).
@@ -1051,7 +1052,9 @@ class ConfigureGroup:
             mosaic_tile_index: Mosaic tile index.  Pass an integer, ``'all'``,
                 or a comma-separated list (default None = all tiles).
             sample_index: Sample index (default 0).
-            force_bioformats: Force bfio tiled path even for natively-supported formats.
+            force_bioformats: Force the Java Bio-Formats reader even for formats
+                EuBI-Bridge reads natively (CZI, ND2, LIF, IMS...); a fallback when a
+                native read fails.
             concat_views: Stack multiple views along the channel axis instead of
                 writing separate OME-Zarr outputs (default False).
             concat_illuminations: Stack multiple illuminations along the channel axis
@@ -1923,14 +1926,14 @@ class EuBIBridge:
 
     @property
     def configure(self) -> 'ConfigureGroup':
-        """Configuration subcommands — ``eubi configure cluster / conversion / downscale / readers / concatenation``.
+        """Configuration subcommands — ``eubi configure cluster / conversion / downscale / readers / concatenation / metadata``.
 
         Run ``eubi configure`` with no subcommand to list the available
         sections.  Bound to the active config so it composes with
         ``with_config``::
 
             eubi configure cluster --max_processes 8
-            eubi with_config hpc configure conversion --zarr_format 3
+            eubi with_config hpc configure conversion --ome_zarr_version 0.5
         """
         return ConfigureGroup(self._cfg)
 

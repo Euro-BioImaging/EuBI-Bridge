@@ -151,3 +151,32 @@ def test_default_conversion_is_written_by_ozp(tmp_path, source, monkeypatch):
     out = _snapshot(_convert(source, tmp_path / "auto", writer="auto", use_threading=True))
     assert len(calls) == 1
     assert out == _snapshot(_convert(source, tmp_path / "eubi", writer="eubi"))
+
+
+# --- 0.1.5: a dask-read source with the memory budget -------------------------------
+# eubi-bridge 0.1.4 passed memory_budget_mb for every ozp write; dyna refuses it for a
+# dask array (dask's scheduler writes those), so EVERY conversion read through the
+# standard readers (dask) failed.
+
+def test_a_dask_source_writes_with_a_memory_budget(tmp_path):
+    import asyncio
+    da = pytest.importorskip("dask.array")
+    import zarr
+    from eubi_bridge.core.ozp_writer import store_multiscale_ozp
+    data = np.random.default_rng(1).integers(0, 999, (8, 64, 64), dtype=np.uint16)
+    out = tmp_path / "dask.zarr"
+    asyncio.run(store_multiscale_ozp(da.from_array(data, chunks=(4, 32, 32)), str(out),
+                                     axes="zyx", scales=[1.0, 1.0, 1.0],
+                                     units=["micrometer"] * 3, overwrite=True,
+                                     memory_budget_mb=512))
+    np.testing.assert_array_equal(zarr.open_array(str(out / "0"))[...], data)
+
+
+def test_the_standard_reader_converts_with_the_default_writer(tmp_path, source):
+    import tifffile
+    import zarr
+    # worker processes, as a CLI run: the memory budget is set there
+    out = _convert(source, tmp_path / "standard", pixel_reader="standard")
+    # the ImageJ source is stored ZCYX; eubi-bridge writes it CZYX
+    np.testing.assert_array_equal(zarr.open_array(str(out / "0"))[...],
+                                  np.moveaxis(tifffile.imread(source), 1, 0))

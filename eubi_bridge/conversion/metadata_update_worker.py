@@ -20,7 +20,18 @@ def parse_units(manager, **kwargs) -> dict:
     return MetadataUpdateConfig(**kwargs).units_for(manager)
 
 
+# The channel settings an update acts on.  Callers pass whole config sections
+# (the CLI collects 'conversion' too), so a conversion dtype must not reach the
+# windows: they describe the dtype the store already has.
+_CHANNEL_KEYS = ("channel_labels", "channel_colors", "channel_intensity_limits")
+
+
 async def update_worker(input_path: Union[str, ArrayManager], **kwargs):
+    """Edit the metadata of an existing OME-Zarr in place.
+
+    Metadata only: the arrays are never touched, so conversion settings that
+    change pixels (squeeze, crop ranges, dtype) are ignored here.
+    """
     cfg = MetadataUpdateConfig(**kwargs)
 
     if not is_zarr_group(input_path):
@@ -37,13 +48,6 @@ async def update_worker(input_path: Union[str, ArrayManager], **kwargs):
     manager.fill_default_meta()
     manager.fix_bad_channels()
 
-    if cfg.squeeze:
-        manager.squeeze()
-
-    crop_slices = cfg.crop_slices()
-    if any(s is not None for s in crop_slices):
-        manager.crop(*crop_slices)
-
     manager.update_meta(
         new_scaledict=cfg.scales_for(manager),
         new_unitdict=cfg.units_for(manager),
@@ -51,7 +55,8 @@ async def update_worker(input_path: Union[str, ArrayManager], **kwargs):
 
     await manager.sync_pyramid(save_changes=False)
 
-    channels = parse_channels(manager, **kwargs)
+    channels = parse_channels(
+        manager, **{k: kwargs[k] for k in _CHANNEL_KEYS if k in kwargs})
     meta = manager.pyr.meta
     meta.metadata["omero"]["channels"] = channels
 

@@ -33,6 +33,29 @@ def _require_ozp():
     return ome_zarr_pyramid
 
 
+def _is_dask(arr) -> bool:
+    """A dask array (subclasses included), without importing dask."""
+    return type(arr).__module__.split(".")[0] == "dask" or any(
+        c.__module__.split(".")[0] == "dask" for c in type(arr).__mro__)
+
+
+def _memory_budget(arrays, kwargs) -> Optional[float]:
+    """The memory budget for this write, or None where it does not apply.
+
+    dyna-zarr bounds a write by its budget in its own region loop. A dask array is
+    written by dask's own scheduler instead (its memory is max_threads x the output's
+    write unit), and dyna refuses a budget for it rather than ignore it. eubi-bridge sets
+    the budget for every conversion, so for a dask source (the standard readers) it is
+    left out here: such a write behaves as with eubi-bridge 0.1.3's writer. eubi-bridge
+    0.1.4 passed it anyway, so every conversion read through dask failed."""
+    budget = kwargs.get('memory_budget_mb')
+    if budget is not None and any(_is_dask(a) for a in arrays):
+        logger.info("memory_budget does not apply to a dask-read source: dask's scheduler "
+                    "writes it (memory about max_threads x the output's write unit)")
+        return None
+    return budget
+
+
 def _level_keys(pyr):
     from natsort import natsorted
     return natsorted(pyr.layers.keys())
@@ -177,7 +200,7 @@ def _store_existing_sync(src, output_path, axes, units, channel_meta, zarr_forma
         dtype=dtype if dtype != np.dtype(arrays[0].dtype) else None,
         window_from_data=bool(kwargs.get('window_from_data', False)),
         io_backend=kwargs.get('io_backend', 'tensorstore'),
-        memory_budget_mb=kwargs.get('memory_budget_mb'),
+        memory_budget_mb=_memory_budget(arrays, kwargs),
     )
 
 
@@ -258,6 +281,7 @@ def _store_multiscale_sync(arr, output_path, axes, scales, units, translation,
         window_from_data=bool(kwargs.get('window_from_data', False)),
         # dyna's bytes backend: 'tensorstore' or 'zarrista'
         io_backend=kwargs.get('io_backend', 'tensorstore'),
-        # the whole write's memory (zarrista: big shards tiled in y/x within it)
-        memory_budget_mb=kwargs.get('memory_budget_mb'),
+        # the whole write's memory (zarrista: big shards tiled in y/x within it);
+        # not for a dask source, which dask's scheduler writes
+        memory_budget_mb=_memory_budget([arr], kwargs),
     )
