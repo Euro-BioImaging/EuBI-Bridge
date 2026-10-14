@@ -1208,31 +1208,13 @@ class ChunkConfig(BaseModel):
 # MetadataUpdateConfig
 # ---------------------------------------------------------------------------
 
-def _coerce_range(v) -> Optional[Tuple[int, int]]:
-    """Coerce a range value: passthrough None/NaN, validate (start, stop) pair."""
-    if v is None:
-        return None
-    try:
-        import math
-        if math.isnan(float(v)):
-            return None
-    except (TypeError, ValueError):
-        pass
-    try:
-        start, stop = int(v[0]), int(v[1])
-    except (TypeError, ValueError, IndexError):
-        raise ValueError(f"Range must be a (start, stop) pair, got {v!r}")
-    if start >= stop:
-        raise ValueError(f"Range start {start} must be less than stop {stop}")
-    return (start, stop)
-
-
 class MetadataUpdateConfig(BaseModel):
     """Parameters for pixel-metadata and channel-metadata update operations.
 
     All scale / unit fields default to ``None`` meaning "keep the value already
-    stored in the file".  Range fields accept ``None`` (no crop on that axis) or
-    a ``(start, stop)`` int pair validated to have ``start < stop``.
+    stored in the file".  An update edits metadata only: squeeze and crop
+    change the arrays, so they belong to conversion, and callers that pass
+    them (whole config sections) have them ignored like any other extra key.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -1256,25 +1238,9 @@ class MetadataUpdateConfig(BaseModel):
     def _one_number_notation(cls, v, info: ValidationInfo):
         return parse_scale(v, info.field_name)
 
-    # Crop ranges as (start, stop) — None → no crop on that axis
-    time_range:    Optional[Tuple[int, int]] = None
-    channel_range: Optional[Tuple[int, int]] = None
-    z_range:       Optional[Tuple[int, int]] = None
-    y_range:       Optional[Tuple[int, int]] = None
-    x_range:       Optional[Tuple[int, int]] = None
-
     # Misc update options
-    squeeze:    bool = False
     save_omexml: bool = True
     series:      Union[int, str] = "all"
-
-    @field_validator(
-        "time_range", "channel_range", "z_range", "y_range", "x_range",
-        mode="before",
-    )
-    @classmethod
-    def _validate_range(cls, v):
-        return _coerce_range(v)
 
     def scales_for(self, manager) -> dict:
         """Merge explicit scale overrides with the manager's existing scaledict."""
@@ -1305,13 +1271,3 @@ class MetadataUpdateConfig(BaseModel):
             for ax in manager.axes
             if ax != "c"   # channel axis carries no physical unit
         }
-
-    def crop_slices(self) -> list:
-        """Return the list of (start, stop) ranges in tczyx order for manager.crop()."""
-        return [
-            self.time_range,
-            self.channel_range,
-            self.z_range,
-            self.y_range,
-            self.x_range,
-        ]
