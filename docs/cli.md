@@ -197,7 +197,7 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--metadata_reader`          | `str`   | Where the metadata comes from: `micro` (default; a file micro-reader does not read falls back to the standard reader), `bfio` or `bioio` |
 | `--channel_labels`           | `str`   | Per-channel name overrides, e.g. `"0,DAPI;1,GFP"` |
 | `--channel_colors`           | `str`   | Per-channel colour overrides, e.g. `"0,FF0000;1,00FF00"`; channels left out keep their source colour |
-| `--channel_intensity_limits` | `str`   | Display-window limits: `from_dtype` (default), `from_array` (per-channel min/max of the data) or `auto` |
+| `--channel_intensity_limits` | `str`   | Display-window limits: `from_dtype` (default), `from_array` (per-channel min/max of the data) or `auto` (0.1–99.9 percentiles of the smallest resolution level; the dtype's range when that level is over 64 MB) |
 | `--override_channel_names`   | `bool`  | Name the output channels after the `channel_tag` values (aggregative conversions) |
 | `--time_scale`, `--z_scale`, `--y_scale`, `--x_scale` | `float` | Physical size of a time step / pixel; unset keeps the source value |
 | `--time_unit`, `--z_unit`, `--y_unit`, `--x_unit` | `str` | Units for those scales, e.g. `second`, `micrometer` |

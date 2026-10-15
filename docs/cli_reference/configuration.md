@@ -877,7 +877,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--channel_intensity_limits</code></summary>
     <p><strong>Type:</strong>&nbsp; `Literal['from_dtype', 'from_array', 'auto']`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>How to set OMERO window limits — `'from_dtype'` (default) uses dtype min/max, `'from_array'` computes per-channel min/max from pixel data, `'auto'` lets the viewer decide.</p>
+    <p>How to set OMERO window limits — `'from_dtype'` (default) uses dtype min/max, `'from_array'` computes per-channel min/max from pixel data, `'auto'` gives a display window from a quick overview: the 0.1 and 99.9 percentiles of the smallest resolution level (the dtype's range when that level is over 64 MB).</p>
     <pre><code>eubi configure metadata --channel_intensity_limits from_array
     </code></pre>
     </details>

@@ -45,7 +45,9 @@ def test_configure_does_not_save_it(tmp_path):
 
 def test_a_conversion_given_it_still_reads_with_micro_reader(tmp_path, monkeypatch):
     """The bug it carried: skip_dask=True sent a TIFF to eubi's own TIFF route
-    instead of micro-reader.  Every reader the conversion opens is asked."""
+    instead of micro-reader.  Every reader the conversion opens is asked.  On the OLD
+    path: the new one (default since step 1d) reads with micro-reader only."""
+    monkeypatch.setenv("EUBI_NEW_PATH", "0")
     from eubi_bridge.core import data_manager
     from eubi_bridge.ebridge import EuBIBridge
 

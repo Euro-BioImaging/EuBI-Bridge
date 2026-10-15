@@ -443,13 +443,18 @@ def _memory_plan(manager: ArrayManager, job: ConversionJob) -> tuple:
     """``(scene write budget, region size)`` in MB, from the run's memory budget
     (core/memory.py): this process's share, minus what it already holds and the
     reader's share (applied to micro-reader here), over the scenes at once."""
+    return _memory_plan_for(manager.array, job)
+
+
+def _memory_plan_for(array, job: ConversionJob) -> tuple:
+    """``_memory_plan`` for the source `array` of one output (both conversion paths)."""
     from eubi_bridge.core import memory
     clus = job.cluster
     process = clus.process_memory_mb or memory.process_mb(clus)
     micro = job.readers.pixel_reader == 'micro' or job.metadata.metadata_reader == 'micro'
     if micro:
         decode, cache = memory.reader_share(process, clus.decode_memory, clus.decode_threads,
-                                            _unit_mb(manager.array))
+                                            _unit_mb(array))
         from eubi_bridge.core.micro_source import set_read_memory
         set_read_memory(decode, cache)
         reader = decode + cache
@@ -538,6 +543,9 @@ async def _process_single_scene(manager: ArrayManager, output_path: str,
         # the output is not read a second time to compute them afterwards
         windows_in_write = update_channels and writer == 'ozp'
         window_kw = {'window_from_data': True} if windows_in_write else {}
+        if writer == 'ozp' and meta.channel_intensity_limits == 'auto':
+            # percentiles of the coarsest level written (the dtype's range if it is big)
+            window_kw = {'windows': 'auto'}
 
         # Windows must describe the dtype actually written, not the source: a
         # uint16 -> uint8 conversion would otherwise advertise 0-65535 for uint8
@@ -687,6 +695,12 @@ async def _process_single_scene_safe(manager: ArrayManager, output_path: str,
     """Run ``_process_single_scene``; on failure remove any partial output and
     re-raise so the caller can record/skip it (used for graceful degradation on
     damaged/corrupt inputs)."""
+    await _convert_safely(_process_single_scene(manager, output_path, job, sem), output_path)
+
+
+async def _convert_safely(conversion, output_path: str) -> None:
+    """Await one output's `conversion`; on failure remove any partial output it
+    created and re-raise (both conversion paths)."""
     target = output_path if output_path.endswith('.zarr') else f"{output_path}.zarr"
     # Whether the output already existed BEFORE this run.  A pre-existing
     # dataset is never ours to delete — only partial output created by this run
@@ -696,7 +710,7 @@ async def _process_single_scene_safe(manager: ArrayManager, output_path: str,
     # output and hand it to the cleanup below.
     preexisting = store_exists(target)
     try:
-        await _process_single_scene(manager, output_path, job, sem)
+        await conversion
     except FileExistsError:
         # Name collision with overwrite=False: surface the error and leave the
         # existing dataset completely untouched.
@@ -842,6 +856,9 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
 
 async def unary_worker(job: ConversionJob) -> None:
     """Convert a single input file to OME-Zarr (all scenes/tiles/views/illuminations in parallel)."""
+    from eubi_bridge.conversion import pyramid_path
+    if pyramid_path.enabled() and await pyramid_path.convert(job):
+        return                                      # the 0.2.0 path (default; step 1d)
     manager = await _load_input_manager(job)
 
     # max_concurrent_scenes: how many scenes write simultaneously.
@@ -913,6 +930,13 @@ async def unary_worker(job: ConversionJob) -> None:
     # readable scenes (e.g. a CZI whose subblock data is unreadable past some
     # scene).  If every output fails, surface the error.
     results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Total scenes the file's index advertises (before the readability cap
+    # and these per-scene skips), so the message reflects the WHOLE file.
+    _report_failures(results, job, getattr(manager, '_n_scenes_in_file', 0))
+
+
+def _report_failures(results: list, job: ConversionJob, total_in_file: int = 0) -> None:
+    """Log the outputs that failed; raise when all did (both conversion paths)."""
     failures = [r for r in results if isinstance(r, BaseException)]
     if failures:
         for exc in failures:
@@ -920,9 +944,7 @@ async def unary_worker(job: ConversionJob) -> None:
         if len(failures) == len(results):
             raise failures[0]
         written = len(results) - len(failures)
-        # Total scenes the file's index advertises (before the readability cap
-        # and these per-scene skips), so the message reflects the WHOLE file.
-        total_in_file = getattr(manager, '_n_scenes_in_file', 0) or len(results)
+        total_in_file = total_in_file or len(results)
         unreadable = max(0, total_in_file - written)
         logger.warning(
             "\n" + "=" * 78 + "\n"

@@ -20,6 +20,13 @@ from eubi_bridge.core.config_models import ConversionJob
 SRC = os.path.join("data", "MouseBrain_2Illuminations.czi")
 
 
+@pytest.fixture(autouse=True)
+def _old_path(monkeypatch):
+    """These fake the OLD conversion path's loader (no file is opened); the new path
+    names views / illuminations itself and is tested in test_pyramid_path.py."""
+    monkeypatch.setenv("EUBI_NEW_PATH", "0")
+
+
 def _vi_manager(suffix):
     stem = os.path.splitext(SRC)[0]
     return SimpleNamespace(series_path=f"{stem}{suffix}.czi", series=0)

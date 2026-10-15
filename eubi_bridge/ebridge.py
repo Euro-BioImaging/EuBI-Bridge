@@ -604,7 +604,9 @@ class ConfigManager:
             channel_intensity_limits: How to set OMERO window limits —
                 ``'from_dtype'`` (default) uses dtype min/max,
                 ``'from_array'`` computes per-channel min/max from pixel data,
-                ``'auto'`` lets the viewer decide.
+                ``'auto'`` gives a display window from a quick overview: the 0.1 and
+                99.9 percentiles of the smallest resolution level (the dtype's
+                range when that level is over 64 MB).
             channel_colors: Per-channel colour overrides as
                 ``"0,FF0000;1,00FF00"``. Channels left out keep their source
                 colour, or are given one automatically.
@@ -1223,7 +1225,9 @@ class ConfigureGroup:
             channel_intensity_limits: How to set OMERO window limits —
                 ``'from_dtype'`` (default) uses dtype min/max,
                 ``'from_array'`` computes per-channel min/max from pixel data,
-                ``'auto'`` lets the viewer decide.
+                ``'auto'`` gives a display window from a quick overview: the 0.1 and
+                99.9 percentiles of the smallest resolution level (the dtype's
+                range when that level is over 64 MB).
             channel_colors: Per-channel colour overrides as
                 ``"0,FF0000;1,00FF00"``. Channels left out keep their source
                 colour, or are given one automatically.
