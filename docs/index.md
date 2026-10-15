@@ -48,7 +48,7 @@ OME-Zarr output is written by `ome_zarr_pyramid` on `dyna-zarr`, region by regio
   <li>
     <p><strong>Activate the environment and install EuBI-Bridge via pip:</strong></p>
     <pre><code class="language-bash">conda activate eubizarr
-pip install --no-cache-dir eubi-bridge==0.1.5
+pip install --no-cache-dir eubi-bridge
 eubi reset_config</code></pre>
   </li>
 </ol>
