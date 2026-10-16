@@ -755,6 +755,11 @@ async def _load_input_manager(job: ConversionJob) -> ArrayManager:
         keep_existing_resolutions=job.downscale.keep_existing_resolutions,
         pixel_reader=job.readers.pixel_reader,
         micro_check_pixels=job.readers.micro_check_pixels,
+        # a CZI's phase and rotation (until 0.1.6 never passed on: always 0); the other
+        # readers take no such option
+        reader_kwargs=({'phase_index': int(job.readers.phase_index or 0),
+                        'rotation_index': int(job.readers.rotation_index or 0)}
+                       if str(job.input_path).lower().endswith('.czi') else {}),
     )
 
     # scene_index may be 'all', an int, or a comma-separated string from CSV
