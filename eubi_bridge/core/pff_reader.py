@@ -15,7 +15,6 @@ import numpy as np
 import zarr
 
 from eubi_bridge.core.reader_interface import ImageReader
-from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -116,6 +115,12 @@ class BioIOReader(ImageReader):
             raise RuntimeError(f"Failed to read image data from {self._path}: {str(e)}") from e
 
 
+class NoNativeReader(Exception):
+    """A format with no native reader here: it is read through Bio-Formats (bfio),
+    as with ``force_bioformats`` (``data_manager.PFFImageMeta.read_img``). Until 0.2.0
+    bioio-bioformats opened it first, and its reader was then dropped."""
+
+
 def read_pff(
     input_path: str,
     **kwargs
@@ -198,10 +203,6 @@ def read_pff(
         return BioIOReader(input_path, img, **kw)
 
     else:
-        # Default fallback: use bioformats
-        from bioio_bioformats.reader import Reader as reader
-        logger.info("Using bioio-bioformats reader (fallback)")
-        img = reader(input_path)
-        kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
-        return BioIOReader(input_path, img, **kw)
+        # no native reader: the caller reads it through Bio-Formats (bfio)
+        raise NoNativeReader(input_path)
 # pff.get_image_dask_data()

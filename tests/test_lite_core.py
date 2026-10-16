@@ -273,7 +273,7 @@ def test_the_full_installation_is_not_taken_for_lite():
     except ImportError:
         pytest.skip("not the full installation")
     assert has_bioformats()
-    for module in ("bfio", "bioio_base", "bioio_bioformats", "scyjava"):
+    for module in ("bfio", "bioio_base", "scyjava"):
         assert module in BIOFORMATS_MODULES          # what the readers really import
 
 

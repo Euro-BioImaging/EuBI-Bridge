@@ -1,0 +1,120 @@
+{
+ "img_T_tset.zarr": {
+  "attrs": {
+   "eubi_bridge": {},
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "t",
+       "type": "time",
+       "unit": "second"
+      },
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+         ],
+         "type": "scale"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FF0000",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "00FF00",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 2",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "0000FF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 3",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     2,
+     3,
+     24,
+     32
+    ],
+    "uint8",
+    [
+     1,
+     1,
+     24,
+     32
+    ],
+    "b77bbe83820bd71891534223ca2872e5948d9f29369eb79906169ae5a13f8e5b"
+   ]
+  ]
+ }
+}

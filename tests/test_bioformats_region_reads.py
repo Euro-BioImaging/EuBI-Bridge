@@ -5,11 +5,11 @@ heap: the reader cut the plane into a fixed grid of 16384 x 16384 tiles while
 the writer asked for 2172-row strips, and dask can only compute whole tiles, so
 every strip read the four full tiles it crossed -- each tile about seven times
 over, several at once.  The image is now a lazy source that reads exactly the
-rectangle each region needs; these tests pin that down through the real writer.
+rectangle each region needs; these tests pin that down through the writer
+(dyna-zarr's, which ome_zarr_pyramid writes with).
 """
 from __future__ import annotations
 
-import asyncio
 import threading
 import time
 
@@ -18,7 +18,6 @@ import pytest
 
 from eubi_bridge.core import data_manager
 from eubi_bridge.core.data_manager import _BioFormatsSource, _build_bioformats_array
-from eubi_bridge.core.writers import write_with_queue_async
 
 
 class _FakeBioReader:
@@ -101,13 +100,11 @@ class TestWriterReadsEachPixelOnce:
     """The regression: strip regions across square tiles re-read the tiles."""
 
     def _write(self, tmp_path, fake_reader, data, region_mb, **kw):
+        from dyna_zarr import io
         reader = fake_reader(data)
         arr = _build_bioformats_array("x", 0, data.shape, data.dtype)
-        asyncio.run(write_with_queue_async(
-            arr=arr, output_path=str(tmp_path / "out.zarr"),
-            output_chunks=kw.pop("chunks", (1, 1, 1, 64, 64)),
-            zarr_format=2, dtype=data.dtype, region_size_mb=region_mb,
-            max_concurrency=2, overwrite=True, **kw))
+        io.write(arr, str(tmp_path / "out.zarr"), chunks=kw.pop("chunks", (1, 1, 1, 64, 64)),
+                 zarr_format=2, region_size_mb=region_mb, max_threads=2, overwrite=True, **kw)
         return reader
 
     def test_strip_regions_read_each_pixel_exactly_once(self, tmp_path,

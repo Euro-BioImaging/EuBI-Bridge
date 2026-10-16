@@ -123,16 +123,6 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--queue_size</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `4`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 1, ≤ 4096</p>
-    <p>Internal write-queue depth per worker.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --queue_size 8
-    </code></pre>
-    </details>
-
-    <details>
     <summary><code>--region_size_mb</code></summary>
     <p><strong>Type:</strong>&nbsp; `float` or `str`</p>
     <p><strong>Default:</strong>&nbsp; `auto`</p>
@@ -182,16 +172,6 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `3GB`</p>
     <p>Each SLURM worker's memory (the SLURM job's), shared by its conversions (formerly `memory_per_worker`).</p>
-    </details>
-
-    <details>
-    <summary><code>--tensorstore_data_copy_concurrency</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `4`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
-    <p>TensorStore internal copy threads.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --tensorstore_data_copy_concurrency 8
-    </code></pre>
     </details>
 
     <details>
@@ -270,16 +250,6 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Default:</strong>&nbsp; —</p>
     <p>Path to an Apptainer/Singularity `.sif` image to run SLURM workers inside (optional).</p>
     <pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_sif_path /apps/eubi.sif
-    </code></pre>
-    </details>
-
-    <details>
-    <summary><code>--max_concurrent_downscale_layers</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `3`</p>
-    <p><strong>Valid values:</strong>&nbsp; > 0</p>
-    <p>How many pyramid levels are downscaled in parallel per file (default 1 = sequential, lowest memory).</p>
-    <pre><code>eubi to_zarr /data/input /data/output --max_concurrent_downscale_layers 2
     </code></pre>
     </details>
 
@@ -559,17 +529,10 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--writer</code></summary>
-    <p><strong>Type:</strong>&nbsp; `auto` or `eubi` or `ozp`</p>
-    <p><strong>Default:</strong>&nbsp; `auto`</p>
-    <p>Which engine writes the OME-Zarr: `auto` (default: `ozp`, and `eubi` only where ozp cannot write the output yet), `ozp` (ome_zarr_pyramid on dyna-zarr) or `eubi` (eubi-bridge's own writer).</p>
-    </details>
-
-    <details>
     <summary><code>--io_backend</code></summary>
     <p><strong>Type:</strong>&nbsp; `tensorstore` or `zarrista`</p>
     <p><strong>Default:</strong>&nbsp; `tensorstore`</p>
-    <p>The bytes backend of the `ozp` writer: `tensorstore` (default) or `zarrista` (`pip install "dyna-zarr[zarrista]"`). With either, shards larger than the region budget are written chunk by chunk in bounded memory (local outputs).</p>
+    <p>The bytes backend ome_zarr_pyramid writes with: `tensorstore` (default) or `zarrista` (`pip install "dyna-zarr[zarrista]"`). With either, shards larger than the region budget are written chunk by chunk in bounded memory (local outputs).</p>
     </details>
 
 
@@ -843,14 +806,6 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `standard` or `micro`</p>
     <p><strong>Default:</strong>&nbsp; `micro`</p>
     <p>Where the pixels come from: `micro` (micro-reader, the default; a file it does not read falls back to the standard reader with a warning) or `standard` (the format's usual reader).</p>
-    </details>
-
-    <details>
-    <summary><code>--micro_check_pixels</code></summary>
-    <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `False`</p>
-    <p><strong>Valid values:</strong>&nbsp; `--micro_check_pixels` to enable &nbsp;·&nbsp; `--micro_check_pixels False` to disable</p>
-    <p>With `pixel_reader micro`: also open the standard reader and compare its pixels with micro-reader's. Slower; for checking a new format.</p>
     </details>
 
     <details>
@@ -1161,16 +1116,6 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--queue_size</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `4`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 1, ≤ 4096</p>
-    <p>Internal write-queue depth per worker.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --queue_size 8
-    </code></pre>
-    </details>
-
-    <details>
     <summary><code>--region_size_mb</code></summary>
     <p><strong>Type:</strong>&nbsp; `float` or `str`</p>
     <p><strong>Default:</strong>&nbsp; `auto`</p>
@@ -1220,16 +1165,6 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `3GB`</p>
     <p>Each SLURM worker's memory (the SLURM job's), shared by its conversions (formerly `memory_per_worker`).</p>
-    </details>
-
-    <details>
-    <summary><code>--tensorstore_data_copy_concurrency</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `4`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
-    <p>TensorStore internal copy threads.</p>
-    <pre><code>eubi to_zarr /data/input /data/output --tensorstore_data_copy_concurrency 8
-    </code></pre>
     </details>
 
     <details>
@@ -1308,16 +1243,6 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Default:</strong>&nbsp; —</p>
     <p>Path to an Apptainer/Singularity `.sif` image to run SLURM workers inside (optional).</p>
     <pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_sif_path /apps/eubi.sif
-    </code></pre>
-    </details>
-
-    <details>
-    <summary><code>--max_concurrent_downscale_layers</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `3`</p>
-    <p><strong>Valid values:</strong>&nbsp; > 0</p>
-    <p>How many pyramid levels are downscaled in parallel per file (default 1 = sequential, lowest memory).</p>
-    <pre><code>eubi to_zarr /data/input /data/output --max_concurrent_downscale_layers 2
     </code></pre>
     </details>
 
@@ -1441,14 +1366,6 @@ Click any command card below to expand its full parameter reference.
     <p><strong>Type:</strong>&nbsp; `standard` or `micro`</p>
     <p><strong>Default:</strong>&nbsp; `micro`</p>
     <p>Where the pixels come from: `micro` (micro-reader, the default; a file it does not read falls back to the standard reader with a warning) or `standard` (the format's usual reader).</p>
-    </details>
-
-    <details>
-    <summary><code>--micro_check_pixels</code></summary>
-    <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `False`</p>
-    <p><strong>Valid values:</strong>&nbsp; `--micro_check_pixels` to enable &nbsp;·&nbsp; `--micro_check_pixels False` to disable</p>
-    <p>With `pixel_reader micro`: also open the standard reader and compare its pixels with micro-reader's. Slower; for checking a new format.</p>
     </details>
 
     <details>

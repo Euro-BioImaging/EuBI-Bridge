@@ -225,6 +225,7 @@ def _store_existing_sync(src, output_path, axes, units, channel_meta, zarr_forma
         compressor_params=kwargs.get('compressor_params') or {},
         dtype=dtype if dtype != np.dtype(arrays[0].dtype) else None,
         window_from_data=bool(kwargs.get('window_from_data', False)),
+        windows=kwargs.get('windows', 'keep'),
         io_backend=kwargs.get('io_backend', 'tensorstore'),
         memory_budget_mb=_memory_budget(arrays, kwargs),
     )
@@ -306,6 +307,7 @@ def _store_multiscale_sync(arr, output_path, axes, scales, units, translation,
         dtype=dtype if dtype != np.dtype(arr.dtype) else None,
         # 'from_array' channel windows: measured while level 0 is written
         window_from_data=bool(kwargs.get('window_from_data', False)),
+        windows=kwargs.get('windows', 'keep'),
         # dyna's bytes backend: 'tensorstore' or 'zarrista'
         io_backend=kwargs.get('io_backend', 'tensorstore'),
         # the whole write's memory (zarrista: big shards tiled in y/x within it);

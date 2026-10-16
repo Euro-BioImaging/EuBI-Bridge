@@ -63,6 +63,12 @@ def _normalise_row_overrides(overrides: dict) -> dict:
     n_layers = normalised.get('n_layers')
     if isinstance(n_layers, str) and n_layers.strip().lower() == 'auto':
         normalised['n_layers'] = None
+    # the acquisition block's three states as a batch cell spells them
+    export = normalised.get('export_acquisition_metadata')
+    if isinstance(export, str):
+        normalised['export_acquisition_metadata'] = {
+            'auto': None, 'on': True, 'off': False, 'true': True, 'false': False,
+        }.get(export.strip().lower(), export)
     return normalised
 
 
@@ -99,7 +105,7 @@ def _row_metadata_readers(input_path, default: str, force_default: bool) -> tupl
 # Heavy imports are deferred — config commands don't need zarr/dask/JVM.
 def _ensure_heavy_imports():
     """Lazy-load heavy modules only when needed for actual conversions."""
-    global np, psutil, s3fs, zarr, AggregativeConverter, run_updates, _heavy_imported
+    global np, psutil, s3fs, zarr, run_updates, _heavy_imported
     if _heavy_imported:
         return
     from eubi_bridge.utils.optional_deps import is_installed
@@ -121,7 +127,6 @@ def _ensure_heavy_imports():
         "ignore", message="Could not parse tiff pixel size",
         category=UserWarning, module="bioio_tifffile.reader",
     )
-    from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
     from eubi_bridge.conversion.updater import run_updates
     _heavy_imported = True
 
@@ -604,7 +609,9 @@ class ConfigManager:
             channel_intensity_limits: How to set OMERO window limits —
                 ``'from_dtype'`` (default) uses dtype min/max,
                 ``'from_array'`` computes per-channel min/max from pixel data,
-                ``'auto'`` lets the viewer decide.
+                ``'auto'`` gives a display window from a quick overview: the 0.1 and
+                99.9 percentiles of the smallest resolution level (the dtype's
+                range when that level is over 64 MB).
             channel_colors: Per-channel colour overrides as
                 ``"0,FF0000;1,00FF00"``. Channels left out keep their source
                 colour, or are given one automatically.
@@ -969,7 +976,8 @@ class ConfigureGroup:
         Args:
             max_processes: Images converted at once, one per worker process
                 (default 4). Formerly ``max_workers``.
-            queue_size: Internal write-queue depth per worker (default 4).
+            queue_size: RETIRED in 0.2.0 with eubi-bridge's own writer: does nothing
+                (warned about once when set).
             region_size_mb: Size of one read region in MB, or ``'auto'`` (default):
                 each scene's write budget over 3 x its threads, 8 to 256 MB.
             memory_budget: The memory the whole run may use on this machine, e.g.
@@ -983,15 +991,15 @@ class ConfigureGroup:
             max_concurrent_scenes: Parallel scenes within one file (default 1);
                 they share ``max_threads``. Increase only when writing a
                 multi-scene file to a large store.
-            max_concurrent_downscale_layers: Number of downscaled pyramid layers
-                written concurrently per scene (default 3).
+            max_concurrent_downscale_layers: RETIRED in 0.2.0 with eubi-bridge's own
+                writer: does nothing (warned about once when set).
             on_local_cluster: DEPRECATED and ignored: conversions run in this
                 machine's worker processes.
             on_slurm: Submit jobs to a SLURM cluster (default False; the full
                 eubi-bridge only).
             use_threading: Use ThreadPool instead of ProcessPool (default False).
-            tensorstore_data_copy_concurrency: TensorStore internal copy threads
-                (default 4).
+            tensorstore_data_copy_concurrency: RETIRED in 0.2.0 with eubi-bridge's own
+                writer: does nothing (warned about once when set).
             max_retries: Retries on broken worker process (default 10).
             bioformats_threads: Threads for parallel Bio-Formats tile reads
                 (default 4).  ``None`` lets dask choose (cpu_count). Formerly
@@ -1062,9 +1070,9 @@ class ConfigureGroup:
             pixel_reader: ``'micro'`` (default): read the pixels with
                 micro-reader (a file it does not read falls back to the
                 standard reader with a warning), or ``'standard'``.
-            micro_check_pixels: with ``pixel_reader='micro'``, also open the
-                standard reader and compare its pixels with micro-reader's
-                (slower; default False: checked against the metadata only).
+            micro_check_pixels: RETIRED: does nothing (warned about once when set).
+                To compare, convert once more with ``pixel_reader='standard'`` and
+                compare the two outputs.
         """
         return self._cfg.configure_readers(**{k: v for k, v in locals().items() if k != 'self'})
 
@@ -1135,18 +1143,14 @@ class ConfigureGroup:
                 splits an acquisition into several containers, since that is when
                 the relationship between the pieces would otherwise be lost.
             verbose: Log verbose progress output (default False).
-            writer: Which engine writes the OME-Zarr: ``'auto'`` (default),
-                ``'ozp'`` or ``'eubi'``. ``'ozp'`` is ome_zarr_pyramid on dyna-zarr:
-                the same output as eubi-bridge's own writer (``'eubi'``), with all
-                levels from one read of the source and lower peak memory.
-                ``'auto'`` uses ``'ozp'``, and ``'eubi'`` only where ozp cannot write
-                the output yet (kept resolution levels not named 0..n-1).
-            io_backend: The bytes backend of the ``'ozp'`` writer:
+            writer: RETIRED in 0.2.0: ome_zarr_pyramid (on dyna-zarr) writes every
+                output. ``'eubi'`` (eubi-bridge's own writer) is accepted with a
+                warning and written by ome_zarr_pyramid too.
+            io_backend: The bytes backend ome_zarr_pyramid writes with:
                 ``'tensorstore'`` (default) or ``'zarrista'`` (Rust, via zarrs;
                 ``pip install "dyna-zarr[zarrista]"``). With either, shards larger than
                 the region budget are written chunk by chunk in bounded memory (local
                 outputs).
-                Not available with ``writer='eubi'``.
         """
         return self._cfg.configure_conversion(**{k: v for k, v in locals().items() if k != 'self'})
 
@@ -1223,7 +1227,9 @@ class ConfigureGroup:
             channel_intensity_limits: How to set OMERO window limits —
                 ``'from_dtype'`` (default) uses dtype min/max,
                 ``'from_array'`` computes per-channel min/max from pixel data,
-                ``'auto'`` lets the viewer decide.
+                ``'auto'`` gives a display window from a quick overview: the 0.1 and
+                99.9 percentiles of the smallest resolution level (the dtype's
+                range when that level is over 64 MB).
             channel_colors: Per-channel colour overrides as
                 ``"0,FF0000;1,00FF00"``. Channels left out keep their source
                 colour, or are given one automatically.
@@ -1508,8 +1514,7 @@ class ConversionManager:
         table, which is the point of the column: a batch should not have to be
         split by hand into two separate runs.
         """
-        from eubi_bridge.conversion.dispatcher import (
-            dispatch_aggregative_jobs, dispatch_unary_jobs)
+        from eubi_bridge.conversion.dispatcher import dispatch_mixed_jobs
         from eubi_bridge.core.config_models import ConversionJob
         from eubi_bridge.utils.path_utils import (
             AGGREGATIVE_GROUP_COLUMN, PER_GROUP_CONCAT_KEYS,
@@ -1587,10 +1592,9 @@ class ConversionManager:
             f"Conversion table: {len(unary_jobs)} one-to-one job(s), "
             f"{len(aggregative_jobs)} aggregative group(s).")
 
-        if unary_jobs:
-            dispatch_unary_jobs(unary_jobs)
-        if aggregative_jobs:
-            dispatch_aggregative_jobs(aggregative_jobs)
+        # one pool for both kinds, running at the same time (roadmap step 3; on SLURM
+        # and on the old path they still run one after the other)
+        dispatch_mixed_jobs(unary_jobs, aggregative_jobs)
 
 
     def validate_aggregative(
@@ -1662,6 +1666,9 @@ class ConversionManager:
         eff_tags = [concat_p['time_tag'], concat_p['channel_tag'],
                     concat_p['z_tag'], concat_p['y_tag'], concat_p['x_tag']]
         filepaths_accepted = _parse_filepaths_with_tags(filepaths, eff_tags)
+        from eubi_bridge.conversion import aggregative_path
+        # by name, before grouping: OME companions left out, mixed formats refused
+        filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
 
         common_dir  = os.path.commonpath(filepaths_accepted)
         output_base = output_path or common_dir
@@ -1794,6 +1801,9 @@ class MetadataManager:
                 series = readers_p['scene_index']
             combined = {
                 **cluster_p, **readers_p, **conversion_p,
+                # the configured metadata reader, as a conversion reads the file
+                # (0.1.x always read with bfio here)
+                'metadata_reader': metadata_reader,
                 'series': series,
                 'use_threading': True,
                 'max_processes': min(16, max(8, len(df['input_path']) if df is not None else 8)),
@@ -1842,7 +1852,8 @@ class MetadataManager:
             **self._config._collect_params('readers',    **kwargs),
             **self._config._collect_params('conversion', **kwargs),
         }
-        combined['channel_intensity_limits'] = 'auto'
+        # the windows stay as they are ('auto' sets them from the data, as conversions do)
+        combined['channel_intensity_limits'] = 'keep'
         # metadata_reader moved to the 'metadata' section, which is not
         # collected wholesale here: its scales/units are the arguments above.
         combined['metadata_reader'] = self._config._collect_params(
@@ -1859,11 +1870,12 @@ class MetadataManager:
                             input_path: Union[Path, str],
                             channel_labels: str = '',
                             channel_colors: str = '',
-                            channel_intensity_limits='from_dtype',
+                            channel_intensity_limits=None,
                             includes=None,
                             excludes=None,
                             **kwargs) -> None:
-        """Update channel label, color, and intensity metadata on existing OME-Zarr files."""
+        """Update channel label, color, and intensity metadata on existing OME-Zarr files.
+        The display windows stay as they are unless channel_intensity_limits is given."""
         from eubi_bridge.conversion.updater import run_updates
         combined = {
             **self._config._collect_params('cluster',    **kwargs),
@@ -1873,7 +1885,9 @@ class MetadataManager:
         # Both keys live in the 'metadata' section now, so collecting
         # 'conversion' silently dropped them.  The section is not merged
         # wholesale: its channel_labels/colors are this method's own arguments.
-        combined['channel_intensity_limits'] = channel_intensity_limits
+        # not given: the windows stay as they are (eubi-bridge 0.1.x reset them to the
+        # dtype's range on every update, a renamed channel included)
+        combined['channel_intensity_limits'] = channel_intensity_limits or 'keep'
         combined['metadata_reader'] = self._config._collect_params(
             'metadata', **kwargs)['metadata_reader']
         extra = {k: v for k, v in kwargs.items() if k not in combined}
@@ -2239,7 +2253,7 @@ class EuBIBridge:
         input_path: Union[Path, str],
         channel_labels: str = '',
         channel_colors: str = '',
-        channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = "from_dtype",
+        channel_intensity_limits: Optional[Literal["from_dtype", "from_array", "auto"]] = None,
         includes: Optional[str] = None,
         excludes: Optional[str] = None,
         max_processes: Optional[int] = None,
@@ -2251,11 +2265,13 @@ class EuBIBridge:
             input_path: OME-Zarr path or directory of OME-Zarr files.
             channel_labels: Index/name pairs, e.g. ``"0,DAPI;1,GFP"``.
             channel_colors: Index/hex pairs, e.g. ``"0,0000FF;1,00FF00"``.
-            channel_intensity_limits: ``'from_dtype'`` (default),
-                ``'from_array'``, or ``'auto'``.
+            channel_intensity_limits: The display windows stay as they are unless
+                this is given. ``'from_dtype'`` sets the data type's full range,
+                ``'from_array'`` each channel's lowest and highest value, ``'auto'``
+                the 0.1 and 99.9 percentiles of the smallest level, as conversions do.
             includes: Comma-separated filename patterns to include.
             excludes: Comma-separated filename patterns to exclude.
-            max_processes: Number of files to process in parallel. Formerly
+            max_processes: Number of files to process at once. Formerly
                 ``max_workers``, which still works.
         """
         kwargs = rename_settings({k: v for k, v in dict(

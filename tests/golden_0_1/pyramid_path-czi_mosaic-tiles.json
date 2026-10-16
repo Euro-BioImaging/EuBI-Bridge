@@ -1,0 +1,738 @@
+{
+ "mosaic_scene0_tile0.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 992.25,
+      "y": 492.25
+     },
+     "scene_index": 0,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          492.25,
+          992.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     32,
+     32
+    ],
+    "uint16",
+    [
+     32,
+     32
+    ],
+    "4c20485c394f4a2eaa220ae74648967fcdf4c8a799a44601a8a1f03119fc0ecc"
+   ]
+  ]
+ },
+ "mosaic_scene0_tile1.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 1008.25,
+      "y": 492.25
+     },
+     "scene_index": 0,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 1
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          492.25,
+          1008.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     32,
+     32
+    ],
+    "uint16",
+    [
+     32,
+     32
+    ],
+    "48ba42353889996f48c6402047a3570e276fa2e22be19db8b800b60763fa1a70"
+   ]
+  ]
+ },
+ "mosaic_scene0_tile2.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 992.25,
+      "y": 508.25
+     },
+     "scene_index": 0,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 2
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          508.25,
+          992.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     32,
+     32
+    ],
+    "uint16",
+    [
+     32,
+     32
+    ],
+    "e31c7fd4118d5a0e3dfd4de40934ac750abd2c4aa3ecd8c535817c37b82d9bd2"
+   ]
+  ]
+ },
+ "mosaic_scene0_tile3.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 1008.25,
+      "y": 508.25
+     },
+     "scene_index": 0,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 3
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          508.25,
+          1008.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     32,
+     32
+    ],
+    "uint16",
+    [
+     32,
+     32
+    ],
+    "cc4c340f6cf2ff679fa6c66fda83b9b10502ba3419950dd93e263daf13793e87"
+   ]
+  ]
+ },
+ "mosaic_scene1_tile0.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 1092.25,
+      "y": 492.25
+     },
+     "scene_index": 1,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          492.25,
+          1092.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     32,
+     32
+    ],
+    "uint16",
+    [
+     32,
+     32
+    ],
+    "171c8ada989a6c4ca275e2ee79d33b2d1ebe9ff61eff854795b015231277125e"
+   ]
+  ]
+ },
+ "mosaic_scene1_tile1.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 1108.25,
+      "y": 492.25
+     },
+     "scene_index": 1,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 1
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          492.25,
+          1108.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     32,
+     32
+    ],
+    "uint16",
+    [
+     32,
+     32
+    ],
+    "4d6b200e4487b2eb727c4bbf549ec38c86e1a39acac78850e066ec528f3f9f6b"
+   ]
+  ]
+ },
+ "mosaic_scene1_tile2.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 1092.25,
+      "y": 508.25
+     },
+     "scene_index": 1,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 2
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          508.25,
+          1092.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     32,
+     32
+    ],
+    "uint16",
+    [
+     32,
+     32
+    ],
+    "ea6ba38ddbaf8f7a81d689e9281b94ab1f265763ceadb1682ac5dcf3e575ebc3"
+   ]
+  ]
+ },
+ "mosaic_scene1_tile3.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 1108.25,
+      "y": 508.25
+     },
+     "scene_index": 1,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 3
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          508.25,
+          1108.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     32,
+     32
+    ],
+    "uint16",
+    [
+     32,
+     32
+    ],
+    "3c719d1a58f1552118a8a2c0b1fcb8ceeba8f0622bbedde2a0cbf27692d95b7e"
+   ]
+  ]
+ }
+}

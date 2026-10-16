@@ -130,7 +130,11 @@ class _Field(QWidget):
         if spec.kind == "choice":
             w = QComboBox()
             w.addItems(list(spec.choices))
-            if value is not None and str(value) in spec.choices:
+            if value is not None and str(value) not in spec.choices and str(value):
+                # a value from elsewhere (an older batch CSV) is shown as it is, not as
+                # an empty editor; the batch's Run check says whether it still works
+                w.addItem(str(value))
+            if value is not None and str(value):
                 w.setCurrentText(str(value))
             else:
                 w.setCurrentIndex(-1)
@@ -183,7 +187,9 @@ class _Field(QWidget):
 
         if spec.kind == "float":
             w = QDoubleSpinBox()
-            w.setDecimals(3)
+            # pixel sizes go far below 0.001 (0.0947 um, 0.00065 s): three decimals
+            # rounded them on every edit
+            w.setDecimals(6)
             w.setRange(float(spec.minimum), float(spec.maximum))
             if value is not None:
                 try:
@@ -267,6 +273,9 @@ class _Field(QWidget):
         elif isinstance(w, QComboBox):
             text = ("True" if value else "False")                 if self.spec.kind == "bool" else str(value)
             index = w.findText(text)
+            if index < 0 and self.spec.kind == "choice" and value is not None and text:
+                w.addItem(text)                    # shown as it is (see _build_editor)
+                index = w.findText(text)
             w.setCurrentIndex(index)
         elif isinstance(w, QSpinBox):
             if self.spec.kind == "auto_int" and (

@@ -26,16 +26,6 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--queue_size</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Internal write-queue depth per worker (default 4).</p>
-    <pre><code># Allow each worker to buffer more write tasks
-    eubi configure cluster --queue_size 8
-    </code></pre>
-    </details>
-
-    <details>
     <summary><code>--region_size_mb</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
@@ -76,15 +66,6 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--max_concurrent_downscale_layers</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Number of downscaled pyramid layers written concurrently per scene (default 3).</p>
-    <pre><code>eubi to_zarr /data/input /data/output --max_concurrent_downscale_layers 2
-    </code></pre>
-    </details>
-
-    <details>
     <summary><code>--on_slurm</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
@@ -103,16 +84,6 @@ Click any command card below to expand its full parameter reference.
     <p>Use ThreadPool instead of ProcessPool (default False).</p>
     <pre><code># Switch from ProcessPool to ThreadPool (useful when GIL is not a bottleneck)
     eubi configure cluster --use_threading
-    </code></pre>
-    </details>
-
-    <details>
-    <summary><code>--tensorstore_data_copy_concurrency</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>TensorStore internal copy threads (default 4).</p>
-    <pre><code># Allow TensorStore to copy data with 8 internal threads
-    eubi configure cluster --tensorstore_data_copy_concurrency 8
     </code></pre>
     </details>
 
@@ -510,20 +481,10 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--writer</code></summary>
-    <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Which engine writes the OME-Zarr: `'auto'` (default), `'ozp'` or `'eubi'`. `'ozp'` is ome_zarr_pyramid on dyna-zarr: the same output as eubi-bridge's own writer (`'eubi'`), with all levels from one read of the source and lower peak memory. `'auto'` uses `'ozp'`, and `'eubi'` only where ozp cannot write the output yet (kept resolution levels not named 0..n-1).</p>
-    <pre><code># Always use eubi-bridge's own writer
-    eubi configure conversion --writer eubi
-    </code></pre>
-    </details>
-
-    <details>
     <summary><code>--io_backend</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>The bytes backend of the `'ozp'` writer: `'tensorstore'` (default) or `'zarrista'` (Rust, via zarrs; `pip install "dyna-zarr[zarrista]"`). With either, shards larger than the region budget are written chunk by chunk in bounded memory (local outputs). Not available with `writer='eubi'`.</p>
+    <p>The bytes backend ome_zarr_pyramid writes with: `'tensorstore'` (default) or `'zarrista'` (Rust, via zarrs; `pip install "dyna-zarr[zarrista]"`). With either, shards larger than the region budget are written chunk by chunk in bounded memory (local outputs).</p>
     </details>
 
 
@@ -832,14 +793,6 @@ Click any command card below to expand its full parameter reference.
     <p>`'micro'` (default): read the pixels with micro-reader (a file it does not read falls back to the standard reader with a warning), or `'standard'`.</p>
     </details>
 
-    <details>
-    <summary><code>--micro_check_pixels</code></summary>
-    <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p><strong>Valid values:</strong>&nbsp; `--micro_check_pixels` to enable &nbsp;·&nbsp; `--micro_check_pixels False` to disable</p>
-    <p>with `pixel_reader='micro'`, also open the standard reader and compare its pixels with micro-reader's (slower; default False: checked against the metadata only).</p>
-    </details>
-
 
     </details>
 
@@ -877,7 +830,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--channel_intensity_limits</code></summary>
     <p><strong>Type:</strong>&nbsp; `Literal['from_dtype', 'from_array', 'auto']`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>How to set OMERO window limits — `'from_dtype'` (default) uses dtype min/max, `'from_array'` computes per-channel min/max from pixel data, `'auto'` lets the viewer decide.</p>
+    <p>How to set OMERO window limits — `'from_dtype'` (default) uses dtype min/max, `'from_array'` computes per-channel min/max from pixel data, `'auto'` gives a display window from a quick overview: the 0.1 and 99.9 percentiles of the smallest resolution level (the dtype's range when that level is over 64 MB).</p>
     <pre><code>eubi configure metadata --channel_intensity_limits from_array
     </code></pre>
     </details>

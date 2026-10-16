@@ -132,9 +132,7 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--bioformats_threads` | `int`    | Threads for parallel Bio-Formats tile reads (formerly `--bf_read_concurrency`) |
 | `--jvm_memory`         | `str`    | Maximum JVM heap for Bio-Formats, e.g. `8GB` (default `1g`) |
 | `--on_slurm`           | `bool`   | Enable SLURM-based execution                 |
-| `--queue_size`           | `int`   | Queue size for the concurrent writes |
 | `--region_size_mb`           | `float` or `auto` | Size of one read region in MB; `auto` (default) sizes it from the memory budget (8 to 256 MB) |
-| `--tensorstore_data_copy_concurrency`  | `int`   | Tensorstore context parameter |
 | `--use_threading`           | `bool`   | Use multi-threading rather than multi-processing |
 
 
@@ -143,7 +141,6 @@ These are stored in the configuration file but can also be supplied directly to 
 | Parameter            | Type   | Description                        |
 |----------------------|--------|------------------------------------|
 | `pixel_reader`       | `str`  | Where the pixels come from: `micro` (default; a file micro-reader does not read falls back to the standard reader, with a warning) or `standard` |
-| `micro_check_pixels` | `bool` | With `pixel_reader micro`: also read with the standard reader and compare (slower; for checking a new format) |
 | `force_bioformats`   | `bool` | Use the Java Bio-Formats reader even for formats read natively; a fallback when a native read fails |
 | `as_mosaic`          | `bool` | Whether to stitch the mosaic tiles |
 | `scene_index`        | `int`, `all` or a list | Scene(s) to convert, e.g. `0`, `all` or `0,2,4`; each becomes its own output |
@@ -187,8 +184,7 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--dtype`              | `str`  | `auto` keeps the source dtype; pass a NumPy dtype (e.g. `uint8`) to cast on write |
 | `--save_omexml`        | `bool` | Save a companion OME-XML sidecar file                    |
 | `--export_acquisition_metadata` | `bool` | Write acquisition metadata NGFF has no field for (view / illumination indices, objective NA, wavelengths) into the `eubi_bridge` attributes; unset = on when one acquisition is split into several outputs |
-| `--writer`             | `str`  | Which engine writes the OME-Zarr: `auto` (default; ome_zarr_pyramid on dyna-zarr, or eubi-bridge's own writer where that cannot write the output yet), `ozp` or `eubi`. Both give the same output |
-| `--io_backend`         | `str`  | The bytes backend of the `ozp` writer: `tensorstore` (default) or `zarrista` (`pip install "dyna-zarr[zarrista]"`) |
+| `--io_backend`         | `str`  | The bytes backend ome_zarr_pyramid writes with: `tensorstore` (default) or `zarrista` (`pip install "dyna-zarr[zarrista]"`) |
 
 #### Metadata Parameters
 
@@ -197,7 +193,7 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--metadata_reader`          | `str`   | Where the metadata comes from: `micro` (default; a file micro-reader does not read falls back to the standard reader), `bfio` or `bioio` |
 | `--channel_labels`           | `str`   | Per-channel name overrides, e.g. `"0,DAPI;1,GFP"` |
 | `--channel_colors`           | `str`   | Per-channel colour overrides, e.g. `"0,FF0000;1,00FF00"`; channels left out keep their source colour |
-| `--channel_intensity_limits` | `str`   | Display-window limits: `from_dtype` (default), `from_array` (per-channel min/max of the data) or `auto` |
+| `--channel_intensity_limits` | `str`   | Display-window limits: `from_dtype` (default), `from_array` (per-channel min/max of the data) or `auto` (0.1–99.9 percentiles of the smallest resolution level; the dtype's range when that level is over 64 MB) |
 | `--override_channel_names`   | `bool`  | Name the output channels after the `channel_tag` values (aggregative conversions) |
 | `--time_scale`, `--z_scale`, `--y_scale`, `--x_scale` | `float` | Physical size of a time step / pixel; unset keeps the source value |
 | `--time_unit`, `--z_unit`, `--y_unit`, `--x_unit` | `str` | Units for those scales, e.g. `second`, `micrometer` |

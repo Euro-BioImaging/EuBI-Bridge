@@ -1,0 +1,230 @@
+{
+ "views_view0.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 990.25,
+      "y": 492.25
+     },
+     "scene_index": 0,
+     "source_path": "<tmp>\\views.czi",
+     "view_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          0.0,
+          492.25,
+          990.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     2,
+     32,
+     40
+    ],
+    "uint16",
+    [
+     1,
+     32,
+     40
+    ],
+    "cf79fb5f0481bb1f47a6e4fcf2fc3f8c6d8f39171e55c56b4f816a544ffb728f"
+   ]
+  ]
+ },
+ "views_view1.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 990.25,
+      "y": 492.25
+     },
+     "scene_index": 0,
+     "source_path": "<tmp>\\views.czi",
+     "view_index": 1
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          0.0,
+          492.25,
+          990.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     2,
+     32,
+     40
+    ],
+    "uint16",
+    [
+     1,
+     32,
+     40
+    ],
+    "8634ebddb12619acef8cf1116b076324ef8a5361c782763ef34f2049a6360ea3"
+   ]
+  ]
+ }
+}

@@ -1,0 +1,112 @@
+{
+ "stack.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "scene_index": 0,
+     "source_path": "<tmp>\\stack.tif",
+     "tile_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "z",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          1.5,
+          0.2,
+          0.2
+         ],
+         "type": "scale"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     2,
+     5,
+     30,
+     34
+    ],
+    "uint16",
+    [
+     1,
+     5,
+     30,
+     34
+    ],
+    "ab9421dd2cf692b8c7923e1463f131bb384b72e3fdd3479a8e2cc9ae1ec66631"
+   ]
+  ]
+ }
+}

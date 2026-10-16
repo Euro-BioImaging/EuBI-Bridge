@@ -79,35 +79,6 @@ class BioIOMetadataExtractor(MetadataExtractor):
             raise
 
 
-class BioFormatsMetadataExtractor(MetadataExtractor):
-    """
-    Extract metadata using bioio-bioformats (generic fallback).
-    
-    This is the most compatible option but requires JVM startup and can be slow.
-    Used as a fallback when format-specific readers are unavailable.
-    """
-    
-    async def extract(self, path: str, series: Optional[int] = None) -> Any:
-        """Extract metadata via bioformats."""
-        from bioio_bioformats.reader import Reader
-        
-        if series is None:
-            series = 0
-        
-        logger.info(f"Extracting metadata via bioformats for: {path}")
-        
-        try:
-            img = Reader(path)
-            if series is not None:
-                img.set_scene(series)
-            omemeta = img.ome_metadata
-            return omemeta
-        except FileNotFoundError as e:
-            if ".jgo" in str(e):
-                raise RuntimeError("JGO cache may be corrupted. Run `rm -rf ~/.jgo/` and retry.") from e
-            raise
-
-
 class BFIOMetadataExtractor(MetadataExtractor):
     """
     Extract metadata using bfio library.
@@ -184,7 +155,7 @@ class ZarrMetadataExtractor(MetadataExtractor):
     Zarr/NGFF metadata extractor (placeholder).
     
     Zarr/NGFF pyramids don't need traditional OME metadata extraction.
-    The pyramid_reader and NGFFImageMeta handle metadata internally.
+    OME-Zarr inputs are read by ome_zarr_pyramid (legacy_image.NgffFile).
     Returns None since metadata extraction is not applicable.
     """
     

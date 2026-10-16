@@ -608,40 +608,38 @@ def _save_zattrs(fpath: str, data: dict):
         json.dump(data, f, indent=2)
 
 
+def _update_metadata(zarr_path: str, **kwargs):
+    """One ome_zarr_pyramid update_metadata call on a local or remote store."""
+    from ome_zarr_pyramid import IO
+    from eubi_bridge.core.output_store import _ozp_target_args
+    target, storage_options = _ozp_target_args(zarr_path)
+    return IO().update_metadata(target, storage_options=storage_options, **kwargs)
+
+
 def _update_scales_on_disk(zarr_path: str, scales: list[dict]):
-    """Write updated pixel sizes using the Pyramid class (mirrors /update_scales endpoint)."""
-    from eubi_bridge.ngff.multiscales import Pyramid  # type: ignore
-    pyr = Pyramid(gr=zarr_path)
-    scale_kwargs = {s["axis"]: s["value"] for s in scales}
-    unit_kwargs  = {s["axis"]: s["unit"]  for s in scales}
-    pyr.update_scales(**scale_kwargs)
-    pyr.update_units(**unit_kwargs)
-    pyr.meta.save_changes()
+    """Write updated pixel sizes (mirrors the /update_scales endpoint): every level
+    keeps its factor, nothing else is rewritten."""
+    units = {s["axis"]: s["unit"] for s in scales if s.get("unit")}
+    _update_metadata(zarr_path, scales={s["axis"]: s["value"] for s in scales},
+                     units=units or None)
 
 
 def _update_channels_on_disk(zarr_path: str, channels: list[dict]):
-    """Write updated channel metadata via Pyramid so v2/v3 format is handled correctly."""
-    from eubi_bridge.ngff.multiscales import Pyramid  # type: ignore
-    pyr = Pyramid(gr=zarr_path)
-    omero    = pyr.meta.metadata.get("omero", {})
-    existing = omero.get("channels", [])
-
-    while len(existing) < len(channels):
-        existing.append({})
-
+    """Write the viewer's channel settings (label, colour, visibility, display range)
+    into the store; the rest of each channel is kept."""
+    overrides = {}
     for i, ch in enumerate(channels):
-        color = ch.get("color", "#FFFFFF").lstrip("#")
-        existing[i]["label"]  = ch.get("label", f"Ch {i}")
-        existing[i]["color"]  = color
-        existing[i]["active"] = ch.get("visible", True)
-        existing[i]["window"] = {
-            "min":   ch.get("intensityMin", 0) or 0,
-            "max":   ch.get("intensityMax", 65535) or 65535,
-            "start": ch.get("intensityMin", 0) or 0,
-            "end":   ch.get("intensityMax", 65535) or 65535,
-        }
-
-    omero["channels"] = existing
-    pyr.meta.metadata["omero"] = omero
-    pyr.meta._pending_changes = True
-    pyr.meta.save_changes()
+        low = ch.get("intensityMin", 0) or 0
+        high = ch.get("intensityMax", 65535) or 65535
+        overrides[i] = {"label": ch.get("label", f"Ch {i}"),
+                        "color": ch.get("color", "#FFFFFF").lstrip("#"),
+                        "active": ch.get("visible", True),
+                        "window": {"min": low, "max": high, "start": low, "end": high}}
+    from ome_zarr_pyramid import IO
+    from eubi_bridge.core.output_store import _ozp_target_args
+    target, storage_options = _ozp_target_args(zarr_path)
+    pyr = IO().read_pyramid(target, include_labels=False, storage_options=storage_options)
+    axes = pyr.meta.axis_order
+    count = pyr.base_array.shape[axes.index("c")] if "c" in axes else 1
+    # the image's own channels only (0.1.x appended entries beyond them)
+    _update_metadata(zarr_path, channels={i: f for i, f in overrides.items() if i < count})

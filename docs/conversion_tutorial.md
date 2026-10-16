@@ -103,6 +103,17 @@ multichannel_timeseries_concat_zarr
 └── Channel_cset-T_tset.zarr
 ```  
 
+What the files to join must have in common:
+
+- One pixel type, and the same size along the axes they are not joined along. A file
+  that differs stops the conversion with a message naming it.
+- One file format. A stray file, such as a thumbnail, stops the conversion with a
+  message naming it; leave it out with `--excludes`.
+
+An OME companion file (`.companion.ome`) among the files is left out: it holds metadata
+only, and the image files that point to it are read with it. Channels the files do not
+name are called `Channel 0`, `Channel 1`, and so on, across the joined image.
+
 ### Handling Nested Directories  
 
 For datasets stored in nested directories such as:  

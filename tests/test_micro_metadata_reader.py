@@ -2,9 +2,9 @@
 from micro-reader, no Bio-Formats -- and so no JVM -- for the files it reads
 (eubi_bridge/core/micro_source.py: micro_omemeta, micro_extras).
 
-The OME object built from micro-reader, the scene managers the writer reads
-from (scales, channels, position -> translation, wavelengths -> the
-``eubi_bridge`` attributes), the per-file fallback to Bio-Formats, and the
+The OME object built from micro-reader, the images the conversion reads from the
+older readers (``LegacyFile``: scales, channels, position -> translation, wavelengths
+-> the ``eubi_bridge`` attributes), the per-file fallback to Bio-Formats, and the
 JVM staying off until something needs it.
 """
 from __future__ import annotations
@@ -13,7 +13,6 @@ import json
 import subprocess
 import sys
 import textwrap
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -77,18 +76,26 @@ def test_ome_object_from_micro_reader(tmp_path):
 
 
 def _load(path, metadata_reader="micro"):
-    import asyncio
+    """Every scene's image as the older readers hand it to the conversion
+    (conversion/legacy_image.py: ``LegacyFile``)."""
+    from eubi_bridge.conversion.legacy_image import LegacyFile
+    from eubi_bridge.core.config_models import ConversionJob
+    job = ConversionJob.from_kwargs(path, "out", {"metadata_reader": metadata_reader,
+                                                  "scene_index": "all"})
+    f = LegacyFile(job)
+    return [f.image(index) for index in f.indices]
 
-    from eubi_bridge.core.data_manager import ArrayManager
 
-    async def load():
-        manager = ArrayManager(path, metadata_reader=metadata_reader)
-        return await manager.load_scenes(scene_indices="all", mosaic_tile_index=0)
-    return list(asyncio.run(load()).values())
+def _sizes(image) -> dict:
+    return {ax: q.value for ax, q in image.metadata.pixel_sizes.items()}
+
+
+def _position(image) -> dict:
+    return {ax: q.value for ax, q in image.metadata.position.items()}
 
 
 def test_scenes_load_from_micro_reader_alone(tmp_path, monkeypatch):
-    """The layer the writer reads from, with every Bio-Formats metadata path
+    """The layer the conversion reads from, with every Bio-Formats metadata path
     made to fail: metadata_reader='micro' needs none of them, and reads the
     pixels with micro-reader too."""
     from eubi_bridge.core import data_manager
@@ -97,22 +104,21 @@ def test_scenes_load_from_micro_reader_alone(tmp_path, monkeypatch):
     def no_bio_formats(*args, **kwargs):
         raise AssertionError("Bio-Formats metadata was read")
 
-    for name in ("read_metadata_via_bfio", "read_metadata_via_bioio_bioformats",
-                 "read_metadata_via_extension"):
+    for name in ("read_metadata_via_bfio", "read_metadata_via_extension"):
         monkeypatch.setattr(data_manager, name, no_bio_formats)
     path, a, b = _ome_tiff(tmp_path)
     first, second = _load(path)
     assert isinstance(_reader_source(first.array), MicroSource)
     np.testing.assert_array_equal(np.asarray(first.array), a[None])          # C Z Y X
-    assert first.scaledict["x"] == 0.5 and first.scaledict["z"] == 2.0
-    assert [c["label"] for c in first.channels] == ["DAPI", "GFP"]
+    assert _sizes(first)["x"] == 0.5 and _sizes(first)["z"] == 2.0
+    assert [c.name for c in first.metadata.channels] == ["DAPI", "GFP"]
     # D3: the first pixel's centre -- the image's centre (100, 50) minus
     # 11.5 / 9.5 pixels of 0.5 um -- becomes the translation
-    assert first.origindict == pytest.approx({"x": 100 - 11.5 * 0.5, "y": 50 - 9.5 * 0.5})
+    assert _position(first) == pytest.approx({"x": 100 - 11.5 * 0.5, "y": 50 - 9.5 * 0.5})
     # D4: wavelengths for the eubi_bridge attributes
-    waves = first.acquisition_extras["channel_wavelengths"]
-    assert waves[1]["emission_wavelength"] == {"value": 510.0, "unit": "nanometer"}
-    assert second.scaledict["x"] == 0.25 and second.origindict == {}
+    wave = first.metadata.channels[1].emission_wavelength
+    assert (wave.value, wave.unit) == (510.0, "nanometer")
+    assert _sizes(second)["x"] == 0.25 and _position(second) == {}
 
 
 @requires_full
@@ -134,20 +140,7 @@ def test_a_file_micro_reader_does_not_take_falls_back_to_bio_formats(tmp_path, m
     first, _ = _load(path)
     assert calls == [path]
     assert not isinstance(_reader_source(first.array), micro_source.MicroSource)
-    assert first.origindict == {}                # positions only from micro-reader
-
-
-def test_wavelengths_are_written_without_a_split():
-    from eubi_bridge.conversion.conversion_worker import build_acquisition_metadata
-    extras = {"channel_wavelengths": [{"emission_wavelength": {"value": 510.0,
-                                                               "unit": "nanometer"}}]}
-    manager = SimpleNamespace(acquisition_extras=extras, origindict={}, series_path="img",
-                              mosaic_tile_index=None, series=0)
-    job = SimpleNamespace(conversion=SimpleNamespace(export_acquisition_metadata=None),
-                          input_path="img.tif")
-    assert build_acquisition_metadata(manager, job) == extras
-    job.conversion.export_acquisition_metadata = False
-    assert build_acquisition_metadata(manager, job) is None
+    assert _position(first) == {}                # positions only from micro-reader
 
 
 def _run_python(code: str, timeout=600) -> str:

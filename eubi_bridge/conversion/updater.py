@@ -1,6 +1,5 @@
 import asyncio
-# from distributed import LocalCluster, Client
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -50,8 +49,9 @@ async def run_updates_on_filepaths(
             job_kwargs
         )
 
-    # --- Run all conversions ---
-    with ProcessPoolExecutor(max_workers) as pool:
+    # --- Run all updates ---
+    # metadata is edited through ozp only (no Java VM), so threads do
+    with ThreadPoolExecutor(max_workers) as pool:
         tasks = [_run_one(row) for _, row in df.iterrows()]
         results = await asyncio.gather(*tasks)
 

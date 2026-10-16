@@ -1,0 +1,114 @@
+{
+ "Channel_cset_T_tset.ome.zarr": {
+  "attrs": {
+   "eubi_bridge": {},
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "t",
+       "type": "time",
+       "unit": "second"
+      },
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "z",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          1.0,
+          2.0,
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FF0000",
+      "family": "linear",
+      "inverted": false,
+      "label": "DAPI",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "00FF00",
+      "family": "linear",
+      "inverted": false,
+      "label": "GFP",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     3,
+     2,
+     3,
+     40,
+     48
+    ],
+    "uint16",
+    [
+     1,
+     1,
+     3,
+     40,
+     48
+    ],
+    "386b21be00bcbba9dfa0ca64a39a18aeface18603c105109ad3c91fbd9087d6e"
+   ]
+  ]
+ }
+}

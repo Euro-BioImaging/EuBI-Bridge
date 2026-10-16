@@ -1,0 +1,249 @@
+{
+ "img_scene0.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "channel_wavelengths": [
+      {
+       "emission_wavelength": {
+        "unit": "nanometer",
+        "value": 461.0
+       },
+       "excitation_wavelength": {
+        "unit": "nanometer",
+        "value": 405.0
+       }
+      },
+      {
+       "emission_wavelength": {
+        "unit": "nanometer",
+        "value": 510.0
+       },
+       "excitation_wavelength": {
+        "unit": "nanometer",
+        "value": 488.0
+       }
+      }
+     ],
+     "origin_um": {
+      "x": 88.25,
+      "y": 40.25
+     },
+     "scene_index": 0,
+     "source_path": "<tmp>\\img.ome.tif",
+     "tile_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "z",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          3.0,
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          0.0,
+          0.0,
+          40.25,
+          88.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FF0000",
+      "family": "linear",
+      "inverted": false,
+      "label": "Nuclei",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 2
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FF0000",
+      "family": "linear",
+      "inverted": false,
+      "label": "GFP",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 1
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     2,
+     3,
+     24,
+     48
+    ],
+    "uint8",
+    [
+     1,
+     3,
+     24,
+     48
+    ],
+    "2dc90dc878e6406ae04fc5a60766cf06d5ad8ff69933a98aef4aa14a90dfda42"
+   ]
+  ]
+ },
+ "img_scene1.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "scene_index": 1,
+     "source_path": "<tmp>\\img.ome.tif",
+     "tile_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          0.25,
+          0.25
+         ],
+         "type": "scale"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Nuclei",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 8
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FF0000",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 12
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     2,
+     24,
+     36
+    ],
+    "uint8",
+    [
+     1,
+     24,
+     36
+    ],
+    "4133061a82bdb401b11bfadf3bb85b3e7115d67229fbe0ee4d5c6621eb17ca4c"
+   ]
+  ]
+ }
+}

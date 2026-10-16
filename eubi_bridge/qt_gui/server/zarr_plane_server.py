@@ -66,13 +66,27 @@ sys.stderr.write("Starting zarr plane server...\n")
 sys.stderr.flush()
 
 try:
-    from eubi_bridge.ngff.multiscales import Pyramid
-    sys.stderr.write("EuBI-Bridge Pyramid loaded successfully\n")
+    # ome_zarr_pyramid's Pyramid (eubi-bridge 0.2.0, roadmap step 5)
+    from ome_zarr_pyramid import Pyramid
+    sys.stderr.write("ome_zarr_pyramid Pyramid loaded successfully\n")
     sys.stderr.flush()
 except Exception as e:
     sys.stderr.write(f"Failed to import Pyramid: {e}\n")
     sys.stderr.flush()
     sys.exit(1)
+
+
+def _update_scales_on_disk(zarr_path: str, scales: list) -> None:
+    """Pixel sizes and units ([{axis, value, unit}, ...]) written into the store: one
+    ome_zarr_pyramid update_metadata call (every level keeps its factor; nothing else
+    is rewritten)."""
+    from ome_zarr_pyramid import IO
+    from eubi_bridge.core.output_store import _ozp_target_args
+    scale_kwargs = {s['axis']: s['value'] for s in scales}
+    unit_kwargs = {s['axis']: s['unit'] for s in scales if s.get('unit')}
+    target, storage_options = _ozp_target_args(zarr_path)
+    IO().update_metadata(target, scales=scale_kwargs, units=unit_kwargs or None,
+                         storage_options=storage_options)
 
 
 def _is_remote_path(path: str) -> bool:
@@ -2023,13 +2037,7 @@ class PlaneHandler(BaseHTTPRequestHandler):
                 if not zarr_path or not scales:
                     raise ValueError("path and scales are required")
 
-                from eubi_bridge.ngff.multiscales import Pyramid
-                pyr = Pyramid(gr=zarr_path)
-                scale_kwargs = {s['axis']: s['value'] for s in scales}
-                unit_kwargs  = {s['axis']: s['unit']  for s in scales}
-                pyr.update_scales(**scale_kwargs)
-                pyr.update_units(**unit_kwargs)
-                pyr.meta.save_changes()
+                _update_scales_on_disk(zarr_path, scales)
 
                 # Invalidate caches so the next read reflects new values
                 with pyramid_cache._lock:

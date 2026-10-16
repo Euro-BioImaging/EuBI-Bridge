@@ -1,0 +1,872 @@
+{
+ "grid 0": {
+  "canvasHeight": 75,
+  "canvasWidth": 80,
+  "chunkSize": [
+   75,
+   80
+  ],
+  "fovRegion": [
+   0,
+   75,
+   0,
+   80
+  ],
+  "tileCount": 1,
+  "tiles": [
+   {
+    "canvasX": 0,
+    "canvasY": 0,
+    "dataColEnd": 80,
+    "dataColStart": 0,
+    "dataRowEnd": 75,
+    "dataRowStart": 0,
+    "height": 75,
+    "tileCol": 0,
+    "tileRow": 0,
+    "width": 80
+   }
+  ]
+ },
+ "grid 1": {
+  "canvasHeight": 150,
+  "canvasWidth": 160,
+  "chunkSize": [
+   150,
+   160
+  ],
+  "fovRegion": [
+   0,
+   150,
+   0,
+   160
+  ],
+  "tileCount": 1,
+  "tiles": [
+   {
+    "canvasX": 0,
+    "canvasY": 0,
+    "dataColEnd": 160,
+    "dataColStart": 0,
+    "dataRowEnd": 150,
+    "dataRowStart": 0,
+    "height": 150,
+    "tileCol": 0,
+    "tileRow": 0,
+    "width": 160
+   }
+  ]
+ },
+ "grid 2": {
+  "canvasHeight": 300,
+  "canvasWidth": 320,
+  "chunkSize": [
+   256,
+   320
+  ],
+  "fovRegion": [
+   0,
+   300,
+   0,
+   320
+  ],
+  "tileCount": 2,
+  "tiles": [
+   {
+    "canvasX": 0,
+    "canvasY": 0,
+    "dataColEnd": 320,
+    "dataColStart": 0,
+    "dataRowEnd": 256,
+    "dataRowStart": 0,
+    "height": 256,
+    "tileCol": 0,
+    "tileRow": 0,
+    "width": 320
+   },
+   {
+    "canvasX": 0,
+    "canvasY": 256,
+    "dataColEnd": 320,
+    "dataColStart": 0,
+    "dataRowEnd": 300,
+    "dataRowStart": 256,
+    "height": 44,
+    "tileCol": 0,
+    "tileRow": 1,
+    "width": 320
+   }
+  ]
+ },
+ "info": {
+  "axes": "tczyx",
+  "channels": [
+   {
+    "color": "0000FF",
+    "index": 0,
+    "label": "DAPI",
+    "visible": true,
+    "window": {
+     "end": 65535,
+     "max": 65535,
+     "min": 0,
+     "start": 0
+    }
+   },
+   {
+    "color": "00FF00",
+    "index": 1,
+    "label": "GFP",
+    "visible": true,
+    "window": {
+     "end": 65535,
+     "max": 65535,
+     "min": 0,
+     "start": 0
+    }
+   }
+  ],
+  "dimSizes": {
+   "c": 2,
+   "t": 1,
+   "x": 320,
+   "y": 300,
+   "z": 6
+  },
+  "dtype": "uint16",
+  "levelsInfo": [
+   {
+    "chunks": [
+     1,
+     1,
+     6,
+     256,
+     320
+    ],
+    "compression": {
+     "name": "blosc",
+     "params": {
+      "blocksize": 0,
+      "clevel": 5,
+      "cname": "lz4",
+      "shuffle": "shuffle",
+      "typesize": 2
+     }
+    },
+    "dtype": "uint16",
+    "path": "0",
+    "shape": [
+     1,
+     2,
+     6,
+     300,
+     320
+    ]
+   },
+   {
+    "chunks": [
+     1,
+     2,
+     3,
+     150,
+     160
+    ],
+    "compression": {
+     "name": "blosc",
+     "params": {
+      "blocksize": 0,
+      "clevel": 5,
+      "cname": "lz4",
+      "shuffle": "shuffle",
+      "typesize": 2
+     }
+    },
+    "dtype": "uint16",
+    "path": "1",
+    "shape": [
+     1,
+     2,
+     3,
+     150,
+     160
+    ]
+   },
+   {
+    "chunks": [
+     1,
+     2,
+     2,
+     75,
+     80
+    ],
+    "compression": {
+     "name": "blosc",
+     "params": {
+      "blocksize": 0,
+      "clevel": 5,
+      "cname": "lz4",
+      "shuffle": "shuffle",
+      "typesize": 2
+     }
+    },
+    "dtype": "uint16",
+    "path": "2",
+    "shape": [
+     1,
+     2,
+     2,
+     75,
+     80
+    ]
+   }
+  ],
+  "numLevels": 3,
+  "resolutionPaths": [
+   "0",
+   "1",
+   "2"
+  ],
+  "shape": [
+   1,
+   2,
+   6,
+   300,
+   320
+  ]
+ },
+ "metadata": {
+  "axes": [
+   {
+    "name": "t",
+    "type": "time",
+    "unit": "second"
+   },
+   {
+    "name": "c",
+    "type": "channel",
+    "unit": ""
+   },
+   {
+    "name": "z",
+    "type": "space",
+    "unit": "micrometer"
+   },
+   {
+    "name": "y",
+    "type": "space",
+    "unit": "micrometer"
+   },
+   {
+    "name": "x",
+    "type": "space",
+    "unit": "micrometer"
+   }
+  ],
+  "channels": [
+   {
+    "color": "#0000FF",
+    "index": 0,
+    "label": "DAPI",
+    "visible": true,
+    "window": {
+     "end": 65535,
+     "max": 65535,
+     "min": 0,
+     "start": 0
+    }
+   },
+   {
+    "color": "#00FF00",
+    "index": 1,
+    "label": "GFP",
+    "visible": true,
+    "window": {
+     "end": 65535,
+     "max": 65535,
+     "min": 0,
+     "start": 0
+    }
+   }
+  ],
+  "chunks": [
+   1,
+   1,
+   6,
+   256,
+   320
+  ],
+  "compression": {
+   "name": "blosc",
+   "params": {
+    "blocksize": 0,
+    "clevel": 5,
+    "cname": "lz4",
+    "shuffle": "shuffle",
+    "typesize": 2
+   }
+  },
+  "dataType": "uint16",
+  "name": "img.zarr",
+  "ngffVersion": "0.5",
+  "pyramidLayers": [
+   {
+    "chunks": [
+     1,
+     1,
+     6,
+     256,
+     320
+    ],
+    "compression": {
+     "name": "blosc",
+     "params": {
+      "blocksize": 0,
+      "clevel": 5,
+      "cname": "lz4",
+      "shuffle": "shuffle",
+      "typesize": 2
+     }
+    },
+    "dtype": "uint16",
+    "level": 0,
+    "path": "0",
+    "scales": [
+     {
+      "axis": "t",
+      "unit": "second",
+      "value": 1.0
+     },
+     {
+      "axis": "c",
+      "unit": "",
+      "value": 1.0
+     },
+     {
+      "axis": "z",
+      "unit": "micrometer",
+      "value": 2.0
+     },
+     {
+      "axis": "y",
+      "unit": "micrometer",
+      "value": 0.5
+     },
+     {
+      "axis": "x",
+      "unit": "micrometer",
+      "value": 0.5
+     }
+    ],
+    "shape": [
+     1,
+     2,
+     6,
+     300,
+     320
+    ]
+   },
+   {
+    "chunks": [
+     1,
+     2,
+     3,
+     150,
+     160
+    ],
+    "compression": {
+     "name": "blosc",
+     "params": {
+      "blocksize": 0,
+      "clevel": 5,
+      "cname": "lz4",
+      "shuffle": "shuffle",
+      "typesize": 2
+     }
+    },
+    "dtype": "uint16",
+    "level": 1,
+    "path": "1",
+    "scales": [
+     {
+      "axis": "t",
+      "unit": "second",
+      "value": 1.0
+     },
+     {
+      "axis": "c",
+      "unit": "",
+      "value": 1.0
+     },
+     {
+      "axis": "z",
+      "unit": "micrometer",
+      "value": 4.0
+     },
+     {
+      "axis": "y",
+      "unit": "micrometer",
+      "value": 1.0
+     },
+     {
+      "axis": "x",
+      "unit": "micrometer",
+      "value": 1.0
+     }
+    ],
+    "shape": [
+     1,
+     2,
+     3,
+     150,
+     160
+    ]
+   },
+   {
+    "chunks": [
+     1,
+     2,
+     2,
+     75,
+     80
+    ],
+    "compression": {
+     "name": "blosc",
+     "params": {
+      "blocksize": 0,
+      "clevel": 5,
+      "cname": "lz4",
+      "shuffle": "shuffle",
+      "typesize": 2
+     }
+    },
+    "dtype": "uint16",
+    "level": 2,
+    "path": "2",
+    "scales": [
+     {
+      "axis": "t",
+      "unit": "second",
+      "value": 1.0
+     },
+     {
+      "axis": "c",
+      "unit": "",
+      "value": 1.0
+     },
+     {
+      "axis": "z",
+      "unit": "micrometer",
+      "value": 8.0
+     },
+     {
+      "axis": "y",
+      "unit": "micrometer",
+      "value": 2.0
+     },
+     {
+      "axis": "x",
+      "unit": "micrometer",
+      "value": 2.0
+     }
+    ],
+    "shape": [
+     1,
+     2,
+     2,
+     75,
+     80
+    ]
+   }
+  ],
+  "resolutionLevels": 3,
+  "scales": [
+   {
+    "axis": "t",
+    "unit": "second",
+    "value": 1.0
+   },
+   {
+    "axis": "c",
+    "unit": "",
+    "value": 1.0
+   },
+   {
+    "axis": "z",
+    "unit": "micrometer",
+    "value": 2.0
+   },
+   {
+    "axis": "y",
+    "unit": "micrometer",
+    "value": 0.5
+   },
+   {
+    "axis": "x",
+    "unit": "micrometer",
+    "value": 0.5
+   }
+  ],
+  "shape": [
+   1,
+   2,
+   6,
+   300,
+   320
+  ]
+ },
+ "metadata after update": {
+  "axes": [
+   {
+    "name": "t",
+    "type": "time",
+    "unit": "second"
+   },
+   {
+    "name": "c",
+    "type": "channel",
+    "unit": ""
+   },
+   {
+    "name": "z",
+    "type": "space",
+    "unit": "nanometer"
+   },
+   {
+    "name": "y",
+    "type": "space",
+    "unit": "micrometer"
+   },
+   {
+    "name": "x",
+    "type": "space",
+    "unit": "micrometer"
+   }
+  ],
+  "channels": [
+   {
+    "color": "#0000FF",
+    "index": 0,
+    "label": "DAPI",
+    "visible": true,
+    "window": {
+     "end": 65535,
+     "max": 65535,
+     "min": 0,
+     "start": 0
+    }
+   },
+   {
+    "color": "#00FF00",
+    "index": 1,
+    "label": "GFP",
+    "visible": true,
+    "window": {
+     "end": 65535,
+     "max": 65535,
+     "min": 0,
+     "start": 0
+    }
+   }
+  ],
+  "chunks": [
+   1,
+   1,
+   6,
+   256,
+   320
+  ],
+  "compression": {
+   "name": "blosc",
+   "params": {
+    "blocksize": 0,
+    "clevel": 5,
+    "cname": "lz4",
+    "shuffle": "shuffle",
+    "typesize": 2
+   }
+  },
+  "dataType": "uint16",
+  "name": "copy.zarr",
+  "ngffVersion": "0.5",
+  "pyramidLayers": [
+   {
+    "chunks": [
+     1,
+     1,
+     6,
+     256,
+     320
+    ],
+    "compression": {
+     "name": "blosc",
+     "params": {
+      "blocksize": 0,
+      "clevel": 5,
+      "cname": "lz4",
+      "shuffle": "shuffle",
+      "typesize": 2
+     }
+    },
+    "dtype": "uint16",
+    "level": 0,
+    "path": "0",
+    "scales": [
+     {
+      "axis": "t",
+      "unit": "second",
+      "value": 1.0
+     },
+     {
+      "axis": "c",
+      "unit": "",
+      "value": 1.0
+     },
+     {
+      "axis": "z",
+      "unit": "nanometer",
+      "value": 1.7
+     },
+     {
+      "axis": "y",
+      "unit": "micrometer",
+      "value": 0.5
+     },
+     {
+      "axis": "x",
+      "unit": "micrometer",
+      "value": 0.33
+     }
+    ],
+    "shape": [
+     1,
+     2,
+     6,
+     300,
+     320
+    ]
+   },
+   {
+    "chunks": [
+     1,
+     2,
+     3,
+     150,
+     160
+    ],
+    "compression": {
+     "name": "blosc",
+     "params": {
+      "blocksize": 0,
+      "clevel": 5,
+      "cname": "lz4",
+      "shuffle": "shuffle",
+      "typesize": 2
+     }
+    },
+    "dtype": "uint16",
+    "level": 1,
+    "path": "1",
+    "scales": [
+     {
+      "axis": "t",
+      "unit": "second",
+      "value": 1.0
+     },
+     {
+      "axis": "c",
+      "unit": "",
+      "value": 1.0
+     },
+     {
+      "axis": "z",
+      "unit": "nanometer",
+      "value": 3.4
+     },
+     {
+      "axis": "y",
+      "unit": "micrometer",
+      "value": 1.0
+     },
+     {
+      "axis": "x",
+      "unit": "micrometer",
+      "value": 0.66
+     }
+    ],
+    "shape": [
+     1,
+     2,
+     3,
+     150,
+     160
+    ]
+   },
+   {
+    "chunks": [
+     1,
+     2,
+     2,
+     75,
+     80
+    ],
+    "compression": {
+     "name": "blosc",
+     "params": {
+      "blocksize": 0,
+      "clevel": 5,
+      "cname": "lz4",
+      "shuffle": "shuffle",
+      "typesize": 2
+     }
+    },
+    "dtype": "uint16",
+    "level": 2,
+    "path": "2",
+    "scales": [
+     {
+      "axis": "t",
+      "unit": "second",
+      "value": 1.0
+     },
+     {
+      "axis": "c",
+      "unit": "",
+      "value": 1.0
+     },
+     {
+      "axis": "z",
+      "unit": "nanometer",
+      "value": 6.8
+     },
+     {
+      "axis": "y",
+      "unit": "micrometer",
+      "value": 2.0
+     },
+     {
+      "axis": "x",
+      "unit": "micrometer",
+      "value": 1.32
+     }
+    ],
+    "shape": [
+     1,
+     2,
+     2,
+     75,
+     80
+    ]
+   }
+  ],
+  "resolutionLevels": 3,
+  "scales": [
+   {
+    "axis": "t",
+    "unit": "second",
+    "value": 1.0
+   },
+   {
+    "axis": "c",
+    "unit": "",
+    "value": 1.0
+   },
+   {
+    "axis": "z",
+    "unit": "nanometer",
+    "value": 1.7
+   },
+   {
+    "axis": "y",
+    "unit": "micrometer",
+    "value": 0.5
+   },
+   {
+    "axis": "x",
+    "unit": "micrometer",
+    "value": 0.33
+   }
+  ],
+  "shape": [
+   1,
+   2,
+   6,
+   300,
+   320
+  ]
+ },
+ "minmax": [
+  {
+   "channel": 0,
+   "max": 2999.0,
+   "min": 100.0
+  },
+  {
+   "channel": 1,
+   "max": 2999.0,
+   "min": 100.0
+  }
+ ],
+ "plane 0": [
+  [
+   75,
+   80,
+   3
+  ],
+  "uint8",
+  "4702c115a21265566a07021bd878f6b72b04d771912f861478fc8aca0be9fa03"
+ ],
+ "plane 1": [
+  [
+   150,
+   160,
+   3
+  ],
+  "uint8",
+  "99da61c10bcbf7fa2bc9d17c03b411fc2af6ee19b2011a717b57b19f87f1a851"
+ ],
+ "plane 2": [
+  [
+   256,
+   256,
+   3
+  ],
+  "uint8",
+  "3d3eab31fe77c134177b8476e926d7f9014eea960c1ba47d00f5bcc5a0ce1bb3"
+ ],
+ "plane XZ": [
+  [
+   2,
+   80,
+   3
+  ],
+  "uint8",
+  "cc7cb002cd27fed198a1f6f1ac04d8434f2ad44d48c7672e97c984ebf227cfc8"
+ ],
+ "tile 0": [
+  [
+   75,
+   80,
+   3
+  ],
+  "uint8",
+  "4702c115a21265566a07021bd878f6b72b04d771912f861478fc8aca0be9fa03"
+ ],
+ "tile 1": [
+  [
+   150,
+   160,
+   3
+  ],
+  "uint8",
+  "99da61c10bcbf7fa2bc9d17c03b411fc2af6ee19b2011a717b57b19f87f1a851"
+ ],
+ "tile 2": [
+  [
+   44,
+   320,
+   3
+  ],
+  "uint8",
+  "8ab5077878e7bc1e6402fc3abfe1ff448578c10d2ba7d7d06b927cb956478a92"
+ ]
+}

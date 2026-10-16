@@ -45,18 +45,19 @@ def test_configure_does_not_save_it(tmp_path):
 
 def test_a_conversion_given_it_still_reads_with_micro_reader(tmp_path, monkeypatch):
     """The bug it carried: skip_dask=True sent a TIFF to eubi's own TIFF route
-    instead of micro-reader.  Every reader the conversion opens is asked."""
-    from eubi_bridge.core import data_manager
+    instead of micro-reader.  The conversion must open the file with micro-reader."""
+    from eubi_bridge.conversion import pyramid_path
     from eubi_bridge.ebridge import EuBIBridge
 
-    asked = []
-    original = data_manager.ArrayManager.__init__
+    opened = []
+    original = pyramid_path._open_micro
 
-    def spy(self, *args, **kwargs):
-        asked.append(kwargs.get("skip_dask", False))
-        original(self, *args, **kwargs)
+    def spy(job):
+        out = original(job)
+        opened.append(str(job.input_path))
+        return out
 
-    monkeypatch.setattr(data_manager.ArrayManager, "__init__", spy)
+    monkeypatch.setattr(pyramid_path, "_open_micro", spy)
     data = np.arange(2 * 3 * 24 * 24, dtype="u2").reshape(2, 3, 24, 24)
     source = tmp_path / "a.ome.tif"
     tifffile.imwrite(source, data, metadata={"axes": "CZYX"})
@@ -64,7 +65,7 @@ def test_a_conversion_given_it_still_reads_with_micro_reader(tmp_path, monkeypat
     EuBIBridge(configpath=str(tmp_path / "cfg")).to_zarr(
         str(source), str(out), skip_dask=True, use_threading=True, verbose=False)
 
-    assert asked and not any(asked)
+    assert opened == [str(source)]
     import zarr
     (store,) = out.glob("*.zarr")
     np.testing.assert_array_equal(np.asarray(zarr.open_group(str(store), mode="r")["0"]).squeeze(),

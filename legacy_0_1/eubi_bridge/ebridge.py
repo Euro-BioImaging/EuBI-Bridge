@@ -1,0 +1,2337 @@
+"""EuBI-Bridge: convert bioimage datasets to OME-Zarr format.
+
+Public entry point is :class:`EuBIBridge`, which composes three focused
+delegator classes:
+
+* :class:`ConfigManager`    — configuration persistence and Pydantic validation
+* :class:`ConversionManager` — conversion pipeline (to_zarr)
+* :class:`MetadataManager`  — metadata inspection and update
+"""
+from __future__ import annotations
+
+import copy
+import os
+import shutil
+import tempfile
+import time
+import warnings
+from pathlib import Path
+from typing import Literal, Optional, Union
+
+from rich.console import Console
+from rich.table import Table
+
+from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.core.config_models import (
+    AggregativeConversionJob,
+    AggregativePlan,
+    ClusterConfig,
+    ConcatenationConfig,
+    ConversionConfig,
+    drop_retired,
+    rename_config_keys,
+    rename_settings,
+    RENAMED_SETTINGS,
+    resolve_ome_zarr_target,
+    DownscaleConfig,
+    MetadataConfig,
+    ReaderConfig,
+)
+
+logger = get_logger(__name__)
+_console = Console()
+
+# Table/spreadsheet extensions accepted as batch-input by to_zarr
+TABLE_FORMATS = [".csv", ".tsv", ".txt", ".xls", ".xlsx"]
+
+
+def _normalise_row_overrides(overrides: dict) -> dict:
+    """Apply the runtime sentinel conversions that ``_collect_params`` performs.
+
+    Per-row values from a conversion table are merged *after* ``_collect_params``
+    and so never pass through it.  A cell holding an on-disk sentinel — notably
+    ``dtype='auto'``, which means "keep the source dtype" — would otherwise reach
+    ``np.dtype()`` verbatim and raise ``TypeError: data type 'auto' not
+    understood``.
+    """
+    normalised = rename_settings(dict(overrides))
+    if normalised.get('dtype') == 'auto':
+        normalised['dtype'] = None
+    # n_layers='auto' means "detect the layer count", which the config models
+    # spell as None.  Blank cells never reach here, so this cannot be confused
+    # with "fall back to the global value".
+    n_layers = normalised.get('n_layers')
+    if isinstance(n_layers, str) and n_layers.strip().lower() == 'auto':
+        normalised['n_layers'] = None
+    # the acquisition block's three states as a batch cell spells them
+    export = normalised.get('export_acquisition_metadata')
+    if isinstance(export, str):
+        normalised['export_acquisition_metadata'] = {
+            'auto': None, 'on': True, 'off': False, 'true': True, 'false': False,
+        }.get(export.strip().lower(), export)
+    return normalised
+
+
+def _row_metadata_readers(input_path, default: str, force_default: bool) -> tuple:
+    """The metadata readers a conversion will use, and whether any forces
+    Bio-Formats: the configured ones for a plain input; for a conversion
+    table (a DataFrame, or a .csv / .tsv / .txt / .xls / .xlsx file), each
+    row's own -- a blank cell means the configured value."""
+    import pandas as pd
+    df = None
+    if isinstance(input_path, pd.DataFrame):
+        df = input_path
+    elif isinstance(input_path, str) and input_path.endswith(tuple(TABLE_FORMATS)):
+        try:
+            df = (pd.read_excel(input_path) if input_path.endswith((".xls", ".xlsx"))
+                  else pd.read_csv(input_path))
+        except Exception:                       # noqa: BLE001 - read again (and fail) later
+            df = None
+    if df is None or df.empty:
+        return {default}, bool(force_default)
+
+    def given(value) -> bool:
+        return value is not None and value == value and str(value).strip() != ""
+
+    readers = ({str(v) if given(v) else default for v in df["metadata_reader"]}
+               if "metadata_reader" in df else {default})
+    force = bool(force_default)
+    if "force_bioformats" in df:
+        force = any((str(v).strip().lower() in ("true", "1")) if given(v) else force_default
+                    for v in df["force_bioformats"])
+    return readers, force
+
+
+# Heavy imports are deferred — config commands don't need zarr/dask/JVM.
+def _ensure_heavy_imports():
+    """Lazy-load heavy modules only when needed for actual conversions."""
+    global np, psutil, s3fs, zarr, AggregativeConverter, run_updates, _heavy_imported
+    if _heavy_imported:
+        return
+    from eubi_bridge.utils.optional_deps import is_installed
+    if is_installed("scyjava"):            # the Java bridge: the full eubi-bridge only
+        import scyjava
+        scyjava.config.endpoints.clear()
+        scyjava.config.maven_offline = True
+        scyjava.config.jgo_disabled = True
+    import numpy as np
+    import psutil
+    import s3fs
+    import zarr
+    warnings.filterwarnings(
+        "ignore",
+        message="Dask configuration key 'distributed.p2p.disk' has been deprecated",
+        category=FutureWarning, module="dask.config",
+    )
+    warnings.filterwarnings(
+        "ignore", message="Could not parse tiff pixel size",
+        category=UserWarning, module="bioio_tifffile.reader",
+    )
+    from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
+    from eubi_bridge.conversion.updater import run_updates
+    _heavy_imported = True
+
+
+_heavy_imported = False
+
+
+# ---------------------------------------------------------------------------
+# Module-level rendering helpers (used by MetadataManager)
+# ---------------------------------------------------------------------------
+
+def _format_scale_value(value) -> str:
+    """Format a physical scale value to 3 significant figures."""
+    if isinstance(value, (int, float)):
+        if value == 0:
+            return "0"
+        v = float(value)
+        if 0.001 <= abs(v) < 1000:
+            return f"{v:.3g}" if v >= 1 else f"{v:.2g}"
+        return f"{v:.2e}"
+    return str(value)
+
+
+def _wrap_text(text: str, width: int) -> str:
+    """Wrap *text* to *width* characters, preserving existing line breaks."""
+    if len(text) <= width:
+        return text
+    lines = []
+    for line in text.split('\n'):
+        if len(line) <= width:
+            lines.append(line)
+        else:
+            words, current = line.split(), []
+            for word in words:
+                if len(' '.join(current + [word])) <= width:
+                    current.append(word)
+                else:
+                    if current:
+                        lines.append(' '.join(current))
+                    current = [word]
+            if current:
+                lines.append(' '.join(current))
+    return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------
+# ConfigManager
+# ---------------------------------------------------------------------------
+
+class ConfigManager:
+    """Configuration persistence, access, and Pydantic validation.
+
+    Single source of truth for all cluster, reader, conversion, and downscale
+    parameters.  JSON on disk is the canonical store; in-memory dict is a
+    lazy-loaded cache.
+    """
+
+    _ROOT_DEFAULTS: dict = dict(
+        cluster=dict(
+            on_slurm=False,
+            use_threading=False,
+            max_processes=4,
+            queue_size=4,
+            region_size_mb='auto',
+            max_threads=4,
+            max_concurrent_scenes=1,
+            max_concurrent_downscale_layers=3,
+            memory_budget='auto',
+            decode_memory='auto',
+            slurm_worker_memory='3GB',
+            tensorstore_data_copy_concurrency=4,
+            max_retries=10,
+            bioformats_threads=4,
+            decode_threads=4,
+            jvm_memory='1g',
+            slurm_time='24:00:00',
+            slurm_account=None,
+            slurm_partition=None,
+            slurm_worker_timeout=300,
+            slurm_sif_path=None,
+        ),
+        readers=dict(
+            as_mosaic=False,
+            view_index=0,
+            phase_index=0,
+            illumination_index=0,
+            scene_index=0,
+            rotation_index=0,
+            mosaic_tile_index=0,
+            sample_index=0,
+            force_bioformats=False,
+            pixel_reader='micro',
+            micro_check_pixels=False,
+            concat_views=False,
+            concat_illuminations=False,
+        ),
+        conversion=dict(
+            verbose=False,
+            ome_zarr_version=None,
+            zarr_format=2,
+            auto_chunk=True,
+            target_chunk_mb=1,
+            time_chunk=1,
+            channel_chunk=1,
+            z_chunk=96,
+            y_chunk=96,
+            x_chunk=96,
+            time_shard_coef=1,
+            channel_shard_coef=1,
+            z_shard_coef=3,
+            y_shard_coef=3,
+            x_shard_coef=3,
+            time_range=None,
+            channel_range=None,
+            z_range=None,
+            y_range=None,
+            x_range=None,
+            dimension_order='tczyx',
+            compressor='blosc',
+            compressor_params={},
+            overwrite=False,
+            save_omexml=True,
+            export_acquisition_metadata=None,
+            squeeze=True,
+            dtype='auto',
+            writer='auto',
+            io_backend='tensorstore',
+        ),
+        downscale=dict(
+            time_scale_factor=1,
+            channel_scale_factor=1,
+            z_scale_factor=2,
+            y_scale_factor=2,
+            x_scale_factor=2,
+            n_layers=None,
+            min_dimension_size=64,
+            downscale_method='simple',
+            keep_existing_resolutions=False,
+            apply_smart_downscaling=False,
+            time_smart_scale_factor=None,
+            z_smart_scale_factor=None,
+            y_smart_scale_factor=None,
+            x_smart_scale_factor=None,
+        ),
+        metadata=dict(
+            metadata_reader='micro',
+            override_channel_names=False,
+            channel_intensity_limits='from_dtype',
+            channel_colors='',
+            channel_labels='',
+            time_scale=None,
+            z_scale=None,
+            y_scale=None,
+            x_scale=None,
+            time_unit=None,
+            z_unit=None,
+            y_unit=None,
+            x_unit=None,
+        ),
+        concatenation=dict(
+            concatenation_axes=None,
+            time_tag=None,
+            channel_tag=None,
+            z_tag=None,
+            y_tag=None,
+            x_tag=None,
+            aggregative_group=None,
+        ),
+    )
+
+    def __init__(self, configpath: str):
+        self._configpath = configpath
+        self._config: dict | None = None  # lazy-loaded
+
+    # ── path helpers ──────────────────────────────────────────────────────
+
+    def _get_config_dir(self) -> Path:
+        """Return the directory that holds all config files."""
+        p = Path(self._configpath)
+        return p.parent if p.suffix.lower() == '.json' else p
+
+    # ── JSON persistence ──────────────────────────────────────────────────
+
+    def _get_json_path(self) -> Path:
+        p = Path(self._configpath)
+        return p if p.suffix.lower() == '.json' else p / '.eubi_config.json'
+
+    def _load_config_from_json(self) -> dict | None:
+        import json
+        path = self._get_json_path()
+        if path.exists():
+            try:
+                with open(path) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                return None
+        return None
+
+    def _save_config_to_json(self, config: dict) -> None:
+        import json
+        path = self._get_json_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(path, 'w') as f:
+                json.dump(config, f, indent=2)
+        except IOError as e:
+            logger.warning(f"Failed to save config JSON: {e}")
+
+    def _ensure_config_loaded(self) -> None:
+        if self._config is not None:
+            return
+        config = self._load_config_from_json()
+        if config is None:
+            config = {k: dict(v) for k, v in self._ROOT_DEFAULTS.items()}
+            self._save_config_to_json(config)
+        else:
+            dirty = False
+            # Migrate legacy string shuffle values to int
+            _shuffle_map = {'noshuffle': 0, 'shuffle': 1, 'bitshuffle': 2, 'autoshuffle': -1}
+            cp = config.get('conversion', {}).get('compressor_params', {})
+            if isinstance(cp.get('shuffle'), str):
+                cp['shuffle'] = _shuffle_map.get(cp['shuffle'].lower(), 1)
+                dirty = True
+            # Upgrade: backfill anything the installed version knows about but
+            # this file predates -- whole sections, and individual keys within a
+            # section that already exists.  Without the key-level pass a field
+            # added after the file was written would stay absent forever, since
+            # every existing config already has the section it belongs to.
+            # Renamed settings (config_models.RENAMED_SETTINGS): the value is kept
+            # under its new name, before the backfill below adds the default.
+            if rename_config_keys(config):
+                dirty = True
+            for section, defaults in self._ROOT_DEFAULTS.items():
+                if section not in config:
+                    config[section] = dict(defaults)
+                    dirty = True
+                    continue
+                if not isinstance(config[section], dict):
+                    continue
+                for key, value in defaults.items():
+                    if key not in config[section]:
+                        config[section][key] = value
+                        dirty = True
+            # Keys that no longer do anything.  Every older config carries them
+            # at their old default, so leaving them would raise a deprecation
+            # warning on every run for a value the user never chose.
+            for section, key in self._RETIRED_KEYS:
+                if isinstance(config.get(section), dict) and key in config[section]:
+                    del config[section][key]
+                    dirty = True
+            self._warn_about_relocated_keys(config)
+            if dirty:
+                self._save_config_to_json(config)
+        self._config = config
+
+    #: Settings that no longer have any effect, removed from a config on load.
+    #: bf_tile_size_mb: Bio-Formats images are read one region at a time since
+    #: 0.1.3, so region_size_mb sets the read size.  The rest
+    #: (config_models.RETIRED_SETTINGS, 2026-10-05): micro-reader reads without
+    #: dask; the local dask cluster backend is gone.
+    _RETIRED_KEYS = (('cluster', 'bf_tile_size_mb'), ('conversion', 'skip_dask'),
+                     ('cluster', 'on_local_cluster'))
+
+    #: Settings that used to live in another section.  Their old copies are left
+    #: in place rather than moved automatically: silently relocating a value the
+    #: user set is how a conversion ends up not matching its config, so the
+    #: choice of how to fix it stays theirs.
+    _RELOCATED_KEYS = {
+        'metadata_reader': ('conversion', 'metadata'),
+        'override_channel_names': ('conversion', 'metadata'),
+        'channel_intensity_limits': ('conversion', 'metadata'),
+        'channel_colors': ('conversion', 'metadata'),
+        'channel_labels': ('conversion', 'metadata'),
+    }
+
+    def _warn_about_relocated_keys(self, config: dict) -> None:
+        """Say loudly when a config still holds a setting in its old section.
+
+        The stale copy is simply ignored, so without this the conversion would
+        quietly use the default while the file appears to say otherwise -- and
+        the file looks perfectly valid, which makes it very hard to spot.
+        """
+        stale = [(key, old, new)
+                 for key, (old, new) in self._RELOCATED_KEYS.items()
+                 if isinstance(config.get(old), dict) and key in config[old]]
+        if not stale:
+            return
+
+        lines = [
+            "",
+            "=" * 70,
+            "CONFIG OUT OF DATE: some settings have moved to a new section.",
+            "",
+            "These are still in their old place and are now being IGNORED:",
+            "",
+        ]
+        for key, old, new in stale:
+            value = config[old][key]
+            lines.append(f"    {old}.{key} = {value!r}")
+            lines.append(f"        -> now read from '{new}.{key}'")
+        lines += [
+            "",
+            f"Config file: {self._get_json_path()}",
+            "",
+            "Fix it either way:",
+            "  * eubi config reset_config          (start from the defaults), or",
+            "  * eubi configure metadata --<key> <value>   for each one above,",
+            "    then delete the stale keys from the 'conversion' section.",
+            "=" * 70,
+            "",
+        ]
+        logger.warning("\n".join(lines))
+
+    # ── config property ───────────────────────────────────────────────────
+
+    @property
+    def config(self) -> dict:
+        self._ensure_config_loaded()
+        assert self._config is not None  # guaranteed by _ensure_config_loaded
+        return self._config
+
+    @config.setter
+    def config(self, value: dict) -> None:
+        self._config = value
+        self._save_config_to_json(value)
+
+    # ── parameter collection ──────────────────────────────────────────────
+
+    def _collect_params(self, param_type: str, **overrides) -> dict:
+        """Return *param_type* config section merged with *overrides*.
+
+        Converts ``dtype='auto'`` → ``None`` at runtime.
+        """
+        overrides = rename_settings(overrides)
+        params = {}
+        for key in self.config[param_type]:
+            params[key] = overrides[key] if key in overrides else self.config[param_type][key]
+            if key == 'dtype' and params[key] == 'auto':
+                params[key] = None
+        return params
+
+    # ── configure_* ───────────────────────────────────────────────────────
+
+    def configure_cluster(self,
+                          max_processes: int = 'default',
+                          queue_size: int = 'default',
+                          region_size_mb: int = 'default',
+                          memory_budget: str = 'default',
+                          max_threads: int = 'default',
+                          max_concurrent_scenes: int = 'default',
+                          max_concurrent_downscale_layers: int = 'default',
+                          on_local_cluster: bool = 'default',
+                          on_slurm: bool = 'default',
+                          use_threading: bool = 'default',
+                          tensorstore_data_copy_concurrency: int = 'default',
+                          max_retries: int = 'default',
+                          bioformats_threads: int = 'default',
+                          decode_threads: int = 'default',
+                          decode_memory: str = 'default',
+                          bf_tile_size_mb: float = 'default',
+                          jvm_memory: str = 'default',
+                          slurm_time: str = 'default',
+                          slurm_account: str = 'default',
+                          slurm_partition: str = 'default',
+                          slurm_worker_timeout: int = 'default',
+                          slurm_sif_path: str = 'default',
+                          slurm_worker_memory: str = 'default',
+                          **kwargs) -> None:
+        """Update cluster parameters. Omitted arguments keep their current values.
+        The old names of renamed settings (``max_workers``, ``max_concurrency``,
+        ``micro_read_concurrency``, ``bf_read_concurrency``) still work."""
+        params = {k: v for k, v in locals().items() if k not in ('self', 'kwargs')}
+        unknown = set(kwargs) - set(RENAMED_SETTINGS)
+        if unknown:
+            raise TypeError(f"configure_cluster got unknown setting(s): {sorted(unknown)}")
+        params.update(rename_settings({k: v for k, v in kwargs.items() if v != 'default'}))
+        if params.pop('bf_tile_size_mb') != 'default':
+            logger.warning(
+                "DEPRECATION: 'bf_tile_size_mb' is no longer used and was not saved. "
+                "Bio-Formats images are read one region at a time, so "
+                "'region_size_mb' now sets the read size.")
+        params = drop_retired(params)                  # warned about, not saved
+        for key, val in params.items():
+            if key in self.config['cluster'] and val != 'default':
+                self.config['cluster'][key] = val
+        ClusterConfig(**self.config['cluster'])
+        self._save_config_to_json(self.config)
+
+    def configure_readers(self,
+                          as_mosaic: bool = 'default',
+                          view_index: int = 'default',
+                          phase_index: int = 'default',
+                          illumination_index: int = 'default',
+                          scene_index: int = 'default',
+                          rotation_index: int = 'default',
+                          mosaic_tile_index: int = 'default',
+                          sample_index: int = 'default',
+                          force_bioformats: bool = 'default',
+                          concat_views: bool = 'default',
+                          concat_illuminations: bool = 'default',
+                          pixel_reader: str = 'default',
+                          micro_check_pixels: bool = 'default') -> None:
+        """Update reader parameters. Omitted arguments keep their current values."""
+        params = {k: v for k, v in locals().items() if k != 'self'}
+        for key, val in params.items():
+            if key in self.config['readers'] and val != 'default':
+                self.config['readers'][key] = val
+        ReaderConfig(**self.config['readers'])
+        self._save_config_to_json(self.config)
+
+    def configure_conversion(self,
+                             ome_zarr_version: str = 'default',
+                             zarr_format: int = 'default',
+                             skip_dask: bool = 'default',
+                             auto_chunk: bool = 'default',
+                             target_chunk_mb: float = 'default',
+                             time_chunk: int = 'default',
+                             channel_chunk: int = 'default',
+                             z_chunk: int = 'default',
+                             y_chunk: int = 'default',
+                             x_chunk: int = 'default',
+                             time_shard_coef: int = 'default',
+                             channel_shard_coef: int = 'default',
+                             z_shard_coef: int = 'default',
+                             y_shard_coef: int = 'default',
+                             x_shard_coef: int = 'default',
+                             time_range: int = 'default',
+                             channel_range: int = 'default',
+                             z_range: int = 'default',
+                             y_range: int = 'default',
+                             x_range: int = 'default',
+                             compressor: str = 'default',
+                             compressor_params: dict = 'default',
+                             overwrite: bool = 'default',
+                             save_omexml: bool = 'default',
+                             export_acquisition_metadata: bool = 'default',
+                             squeeze: bool = 'default',
+                             dtype: str = 'default',
+                             verbose: bool = 'default',
+                             writer: str = 'default',
+                             io_backend: str = 'default') -> None:
+        """Update conversion parameters. Omitted arguments keep their current values."""
+        params = {k: v for k, v in locals().items() if k != 'self'}
+        params = drop_retired(params)                  # warned about, not saved
+        for key, val in params.items():
+            if key in self.config['conversion'] and val != 'default':
+                self.config['conversion'][key] = val
+        ConversionConfig(**self.config['conversion'])
+        self._save_config_to_json(self.config)
+
+    def configure_metadata(self,
+                           metadata_reader: str = 'default',
+                           override_channel_names: bool = 'default',
+                           channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
+                           channel_colors: str = 'default',
+                           channel_labels: str = 'default',
+                           time_scale: float = 'default',
+                           z_scale: float = 'default',
+                           y_scale: float = 'default',
+                           x_scale: float = 'default',
+                           time_unit: str = 'default',
+                           z_unit: str = 'default',
+                           y_unit: str = 'default',
+                           x_unit: str = 'default') -> None:
+        """Update how the output's metadata is read and described.
+
+        These moved here from ``conversion`` so the config file matches the
+        Metadata tab the interface has always shown them on.  A config written
+        before the move keeps its old copies, which are ignored -- loading one
+        warns and says which keys to set here instead.
+
+        Args:
+            metadata_reader: Metadata backend — ``'micro'`` (default):
+                micro-reader's metadata, and its pixels with it (no JVM unless
+                a file falls back to Bio-Formats; also writes the stage
+                position as the NGFF translation and wavelengths in the
+                ``eubi_bridge`` attributes); ``'bfio'`` or ``'bioio'``.
+            override_channel_names: Replace channel names with ones derived
+                from the concatenation tags (default False).
+            channel_intensity_limits: How to set OMERO window limits —
+                ``'from_dtype'`` (default) uses dtype min/max,
+                ``'from_array'`` computes per-channel min/max from pixel data,
+                ``'auto'`` gives a display window from a quick overview: the 0.1 and
+                99.9 percentiles of the smallest resolution level (the dtype's
+                range when that level is over 64 MB).
+            channel_colors: Per-channel colour overrides as
+                ``"0,FF0000;1,00FF00"``. Channels left out keep their source
+                colour, or are given one automatically.
+            channel_labels: Per-channel name overrides as ``"0,DAPI;1,GFP"``.
+            time_scale: Physical size of one time step. ``None`` keeps whatever
+                the source file states.
+            z_scale: Physical pixel size along z (e.g. ``0.5``). ``None`` keeps
+                the source value.
+            y_scale: Physical pixel size along y. ``None`` keeps the source value.
+            x_scale: Physical pixel size along x. ``None`` keeps the source value.
+            time_unit: Unit for ``time_scale`` (e.g. ``'second'``). ``None``
+                keeps the source value.
+            z_unit: Unit for ``z_scale`` (e.g. ``'micrometer'``). ``None`` keeps
+                the source value.
+            y_unit: Unit for ``y_scale``. ``None`` keeps the source value.
+            x_unit: Unit for ``x_scale``. ``None`` keeps the source value.
+        """
+        params = {k: v for k, v in locals().items() if k != 'self'}
+        for key, val in params.items():
+            if key in self.config['metadata'] and val != 'default':
+                self.config['metadata'][key] = val
+        MetadataConfig(**self.config['metadata'])
+        self._save_config_to_json(self.config)
+
+    def configure_downscale(self,
+                            n_layers: int = 'default',
+                            min_dimension_size: int = 'default',
+                            time_scale_factor: int = 'default',
+                            channel_scale_factor: int = 'default',
+                            z_scale_factor: int = 'default',
+                            y_scale_factor: int = 'default',
+                            x_scale_factor: int = 'default',
+                            downscale_method: str = 'default',
+                            keep_existing_resolutions: bool = 'default',
+                            apply_smart_downscaling: bool = 'default',
+                            time_smart_scale_factor: int = 'default',
+                            z_smart_scale_factor: int = 'default',
+                            y_smart_scale_factor: int = 'default',
+                            x_smart_scale_factor: int = 'default') -> None:
+        """Update downscale parameters. Omitted arguments keep their current values."""
+        params = {k: v for k, v in locals().items() if k != 'self'}
+        for key, val in params.items():
+            if key in self.config['downscale'] and val != 'default':
+                self.config['downscale'][key] = val
+        DownscaleConfig(**self.config['downscale'])
+        self._save_config_to_json(self.config)
+
+    def configure_concatenation(self,
+                                concatenation_axes: Union[str, int, None] = 'default',
+                                time_tag: Union[str, tuple, None] = 'default',
+                                channel_tag: Union[str, tuple, None] = 'default',
+                                z_tag: Union[str, tuple, None] = 'default',
+                                y_tag: Union[str, tuple, None] = 'default',
+                                x_tag: Union[str, tuple, None] = 'default',
+                                aggregative_group: Union[str, None] = 'default') -> None:
+        """Update aggregative (concatenation) parameters.
+
+        Set ``concatenation_axes`` to a string of axis letters (e.g. ``'c'``,
+        ``'tc'``) to enable aggregative conversion by default.  Each axis
+        listed requires a corresponding tag (``time_tag``, ``channel_tag``,
+        etc.) to be set as well — either here or at ``to_zarr()`` call time.
+        Set ``concatenation_axes=None`` to revert to unary (non-concatenated)
+        conversion.
+
+        Args:
+            concatenation_axes: Axes to concatenate along, e.g. ``'z'`` or ``'tc'``.
+            time_tag: Filename tag marking the time index.
+            channel_tag: Filename tag marking the channel index.
+            z_tag: Filename tag marking the z index.
+            y_tag: Filename tag marking the y index.
+            x_tag: Filename tag marking the x index.
+            aggregative_group: Name prefixed to the concatenated output.  In a
+                conversion table, rows sharing this value are concatenated
+                together and a blank one converts on its own.  Prefer short
+                labels such as ``gr1`` or ``A``, since it becomes part of the
+                output filename.
+        """
+        params = {k: v for k, v in locals().items() if k != 'self'}
+        for key, val in params.items():
+            if key in self.config['concatenation'] and val != 'default':
+                self.config['concatenation'][key] = val
+        ConcatenationConfig(**self.config['concatenation'])
+        self._save_config_to_json(self.config)
+
+    # ── named configs ─────────────────────────────────────────────────────
+
+    def list_configs(self) -> dict:
+        """Return ``{name: path}`` for every named config in the config directory.
+
+        Named configs are any ``*.json`` files in the config directory that are
+        *not* the default ``.eubi_config.json``.  The name is the filename stem.
+        """
+        return {
+            p.stem: str(p)
+            for p in sorted(self._get_config_dir().glob('*.json'))
+            if p.name != '.eubi_config.json'
+        }
+
+    def save_as(self, name: str) -> None:
+        """Save the current config as a named config file.
+
+        Creates ``<config_dir>/<name>.json``.  Overwrites an existing file with
+        the same name.  ``name`` must contain only letters, digits, hyphens, and
+        underscores.
+        """
+        import json
+        import re
+        if not re.match(r'^[A-Za-z0-9_\-]+$', name):
+            raise ValueError(
+                f"Config name '{name}' must contain only letters, digits, "
+                "hyphens, and underscores."
+            )
+        dirpath = self._get_config_dir()
+        dirpath.mkdir(parents=True, exist_ok=True)
+        path = dirpath / f'{name}.json'
+        with open(path, 'w') as f:
+            json.dump(self.config, f, indent=2)
+        logger.info(f"Config saved as '{name}' → {path}")
+
+    def with_config(self, name: str) -> 'ConfigManager':
+        """Return a ``ConfigManager`` backed by the named config file.
+
+        The named config provides the defaults for all parameters; any
+        call-time overrides still take priority.  Raises ``KeyError`` if
+        the name does not exist.
+        """
+        registry = self.list_configs()
+        if name not in registry:
+            available = sorted(registry) or ['(none)']
+            raise KeyError(
+                f"Named config '{name}' not found in {self._get_config_dir()}. "
+                f"Available: {available}"
+            )
+        return ConfigManager(registry[name])
+
+    def update_config(self, name_or_path: str, create: bool = False) -> None:
+        """Write the current in-memory config into *name_or_path*.
+
+        *name_or_path* is resolved as follows:
+
+        * **Name** (no path separators, no ``.json`` suffix) — looked up in
+          the named-config registry.  If not found and ``create=True`` the
+          file ``<config_dir>/<name>.json`` is created.
+        * **Path** (contains a separator or ends with ``.json``) — used as a
+          literal filesystem path.  Relative paths are resolved from the
+          current working directory.
+
+        ``create=False`` (default) raises ``FileNotFoundError`` when the
+        target does not exist.  ``create=True`` creates the parent directories
+        as well.
+        """
+        import json as _json
+        import re
+
+        raw = name_or_path
+        is_path = (os.sep in raw or '/' in raw or raw.endswith('.json'))
+
+        if is_path:
+            target = Path(raw) if Path(raw).is_absolute() else Path.cwd() / raw
+            if not target.exists() and not create:
+                raise FileNotFoundError(
+                    f"Config file '{target}' does not exist. "
+                    "Pass --create to create it."
+                )
+        else:
+            name = raw
+            registry = self.list_configs()
+            if name in registry:
+                target = Path(registry[name])
+            elif create:
+                if not re.match(r'^[A-Za-z0-9_\-]+$', name):
+                    raise ValueError(
+                        f"Config name '{name}' must contain only letters, "
+                        "digits, hyphens, and underscores."
+                    )
+                target = self._get_config_dir() / f'{name}.json'
+            else:
+                available = sorted(registry) or ['(none)']
+                raise FileNotFoundError(
+                    f"Named config '{name}' not found. "
+                    f"Pass --create to create it.  Available: {available}"
+                )
+
+        # Materialize config before opening the target for writing.
+        # open(target, 'w') truncates the file immediately; accessing self.config
+        # inside the with-block would trigger a lazy JSON read on an empty file,
+        # causing JSONDecodeError → silent fallback to _ROOT_DEFAULTS.
+        config_snapshot = self.config
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, 'w') as f:
+            _json.dump(config_snapshot, f, indent=2)
+        logger.info(f"Config written → {target}")
+
+    def delete_config(self, name: str) -> None:
+        """Delete the named config file.  Raises ``KeyError`` if not found."""
+        registry = self.list_configs()
+        if name not in registry:
+            raise KeyError(f"Named config '{name}' not found.")
+        Path(registry[name]).unlink()
+        logger.info(f"Named config '{name}' deleted.")
+
+    # ── display / reset ───────────────────────────────────────────────────
+
+    def reset_config(self) -> None:
+        """Reset all parameters to installation defaults."""
+        self.config = copy.deepcopy(self._ROOT_DEFAULTS)
+
+    def show_config(self, name: str = None) -> None:
+        """Display configuration as a rich table.
+
+        If *name* is given, display the named config file.
+        If omitted, display the default (``.eubi_config.json``) config.
+        """
+        import json as _json
+        if name is not None:
+            registry = self.list_configs()
+            if name not in registry:
+                available = sorted(registry) or ['(none)']
+                raise KeyError(
+                    f"Named config '{name}' not found. Available: {available}"
+                )
+            with open(registry[name]) as f:
+                config = _json.load(f)
+            display_name = name
+        else:
+            config = self._load_config_from_json() or self.config
+            # Auto-detect when called via `with_config(name).show_config()`:
+            # if this manager is backed by a named file (not .eubi_config.json),
+            # surface the name so the title is accurate.
+            json_path = self._get_json_path()
+            display_name = (None if json_path.name == '.eubi_config.json'
+                            else json_path.stem)
+
+        if display_name is not None:
+            title       = f"Config: {display_name}"
+            header_text = f"[bold cyan]Config: {display_name}[/bold cyan]"
+        else:
+            title       = "Current Configuration"
+            header_text = "[bold cyan]Current Configuration[/bold cyan]"
+
+        _console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
+        _console.print(header_text)
+        _console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
+        sections = {k: v for k, v in config.items()
+                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'metadata', 'concatenation')}
+        self._print_config_unified(title, sections)
+        _console.print()
+
+    def show_root_defaults(self) -> None:
+        """Display installation defaults as a rich table."""
+        _console.print("\n[bold yellow]═══════════════════════════════════════════════════════[/bold yellow]")
+        _console.print("[bold yellow]Installation Defaults[/bold yellow]")
+        _console.print("[bold yellow]═══════════════════════════════════════════════════════[/bold yellow]\n")
+        sections = {k: v for k, v in self._ROOT_DEFAULTS.items()
+                    if k in ('cluster', 'readers', 'conversion', 'downscale', 'metadata', 'concatenation')}
+        self._print_config_unified("Defaults", sections)
+        _console.print()
+
+    def show_configs(self) -> None:
+        """Display all named configs found in the config directory."""
+        configs = self.list_configs()
+        _console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
+        _console.print(f"[bold cyan]Named Configs  ({self._get_config_dir()})[/bold cyan]")
+        _console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
+        if not configs:
+            _console.print("[dim italic]  No named configs found.  "
+                           "Use save_as('<name>') to create one.[/dim italic]\n")
+            return
+        table = Table(
+            show_header=True, header_style="bold white on blue",
+            padding=(0, 1), border_style="blue",
+        )
+        table.add_column("Name", style="cyan", width=20)
+        table.add_column("Path", style="green")
+        for name, path in configs.items():
+            table.add_row(name, path)
+        _console.print(table)
+        _console.print()
+
+    def _print_config_unified(self, title: str, config_sections: dict) -> None:
+        table = Table(
+            title=title, title_style="bold cyan", show_header=True,
+            header_style="bold white on blue", padding=(0, 1), border_style="blue",
+        )
+        table.add_column("Section",   style="magenta", width=15)
+        # Sized to fit the longest parameter name (e.g.
+        # 'tensorstore_data_copy_concurrency', 33 chars) without cropping.
+        table.add_column("Parameter", style="cyan",    width=35, no_wrap=True)
+        table.add_column("Value",     style="green")
+        section_list = list(config_sections.items())
+        for idx, (section_name, section_dict) in enumerate(section_list):
+            is_first = True
+            for key, value in sorted(section_dict.items()):
+                if isinstance(value, bool):
+                    val_str = "[bold green]True[/]" if value else "[bold red]False[/]"
+                elif isinstance(value, dict):
+                    val_str = "[dim]" + str(value) + "[/dim]"
+                elif value is None:
+                    val_str = "[dim italic]None[/]"
+                else:
+                    val_str = str(value)
+                section_display = f"[bold magenta]{section_name.upper()}[/]" if is_first else ""
+                table.add_row(section_display, key, val_str)
+                is_first = False
+            if idx < len(section_list) - 1:
+                table.add_section()
+        _console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# ConfigureGroup — `eubi configure <section>` subcommands
+# ---------------------------------------------------------------------------
+
+class ConfigureGroup:
+    """Update a configuration section. Run ``eubi configure`` to list sections.
+
+    Subcommands:
+
+    * ``cluster``       - parallelism / cluster / JVM settings
+    * ``conversion``    - Zarr output, chunking, compression, dtype
+    * ``downscale``     - pyramid level count and per-axis scale factors
+    * ``readers``       - scene / view / illumination / mosaic selection
+    * ``concatenation`` - aggregative axes and filename tags
+    * ``metadata``      - metadata reader, channel names / colours / limits, pixel scales and units
+
+    Each subcommand updates only the arguments you pass; omitted arguments keep
+    their current values.  Example::
+
+        eubi configure cluster --max_processes 8
+    """
+
+    def __init__(self, config: 'ConfigManager'):
+        self._cfg = config
+
+    def cluster(self,
+                max_processes: int = 'default',
+                queue_size: int = 'default',
+                region_size_mb: int = 'default',
+                memory_budget: str = 'default',
+                max_threads: int = 'default',
+                max_concurrent_scenes: int = 'default',
+                max_concurrent_downscale_layers: int = 'default',
+                on_local_cluster: bool = 'default',
+                on_slurm: bool = 'default',
+                use_threading: bool = 'default',
+                tensorstore_data_copy_concurrency: int = 'default',
+                max_retries: int = 'default',
+                bioformats_threads: int = 'default',
+                decode_threads: int = 'default',
+                decode_memory: str = 'default',
+                bf_tile_size_mb: float = 'default',
+                jvm_memory: str = 'default',
+                slurm_time: str = 'default',
+                slurm_account: str = 'default',
+                slurm_partition: str = 'default',
+                slurm_worker_timeout: int = 'default',
+                slurm_sif_path: str = 'default',
+                slurm_worker_memory: str = 'default',
+                **kwargs) -> None:
+        """Update cluster / concurrency parameters. Omitted arguments keep their current values.
+
+        Args:
+            max_processes: Images converted at once, one per worker process
+                (default 4). Formerly ``max_workers``.
+            queue_size: Internal write-queue depth per worker (default 4).
+            region_size_mb: Size of one read region in MB, or ``'auto'`` (default):
+                each scene's write budget over 3 x its threads, 8 to 256 MB.
+            memory_budget: The memory the whole run may use on this machine, e.g.
+                ``'16GB'``, or ``'auto'`` (default): half the RAM free when it starts.
+                eubi shares it out: between the conversions running at once, then in
+                each between what the process already holds, reading
+                (``decode_memory``) and the scenes converted at once.
+            max_threads: Threads per conversion, each reading and writing one
+                region at a time (default 4). Scenes converted at once share them.
+                Formerly ``max_concurrency``.
+            max_concurrent_scenes: Parallel scenes within one file (default 1);
+                they share ``max_threads``. Increase only when writing a
+                multi-scene file to a large store.
+            max_concurrent_downscale_layers: Number of downscaled pyramid layers
+                written concurrently per scene (default 3).
+            on_local_cluster: DEPRECATED and ignored: conversions run in this
+                machine's worker processes.
+            on_slurm: Submit jobs to a SLURM cluster (default False; the full
+                eubi-bridge only).
+            use_threading: Use ThreadPool instead of ProcessPool (default False).
+            tensorstore_data_copy_concurrency: TensorStore internal copy threads
+                (default 4).
+            max_retries: Retries on broken worker process (default 10).
+            bioformats_threads: Threads for parallel Bio-Formats tile reads
+                (default 4).  ``None`` lets dask choose (cpu_count). Formerly
+                ``bf_read_concurrency``.
+            decode_threads: micro-reader's decode threads per worker process,
+                used with ``readers(pixel_reader='micro')`` (default 4). Formerly
+                ``micro_read_concurrency``.
+            decode_memory: micro-reader's decoding memory per process, e.g. ``'1GB'``,
+                or ``'auto'`` (default): what the file's decode unit needs, at least
+                64 MB and normally at most a quarter of the process's memory.
+            bf_tile_size_mb: DEPRECATED and ignored. Bio-Formats images are now
+                read one region at a time, so ``region_size_mb`` sets the read
+                size. Accepted for now so existing scripts keep working.
+            jvm_memory: Maximum JVM heap for Bio-Formats, e.g. ``'8GB'``, ``'4GB'``.
+                Accepts ``'NGB'`` / ``'NMB'`` (like memory_budget) and normalises
+                internally to JVM format (``'Ng'`` / ``'Nm'``).  Default ``'1g'``.
+            slurm_time: SLURM job wall-clock limit, e.g. ``'24:00:00'`` (used only
+                when on_slurm=True).
+            slurm_account: SLURM account/allocation to charge (default None).
+            slurm_partition: SLURM partition/queue to submit to (default None).
+            slurm_worker_timeout: Seconds to wait for SLURM workers to start
+                (default 300).
+            slurm_sif_path: Path to an Apptainer/Singularity SIF image to run
+                workers in (default None).
+            slurm_worker_memory: Each SLURM worker's memory, e.g. ``'8GB'`` (default
+                ``'3GB'``; used only when on_slurm=True): the SLURM job's memory, shared
+                by its conversions. Formerly ``memory_per_worker``.
+        """
+        args = {k: v for k, v in locals().items() if k not in ('self', 'kwargs')}
+        return self._cfg.configure_cluster(**args, **kwargs)
+
+    def readers(self,
+                as_mosaic: bool = 'default',
+                view_index: int = 'default',
+                phase_index: int = 'default',
+                illumination_index: int = 'default',
+                scene_index: int = 'default',
+                rotation_index: int = 'default',
+                mosaic_tile_index: int = 'default',
+                sample_index: int = 'default',
+                force_bioformats: bool = 'default',
+                concat_views: bool = 'default',
+                concat_illuminations: bool = 'default',
+                pixel_reader: str = 'default',
+                micro_check_pixels: bool = 'default') -> None:
+        """Update file-reader parameters. Omitted arguments keep their current values.
+
+        Args:
+            as_mosaic: Treat tiled acquisitions as a stitched mosaic (default False).
+            view_index: View index for multi-view formats (default 0). Pass ``'all'``
+                or a comma-separated list (e.g. ``'0,2'``) to expose multiple views.
+            phase_index: Phase index (default 0).
+            illumination_index: Illumination index (default 0). Pass ``'all'`` or a
+                comma-separated list to expose multiple illuminations.
+            scene_index: Scene / series index to read.  Pass an integer, ``'all'``,
+                or a comma-separated list such as ``'0,2,4'`` (default 0).
+            rotation_index: Rotation index (default 0).
+            mosaic_tile_index: Mosaic tile index.  Pass an integer, ``'all'``,
+                or a comma-separated list (default None = all tiles).
+            sample_index: Sample index (default 0).
+            force_bioformats: Force the Java Bio-Formats reader even for formats
+                EuBI-Bridge reads natively (CZI, ND2, LIF, IMS...); a fallback when a
+                native read fails.
+            concat_views: Stack multiple views along the channel axis instead of
+                writing separate OME-Zarr outputs (default False).
+            concat_illuminations: Stack multiple illuminations along the channel axis
+                instead of writing separate OME-Zarr outputs (default False).
+            pixel_reader: ``'micro'`` (default): read the pixels with
+                micro-reader (a file it does not read falls back to the
+                standard reader with a warning), or ``'standard'``.
+            micro_check_pixels: with ``pixel_reader='micro'``, also open the
+                standard reader and compare its pixels with micro-reader's
+                (slower; default False: checked against the metadata only).
+        """
+        return self._cfg.configure_readers(**{k: v for k, v in locals().items() if k != 'self'})
+
+    def conversion(self,
+                   ome_zarr_version: str = 'default',
+                   zarr_format: int = 'default',
+                   skip_dask: bool = 'default',
+                   auto_chunk: bool = 'default',
+                   target_chunk_mb: float = 'default',
+                   time_chunk: int = 'default',
+                   channel_chunk: int = 'default',
+                   z_chunk: int = 'default',
+                   y_chunk: int = 'default',
+                   x_chunk: int = 'default',
+                   time_shard_coef: int = 'default',
+                   channel_shard_coef: int = 'default',
+                   z_shard_coef: int = 'default',
+                   y_shard_coef: int = 'default',
+                   x_shard_coef: int = 'default',
+                   time_range: int = 'default',
+                   channel_range: int = 'default',
+                   z_range: int = 'default',
+                   y_range: int = 'default',
+                   x_range: int = 'default',
+                   compressor: str = 'default',
+                   compressor_params: dict = 'default',
+                   overwrite: bool = 'default',
+                   save_omexml: bool = 'default',
+                   export_acquisition_metadata: bool = 'default',
+                   squeeze: bool = 'default',
+                   dtype: str = 'default',
+                   verbose: bool = 'default',
+                   writer: str = 'default',
+                   io_backend: str = 'default') -> None:
+        """Update Zarr conversion parameters. Omitted arguments keep their current values.
+
+        Args:
+            ome_zarr_version: OME-Zarr (NGFF) version to write, e.g. ``'0.4'`` or
+                ``'0.5'``.  This is the preferred control and supersedes
+                ``zarr_format`` (the zarr container format is derived from it).
+            zarr_format: DEPRECATED zarr container version — ``2`` (default) or
+                ``3``.  Used only when ``ome_zarr_version`` is unset/unrecognised;
+                prefer ``ome_zarr_version``.
+            skip_dask: DEPRECATED and ignored: micro-reader reads without dask.
+                Accepted for now so existing scripts keep working.
+            auto_chunk: Auto-compute chunk shape from array size (default True).
+            target_chunk_mb: Target chunk size in MB when auto_chunk is True.
+            time_chunk / channel_chunk / z_chunk / y_chunk / x_chunk:
+                Manual per-axis chunk sizes (used when auto_chunk is False).
+            time_shard_coef / channel_shard_coef / z_shard_coef / y_shard_coef / x_shard_coef:
+                Shard-to-chunk multipliers for Zarr v3 sharding (default 3 on spatial axes).
+            time_range / channel_range / z_range / y_range / x_range:
+                Crop ranges as ``"start,stop"`` strings applied before writing.
+            compressor: Compression codec — ``'blosc'`` (default), ``'gzip'``,
+                ``'zstd'``, ``'bz2'``, or ``'none'``.
+            compressor_params: Dict of codec parameters, e.g.
+                ``{'cname': 'lz4', 'clevel': 5}``.
+            overwrite: Overwrite existing output zarr (default False).
+            dtype: Output dtype — ``'auto'`` keeps the source dtype, or any
+                NumPy dtype string such as ``'uint16'``.
+            squeeze: Remove singleton dimensions before writing (default True).
+            save_omexml: Write a companion OME-XML file alongside the zarr
+                (default True).
+            export_acquisition_metadata: Write acquisition metadata that NGFF has
+                no field for (view/illumination indices, objective NA,
+                per-channel emission) into the namespaced ``eubi_bridge`` attrs
+                block.  ``None``/unset means auto: enabled when the conversion
+                splits an acquisition into several containers, since that is when
+                the relationship between the pieces would otherwise be lost.
+            verbose: Log verbose progress output (default False).
+            writer: Which engine writes the OME-Zarr: ``'auto'`` (default),
+                ``'ozp'`` or ``'eubi'``. ``'ozp'`` is ome_zarr_pyramid on dyna-zarr:
+                the same output as eubi-bridge's own writer (``'eubi'``), with all
+                levels from one read of the source and lower peak memory.
+                ``'auto'`` uses ``'ozp'``, and ``'eubi'`` only where ozp cannot write
+                the output yet (kept resolution levels not named 0..n-1).
+            io_backend: The bytes backend of the ``'ozp'`` writer:
+                ``'tensorstore'`` (default) or ``'zarrista'`` (Rust, via zarrs;
+                ``pip install "dyna-zarr[zarrista]"``). With either, shards larger than
+                the region budget are written chunk by chunk in bounded memory (local
+                outputs).
+                Not available with ``writer='eubi'``.
+        """
+        return self._cfg.configure_conversion(**{k: v for k, v in locals().items() if k != 'self'})
+
+    def downscale(self,
+                  n_layers: int = 'default',
+                  min_dimension_size: int = 'default',
+                  time_scale_factor: int = 'default',
+                  channel_scale_factor: int = 'default',
+                  z_scale_factor: int = 'default',
+                  y_scale_factor: int = 'default',
+                  x_scale_factor: int = 'default',
+                  downscale_method: str = 'default',
+                  keep_existing_resolutions: bool = 'default',
+                  apply_smart_downscaling: bool = 'default',
+                  time_smart_scale_factor: int = 'default',
+                  z_smart_scale_factor: int = 'default',
+                  y_smart_scale_factor: int = 'default',
+                  x_smart_scale_factor: int = 'default') -> None:
+        """Update downscale parameters. Omitted arguments keep their current values.
+
+        Args:
+            n_layers: Number of downscale pyramid levels to generate. ``None``
+                (default) auto-derives the count from ``min_dimension_size``.
+            min_dimension_size: Stop adding levels when the smallest spatial
+                dimension falls below this pixel count (default 64).
+            time_scale_factor: Downscale factor along the time axis (default 1,
+                i.e. no downscaling).
+            channel_scale_factor: Downscale factor along the channel axis (default 1).
+            z_scale_factor: Downscale factor along the z axis (default 2).
+            y_scale_factor: Downscale factor along the y axis (default 2).
+            x_scale_factor: Downscale factor along the x axis (default 2).
+            downscale_method: Pixel aggregation method for downscaling — one of
+                'simple', 'mean', 'median', 'min', 'max', 'mode' (default 'simple').
+            keep_existing_resolutions: If the input format already carries its
+                own multiscale pyramid (e.g. ``.ims``, ``.zarr``), write each
+                existing resolution level straight to the output OME-Zarr
+                instead of rebuilding the pyramid with the above scale factors
+                (default False).
+            apply_smart_downscaling: Make the first pyramid level use
+                automatically-computed factors that drive the voxels toward
+                isotropy (default False).
+            time_smart_scale_factor: Per-axis override for smart downscaling on
+                the time axis (default None = auto).
+            z_smart_scale_factor: Per-axis smart-downscaling override for z.
+            y_smart_scale_factor: Per-axis smart-downscaling override for y.
+            x_smart_scale_factor: Per-axis smart-downscaling override for x.
+        """
+        return self._cfg.configure_downscale(**{k: v for k, v in locals().items() if k != 'self'})
+
+    def metadata(self,
+                 metadata_reader: str = 'default',
+                 override_channel_names: bool = 'default',
+                 channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = 'default',
+                 channel_colors: str = 'default',
+                 channel_labels: str = 'default',
+                 time_scale: float = 'default',
+                 z_scale: float = 'default',
+                 y_scale: float = 'default',
+                 x_scale: float = 'default',
+                 time_unit: str = 'default',
+                 z_unit: str = 'default',
+                 y_unit: str = 'default',
+                 x_unit: str = 'default') -> None:
+        """Update output metadata parameters. Omitted arguments keep their current values.
+
+        Args:
+            metadata_reader: Metadata backend — ``'micro'`` (default):
+                micro-reader's metadata, and its pixels with it (no JVM unless
+                a file falls back to Bio-Formats; also writes the stage
+                position as the NGFF translation and wavelengths in the
+                ``eubi_bridge`` attributes); ``'bfio'`` or ``'bioio'``.
+            override_channel_names: Replace channel names with ones derived from
+                the concatenation tag values (default False).
+            channel_intensity_limits: How to set OMERO window limits —
+                ``'from_dtype'`` (default) uses dtype min/max,
+                ``'from_array'`` computes per-channel min/max from pixel data,
+                ``'auto'`` gives a display window from a quick overview: the 0.1 and
+                99.9 percentiles of the smallest resolution level (the dtype's
+                range when that level is over 64 MB).
+            channel_colors: Per-channel colour overrides as
+                ``"0,FF0000;1,00FF00"``. Channels left out keep their source
+                colour, or are given one automatically.
+            channel_labels: Per-channel name overrides as ``"0,DAPI;1,GFP"``.
+            time_scale: Physical size of one time step. Unset keeps whatever the
+                source file states.
+            z_scale: Physical pixel size along z (e.g. ``0.5``). Unset keeps the
+                source value.
+            y_scale: Physical pixel size along y. Unset keeps the source value.
+            x_scale: Physical pixel size along x. Unset keeps the source value.
+            time_unit: Unit for ``time_scale`` (e.g. ``'second'``).
+            z_unit: Unit for ``z_scale`` (e.g. ``'micrometer'``).
+            y_unit: Unit for ``y_scale``.
+            x_unit: Unit for ``x_scale``.
+        """
+        return self._cfg.configure_metadata(**{k: v for k, v in locals().items() if k != 'self'})
+
+    def concatenation(self,
+                      concatenation_axes: Union[str, int, None] = 'default',
+                      time_tag: Union[str, tuple, None] = 'default',
+                      channel_tag: Union[str, tuple, None] = 'default',
+                      z_tag: Union[str, tuple, None] = 'default',
+                      y_tag: Union[str, tuple, None] = 'default',
+                      x_tag: Union[str, tuple, None] = 'default',
+                      aggregative_group: Union[str, None] = 'default') -> None:
+        """Update aggregative (concatenation) parameters. Omitted arguments keep their current values.
+
+        Args:
+            concatenation_axes: Axes along which to concatenate files.  Pass a
+                string of axis letters such as ``'tc'`` or ``'z'``, or an integer
+                axis index.  ``None`` disables aggregative mode entirely.
+            time_tag: Filename substring (or tuple of substrings) that identifies
+                a file as contributing to the time axis.
+            channel_tag: Filename substring (or tuple of substrings) identifying
+                the channel axis.
+            z_tag: Filename substring (or tuple of substrings) identifying the z
+                axis.
+            y_tag: Filename substring (or tuple of substrings) identifying the y
+                axis.
+            x_tag: Filename substring (or tuple of substrings) identifying the x
+                axis.
+            aggregative_group: Name prefixed to the concatenated output, so
+                several concatenated outputs from one run stay distinguishable.
+                In a conversion table, rows sharing this value are concatenated
+                together and a blank one converts on its own.  Prefer short
+                labels such as ``gr1`` or ``A``: it becomes part of the output
+                filename.
+        """
+        return self._cfg.configure_concatenation(**{k: v for k, v in locals().items() if k != 'self'})
+
+
+# ---------------------------------------------------------------------------
+# ConversionManager
+# ---------------------------------------------------------------------------
+
+class ConversionManager:
+    """Owns the conversion pipeline."""
+
+    def __init__(self, config: ConfigManager):
+        self._config = config
+
+    def to_zarr(self,
+                input_path,
+                output_path=None,
+                includes=None,
+                excludes=None,
+                time_tag: Union[str, tuple] = None,
+                channel_tag: Union[str, tuple] = None,
+                z_tag: Union[str, tuple] = None,
+                y_tag: Union[str, tuple] = None,
+                x_tag: Union[str, tuple] = None,
+                concatenation_axes: Union[int, tuple, str] = None,
+                aggregative_group: str = None,
+                max_processes: int = None,
+                max_retries: int = None,
+                tensorstore_data_copy_concurrency: int = None,
+                use_threading: bool = None,
+                on_slurm: bool = None,
+                on_local_cluster: bool = None,
+                plan: 'AggregativePlan | None' = None,
+                **kwargs) -> None:
+        """Convert image data to OME-Zarr format."""
+        _ensure_heavy_imports()
+
+        t0 = time.time()
+        logger.info("Conversion starting.")
+        if output_path is None:
+            # Without a global output path, every row must carry its own, which
+            # only a conversion table can express: a file on disk, or one handed
+            # over directly (the GUI batch queue runs without writing a CSV).
+            import pandas as pd
+            if not (isinstance(input_path, pd.DataFrame)
+                    or (isinstance(input_path, str)
+                        and input_path.endswith(tuple(TABLE_FORMATS)))):
+                raise ValueError(
+                    "output_path is required unless input_path is a conversion "
+                    "table (.csv/.tsv/.txt/.xlsx) whose rows carry their own "
+                    "output_path.")
+
+        # Collect CLI overrides (explicit non-None args take priority)
+        cli_kwargs = {k: v for k, v in dict(
+            max_processes=max_processes,
+            max_retries=max_retries,
+            tensorstore_data_copy_concurrency=tensorstore_data_copy_concurrency,
+            use_threading=use_threading,
+            on_slurm=on_slurm,
+            on_local_cluster=on_local_cluster,
+        ).items() if v is not None}
+        cli_kwargs.update(kwargs)
+        # Retired settings (config_models.RETIRED_SETTINGS): warned about once
+        # here, then dropped, so no job -- and no worker process -- sees them
+        cli_kwargs = drop_retired(cli_kwargs)
+        # Renamed settings (config_models.RENAMED_SETTINGS): the old names work
+        cli_kwargs = rename_settings(cli_kwargs)
+        kwargs = {k: v for k, v in rename_settings(kwargs).items() if k in cli_kwargs}
+
+        # Build effective params (config defaults merged with CLI overrides).
+        # Pydantic validates each section — catches bad CLI values early (Path 1).
+        cluster_p    = self._config._collect_params('cluster',    **cli_kwargs)
+        readers_p    = self._config._collect_params('readers',    **cli_kwargs)
+        conversion_p = self._config._collect_params('conversion', **cli_kwargs)
+        # Emit the zarr_format deprecation once, reflecting the user's actual
+        # choice (the model resolves the same mapping silently).  Consult
+        # cli_kwargs too: a stale config may lack the ome_zarr_version key, so a
+        # CLI override would otherwise be invisible here.
+        resolve_ome_zarr_target(
+            conversion_p.get('ome_zarr_version') or cli_kwargs.get('ome_zarr_version'),
+            conversion_p.get('zarr_format', 2), warn=True)
+        downscale_p  = self._config._collect_params('downscale',  **cli_kwargs)
+        metadata_p   = self._config._collect_params('metadata',   **cli_kwargs)
+        ClusterConfig(**cluster_p)
+        ReaderConfig(**readers_p)
+        ConversionConfig(**conversion_p)
+        DownscaleConfig(**downscale_p)
+        MetadataConfig(**metadata_p)
+        # The metadata readers every conversion will use: a conversion table
+        # (a batch) states its own per row
+        row_readers, any_forced = _row_metadata_readers(
+            input_path, metadata_p.get('metadata_reader'), readers_p.get('force_bioformats'))
+        # eubi-bridge-lite: what it lacks is refused here, before any work
+        from eubi_bridge.utils.capabilities import check_run
+        for reader in sorted(row_readers, key=str):
+            check_run(metadata_reader=reader,
+                      pixel_reader=readers_p.get('pixel_reader'),
+                      on_slurm=cluster_p.get('on_slurm', False),
+                      force_bioformats=any_forced)
+        # With micro-reader's metadata (and so its pixels) nothing may need
+        # Java: the JVM then starts only if a file falls back to Bio-Formats
+        from eubi_bridge.utils.jvm_manager import set_jvm_lazy, soft_start_jvm
+        set_jvm_lazy(row_readers == {'micro'} and not any_forced)
+        soft_start_jvm()
+
+        # Resolve concatenation params: call-time args take priority over config.
+        cli_concat = {k: v for k, v in dict(
+            concatenation_axes=concatenation_axes,
+            time_tag=time_tag, channel_tag=channel_tag,
+            z_tag=z_tag, y_tag=y_tag, x_tag=x_tag,
+            aggregative_group=aggregative_group,
+        ).items() if v is not None}
+        concat_p = self._config._collect_params('concatenation', **cli_concat)
+        ConcatenationConfig(**concat_p)
+
+        effective_concatenation_axes = concat_p['concatenation_axes']
+        effective_time_tag    = concat_p['time_tag']
+        effective_channel_tag = concat_p['channel_tag']
+        effective_z_tag       = concat_p['z_tag']
+        effective_y_tag       = concat_p['y_tag']
+        effective_x_tag       = concat_p['x_tag']
+        effective_aggregative_group = concat_p['aggregative_group']
+
+        merged = {**cluster_p, **readers_p, **conversion_p, **downscale_p,
+                  **metadata_p}
+        extra  = {k: v for k, v in kwargs.items() if k not in merged}
+        import pandas as _pd
+        if isinstance(input_path, _pd.DataFrame):
+            # An already-built table: take_filepaths uses it as-is, so there is
+            # no path here to normalise.
+            _input: Union[str, list, _pd.DataFrame] = input_path
+        elif isinstance(input_path, tuple):
+            _input = list(input_path)
+        elif isinstance(input_path, list):
+            _input = input_path
+        else:
+            _input = os.path.abspath(input_path)
+
+        # A conversion table may mix both kinds of job, so it is read before the
+        # branch below rather than after it: rows sharing an aggregative_group
+        # are concatenated together, the rest convert one-to-one.  Everything
+        # else (a directory, a glob, a file list) still picks one mode globally.
+        from eubi_bridge.utils.path_utils import (
+            AGGREGATIVE_GROUP_COLUMN, partition_by_group, take_filepaths)
+        import pandas as _pd
+
+        _is_table = isinstance(_input, _pd.DataFrame) or (
+            isinstance(_input, str) and _input.endswith(tuple(TABLE_FORMATS)))
+        _mixed_table = False
+        if _is_table:
+            _table = take_filepaths(
+                _input, output_path=output_path,
+                includes=includes, excludes=excludes,
+                **merged, **extra,
+            )
+            _mixed_table = AGGREGATIVE_GROUP_COLUMN in _table.columns
+
+        if _mixed_table:
+            self._run_mixed_table(
+                _table, output_path=output_path,
+                cluster_p=cluster_p, readers_p=readers_p,
+                conversion_p=conversion_p, downscale_p=downscale_p,
+                metadata_p=metadata_p, concat_p=concat_p,
+                merged=merged, extra=extra,
+                includes=includes, excludes=excludes,
+            )
+        elif effective_concatenation_axes is not None:
+            from eubi_bridge.conversion.dispatcher import dispatch_aggregative_job
+            job = AggregativeConversionJob(
+                input_path=_input,
+                output_path=str(output_path) if output_path is not None else "",
+                cluster=ClusterConfig(**cluster_p),
+                readers=ReaderConfig(**readers_p),
+                conversion=ConversionConfig(**conversion_p),
+                downscale=DownscaleConfig(**downscale_p),
+                metadata=MetadataConfig(**metadata_p),
+                concatenation_axes=effective_concatenation_axes,
+                time_tag=effective_time_tag,
+                channel_tag=effective_channel_tag,
+                z_tag=effective_z_tag,
+                y_tag=effective_y_tag,
+                x_tag=effective_x_tag,
+                aggregative_group=effective_aggregative_group,
+                includes=includes,
+                excludes=excludes,
+                extra=extra,
+            )
+            dispatch_aggregative_job(job, plan=plan)
+        else:
+            # Unary path — build one validated ConversionJob per file here in
+            # ebridge.py so the dispatcher receives already-validated objects.
+            # CSV row params (Stage 2 triage) are validated here too (Path 2).
+            from eubi_bridge.core.config_models import ConversionJob
+
+            df = _table if _is_table else take_filepaths(
+                _input, output_path=output_path,
+                includes=includes, excludes=excludes,
+                **merged, **extra,
+            )
+            # Two inputs sharing a basename would target one output — the
+            # second either refused (overwrite=False) or destroying the first
+            # (overwrite=True).  Give the colliding ones a parent-directory
+            # prefix so every job writes somewhere distinct.
+            from eubi_bridge.utils.path_utils import disambiguate_output_names
+            unique_names = disambiguate_output_names(
+                [str(p) for p in df['input_path'].tolist()])
+
+            jobs = []
+            for _, row in df.iterrows():
+                row_dict = row.to_dict()
+                ip  = row_dict.pop('input_path')
+                op  = row_dict.pop('output_path', None) or output_path
+                # Drop NaN/None CSV cells so they don't shadow global values
+                row_overrides = {k: v for k, v in row_dict.items()
+                                 if v is not None and v == v}  # v==v filters NaN
+                row_overrides = _normalise_row_overrides(row_overrides)
+                per_job = {**merged, **extra, **row_overrides}
+                jobs.append(ConversionJob.from_kwargs(
+                    ip, op, per_job,
+                    resolved_basename=unique_names.get(str(ip))))
+
+            from eubi_bridge.conversion.dispatcher import dispatch_unary_jobs
+            dispatch_unary_jobs(jobs)
+
+        logger.info("Conversion complete for all datasets.")
+        logger.info(f"Elapsed for conversion + downscaling: {(time.time() - t0) / 60:.2f} min.")
+
+    def _run_mixed_table(self, table, *, output_path, cluster_p, readers_p,
+                         conversion_p, downscale_p, metadata_p, concat_p,
+                         merged, extra, includes, excludes) -> None:
+        """Run a conversion table that may contain both kinds of job.
+
+        Rows sharing an ``aggregative_group`` become one concatenated output;
+        rows with a blank group convert one-to-one.  Both run from the same
+        table, which is the point of the column: a batch should not have to be
+        split by hand into two separate runs.
+        """
+        from eubi_bridge.conversion.dispatcher import dispatch_mixed_jobs
+        from eubi_bridge.core.config_models import ConversionJob
+        from eubi_bridge.utils.path_utils import (
+            AGGREGATIVE_GROUP_COLUMN, PER_GROUP_CONCAT_KEYS,
+            concat_without_group_problems, disambiguate_output_names,
+            partition_by_group, resolve_group_concat_params)
+
+        # Caught before anything is dispatched: a row with axes but no group
+        # converts one-to-one, so the run would quietly produce something other
+        # than the table describes.  A hand-written CSV reaches here without
+        # passing any GUI check, which is why the guard lives on this path.
+        problems = concat_without_group_problems(table, concat_p)
+        if problems:
+            raise ValueError("\n".join(problems))
+
+        unary_rows, groups = partition_by_group(table)
+
+        def _row_overrides(row_dict: dict) -> dict:
+            # Drop NaN/None cells so they cannot shadow the global value.
+            clean = {k: v for k, v in row_dict.items()
+                     if v is not None and v == v}      # v == v filters NaN
+            clean.pop(AGGREGATIVE_GROUP_COLUMN, None)
+            return _normalise_row_overrides(clean)
+
+        # ── one-to-one rows ──────────────────────────────────────────────────
+        unary_jobs = []
+        if len(unary_rows):
+            unique_names = disambiguate_output_names(
+                [str(path) for path in unary_rows["input_path"].tolist()])
+            for _, row in unary_rows.iterrows():
+                row_dict = row.to_dict()
+                inp = row_dict.pop("input_path")
+                out = row_dict.pop("output_path", None) or output_path
+                unary_jobs.append(ConversionJob.from_kwargs(
+                    inp, out, {**merged, **extra, **_row_overrides(row_dict)},
+                    resolved_basename=unique_names.get(str(inp))))
+
+        # ── aggregative groups ───────────────────────────────────────────────
+        aggregative_jobs = []
+        for group_id, group_rows in groups:
+            first = group_rows.iloc[0].to_dict()
+            paths = [str(path) for path in group_rows["input_path"].tolist()]
+            out = first.get("output_path") or output_path
+            # Concatenation settings describe the group as a whole, so they are
+            # resolved across all of its rows and a disagreement is refused.
+            concat = resolve_group_concat_params(group_id, group_rows, concat_p)
+            # Everything else still comes from the first row: those settings
+            # describe one output, so a per-row difference has nothing to apply
+            # to.  The concatenation keys are dropped here to keep the resolved
+            # values above authoritative.
+            overrides = _row_overrides({
+                k: v for k, v in first.items()
+                if k not in ("input_path", "output_path")
+                and k not in PER_GROUP_CONCAT_KEYS})
+            aggregative_jobs.append(AggregativeConversionJob(
+                input_path=paths,
+                output_path=str(out) if out is not None else "",
+                aggregative_group=str(group_id),
+                cluster=ClusterConfig(**{**cluster_p, **overrides}),
+                readers=ReaderConfig(**{**readers_p, **overrides}),
+                conversion=ConversionConfig(**{**conversion_p, **overrides}),
+                downscale=DownscaleConfig(**{**downscale_p, **overrides}),
+                metadata=MetadataConfig(**{**metadata_p, **overrides}),
+                concatenation_axes=concat["concatenation_axes"],
+                time_tag=concat["time_tag"],
+                channel_tag=concat["channel_tag"],
+                z_tag=concat["z_tag"],
+                y_tag=concat["y_tag"],
+                x_tag=concat["x_tag"],
+                includes=includes,
+                excludes=excludes,
+                extra=extra,
+            ))
+
+        logger.info(
+            f"Conversion table: {len(unary_jobs)} one-to-one job(s), "
+            f"{len(aggregative_jobs)} aggregative group(s).")
+
+        # one pool for both kinds, running at the same time (roadmap step 3; on SLURM
+        # and on the old path they still run one after the other)
+        dispatch_mixed_jobs(unary_jobs, aggregative_jobs)
+
+
+    def validate_aggregative(
+        self,
+        input_path: Union[str, Path],
+        output_path: Union[str, Path, None] = None,
+        includes: Optional[str] = None,
+        excludes: Optional[str] = None,
+        time_tag: Union[str, tuple, None] = None,
+        channel_tag: Union[str, tuple, None] = None,
+        z_tag: Union[str, tuple, None] = None,
+        y_tag: Union[str, tuple, None] = None,
+        x_tag: Union[str, tuple, None] = None,
+        concatenation_axes: Union[str, int, None] = None,
+        **kwargs,
+    ) -> AggregativePlan:
+        """Dry-run an aggregative conversion and return a resource plan.
+
+        Determines output groups via pure filename matching (no data loaded),
+        then reads one file header per group to estimate shapes and sizes.
+        The returned :class:`AggregativePlan` can be passed to
+        :meth:`to_zarr` to skip re-planning and apply the pre-computed
+        worker allocation.
+
+        Args:
+            (same parameters as :meth:`to_zarr` with ``concatenation_axes``)
+
+        Returns:
+            :class:`AggregativePlan` with per-output metadata and
+            recommended ``file_workers`` / ``region_workers``.
+        """
+        from eubi_bridge.utils.path_utils import take_filepaths
+        from eubi_bridge.conversion.dispatcher import (
+            _parse_filepaths_with_tags, _build_aggregative_plan,
+        )
+
+        cli_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        cluster_p    = self._config._collect_params('cluster',    **cli_kwargs)
+        readers_p    = self._config._collect_params('readers',    **cli_kwargs)
+        conversion_p = self._config._collect_params('conversion', **cli_kwargs)
+        # Emit the zarr_format deprecation once, reflecting the user's actual
+        # choice (the model resolves the same mapping silently).  Consult
+        # cli_kwargs too: a stale config may lack the ome_zarr_version key, so a
+        # CLI override would otherwise be invisible here.
+        resolve_ome_zarr_target(
+            conversion_p.get('ome_zarr_version') or cli_kwargs.get('ome_zarr_version'),
+            conversion_p.get('zarr_format', 2), warn=True)
+        downscale_p  = self._config._collect_params('downscale',  **cli_kwargs)
+        merged = {**cluster_p, **readers_p, **conversion_p, **downscale_p}
+        extra  = {k: v for k, v in kwargs.items() if k not in merged}
+
+        cli_concat = {k: v for k, v in dict(
+            concatenation_axes=concatenation_axes,
+            time_tag=time_tag, channel_tag=channel_tag,
+            z_tag=z_tag, y_tag=y_tag, x_tag=x_tag,
+        ).items() if v is not None}
+        concat_p = self._config._collect_params('concatenation', **cli_concat)
+
+        _input = (input_path if isinstance(input_path, (list, tuple))
+                  else os.path.abspath(input_path))
+
+        df = take_filepaths(
+            _input, output_path=output_path,
+            includes=includes, excludes=excludes,
+            **merged, **extra,
+        )
+        filepaths = df.input_path.to_numpy().tolist()
+
+        eff_tags = [concat_p['time_tag'], concat_p['channel_tag'],
+                    concat_p['z_tag'], concat_p['y_tag'], concat_p['x_tag']]
+        filepaths_accepted = _parse_filepaths_with_tags(filepaths, eff_tags)
+        from eubi_bridge.conversion import aggregative_path, pyramid_path
+        if pyramid_path.enabled():
+            # by name, before grouping: OME companions left out, mixed formats refused
+            filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
+
+        common_dir  = os.path.commonpath(filepaths_accepted)
+        output_base = output_path or common_dir
+        max_processes = cluster_p.get('max_processes', 4)
+
+        return _build_aggregative_plan(
+            filepaths_accepted,
+            concatenation_axes=concat_p['concatenation_axes'],
+            common_dir=common_dir,
+            output_path=output_base,
+            max_processes=max_processes,
+            time_tag=concat_p['time_tag'],
+            channel_tag=concat_p['channel_tag'],
+            z_tag=concat_p['z_tag'],
+            y_tag=concat_p['y_tag'],
+            x_tag=concat_p['x_tag'],
+        )
+
+
+# ---------------------------------------------------------------------------
+# MetadataManager
+# ---------------------------------------------------------------------------
+
+class MetadataManager:
+    """Metadata inspection and update for existing OME-Zarr files."""
+
+    def __init__(self, config: ConfigManager):
+        self._config = config
+
+    # ── shared rendering helper ───────────────────────────────────────────
+
+    @staticmethod
+    def _render_metadata(metadata_list: list, console: Console) -> None:
+        """Render *metadata_list* to *console* (any Rich Console instance)."""
+        _ax = {'t': 'time', 'c': 'channels', 'z': 'z', 'y': 'y', 'x': 'x'}
+        console.print("\n[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]")
+        console.print("[bold cyan]Image Metadata Summary[/bold cyan]")
+        console.print("[bold cyan]═══════════════════════════════════════════════════════[/bold cyan]\n")
+        for idx, metadata in enumerate(metadata_list):
+            if idx > 0:
+                console.print("[cyan]" + "─" * 100 + "[/cyan]")
+            if metadata.get('status') == 'error':
+                console.print(f"[red bold]File:[/red bold] {Path(metadata.get('input_path', 'Unknown')).name}")
+                console.print(f"[red]ERROR:[/red] {metadata.get('error', 'Unknown error')}\n")
+                continue
+            axes     = metadata.get('axes', 'Unknown')
+            shape    = metadata.get('shape', {})
+            scale    = metadata.get('scale', {})
+            units    = metadata.get('units', {})
+            dtype    = metadata.get('dtype', 'Unknown')
+            channels = metadata.get('channels', [])
+
+            console.print(f"[magenta bold]File:[/magenta bold] {_wrap_text(metadata['input_path'], 90)}")
+            console.print(
+                "[yellow bold]Shape:[/yellow bold]\n" +
+                '\n'.join(f"  {_ax.get(ax, ax)}: {shape.get(ax, '?')}" for ax in axes)
+            )
+            scale_lines = []
+            for ax in axes:
+                if ax == 'c':
+                    continue
+                sv, uv = scale.get(ax, '?'), units.get(ax, '')
+                label = _ax.get(ax, ax)
+                scale_lines.append(
+                    f"  {label}: {_format_scale_value(sv)} {uv}".rstrip() if sv != '?' else f"  {label}: ?"
+                )
+            console.print("[green bold]Scale & Units:[/green bold]\n" + '\n'.join(scale_lines))
+            console.print(f"[white bold]Data Type:[/white bold] {dtype}")
+            if channels:
+                console.print("[bright_magenta bold]Channels:[/bright_magenta bold]")
+                for i, ch in enumerate(channels):
+                    lbl   = ch.get('label', f"Channel {i}")
+                    color = ch.get('color') or "None"
+                    console.print(f"  [{i}] Label: {_wrap_text(lbl, 80)}, Color: {color}")
+            else:
+                console.print("[bright_magenta bold]Channels:[/bright_magenta bold] None")
+            console.print()
+        console.print("[cyan]" + "═" * 100 + "[/cyan]")
+        console.print()
+
+    # ── public methods ────────────────────────────────────────────────────
+
+    def show_pixel_meta(self,
+                        input_path: Union[Path, str],
+                        includes=None,
+                        excludes=None,
+                        series: int = None,
+                        output_file: str = None,
+                        **kwargs) -> None:
+        """Display pixel-level and channel metadata for all datasets in *input_path*.
+
+        Args:
+            input_path: Path to input file or directory.
+            includes: Filename patterns to include (comma-separated).
+            excludes: Filename patterns to exclude (comma-separated).
+            series: Series index. Defaults to configured scene_index.
+            output_file: Save output as plain text (any ext) or HTML (.html).
+        """
+        import asyncio
+        from eubi_bridge.utils.path_utils import take_filepaths
+
+        df = None
+        try:
+            df = take_filepaths(input_path, **kwargs)
+            all_zarr   = all(p.endswith('.zarr') for p in df['input_path'])
+            zarr_paths = df['input_path'].tolist() if all_zarr else None
+        except (ValueError, KeyError):
+            all_zarr, zarr_paths = False, None
+
+        if all_zarr:
+            logger.info(f"Fast path: reading metadata from {len(zarr_paths)} OME-Zarr files.")
+            from eubi_bridge.utils.metadata_utils import read_ome_zarr_metadata_from_collection
+            metadata_list = asyncio.run(read_ome_zarr_metadata_from_collection(zarr_paths))
+        else:
+            _ensure_heavy_imports()
+            from eubi_bridge.utils.jvm_manager import set_jvm_lazy, soft_start_jvm
+            # micro-reader's metadata: the JVM starts only if a file needs Bio-Formats
+            metadata_reader = self._config._collect_params('metadata', **kwargs).get(
+                'metadata_reader')
+            set_jvm_lazy(metadata_reader == 'micro')
+            if soft_start_jvm() == "started":
+                logger.info("Non-Zarr files detected — JVM started for Bio-Formats.")
+            cluster_p    = self._config._collect_params('cluster',    **kwargs)
+            readers_p    = self._config._collect_params('readers',    **kwargs)
+            conversion_p = self._config._collect_params('conversion', **kwargs)
+            resolve_ome_zarr_target(
+                conversion_p.get('ome_zarr_version') or kwargs.get('ome_zarr_version'),
+                conversion_p.get('zarr_format', 2), warn=True)
+            if series is None:
+                series = readers_p['scene_index']
+            from eubi_bridge.conversion import pyramid_path
+            combined = {
+                **cluster_p, **readers_p, **conversion_p,
+                # the 0.2.0 path: the configured metadata reader, as a conversion reads
+                # the file (the old path always read with bfio here)
+                **({'metadata_reader': metadata_reader} if pyramid_path.enabled() else {}),
+                'series': series,
+                'use_threading': True,
+                'max_processes': min(16, max(8, len(df['input_path']) if df is not None else 8)),
+            }
+            extra = {k: v for k, v in kwargs.items() if k not in combined}
+            from eubi_bridge.conversion.dispatcher import run_metadata_collection_from_filepaths
+            metadata_list = asyncio.run(run_metadata_collection_from_filepaths(
+                input_path, includes=includes, excludes=excludes, **combined, **extra,
+            ))
+
+        # Render to stdout always
+        self._render_metadata(metadata_list, _console)
+
+        if output_file:
+            if output_file.lower().endswith('.html'):
+                html_con = Console(record=True, width=100, force_terminal=True, legacy_windows=False)
+                self._render_metadata(metadata_list, html_con)
+                with open(output_file, 'w') as f:
+                    f.write(html_con.export_html())
+                logger.info(f"Metadata saved to {output_file} (HTML)")
+            else:
+                with open(output_file, 'w') as f:
+                    self._render_metadata(
+                        metadata_list,
+                        Console(file=f, width=100, force_terminal=True, legacy_windows=False),
+                    )
+                logger.info(f"Metadata saved to {output_file} (text)")
+
+    def update_pixel_meta(self,
+                          input_path: Union[Path, str],
+                          includes=None,
+                          excludes=None,
+                          time_scale: Union[int, float, None] = None,
+                          z_scale: Union[int, float, None] = None,
+                          y_scale: Union[int, float, None] = None,
+                          x_scale: Union[int, float, None] = None,
+                          time_unit: Union[str, None] = None,
+                          z_unit: Union[str, None] = None,
+                          y_unit: Union[str, None] = None,
+                          x_unit: Union[str, None] = None,
+                          **kwargs) -> None:
+        """Update pixel-scale and unit metadata on existing OME-Zarr files."""
+        from eubi_bridge.conversion.updater import run_updates
+        combined = {
+            **self._config._collect_params('cluster',    **kwargs),
+            **self._config._collect_params('readers',    **kwargs),
+            **self._config._collect_params('conversion', **kwargs),
+        }
+        # the windows stay as they are ('auto' sets them from the data, as conversions do)
+        combined['channel_intensity_limits'] = 'keep'
+        # metadata_reader moved to the 'metadata' section, which is not
+        # collected wholesale here: its scales/units are the arguments above.
+        combined['metadata_reader'] = self._config._collect_params(
+            'metadata', **kwargs)['metadata_reader']
+        extra = {k: v for k, v in kwargs.items() if k not in combined}
+        pixel_meta = {k: v for k, v in dict(
+            time_scale=time_scale, z_scale=z_scale, y_scale=y_scale, x_scale=x_scale,
+            time_unit=time_unit,   z_unit=z_unit,   y_unit=y_unit,   x_unit=x_unit,
+        ).items() if v is not None}
+        run_updates(input_path, includes=includes, excludes=excludes,
+                    **combined, **pixel_meta, **extra)
+
+    def update_channel_meta(self,
+                            input_path: Union[Path, str],
+                            channel_labels: str = '',
+                            channel_colors: str = '',
+                            channel_intensity_limits=None,
+                            includes=None,
+                            excludes=None,
+                            **kwargs) -> None:
+        """Update channel label, color, and intensity metadata on existing OME-Zarr files.
+        The display windows stay as they are unless channel_intensity_limits is given."""
+        from eubi_bridge.conversion.updater import run_updates
+        combined = {
+            **self._config._collect_params('cluster',    **kwargs),
+            **self._config._collect_params('readers',    **kwargs),
+            **self._config._collect_params('conversion', **kwargs),
+        }
+        # Both keys live in the 'metadata' section now, so collecting
+        # 'conversion' silently dropped them.  The section is not merged
+        # wholesale: its channel_labels/colors are this method's own arguments.
+        # not given: the windows stay as they are (eubi-bridge 0.1.x reset them to the
+        # dtype's range on every update, a renamed channel included)
+        combined['channel_intensity_limits'] = channel_intensity_limits or 'keep'
+        combined['metadata_reader'] = self._config._collect_params(
+            'metadata', **kwargs)['metadata_reader']
+        extra = {k: v for k, v in kwargs.items() if k not in combined}
+        channel_meta = {k: v for k, v in dict(
+            channel_labels=channel_labels, channel_colors=channel_colors,
+        ).items() if v}
+        run_updates(os.path.abspath(input_path),
+                    includes=includes, excludes=excludes,
+                    **combined, **channel_meta, **extra)
+
+
+# ---------------------------------------------------------------------------
+# EuBIBridge — thin shell
+# ---------------------------------------------------------------------------
+
+class EuBIBridge:
+    """Entry point for EuBI-Bridge.
+
+    Composes :class:`ConfigManager`, :class:`ConversionManager`, and
+    :class:`MetadataManager`.  All public methods delegate to the appropriate
+    manager; signatures are preserved so the Fire CLI and existing call sites
+    continue to work unchanged.
+    """
+
+    def __init__(self, configpath: str = None):
+        # the config folder: given, else EUBI_CONFIG_DIR, else ~/.eubi_bridge
+        # (resolved now, not when this module was imported)
+        configpath = (configpath or os.environ.get("EUBI_CONFIG_DIR")
+                      or f"{os.path.expanduser('~')}/.eubi_bridge")
+        self._cfg      = ConfigManager(configpath)
+        self._conv     = ConversionManager(self._cfg)
+        self._meta     = MetadataManager(self._cfg)
+        self._dask_temp_dir = None
+
+    # ── backward-compat attribute ─────────────────────────────────────────
+
+    @property
+    def root_defaults(self) -> dict:
+        return self._cfg._ROOT_DEFAULTS
+
+    # ── config pass-throughs ──────────────────────────────────────────────
+
+    @property
+    def config(self) -> dict:
+        return self._cfg.config
+
+    @config.setter
+    def config(self, value: dict) -> None:
+        self._cfg.config = value
+
+    @property
+    def configure(self) -> 'ConfigureGroup':
+        """Configuration subcommands — ``eubi configure cluster / conversion / downscale / readers / concatenation / metadata``.
+
+        Run ``eubi configure`` with no subcommand to list the available
+        sections.  Bound to the active config so it composes with
+        ``with_config``::
+
+            eubi configure cluster --max_processes 8
+            eubi with_config hpc configure conversion --ome_zarr_version 0.5
+        """
+        return ConfigureGroup(self._cfg)
+
+    # ── named-config pass-throughs ────────────────────────────────────────
+
+    def with_config(self, name: str) -> 'EuBIBridge':
+        """Return a new EuBIBridge backed by the named config file.
+
+        All parameters in the named config are used as defaults; any
+        arguments passed directly to ``to_zarr()`` (or other commands) still
+        take priority.  Designed for Fire chaining::
+
+            eubi with_config hpc to_zarr input/ output/
+
+        Args:
+            name: Name of a saved config profile (without the ``.json``
+                extension), e.g. ``hpc``.  Must already exist — create profiles
+                with ``save_as`` or ``update_config --create``.
+        """
+        new_cfg = self._cfg.with_config(name)
+        new_bridge = EuBIBridge.__new__(EuBIBridge)
+        new_bridge._cfg  = new_cfg
+        new_bridge._conv = ConversionManager(new_cfg)
+        new_bridge._meta = MetadataManager(new_cfg)
+        new_bridge._dask_temp_dir = None
+        return new_bridge
+
+    def list_configs(self) -> dict:
+        """Return ``{name: path}`` for all named configs in the config directory."""
+        return self._cfg.list_configs()
+
+    def save_as(self, name: str) -> None:
+        """Save the current config as a named config file.
+
+        Args:
+            name: Profile name to save under (without the ``.json`` extension),
+                e.g. ``hpc``.  May contain only letters, digits, hyphens, and
+                underscores.  Overwrites an existing profile of the same name.
+        """
+        return self._cfg.save_as(name)
+
+    def update_config(self, name_or_path: str, create: bool = False) -> None:
+        """Copy the current config into a named config or an explicit file path.
+
+        Typical use: propagate default-config edits to a named config::
+
+            eubi configure cluster --max_processes 64   # edits .eubi_config.json
+            eubi update_config hpc                     # copies it to hpc.json
+
+        Note: ``with_config hpc configure cluster ...`` already writes directly
+        to hpc.json, so ``update_config`` is not needed in that flow.
+
+        Args:
+            name_or_path: Target to write the current config into.  A bare name
+                (e.g. ``hpc``) is resolved in the named-config registry; a value
+                containing a path separator or ending in ``.json`` is treated as
+                a literal filesystem path.
+            create: When True, create the target profile / file if it does not
+                already exist (default False raises if missing).
+        """
+        return self._cfg.update_config(name_or_path, create=create)
+
+    def delete_config(self, name: str) -> None:
+        """Permanently delete a named config file from the config directory.
+
+        The active (default) config is not affected.  Only named configs
+        created with ``save_as`` or ``update_config --create`` can be deleted
+        this way.
+
+        Args:
+            name: Short name of the config to delete (without the ``.json``
+                extension), e.g. ``hpc``.
+        """
+        return self._cfg.delete_config(name)
+
+    def show_configs(self) -> None:
+        """List all named config files found in the config directory.
+
+        Prints a table of ``{name: path}`` entries.  Use ``with_config NAME``
+        to activate one of them for a single command, or ``save_as`` /
+        ``update_config`` to manage them.
+        """
+        return self._cfg.show_configs()
+
+    def _get_json_path(self) -> Path:
+        """Return the resolved path to the JSON config file."""
+        return self._cfg._get_json_path()
+
+    def reset_config(self) -> None:
+        """Reset all parameters in the active config to installation defaults.
+
+        Overwrites the active ``.eubi_config.json`` with the bundled root
+        defaults.  Named configs (``hpc.json``, etc.) are not affected.
+        Use ``show_root_defaults`` to inspect the values that will be written.
+        """
+        return self._cfg.reset_config()
+
+    def show_config(self, name: str = None) -> None:
+        """Display the active configuration, or a specific named config.
+
+        With no arguments, prints the current ``.eubi_config.json``.
+        Pass a name to inspect a saved config without activating it.
+
+        Args:
+            name: Named config to display (e.g. ``hpc``).  If omitted,
+                the active (default) config is shown.
+        """
+        return self._cfg.show_config(name=name)
+
+    def show_root_defaults(self) -> None:
+        """Display the installation defaults for all configuration parameters.
+
+        These are the values that ``reset_config`` will restore.  Useful as a
+        reference when tuning cluster or conversion settings.
+        """
+        return self._cfg.show_root_defaults()
+
+    # ── conversion pass-throughs ─────────────────────────────────────────
+
+    def to_zarr(
+        self,
+        input_path: Union[str, Path],
+        output_path: Union[str, Path, None] = None,
+        includes: Optional[str] = None,
+        excludes: Optional[str] = None,
+        time_tag: Union[str, tuple, None] = None,
+        channel_tag: Union[str, tuple] = None,
+        z_tag: Union[str, tuple] = None,
+        y_tag: Union[str, tuple] = None,
+        x_tag: Union[str, tuple] = None,
+        concatenation_axes: Union[int, tuple, str] = None,
+        aggregative_group: Optional[str] = None,
+        max_processes: int = None,
+        max_retries: int = None,
+        tensorstore_data_copy_concurrency: int = None,
+        use_threading: bool = None,
+        on_slurm: bool = None,
+        on_local_cluster: bool = None,
+        plan: 'AggregativePlan | None' = None,
+        **kwargs,
+    ) -> None:
+        """Convert image data to OME-Zarr format.
+
+        Args:
+            input_path: File path, directory, or table (.csv/.tsv/.xlsx) of paths.
+            output_path: Destination directory.  Required unless input_path is a
+                table that already contains an output_path column.
+            includes: Comma-separated filename patterns to include (glob-style).
+            excludes: Comma-separated filename patterns to exclude (glob-style).
+            time_tag: Filename tag identifying the time axis (aggregative only).
+            channel_tag: Filename tag identifying the channel axis.
+            z_tag: Filename tag identifying the z axis.
+            y_tag: Filename tag identifying the y axis.
+            x_tag: Filename tag identifying the x axis.
+            concatenation_axes: Axes to concatenate across files, e.g. ``'tc'``.
+                If omitted the config value is used; ``None`` means unary conversion.
+            max_processes: Override the configured max_processes (images converted
+                at once) for this run. Formerly ``max_workers``, which still works.
+            max_retries: Override the configured max_retries.
+            tensorstore_data_copy_concurrency: TensorStore internal copy threads.
+            use_threading: Use a ThreadPool instead of a ProcessPool.
+            on_slurm: Submit jobs to a SLURM cluster (the full eubi-bridge only).
+            on_local_cluster: DEPRECATED and ignored.
+            aggregative_group: Name prefixed to the concatenated output, so
+                several concatenated outputs stay distinguishable.  In a
+                conversion table, rows sharing this value are concatenated
+                together and a blank one converts on its own.  Prefer short
+                labels such as ``gr1`` or ``A``: it becomes part of the output
+                filename.
+            plan: Pre-computed AggregativePlan from validate_aggregative().
+            **kwargs: Any ReaderConfig / ConversionConfig / DownscaleConfig field
+                overrides (e.g. ``zarr_format=3``, ``z_chunk=64``,
+                ``region_size_mb=512``, ``jvm_memory='8GB'``,
+                ``force_bioformats=True``).
+        """
+        return self._conv.to_zarr(
+            input_path, output_path, includes, excludes,
+            time_tag, channel_tag, z_tag, y_tag, x_tag,
+            concatenation_axes=concatenation_axes,
+            aggregative_group=aggregative_group,
+            max_processes=max_processes, max_retries=max_retries,
+            tensorstore_data_copy_concurrency=tensorstore_data_copy_concurrency,
+            use_threading=use_threading, on_slurm=on_slurm,
+            on_local_cluster=on_local_cluster, plan=plan, **kwargs,
+        )
+
+    def validate_aggregative(
+        self,
+        input_path: Union[str, Path],
+        output_path: Union[str, Path, None] = None,
+        includes: Optional[str] = None,
+        excludes: Optional[str] = None,
+        time_tag: Union[str, tuple, None] = None,
+        channel_tag: Union[str, tuple, None] = None,
+        z_tag: Union[str, tuple, None] = None,
+        y_tag: Union[str, tuple, None] = None,
+        x_tag: Union[str, tuple, None] = None,
+        concatenation_axes: Union[str, int, None] = None,
+        **kwargs,
+    ) -> AggregativePlan:
+        """Dry-run an aggregative conversion and print the resource plan.
+
+        Determines output groups and worker allocation without reading any pixel
+        data.  Prints a human-readable summary and returns the plan object so it
+        can be passed to :meth:`to_zarr` to skip re-planning.
+
+        Args:
+            input_path: File path, directory, or table of paths.
+            output_path: Destination directory.
+            includes: Comma-separated filename patterns to include.
+            excludes: Comma-separated filename patterns to exclude.
+            time_tag: Filename substring (or tuple of substrings) identifying the
+                time axis.
+            channel_tag: Filename substring (or tuple of substrings) identifying
+                the channel axis.
+            z_tag: Filename substring (or tuple of substrings) identifying the z
+                axis.
+            y_tag: Filename substring (or tuple of substrings) identifying the y
+                axis.
+            x_tag: Filename substring (or tuple of substrings) identifying the x
+                axis.
+            concatenation_axes: Axes to concatenate, e.g. ``'c'``.
+            **kwargs: Additional conversion parameters.
+
+        Returns:
+            AggregativePlan with output groups and recommended worker counts.
+        """
+        plan = self._conv.validate_aggregative(
+            input_path, output_path, includes, excludes,
+            time_tag, channel_tag, z_tag, y_tag, x_tag,
+            concatenation_axes, **kwargs,
+        )
+        logger.info("\n" + str(plan))
+        return plan
+
+    # ── metadata pass-throughs ────────────────────────────────────────────
+
+    def show_pixel_meta(
+        self,
+        input_path: Union[Path, str],
+        includes: Optional[str] = None,
+        excludes: Optional[str] = None,
+        series: int = None,
+        output_file: str = None,
+    ) -> None:
+        """Display pixel-level and channel metadata for all files in input_path.
+
+        Args:
+            input_path: File path or directory.
+            includes: Comma-separated filename patterns to include.
+            excludes: Comma-separated filename patterns to exclude.
+            series: Series / scene index (default: configured scene_index).
+            output_file: Write output to this path; use ``.html`` for HTML output.
+        """
+        return self._meta.show_pixel_meta(
+            input_path, includes, excludes, series, output_file)
+
+    def update_pixel_meta(
+        self,
+        input_path: Union[Path, str],
+        includes: Optional[str] = None,
+        excludes: Optional[str] = None,
+        time_scale: float = None,
+        z_scale: float = None,
+        y_scale: float = None,
+        x_scale: float = None,
+        time_unit: str = None,
+        z_unit: str = None,
+        y_unit: str = None,
+        x_unit: str = None,
+        max_processes: Optional[int] = None,
+        max_workers: Optional[int] = None,
+    ) -> None:
+        """Update pixel-scale and unit metadata on existing OME-Zarr files.
+
+        Args:
+            input_path: OME-Zarr path or directory of OME-Zarr files.
+            includes: Comma-separated filename patterns to include.
+            excludes: Comma-separated filename patterns to exclude.
+            time_scale: Physical pixel size along the time axis.
+            z_scale: Physical pixel size along the z axis (e.g. ``0.5`` for
+                0.5 µm z-steps).
+            y_scale: Physical pixel size along the y axis.
+            x_scale: Physical pixel size along the x axis.
+            time_unit: Physical unit for the time axis (e.g. ``second``,
+                ``millisecond``).
+            z_unit: Physical unit for the z axis (e.g. ``micrometer``,
+                ``nanometer``).
+            y_unit: Physical unit for the y axis.
+            x_unit: Physical unit for the x axis.
+            max_processes: Number of files to process in parallel. Formerly
+                ``max_workers``, which still works.
+        """
+        kwargs = rename_settings({k: v for k, v in dict(
+            max_processes=max_processes, max_workers=max_workers).items() if v is not None})
+        return self._meta.update_pixel_meta(
+            input_path, includes, excludes,
+            time_scale, z_scale, y_scale, x_scale,
+            time_unit, z_unit, y_unit, x_unit, **kwargs)
+
+    def update_channel_meta(
+        self,
+        input_path: Union[Path, str],
+        channel_labels: str = '',
+        channel_colors: str = '',
+        channel_intensity_limits: Optional[Literal["from_dtype", "from_array", "auto"]] = None,
+        includes: Optional[str] = None,
+        excludes: Optional[str] = None,
+        max_processes: Optional[int] = None,
+        max_workers: Optional[int] = None,
+    ) -> None:
+        """Update channel label, color, and intensity metadata.
+
+        Args:
+            input_path: OME-Zarr path or directory of OME-Zarr files.
+            channel_labels: Index/name pairs, e.g. ``"0,DAPI;1,GFP"``.
+            channel_colors: Index/hex pairs, e.g. ``"0,0000FF;1,00FF00"``.
+            channel_intensity_limits: The display windows stay as they are unless
+                this is given. ``'from_dtype'`` sets the data type's full range,
+                ``'from_array'`` each channel's lowest and highest value, ``'auto'``
+                the 0.1 and 99.9 percentiles of the smallest level, as conversions do.
+            includes: Comma-separated filename patterns to include.
+            excludes: Comma-separated filename patterns to exclude.
+            max_processes: Number of files to process at once. Formerly
+                ``max_workers``, which still works.
+        """
+        kwargs = rename_settings({k: v for k, v in dict(
+            max_processes=max_processes, max_workers=max_workers).items() if v is not None})
+        return self._meta.update_channel_meta(
+            input_path, channel_labels, channel_colors,
+            channel_intensity_limits, includes, excludes, **kwargs)
+
+    def version(self) -> None:
+        """Display the installed EuBI-Bridge version."""
+        from eubi_bridge import __distribution__, __version__
+        lite = " (eubi-bridge-lite)" if __distribution__ == "eubi-bridge-lite" else ""
+        _console.print(f"EuBI-Bridge [bold cyan]{__version__}[/bold cyan]{lite}")
+
+    # ── workflow sub-namespace ────────────────────────────────────────────
+
+    def flow(self) -> "EuBIFlow":
+        """Workflow operations — ``eubi flow create / run / select / list_waves``."""
+        try:
+            from eubi_flow.eubiflow import EuBIFlow  # type: ignore[import]
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError(
+                "The 'eubi-flow' package is required for workflow operations but is not installed.\n"
+                "Install it with:  pip install eubi-flow\n"
+                "Or via the core extra:  pip install \"eubi-bridge[flow]\""
+            ) from None
+        return EuBIFlow()
+
+    # ── resource management ───────────────────────────────────────────────
+
+    def _cleanup_temp_dir(self) -> None:
+        if self._dask_temp_dir is None:
+            return
+        try:
+            if isinstance(self._dask_temp_dir, tempfile.TemporaryDirectory):
+                self._dask_temp_dir.cleanup()
+            elif isinstance(self._dask_temp_dir, (str, Path)):
+                path = Path(self._dask_temp_dir)
+                if path.exists():
+                    shutil.rmtree(path)
+        except Exception as e:
+            logger.warning(f"Error cleaning up temporary directory: {e}")
+        finally:
+            self._dask_temp_dir = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._cleanup_temp_dir()
+        return False
+
+    def __del__(self):
+        try:
+            self._cleanup_temp_dir()
+        except Exception:
+            pass

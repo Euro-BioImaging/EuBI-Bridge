@@ -1,0 +1,1230 @@
+"""
+Conversion workers for image data processing with zarr storage.
+
+This module provides async workers for converting image data to zarr format,
+supporting both unary (single-file) and aggregative (multi-file) conversion modes.
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import asyncio
+import os
+import sys
+from typing import Any, Dict, Optional, Tuple, Union
+
+import numpy as np
+import pandas as pd
+
+# Add these imports at the top of conversion_worker.py
+from eubi_bridge.conversion.worker_init import safe_worker_wrapper
+from eubi_bridge.core.config_models import ChunkConfig, ConversionJob, parse_scale
+from eubi_bridge.core.data_manager import ArrayManager
+from eubi_bridge.core.writers import (store_exists,
+                                      store_existing_pyramid_async,
+                                       store_multiscale_async)
+from eubi_bridge.utils.array_utils import autocompute_chunk_shape
+from eubi_bridge.utils.jvm_manager import soft_start_jvm
+from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.metadata_utils import parse_channels
+from eubi_bridge.utils.optional_deps import dask_config
+from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
+                                          sensitive_glob, take_filepaths)
+
+if TYPE_CHECKING:
+    import dask.array as da
+
+# soft_start_jvm()
+
+
+
+
+logger = get_logger(__name__)
+
+# Constants
+DEFAULT_SHARD_COEFS = {
+    'time_shard_coef': 1,
+    'channel_shard_coef': 1,
+    'z_shard_coef': 5,
+    'y_shard_coef': 5,
+    'x_shard_coef': 5,
+}
+
+DEFAULT_SCALE_FACTORS = {
+    'time_scale_factor': 1,
+    'channel_scale_factor': 1,
+    'z_scale_factor': 2,
+    'y_scale_factor': 2,
+    'x_scale_factor': 2,
+}
+
+AXIS_PARAM_MAP = {
+    't': ('time_chunk', 'time_shard_coef', 'time_scale', 'time_scale_factor', 'time_unit'),
+    # No scale or unit for channels: a channel has no physical extent.
+    'c': ('channel_chunk', 'channel_shard_coef', None, 'channel_scale_factor', None),
+    'z': ('z_chunk', 'z_shard_coef', 'z_scale', 'z_scale_factor', 'z_unit'),
+    'y': ('y_chunk', 'y_shard_coef', 'y_scale', 'y_scale_factor', 'y_unit'),
+    'x': ('x_chunk', 'x_shard_coef', 'x_scale', 'x_scale_factor', 'x_unit'),
+}
+
+CROPPING_PARAMS = {'time_range', 'channel_range', 'z_range', 'y_range', 'x_range'}
+
+
+def _get_param_value(kwargs: Dict, param_name: Optional[str],
+                     axis: str, default_dict: Dict) -> Any:
+    """
+    Extract parameter value from kwargs with fallback to defaults.
+
+    Args:
+        kwargs: Keyword arguments dictionary
+        param_name: Parameter name to look up
+        axis: Axis identifier for fallback
+        default_dict: Default values dictionary
+
+    Returns:
+        Parameter value or default
+    """
+    if param_name is None:
+        return None
+
+    value = kwargs.get(param_name)
+    if pd.isna(value):
+        # For scale/unit params, use axis as key; for others use param_name
+        default_key = axis if param_name.endswith(('_scale', '_unit')) else param_name
+        return default_dict.get(default_key)
+    return value
+
+
+def _parse_axis_params(manager: ArrayManager, kwargs: Dict,
+                       param_idx: int, default_dict: Dict) -> Tuple:
+    """
+    Generic parser for axis-based parameters.
+
+    Args:
+        manager: ArrayManager instance
+        kwargs: Keyword arguments
+        param_idx: Index in AXIS_PARAM_MAP tuple (0=chunk, 1=shard, etc.)
+        default_dict: Default values dictionary
+
+    Returns:
+        Tuple of parsed values for each axis
+    """
+    axes = manager.axes #if param_idx <= 1 else manager.caxes
+    output = {}
+
+    for axis in axes:
+        if axis not in AXIS_PARAM_MAP:
+            continue
+
+        param_name = AXIS_PARAM_MAP[axis][param_idx]
+        if param_name is None:
+            # No user-settable parameter for this axis (a channel has no
+            # physical scale or unit).  Its scale still belongs in the result,
+            # carrying whatever the file itself says -- dropping it would leave
+            # the scales tuple shorter than the axes it describes.  Its unit
+            # does not: the NGFF writer expects the channel left out of the
+            # units and the default for it ('Channel') is no valid NGFF unit,
+            # which viewers such as Neuroglancer refuse to open.
+            if param_idx == 2:
+                output[axis] = default_dict.get(axis)
+            continue
+
+        output[axis] = _get_param_value(kwargs, param_name, axis, default_dict)
+
+    return tuple(output[ax] for ax in axes if ax in output)
+
+
+def parse_chunks(manager: ArrayManager, job: ConversionJob) -> Tuple:
+    """Parse chunk sizes for each axis from the job's ConversionConfig."""
+    cfg = job.conversion
+    return ChunkConfig(
+        t=cfg.time_chunk, c=cfg.channel_chunk,
+        z=cfg.z_chunk, y=cfg.y_chunk, x=cfg.x_chunk,
+    ).as_tuple(manager.axes)
+
+
+def parse_shard_coefs(manager: ArrayManager, job: ConversionJob) -> Tuple:
+    """Parse shard coefficients for each axis from the job's ConversionConfig."""
+    cfg = job.conversion
+    shard_map = {
+        't': cfg.time_shard_coef,
+        'c': cfg.channel_shard_coef,
+        'z': cfg.z_shard_coef,
+        'y': cfg.y_shard_coef,
+        'x': cfg.x_shard_coef,
+    }
+    return tuple(shard_map[ax] for ax in manager.axes if ax in shard_map)
+
+
+def _axis_metadata_kwargs(job: ConversionJob) -> Dict:
+    """Scale/unit overrides from the metadata config, overlaid with job.extra.
+
+    These are typed fields on MetadataConfig now, so they no longer arrive as
+    unrecognised keys in ``extra``.  ``extra`` is still consulted and still
+    wins, because that is where a per-row override from a conversion table
+    arrives -- the config value is only the batch-wide default.
+    """
+    stored = {k: v for k, v in job.metadata.model_dump().items()
+              if (k.endswith(('_scale', '_unit')) and v is not None)}
+    # extra skips the config model, so its scales get the same one-notation check
+    stored.update({k: parse_scale(v, k) if k.endswith('_scale') else v
+                   for k, v in job.extra.items()})
+    return stored
+
+
+def parse_scales(manager: ArrayManager, job: ConversionJob) -> Tuple:
+    """Parse per-axis scale overrides, falling back to manager.scaledict."""
+    return _parse_axis_params(
+        manager, _axis_metadata_kwargs(job), 2, manager.scaledict)
+
+
+def parse_translation(manager: ArrayManager, job: ConversionJob) -> Optional[Tuple]:
+    """Per-axis physical origin of this output, or None when it is the default.
+
+    When a mosaic is split into one container per tile, each tile's stage
+    position is the only thing that says how the pieces fit back together.
+    ``translation`` is a standard NGFF coordinateTransformation, so writing it
+    keeps the layout in the spec rather than in a sidecar — any reader
+    (multiview-stitcher, napari, BigStitcher) can then place the tiles without
+    eubi-bridge-specific code.
+
+    Returns a tuple ordered like ``manager.axes``, or None if there is no
+    non-trivial origin (single-tile inputs, or formats that do not expose one).
+    """
+    origin = getattr(manager, 'origindict', None)
+    if not origin:
+        return None
+    # An all-zero origin is still written: the tile at (0, 0) belongs to the same
+    # coordinate system as its neighbours, and omitting the field there would
+    # leave the set inconsistent — some tiles placed, one not.
+    return tuple(float(origin.get(ax, 0.0)) for ax in manager.axes)
+
+
+def build_acquisition_metadata(manager: ArrayManager,
+                               job: ConversionJob) -> Optional[dict]:
+    """Acquisition detail that NGFF has no standard field for, or None.
+
+    Enabled by ``conversion.export_acquisition_metadata``.  ``None`` means auto:
+    on whenever the conversion splits one acquisition into several containers
+    (scenes / tiles / views / illuminations), because that is exactly when the
+    relationship between the outputs is lost and cannot be recovered from the
+    OME-Zarr alone.  Positions are NOT included here — those are standard NGFF
+    ``translation`` transforms (see :func:`parse_translation`).
+    """
+    flag = getattr(job.conversion, 'export_acquisition_metadata', None)
+    # metadata_reader='micro': wavelengths and axis values that OME-Zarr has
+    # no field for (D4) are written whenever the file has them
+    extras = dict(getattr(manager, 'acquisition_extras', None) or {})
+    is_split = any(getattr(manager, attr, None) is not None
+                   for attr in ('mosaic_tile_index',)) or bool(
+                   getattr(manager, 'origindict', None))
+    series_path = str(getattr(manager, 'series_path', '') or '')
+    for marker in ('_view', '_illu', '_tile', '_scene'):
+        if marker in os.path.basename(series_path):
+            is_split = True
+            break
+    if flag is False:
+        return None
+    if flag is None and not is_split:
+        return extras or None
+
+    meta: dict = dict(extras)
+    for key, attr in (('scene_index', 'series'),
+                      ('tile_index', 'mosaic_tile_index')):
+        val = getattr(manager, attr, None)
+        if val is not None:
+            meta[key] = val
+    # View / illumination indices are encoded in the series_path suffix, which is
+    # the only place they survive once the scene managers are split.
+    import re as _re
+    for key, pat in (('view_index', r'_view(\d+)'),
+                     ('illumination_index', r'_illu(\d+)')):
+        m = _re.search(pat, os.path.basename(series_path))
+        if m:
+            meta[key] = int(m.group(1))
+    if 'origindict' in dir(manager) and manager.origindict:
+        unit = (getattr(manager, 'unitdict', None) or {}).get('x', 'micrometer')
+        key = 'origin_um' if unit in ('micrometer', 'µm', 'um') else f'origin_{unit}'
+        meta[key] = dict(manager.origindict)
+    meta['source_path'] = str(getattr(job, 'input_path', '') or '')
+    return meta or None
+
+
+def parse_scale_factors(manager: ArrayManager, job: ConversionJob) -> Tuple:
+    """Parse pyramid scale factors from the job's DownscaleConfig."""
+    ds = job.downscale
+    sf_map = {
+        't': ds.time_scale_factor,
+        'c': ds.channel_scale_factor,
+        'z': ds.z_scale_factor,
+        'y': ds.y_scale_factor,
+        'x': ds.x_scale_factor,
+    }
+    return tuple(sf_map[ax] for ax in manager.axes if ax in sf_map)
+
+
+def parse_smart_scale_factors(manager: ArrayManager, job: ConversionJob) -> Optional[Tuple]:
+    """Compute isotropic scale factors when ``apply_smart_downscaling`` is set.
+
+    Smart-scaling parameters live on ``job.downscale`` (the DownscaleConfig); the
+    legacy ``job.extra`` location is still honoured as a fallback.
+    """
+    ds = job.downscale
+
+    def _smart(name):
+        val = getattr(ds, name, None)
+        return val if val is not None else job.extra.get(name)
+
+    if not (getattr(ds, 'apply_smart_downscaling', False)
+            or job.extra.get('apply_smart_downscaling', False)):
+        return None
+
+    from eubi_bridge.core.scale import compute_isotropic_scale_factors
+
+    actual_scales = parse_scales(manager, job)
+    axes = manager.axes
+    auto_factors = compute_isotropic_scale_factors(
+        pixel_sizes=dict(zip(axes, actual_scales)),
+        axes=axes,
+    )
+
+    for kwarg_name, axis in (
+        ('time_smart_scale_factor', 't'),
+        ('channel_smart_scale_factor', 'c'),
+        ('z_smart_scale_factor', 'z'),
+        ('y_smart_scale_factor', 'y'),
+        ('x_smart_scale_factor', 'x'),
+    ):
+        val = _smart(kwarg_name)
+        if val is not None:
+            try:
+                auto_factors[axis] = max(1, int(val))
+            except (ValueError, TypeError):
+                pass
+
+    result = tuple(auto_factors.get(ax, 1) for ax in axes)
+    logger.info(f"[smart_downscale] axes={axes}, smart_scale_factor={result}")
+    return result
+
+
+def parse_units(manager: ArrayManager, job: ConversionJob) -> Tuple:
+    """Parse per-axis unit overrides, falling back to manager.unitdict."""
+    return _parse_axis_params(
+        manager, _axis_metadata_kwargs(job), 4, manager.unitdict)
+
+
+def _extract_cropping_slices(kwargs: Dict) -> Dict:
+    """Extract cropping range parameters from kwargs.
+    
+    Collects all cropping-related keyword arguments that define
+    rectangular regions of interest in the dataset, converting
+    string ranges to tuples suitable for crop() method.
+    
+    Parameters
+    ----------
+    kwargs : Dict
+        Keyword arguments containing potential cropping parameters
+        (e.g., time_range="0,5", channel_range="1,3").
+        
+    Returns
+    -------
+    Dict
+        Dictionary mapping crop method parameter names to range tuples.
+        For example: {"trange": (0, 5), "crange": (1, 3)}
+    """
+    # Map from CLI parameter names to crop() method parameter names
+    param_mapping = {
+        'time_range': 'trange',
+        'channel_range': 'crange',
+        'z_range': 'zrange',
+        'y_range': 'yrange',
+        'x_range': 'xrange',
+    }
+    
+    crop_kwargs = {}
+    for cli_param, crop_param in param_mapping.items():
+        if cli_param in kwargs and kwargs[cli_param] is not None:
+            range_str = kwargs[cli_param]
+            # Parse string like "0,5" to tuple (0, 5)
+            try:
+                if isinstance(range_str, str):
+                    range_parts = range_str.split(',')
+                    range_tuple = tuple(int(x.strip()) for x in range_parts)
+                else:
+                    # Already a tuple/list
+                    range_tuple = tuple(range_str)
+                crop_kwargs[crop_param] = range_tuple
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Failed to parse {cli_param}='{range_str}': {e}")
+    
+    return crop_kwargs
+
+
+async def _prepare_manager(manager: ArrayManager, job: ConversionJob) -> None:
+    """Apply preprocessing steps to a scene manager before writing."""
+    manager.fill_default_meta()
+    await manager.sync_pyramid(save_changes=False)
+
+    manager._channels = parse_channels(manager, channel_intensity_limits='from_dtype')
+    manager.fix_bad_channels()
+
+    cfg = job.conversion
+
+    # When preserving the source's own multiscale pyramid
+    # (keep_existing_resolutions), skip squeeze/crop entirely: both rebuild
+    # manager.pyr from the base array as a SINGLE layer, which would collapse
+    # the very pyramid we are trying to keep verbatim.
+    if (job.downscale.keep_existing_resolutions
+            and manager.pyr is not None
+            and len(manager.pyr.layers) > 1):
+        return
+
+    if cfg.verbose:
+        logger.info(f"The manager array shape before squeezing: {manager.array.shape}")
+    if cfg.squeeze:
+        manager.squeeze()
+
+    cropping_kwargs = _extract_cropping_slices({
+        'time_range':    cfg.time_range,
+        'channel_range': cfg.channel_range,
+        'z_range':       cfg.z_range,
+        'y_range':       cfg.y_range,
+        'x_range':       cfg.x_range,
+    })
+    if cropping_kwargs:
+        manager.crop(**cropping_kwargs)
+
+
+
+def _maybe_compute_bfio_array(manager: ArrayManager, region_size_mb: float) -> None:
+    """Read a small Bio-Formats image into memory in one go.
+
+    A larger one stays lazy: the writer reads it region by region, each region
+    as a single Bio-Formats rectangle, so nothing beyond a region is loaded.
+    """
+    if not manager._bfio_tiling or manager.array is None:
+        return
+    arr = manager.array
+    nbytes = int(np.prod(arr.shape)) * np.dtype(arr.dtype).itemsize
+    if nbytes > region_size_mb * 1024 ** 2:
+        return
+    logger.info(f"Bio-Formats: reading {nbytes / 1e6:.1f} MB into memory at once")
+    computed = arr.compute() if hasattr(arr, 'compute') else np.asarray(arr)
+    import dask.array as da                     # Bio-Formats tiling: the full stack
+    manager.state.update(
+        array=da.from_array(computed, chunks=computed.shape),
+        axes=manager.axes,
+        units=manager.units,
+        scales=manager.scales,
+    )
+
+
+def _threads_per_scene(clus) -> int:
+    """A conversion's ``max_threads``, shared by the scenes it converts at once
+    (``max_concurrent_scenes``): raising the scenes never raises the threads."""
+    scenes = max(1, int(clus.max_concurrent_scenes or 1))
+    return max(1, int(clus.max_threads or 1) // scenes)
+
+
+def _unit_mb(arr) -> Optional[float]:
+    """The size of the source's native decode unit in MB (a whole compressed plane,
+    tile or strip), or None when it is not known."""
+    try:
+        from dyna_zarr._read_cost import read_unit
+        unit = read_unit(arr)
+        if unit is None:
+            return None
+        return float(np.prod(unit)) * np.dtype(arr.dtype).itemsize / 2 ** 20
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def _memory_plan(manager: ArrayManager, job: ConversionJob) -> tuple:
+    """``(scene write budget, region size)`` in MB, from the run's memory budget
+    (core/memory.py): this process's share, minus what it already holds and the
+    reader's share (applied to micro-reader here), over the scenes at once."""
+    return _memory_plan_for(manager.array, job)
+
+
+def _memory_plan_for(array, job: ConversionJob) -> tuple:
+    """``_memory_plan`` for the source `array` of one output (both conversion paths)."""
+    from eubi_bridge.core import memory
+    clus = job.cluster
+    process = clus.process_memory_mb or memory.process_mb(clus)
+    micro = job.readers.pixel_reader == 'micro' or job.metadata.metadata_reader == 'micro'
+    if micro:
+        decode, cache = memory.reader_share(process, clus.decode_memory, clus.decode_threads,
+                                            _unit_mb(array))
+        from eubi_bridge.core.micro_source import set_read_memory
+        set_read_memory(decode, cache)
+        reader = decode + cache
+    else:                                                    # Bio-Formats: the JVM heap
+        reader = memory.parse_mb(clus.jvm_memory or '1g')
+    held = memory.baseline_mb()
+    scenes = max(1, int(clus.max_concurrent_scenes or 1))
+    scene = memory.scene_mb(process, held, reader, scenes)
+    region = memory.region_mb(clus.region_size_mb, scene, _threads_per_scene(clus))
+    logger.info(
+        f"Memory: {process:.0f} MB for this conversion = {held:.0f} MB already held + "
+        f"{reader:.0f} MB reading + {scene:.0f} MB writing per scene ({scenes} at once); "
+        f"regions of {region:.0f} MB")
+    return scene, region
+
+
+#: settings of eubi-bridge's own writer that the ozp writer does not use
+_EUBI_WRITER_ONLY = ('queue_size', 'max_concurrent_downscale_layers',
+                     'tensorstore_data_copy_concurrency')
+_warned_unused: set = set()
+
+
+def _warn_unused_writer_settings(clus) -> None:
+    """Warn once for each eubi-writer setting set to a non-default value while the
+    ozp writer runs (it does nothing there; never fails: retired-settings rule)."""
+    for name in _EUBI_WRITER_ONLY:
+        default = type(clus).model_fields[name].default
+        if getattr(clus, name) != default and name not in _warned_unused:
+            _warned_unused.add(name)
+            logger.warning(
+                f"{name}={getattr(clus, name)} only applies to eubi-bridge's own writer "
+                f"(writer='eubi'); the ozp writer ignores it. Its parallelism is "
+                f"max_threads, its memory memory_budget.")
+
+
+async def _process_single_scene(manager: ArrayManager, output_path: str,
+                                job: ConversionJob, sem: asyncio.Semaphore) -> None:
+    """Process a single scene/tile from a typed ConversionJob."""
+    async with sem:
+        conv = job.conversion
+        ds   = job.downscale
+        clus = job.cluster
+        meta = job.metadata
+
+        # Fail fast on a name collision when not overwriting — BEFORE any data
+        # preparation or writing, and crucially WITHOUT touching the existing
+        # dataset.  (Otherwise the writer hits the existing array, errors, and
+        # the error-cleanup below would delete the pre-existing output.)
+        if not conv.overwrite and store_exists(output_path):
+            raise FileExistsError(
+                f"Output already exists: '{output_path}'. Refusing to convert "
+                f"with overwrite=False — the existing dataset was left untouched. "
+                f"Enable overwrite to replace it, or choose a different output."
+            )
+
+        if conv.verbose:
+            logger.info(f"The manager array shape before preparation: "
+                        f"{manager.array.shape if manager.array is not None else 'N/A'}")
+        await _prepare_manager(manager, job)
+        scene_budget_mb, region_size_mb = _memory_plan(manager, job)
+        _maybe_compute_bfio_array(manager, region_size_mb)
+        update_channels = meta.channel_intensity_limits == 'from_array'
+        keep_levels = (ds.keep_existing_resolutions and manager.pyr is not None
+                       and len(manager.pyr.layers) > 1)
+        from eubi_bridge.core.ozp_writer import resolve_writer
+        writer = resolve_writer(conv.writer, manager.pyr if keep_levels else None)
+        if conv.io_backend != 'tensorstore' and writer != 'ozp':
+            # an explicit backend request is never dropped silently
+            raise ValueError(
+                f"io_backend={conv.io_backend!r} needs the ozp writer, but this "
+                f"conversion uses eubi-bridge's own writer (writer={conv.writer!r}"
+                f"{', which chose eubi for kept resolution levels not named 0..n-1' if conv.writer == 'auto' else ''}"
+                f"). Use io_backend='tensorstore', or writer='ozp'.")
+        io_kw = {'io_backend': conv.io_backend} if writer == 'ozp' else {}
+        # max_threads, shared by the scenes converted at once (each writer's own name)
+        threads = _threads_per_scene(clus)
+        thread_kw = ({'max_threads': threads} if writer == 'ozp'
+                     else {'max_concurrency': threads})
+        if writer == 'ozp':
+            # the memory this scene's write may add (core/memory.py), on both byte
+            # backends: dyna caps its threads by it and tiles big shards in y/x within
+            # it (local zarr v3 outputs)
+            io_kw['memory_budget_mb'] = scene_budget_mb
+            _warn_unused_writer_settings(clus)
+        # writer='ozp' measures them while it writes level 0 (dyna's io.Extrema), so
+        # the output is not read a second time to compute them afterwards
+        windows_in_write = update_channels and writer == 'ozp'
+        window_kw = {'window_from_data': True} if windows_in_write else {}
+        if writer == 'ozp' and meta.channel_intensity_limits == 'auto':
+            # percentiles of the coarsest level written (the dtype's range if it is big)
+            window_kw = {'windows': 'auto'}
+
+        # Windows must describe the dtype actually written, not the source: a
+        # uint16 -> uint8 conversion would otherwise advertise 0-65535 for uint8
+        # data and render black in viewers.
+        channel_meta = parse_channels(
+            manager,
+            # 'from_array' windows are measured on the written output below and
+            # replace these, so the source is not read in full a second time
+            # just to compute values that are discarded.
+            channel_intensity_limits=('from_dtype' if update_channels
+                                      else meta.channel_intensity_limits),
+            dtype=conv.dtype or manager.array.dtype,
+            # Without these the unary path silently ignored --channel_colors and
+            # --channel_labels, which the aggregative path already honoured.
+            # They have their own config section now; job.extra still wins so a
+            # per-row override from a conversion table is not overruled.
+            channel_labels=job.extra.get('channel_labels', meta.channel_labels),
+            channel_colors=job.extra.get('channel_colors', meta.channel_colors),
+        )
+
+        if conv.verbose:
+            logger.info(f"The manager array shape before storing: "
+                        f"{manager.array.shape if manager.array is not None else 'N/A'}")
+
+        # bioformats_threads caps dask's thread pool → caps peak concurrent open
+        # BioReader instances (one per thread via thread-local cache).  Without this,
+        # dask defaults to cpu_count threads, potentially opening cpu_count readers
+        # per series and exhausting JVM heap.
+        dask_kw = {}
+        if clus.bioformats_threads is not None:
+            dask_kw['num_workers'] = clus.bioformats_threads
+        with dask_config(**dask_kw):
+            if keep_levels:
+                logger.info(f"Preserving {len(manager.pyr.layers)} existing resolution levels "
+                            f"from source for {output_path}")
+                if writer == 'ozp':
+                    from eubi_bridge.core.ozp_writer import store_existing_pyramid_ozp
+                    store_existing = store_existing_pyramid_ozp
+                else:
+                    store_existing = store_existing_pyramid_async
+                await store_existing(
+                    pyr=manager.pyr,
+                    output_path=output_path,
+                    axes=manager.axes,
+                    translation=parse_translation(manager, job),
+                    units=parse_units(manager, job),
+                    channel_meta=channel_meta,
+                    zarr_format=conv.zarr_format,
+                    ome_zarr_version=conv.ome_zarr_version,
+                    auto_chunk=conv.auto_chunk,
+                    output_chunks=parse_chunks(manager, job),
+                    output_shard_coefficients=parse_shard_coefs(manager, job),
+                    overwrite=conv.overwrite,
+                    **thread_kw,
+                    region_size_mb=region_size_mb,
+                    queue_size=clus.queue_size,
+                    verbose=conv.verbose,
+                    compressor=conv.compressor,
+                    compressor_params=conv.compressor_params,
+                    dtype=conv.dtype,
+                    target_chunk_mb=conv.target_chunk_mb,
+                    **window_kw,
+                    **io_kw,
+                )
+            else:
+                if ds.keep_existing_resolutions:
+                    logger.info(f"keep_existing_resolutions is set but no existing multiscale "
+                                f"pyramid was found for {output_path}; rebuilding pyramid normally")
+                if writer == 'ozp':
+                    from eubi_bridge.core.ozp_writer import store_multiscale_ozp
+                    store = store_multiscale_ozp
+                else:
+                    store = store_multiscale_async
+                await store(
+                    arr=manager.array,
+                    dtype=conv.dtype,
+                    output_path=output_path,
+                    zarr_format=conv.zarr_format,
+                    ome_zarr_version=conv.ome_zarr_version,
+                    axes=manager.axes,
+                    scales=parse_scales(manager, job),
+                    translation=parse_translation(manager, job),
+                    acquisition_metadata=build_acquisition_metadata(manager, job),
+                    units=parse_units(manager, job),
+                    channel_meta=channel_meta,
+                    auto_chunk=conv.auto_chunk,
+                    output_chunks=parse_chunks(manager, job),
+                    output_shard_coefficients=parse_shard_coefs(manager, job),
+                    overwrite=conv.overwrite,
+                    n_layers=ds.n_layers,
+                    min_dimension_size=ds.min_dimension_size,
+                    scale_factors=parse_scale_factors(manager, job),
+                    smart_scale_factor=parse_smart_scale_factors(manager, job),
+                    **thread_kw,
+                    max_concurrent_downscale_layers=clus.max_concurrent_downscale_layers,
+                    region_size_mb=region_size_mb,
+                    compute_batch_size=job.extra.get('compute_batch_size', 4),
+                    queue_size=clus.queue_size,
+                    memory_limit_per_batch=job.extra.get('memory_limit_per_batch', 1024),
+                    verbose=conv.verbose,
+                    compressor=conv.compressor,
+                    compressor_params=conv.compressor_params,
+                    downscale_method=ds.downscale_method,
+                    # it was never passed, so auto-chunking always used 1 MB
+                    target_chunk_mb=conv.target_chunk_mb,
+                    **window_kw,
+                    **io_kw,
+                )
+
+        measure_after = update_channels and not windows_in_write
+        if conv.save_omexml or measure_after:
+            out_mgr = ArrayManager(output_path)
+            await out_mgr.init()
+
+            if measure_after:
+                out_mgr.fill_default_meta()
+                await out_mgr.sync_pyramid(save_changes=False)
+                # No squeeze here: the output is already written, squeezed or
+                # not, and only its channel windows are updated.  Squeezing
+                # swaps the on-disk pyramid for a detached in-memory one, so
+                # saving failed with "No zarr group connected" whenever the
+                # output kept a singleton axis (keep_existing_resolutions).
+                channels = parse_channels(
+                    out_mgr,
+                    channel_intensity_limits=meta.channel_intensity_limits,
+                    dtype=conv.dtype,
+                    channel_labels=job.extra.get(
+                        'channel_labels', meta.channel_labels),
+                    channel_colors=job.extra.get(
+                        'channel_colors', meta.channel_colors),
+                )
+                assert out_mgr.pyr is not None
+                meta = out_mgr.pyr.meta
+                meta.metadata['omero']['channels'] = channels
+                if meta.zarr_group is not None:
+                    if 'ome' not in meta.zarr_group.attrs:
+                        meta.zarr_group.attrs.update({'omero': []})
+                meta._pending_changes = True
+                meta.save_changes()
+
+            if conv.save_omexml:
+                await out_mgr.save_omexml(output_path, overwrite=True)
+
+
+async def _process_single_scene_safe(manager: ArrayManager, output_path: str,
+                                     job: ConversionJob, sem: asyncio.Semaphore) -> None:
+    """Run ``_process_single_scene``; on failure remove any partial output and
+    re-raise so the caller can record/skip it (used for graceful degradation on
+    damaged/corrupt inputs)."""
+    await _convert_safely(_process_single_scene(manager, output_path, job, sem), output_path)
+
+
+async def _convert_safely(conversion, output_path: str) -> None:
+    """Await one output's `conversion`; on failure remove any partial output it
+    created and re-raise (both conversion paths)."""
+    target = output_path if output_path.endswith('.zarr') else f"{output_path}.zarr"
+    # Whether the output already existed BEFORE this run.  A pre-existing
+    # dataset is never ours to delete — only partial output created by this run
+    # may be cleaned up on failure.
+    # Remote-aware: os.path.exists is always False for a URL, which
+    # would make a pre-existing remote store look like our own partial
+    # output and hand it to the cleanup below.
+    preexisting = store_exists(target)
+    try:
+        await conversion
+    except FileExistsError:
+        # Name collision with overwrite=False: surface the error and leave the
+        # existing dataset completely untouched.
+        raise
+    except Exception:
+        import shutil
+        try:
+            if not preexisting and os.path.isdir(target):
+                shutil.rmtree(target, ignore_errors=True)
+        except Exception:
+            pass
+        raise
+
+
+def _generate_output_path(base_path: str, series_path: str,
+                          series_idx: Optional[int] = None,
+                          tile_idx: Optional[int] = None,
+                          resolved_basename: Optional[str] = None) -> str:
+    """
+    Generate output path with optional scene/tile suffixes.
+
+    Args:
+        base_path: Base output directory
+        series_path: Source series path
+        series_idx: Optional scene index
+        tile_idx: Optional tile index
+        resolved_basename: Pre-computed basename replacing the one derived from
+            *series_path*.  Set when two inputs share a filename and would
+            otherwise write to the same store.  Scene/tile suffixes still apply
+            on top of it, so multi-scene naming is unaffected.
+
+    Returns:
+        Complete output path
+    """
+    basename = resolved_basename or os.path.basename(series_path).split('.')[0]
+    suffix = ""
+
+    if series_idx is not None:
+        suffix += f"_scene{series_idx}"
+    if tile_idx is not None:
+        suffix += f"_tile{tile_idx}"
+
+    return f"{base_path}/{basename}{suffix}.zarr"
+
+
+async def _load_input_manager(job: ConversionJob) -> ArrayManager:
+    """Open the input file, load all requested scenes/tiles/views/illuminations."""
+    if job.readers.pixel_reader == 'micro' or job.metadata.metadata_reader == 'micro':
+        from eubi_bridge.core.micro_source import set_read_concurrency
+        set_read_concurrency(job.cluster.decode_threads)
+    manager = ArrayManager(
+        job.input_path,
+        metadata_reader=job.metadata.metadata_reader,
+        force_bioformats=job.readers.force_bioformats,
+        as_mosaic=job.readers.as_mosaic,
+        keep_existing_resolutions=job.downscale.keep_existing_resolutions,
+        pixel_reader=job.readers.pixel_reader,
+        micro_check_pixels=job.readers.micro_check_pixels,
+    )
+
+    # scene_index may be 'all', an int, or a comma-separated string from CSV
+    series = job.readers.scene_index
+    if isinstance(series, str) and series != 'all' and ',' in series:
+        series = [int(x.strip()) for x in series.split(',')]
+    elif isinstance(series, str) and series != 'all':
+        try:
+            series = int(series)
+        except ValueError:
+            pass
+
+    mosaic_tile_index = job.readers.mosaic_tile_index
+    if isinstance(mosaic_tile_index, str) and mosaic_tile_index != 'all' and ',' in mosaic_tile_index:
+        mosaic_tile_index = [int(x.strip()) for x in mosaic_tile_index.split(',')]
+    elif isinstance(mosaic_tile_index, str) and mosaic_tile_index != 'all':
+        try:
+            mosaic_tile_index = int(mosaic_tile_index)
+        except ValueError:
+            mosaic_tile_index = None
+
+    # A single load handles scenes, tiles, and the multi-scene × multi-tile
+    # cross product (one output container per (scene, tile)).  Tiles only
+    # materialise when reading the un-stitched mosaic (as_mosaic=False); with
+    # as_mosaic=True there is a single stitched tile, so passing a tile index
+    # is a no-op.
+    await manager.load_scenes(scene_indices=series,
+                              mosaic_tile_index=mosaic_tile_index)
+    assert manager.loaded_scenes is not None
+
+    if job.conversion.verbose:
+        first = next(iter(manager.loaded_scenes.values()), None)
+        if first is not None:
+            logger.info(f"The manager array is of type: {type(first.array)}")
+
+    # ── Views / illuminations ────────────────────────────────────────────
+    # Resolve view and illumination indices (same multi-value rules as scene_index).
+    def _parse_multi(value):
+        if value == 'all' or isinstance(value, list):
+            return value
+        if isinstance(value, str) and ',' in value:
+            return [int(x.strip()) for x in value.split(',')]
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+
+    view_index  = _parse_multi(job.readers.view_index)
+    illu_index  = _parse_multi(job.readers.illumination_index)
+
+    # Determine whether multi-view/illumination iteration is needed.
+    # A single int value of 0 with no concat flags means the default single-index
+    # behaviour — skip the extra loading step entirely for performance.
+    # load_views_illuminations itself probes the actual view/illumination count and
+    # early-exits without penalty for single-view/single-illumination formats (LIF,
+    # ND2, OME-TIFF, …) so we do not need to gate on file-level counts here.
+    need_views = (
+        view_index != 0
+        or job.readers.concat_views
+        or view_index == 'all'
+        or isinstance(view_index, list)
+    )
+    need_illus = (
+        illu_index != 0
+        or job.readers.concat_illuminations
+        or illu_index == 'all'
+        or isinstance(illu_index, list)
+    )
+
+    if need_views or need_illus:
+        # Default to index 0 for the non-iterated dimension when not specified.
+        if not need_views:
+            view_index = 0
+        if not need_illus:
+            illu_index = 0
+        await manager.load_views_illuminations(
+            view_indices=view_index,
+            illumination_indices=illu_index,
+            concat_views=job.readers.concat_views,
+            concat_illuminations=job.readers.concat_illuminations,
+        )
+
+    return manager
+
+
+async def unary_worker(job: ConversionJob) -> None:
+    """Convert a single input file to OME-Zarr (all scenes/tiles/views/illuminations in parallel)."""
+    from eubi_bridge.conversion import pyramid_path
+    if pyramid_path.enabled() and await pyramid_path.convert(job):
+        return                                      # the 0.2.0 path (default; step 1d)
+    manager = await _load_input_manager(job)
+
+    # max_concurrent_scenes: how many scenes write simultaneously.
+    # Keeping this ≤ 1 prevents all scenes calling zarr's sync() at once,
+    # which would cause spurious ContainsArrayError on fresh paths.
+    sem = asyncio.Semaphore(job.cluster.max_concurrent_scenes)
+    add_scene = manager._n_scenes > 1
+
+    tasks = []
+    if manager.loaded_scenes is None:
+        raise ValueError("At least one scene must be available.")
+
+    # ── View / illumination outputs take priority when present ───────────
+    if manager.loaded_views_illuminations is not None:
+        input_stem = os.path.splitext(os.path.basename(str(job.input_path)))[0]
+        basename = (job.resolved_basename
+                    or os.path.basename(str(job.input_path)).split('.')[0])
+        for man in manager.loaded_views_illuminations.values():
+            # The view/illumination part of the name ("_illu1", "_view_concat")
+            # exists only inside series_path, and a resolved basename replaces
+            # that whole stem -- so it is carried over here.  Without it every
+            # view or illumination got the same name and all but the first were
+            # skipped as "Output already exists".
+            series_stem = os.path.splitext(os.path.basename(man.series_path))[0]
+            vi_suffix = (series_stem[len(input_stem):]
+                         if series_stem.startswith(input_stem) else "")
+            out_path = _generate_output_path(
+                job.output_path, man.series_path,
+                man.series if add_scene else None,
+                resolved_basename=basename + vi_suffix,
+            )
+            tasks.append(asyncio.create_task(
+                _process_single_scene_safe(man, out_path, job, sem)
+            ))
+    elif manager.loaded_tiles is None:
+        # Unified scene / tile / scene×tile path: each manager carries its own
+        # .series and .mosaic_tile_index, so name by whichever dimensions are
+        # genuinely multi-valued.
+        add_tile = (manager._n_tiles or 1) > 1
+        for man in manager.loaded_scenes.values():
+            out_path = _generate_output_path(
+                job.output_path, man.series_path,
+                man.series if add_scene else None,
+                man.mosaic_tile_index if (add_tile and man.mosaic_tile_index is not None) else None,
+                resolved_basename=job.resolved_basename,
+            )
+            tasks.append(asyncio.create_task(
+                _process_single_scene_safe(man, out_path, job, sem)
+            ))
+    elif len(manager.loaded_scenes) == 1 and manager.loaded_tiles is not None:
+        # Legacy path: tiles loaded via the standalone load_tiles().
+        n_tiles  = manager._n_tiles or 1
+        add_tile = n_tiles > 1
+        for tile in manager.loaded_tiles.values():
+            out_path = _generate_output_path(
+                job.output_path, tile.series_path,
+                None,
+                tile.mosaic_tile_index if add_tile else None,
+                resolved_basename=job.resolved_basename,
+            )
+            tasks.append(asyncio.create_task(
+                _process_single_scene_safe(tile, out_path, job, sem)
+            ))
+    else:
+        raise Exception(
+            "Having both multiple scenes and multiple tiles is not currently supported.")
+
+    # Tolerate per-scene read failures so a damaged/corrupt file still yields its
+    # readable scenes (e.g. a CZI whose subblock data is unreadable past some
+    # scene).  If every output fails, surface the error.
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Total scenes the file's index advertises (before the readability cap
+    # and these per-scene skips), so the message reflects the WHOLE file.
+    _report_failures(results, job, getattr(manager, '_n_scenes_in_file', 0))
+
+
+def _report_failures(results: list, job: ConversionJob, total_in_file: int = 0) -> None:
+    """Log the outputs that failed; raise when all did (both conversion paths)."""
+    failures = [r for r in results if isinstance(r, BaseException)]
+    if failures:
+        for exc in failures:
+            logger.warning(f"Skipped a scene that could not be read: {exc}")
+        if len(failures) == len(results):
+            raise failures[0]
+        written = len(results) - len(failures)
+        total_in_file = total_in_file or len(results)
+        unreadable = max(0, total_in_file - written)
+        logger.warning(
+            "\n" + "=" * 78 + "\n"
+            f"PARTIAL CONVERSION — DAMAGED FILE: {job.input_path}\n"
+            f"Converted {written} of {total_in_file} scene(s) that the file "
+            f"contains. {unreadable} scene(s) exist in the file but could NOT be "
+            f"read (damaged/corrupt data) and are MISSING from the output.\n"
+            f"If you need them, re-export or repair the source file (e.g. "
+            f"'Save As' in Zeiss ZEN).\n" + "=" * 78
+        )
+
+
+async def aggregative_worker(manager: ArrayManager,
+                             output_path: str,
+                             **kwargs) -> None:
+    """Convert aggregated (pre-concatenated) image data to OME-Zarr."""
+    series = kwargs.get('series', 0)
+    if not isinstance(series, int):
+        raise TypeError(
+            "Aggregative conversion does not support multiple series. "
+            "Please specify an integer as a single series index."
+        )
+
+    output_path_full = f"{output_path}.zarr"
+    if kwargs.get('verbose', False):
+        logger.info(f"The manager array is of type: {type(manager.array)}")
+
+    # Build a typed ConversionJob so _process_single_scene can access typed fields.
+    job = ConversionJob.from_kwargs(
+        input_path=manager.path or '',
+        output_path=output_path_full,
+        kwargs=kwargs,
+    )
+    sem = asyncio.Semaphore(job.cluster.max_concurrent_scenes)
+    await _process_single_scene(manager, output_path_full, job, sem)
+
+
+@safe_worker_wrapper
+def unary_worker_sync(job: ConversionJob) -> dict:
+    """Synchronous entry point for multiprocessing workers.
+
+    Dask distributed workers run with an active event loop, so asyncio.run()
+    cannot be called directly.  We escape by running the coroutine in a
+    dedicated thread that has no event loop of its own.
+    """
+    import concurrent.futures
+    from eubi_bridge.core.memory import baseline_mb
+    baseline_mb()            # what this process holds before it reads anything
+
+    if job.conversion.verbose:
+        logger.info(f"[Worker] Processing: {job.input_path}")
+
+    def _run_in_fresh_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(unary_worker(job))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(_run_in_fresh_thread).result()
+
+    if job.conversion.verbose:
+        logger.info(f"[Worker] Completed: {job.input_path}")
+
+    return {"status": "success", "input": str(job.input_path), "output": job.output_path}
+
+
+@safe_worker_wrapper
+def aggregative_worker_sync(manager: ArrayManager,
+                            output_path: str,
+                            kwargs: dict) -> dict:
+    """
+    Synchronous wrapper for aggregative_worker.
+    Safe for multiprocessing with proper exception handling.
+    """
+    import concurrent.futures
+
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Processing aggregative: {output_path}")
+
+    def _run_in_fresh_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                aggregative_worker(manager, output_path, **kwargs)
+            )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(_run_in_fresh_thread).result()
+
+    if kwargs.get('verbose', False):
+        logger.info(f"[Worker] Completed aggregative: {output_path}")
+    return {"status": "success", "output": output_path}
+
+
+async def _aggregative_group_pipeline(
+    file_paths: list,
+    output_path: str,
+    job_kwargs: dict,
+) -> None:
+    """Async pipeline for one pre-grouped file set: read → digest → write zarr.
+
+    Called from ``aggregative_worker_from_paths`` inside a fresh event loop.
+    ``output_path`` is the explicit planned path — it overrides whatever name
+    ``digest()`` would derive internally.
+    """
+    from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
+
+    scene_index            = job_kwargs.get('scene_index', 0)
+    override_channel_names = job_kwargs.get('override_channel_names', False)
+    metadata_reader        = job_kwargs.get('metadata_reader', 'micro')
+    common_dir             = os.path.commonpath(file_paths)
+
+    base = AggregativeConverter(
+        series=scene_index,
+        override_channel_names=override_channel_names,
+    )
+    base.filepaths = file_paths
+
+    pixel_reader = job_kwargs.get('pixel_reader', 'micro')
+    micro_check_pixels = bool(job_kwargs.get('micro_check_pixels', False))
+    if metadata_reader == 'micro':
+        # micro-reader's metadata comes with its pixels (one parse)
+        pixel_reader, micro_check_pixels = 'micro', False
+    if pixel_reader == 'micro':
+        from eubi_bridge.core.micro_source import set_read_concurrency
+        set_read_concurrency(job_kwargs.get('decode_threads', 4))
+
+    await base.read_dataset(
+        readers_params={'aszarr': False},
+        pixel_reader=pixel_reader,
+        micro_check_pixels=micro_check_pixels,
+    )
+    await base.digest(
+        time_tag=job_kwargs.get('time_tag'),
+        channel_tag=job_kwargs.get('channel_tag'),
+        z_tag=job_kwargs.get('z_tag'),
+        y_tag=job_kwargs.get('y_tag'),
+        x_tag=job_kwargs.get('x_tag'),
+        axes_of_concatenation=job_kwargs.get('concatenation_axes'),
+        metadata_reader=metadata_reader,
+        output_path=common_dir,
+        pixel_reader=pixel_reader,      # reaches each file's ArrayManager
+        micro_check_pixels=micro_check_pixels,
+    )
+
+    if not base.managers:
+        raise RuntimeError(f"digest() produced no output groups for: {file_paths}")
+
+    # Pre-grouped files → exactly one output manager.  Use the planned path.
+    manager = next(iter(base.managers.values()))
+    await aggregative_worker(manager, output_path, **job_kwargs)
+
+
+@safe_worker_wrapper
+def aggregative_worker_from_paths(
+    file_paths: list,
+    output_path: str,
+    job_kwargs: dict,
+) -> dict:
+    """Full aggregative pipeline for one pre-grouped file set.
+
+    Runs entirely within this process so only picklable data crosses the
+    process boundary, enabling true CPU-core parallelism via ProcessPool.
+    Each subprocess starts its own JVM instance — no shared reader state.
+    """
+    import concurrent.futures
+    from eubi_bridge.core.memory import baseline_mb
+    baseline_mb()            # what this process holds before it reads anything
+
+    soft_start_jvm()
+
+    def _run():
+        from eubi_bridge.conversion import aggregative_path, pyramid_path
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            if pyramid_path.enabled() and loop.run_until_complete(
+                    aggregative_path.convert_group(file_paths, output_path, job_kwargs)):
+                return None                         # the 0.2.0 path (roadmap step 3)
+            with dask_config(scheduler='synchronous'):
+                return loop.run_until_complete(
+                    _aggregative_group_pipeline(file_paths, output_path, job_kwargs)
+                )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(_run).result()
+
+    return {"status": "success", "output": output_path}
+
+
+@safe_worker_wrapper
+def metadata_reader_sync(input_path: Union[str, ArrayManager],
+                         kwargs: dict) -> dict:
+    """
+    Synchronous worker for reading metadata from a single image file.
+    
+    Initializes an ArrayManager for the input file, reads its metadata,
+    and returns a structured dictionary of metadata information.
+    
+    Args:
+        input_path: Path to image file
+        kwargs: Job parameters (series, skip_dask, metadata_reader, etc.)
+    
+    Returns:
+        Dictionary containing:
+        - status: "success" or "error"
+        - input_path: Input file path
+        - series: Series index
+        - axes: Axis order (e.g., 'tczyx')
+        - shape: Array shape dictionary
+        - scale: Scale factors dictionary
+        - units: Units dictionary
+        - dtype: Data type
+        - channels: List of channel metadata dictionaries
+        - error: Error message (if status is "error")
+    """
+    if kwargs.get('verbose', False):
+        logger.info(f"[MetadataReader] Reading metadata: {input_path}")
+
+    from eubi_bridge.conversion import metadata_path, pyramid_path
+    if pyramid_path.enabled():
+        # the 0.2.0 path (roadmap step 4): what a conversion would write, via ozp
+        return metadata_path.read_metadata(input_path, kwargs)
+
+    try:
+        # Extract relevant parameters
+        series = kwargs.get('series', 0)
+        skip_dask = kwargs.get('skip_dask', False)
+        metadata_reader = kwargs.get('metadata_reader', 'bfio')
+
+        # Initialize ArrayManager
+        manager = ArrayManager( # TODO: implement a new metadata reader for this functionality. ArrayManager is for conversion and completes missing axes!
+            path=input_path,
+            series=series,
+            skip_dask=skip_dask,
+            metadata_reader=metadata_reader,
+        )
+
+        # Initialize the manager (load metadata from file)
+        asyncio.run(manager.init())
+        
+
+        # Fill default metadata
+        manager.fill_default_meta()
+        manager.fix_bad_channels()
+
+        # Extract metadata
+        metadata = {
+            "status": "success",
+            "input_path": str(input_path),
+            "series": series,
+            "axes": manager.axes,
+            "shape": dict(manager.shapedict),
+            "scale": dict(manager.scaledict),
+            "units": dict(manager.unitdict),
+            "dtype": str(manager.array.dtype),
+            "channels": manager.channels,
+            "ndim": manager.ndim,
+        }
+
+        if kwargs.get('verbose', False):
+            logger.info(f"[MetadataReader] Completed: {input_path}")
+
+        return metadata
+
+    except Exception as e:
+        logger.error(f"[MetadataReader] Error reading {input_path}: {str(e)}")
+        return {
+            "status": "error",
+            "input_path": str(input_path),
+            "error": str(e),
+        }

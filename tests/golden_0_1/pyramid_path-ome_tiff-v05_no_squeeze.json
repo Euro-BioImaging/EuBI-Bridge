@@ -1,0 +1,122 @@
+{
+ "img_scene1.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "scene_index": 1,
+     "source_path": "<tmp>\\img.ome.tif",
+     "tile_index": 0
+    }
+   },
+   "ome": {
+    "multiscales": [
+     {
+      "axes": [
+       {
+        "name": "t",
+        "type": "time",
+        "unit": "second"
+       },
+       {
+        "name": "c",
+        "type": "channel"
+       },
+       {
+        "name": "z",
+        "type": "space",
+        "unit": "micrometer"
+       },
+       {
+        "name": "y",
+        "type": "space",
+        "unit": "micrometer"
+       },
+       {
+        "name": "x",
+        "type": "space",
+        "unit": "micrometer"
+       }
+      ],
+      "datasets": [
+       {
+        "coordinateTransformations": [
+         {
+          "scale": [
+           1.0,
+           1.0,
+           0.25,
+           0.25,
+           0.25
+          ],
+          "type": "scale"
+         }
+        ],
+        "path": "0"
+       }
+      ],
+      "metadata": {},
+      "name": "Series 0"
+     }
+    ],
+    "omero": {
+     "channels": [
+      {
+       "active": true,
+       "coefficient": 1,
+       "color": "FFFFFF",
+       "family": "linear",
+       "inverted": false,
+       "label": "Channel 0",
+       "window": {
+        "end": 65535,
+        "max": 65535,
+        "min": 0,
+        "start": 0
+       }
+      },
+      {
+       "active": true,
+       "coefficient": 1,
+       "color": "FFFFFF",
+       "family": "linear",
+       "inverted": false,
+       "label": "Channel 1",
+       "window": {
+        "end": 65535,
+        "max": 65535,
+        "min": 0,
+        "start": 0
+       }
+      }
+     ],
+     "rdefs": {
+      "defaultT": 0,
+      "defaultZ": 0,
+      "model": "greyscale"
+     }
+    },
+    "version": "0.5"
+   }
+  },
+  "levels": [
+   [
+    [
+     1,
+     2,
+     1,
+     32,
+     36
+    ],
+    "uint16",
+    [
+     1,
+     1,
+     1,
+     32,
+     36
+    ],
+    "10273319353270242c5531fe23af093a1b5796ce123ecf49e5c52dc7e56c0c46"
+   ]
+  ]
+ }
+}

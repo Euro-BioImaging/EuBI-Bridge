@@ -157,7 +157,11 @@ def _config_to_react(cfg: dict) -> dict:
             # Read from the 'metadata' section, falling back to 'conversion'
             # only so a config written before the move still populates the form.
             "metadataReader":         meta.get("metadata_reader", conv.get("metadata_reader", "micro")),
-            "channelIntensityLimits": "from_datatype" if meta.get("channel_intensity_limits", conv.get("channel_intensity_limits", "from_dtype")) == "from_dtype" else "from_array",
+            # the conversion's names -> the form's ('auto' came back as 'from_array')
+            "channelIntensityLimits": {"from_dtype": "from_datatype", "from_array": "from_array",
+                                       "auto": "auto"}.get(
+                meta.get("channel_intensity_limits",
+                         conv.get("channel_intensity_limits", "from_dtype")), "from_datatype"),
             # Per-channel colour overrides, "idx,RRGGBB;..." as the CLI takes
             # them.  Empty means every channel keeps its source colour or gets
             # an automatic one.
@@ -223,7 +227,9 @@ def _react_to_config(data: dict) -> dict:
 
     n_layers = None if down_d.get("autoDetectLayers", True) else down_d.get("numLayers", 4)
 
-    ci_limits = "from_dtype" if meta_d.get("channelIntensityLimits", "from_datatype") == "from_datatype" else "from_array"
+    ci_limits = {"from_datatype": "from_dtype", "from_dtype": "from_dtype",
+                 "from_array": "from_array", "auto": "auto"}.get(
+        meta_d.get("channelIntensityLimits", "from_datatype"), "from_dtype")
 
     return {
         "cluster": {

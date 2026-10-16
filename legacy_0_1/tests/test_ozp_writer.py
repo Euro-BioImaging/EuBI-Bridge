@@ -22,6 +22,15 @@ if str(_ROOT) not in sys.path:
 pytest.importorskip("ome_zarr_pyramid")
 
 
+@pytest.fixture(autouse=True)
+def _old_path(monkeypatch):
+    """The ozp writer of the OLD conversion path (core/ozp_writer.py), which still writes
+    every file the new path does not take (Bio-Formats files, for one). Since step 1d the
+    new path converts micro-reader files by default; it is compared with this one in
+    tests/test_pyramid_path.py."""
+    monkeypatch.setenv("EUBI_NEW_PATH", "0")
+
+
 @pytest.fixture(scope="module")
 def source(tmp_path_factory):
     import tifffile

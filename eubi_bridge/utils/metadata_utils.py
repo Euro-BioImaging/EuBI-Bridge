@@ -428,9 +428,9 @@ def parse_channels(manager, **kwargs):
 
 def read_ome_zarr_metadata(zarr_path: str) -> dict:
     """
-    Read metadata from a single OME-Zarr file using Pyramid.
-    
-    Fast, lightweight metadata extraction without JVM or ArrayManager.
+    Read metadata from a single OME-Zarr file with ome_zarr_pyramid.
+
+    Fast, lightweight metadata extraction without a JVM.
     
     Parameters
     ----------
@@ -451,28 +451,8 @@ def read_ome_zarr_metadata(zarr_path: str) -> dict:
         - channels: List of channel metadata
         - error: Error message (if status is "error")
     """
-    try:
-        from eubi_bridge.ngff.multiscales import Pyramid
-        
-        pyr = Pyramid(zarr_path)
-        
-        return {
-            "status": "success",
-            "input_path": str(zarr_path),
-            "axes": pyr.axes,
-            "shape": dict(zip(pyr.axes, pyr.shape)),
-            "scale": dict(zip(pyr.axes, pyr.meta.get_base_scale())),
-            "units": pyr.meta.unit_dict,
-            "dtype": str(pyr.dtype),
-            "channels": pyr.meta.get_channels(),
-        }
-    except Exception as e:
-        logger.error(f"Failed to read OME-Zarr metadata from {zarr_path}: {e}")
-        return {
-            "status": "error",
-            "input_path": str(zarr_path),
-            "error": str(e),
-        }
+    from eubi_bridge.conversion import metadata_path
+    return metadata_path.read_ome_zarr(zarr_path)       # read by ozp (step 4)
 
 
 async def read_ome_zarr_metadata_from_collection(zarr_paths) -> list:

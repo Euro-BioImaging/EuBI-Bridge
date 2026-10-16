@@ -553,10 +553,10 @@ class ConversionConfig(BaseModel):
     # 'auto' is the on-disk sentinel; _collect_params converts it to None at
     # runtime — we accept both here so JSON round-trips work unchanged.
     dtype: Optional[str] = "auto"
-    # Which writer stores the output: ome_zarr_pyramid on dyna-zarr ('ozp';
-    # core/ozp_writer.py) or eubi-bridge's own ('eubi').  'auto' (default) is
-    # 'ozp' wherever it applies and 'eubi' where ozp cannot write the output yet
-    # (kept resolution levels not named 0..n-1); an explicit 'ozp' refuses those.
+    # RETIRED in 0.2.0 (roadmap step 6): ome_zarr_pyramid writes every output.
+    # Still accepted, so saved configs, batches and scripts keep working; 'eubi'
+    # (eubi-bridge's own writer, moved to legacy_0_1/) warns once and writes with
+    # ome_zarr_pyramid.
     writer: Literal['auto', 'eubi', 'ozp'] = 'auto'
     # The bytes backend of the ozp writer (dyna-zarr): TensorStore, or zarrista (Rust,
     # zarrs; `pip install "dyna-zarr[zarrista]"`, which installs zarrista-bounded). With
@@ -607,6 +607,29 @@ class ConversionConfig(BaseModel):
                 f"Unknown compressor '{v}'. "
                 f"Supported across v2+v3: {_ANY_LABEL}."
             )
+        return v
+
+    @field_validator("writer", mode="before")
+    @classmethod
+    def _retired_writer(cls, v):
+        """writer='eubi' (retired in 0.2.0): warned about once, written by ozp."""
+        if isinstance(v, str) and v.strip().lower() == "eubi":
+            if "writer" not in _retired_warned:
+                _retired_warned.add("writer")
+                _logger.warning(
+                    "DEPRECATION: writer='eubi' is no longer available: eubi-bridge 0.2.0 "
+                    "writes every output with ome_zarr_pyramid (same pixels). Remove "
+                    "'writer' from your config, batch or script; it will be rejected in "
+                    "a future release.")
+            return "ozp"
+        return v
+
+    @field_validator("export_acquisition_metadata", mode="before")
+    @classmethod
+    def _tristate_words(cls, v):
+        """'auto' / 'on' / 'off', as the GUI and a batch cell spell the three states."""
+        if isinstance(v, str):
+            return {"auto": None, "on": True, "off": False}.get(v.strip().lower(), v)
         return v
 
     @field_validator("skip_dask")
