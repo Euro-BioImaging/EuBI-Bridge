@@ -15,7 +15,6 @@ import zarr
 
 from eubi_bridge.core.metadata_extractors import MetadataExtractorFactory
 from eubi_bridge.core.reader_interface import ImageReader
-from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.jvm_manager import soft_start_jvm
 from eubi_bridge.utils.logging_config import get_logger
 
@@ -74,10 +73,9 @@ async def read_single_image(
 
     # Route to appropriate reader
     if suffix.endswith('.zarr'):
-        from eubi_bridge.core.pyramid_reader import read_pyramid
-        logger.debug("Detected NGFF/Zarr format")
-        reader = read_pyramid(input_path, aszarr=aszarr, **kwargs)
-    elif suffix.endswith('.h5'):
+        raise ValueError(f"{input_path}: an OME-Zarr input is read by ome_zarr_pyramid "
+                         f"(conversion/legacy_image.py: NgffFile), not the older readers")
+    if suffix.endswith('.h5'):
         from eubi_bridge.core.h5_reader import read_h5
         logger.debug("Detected HDF5 format")
         reader = read_h5(input_path, **kwargs)

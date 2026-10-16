@@ -8,7 +8,7 @@ backend-path = ["."]
 
 [project]
 name = "eubi_bridge"
-version = "0.1.6"
+version = "0.2.0"
 description = "A package for converting datasets to OME-Zarr format."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -30,7 +30,7 @@ dependencies = [
     "bioio-tifffile-fork-by-bugra>=0.0.1b2",
     "dask>=2024.12.1",
     "dyna-zarr>=0.1.0",
-    "ome_zarr_pyramid[remote]>=0.1.0",
+    "ome_zarr_pyramid[remote]>=0.2.0",
     "dask-jobqueue>=0.0.0",
     "distributed>=2024.12.1",
     "micro-reader>=0.0.3",
@@ -103,7 +103,7 @@ dependencies = [
     "tensorstore>=0.0.0",
     "tifffile>=2025.5.21,<2026",
     "micro-reader>=0.0.3",
-    "ome_zarr_pyramid[remote]>=0.1.0",
+    "ome_zarr_pyramid[remote]>=0.2.0",
     "h5py",
     "ome-types",
     "pydantic>=2.11.7",

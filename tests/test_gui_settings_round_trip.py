@@ -35,14 +35,12 @@ def _fresh(page):
 def _set(page):
     """Non-default values in every field this round trip covers."""
     from eubi_bridge.utils.capabilities import has_bioformats
-    page._writer.setCurrentText("ozp")
     if page._io_backend.count() > 1:
         page._io_backend.setCurrentText("zarrista")
     page._export_acquisition.setCurrentIndex(page._export_acquisition.findData(True))
     page._use_micro_reader.setChecked(True)
     page._channel_intensity.setCurrentText("auto")      # 'auto' was saved / run as from_array
     page._codec.setCurrentText("bz2")
-    page._max_concurrent_downscale_layers.setValue(5)
     page._slurm_time.setText("02:30:00")
     page._slurm_account.setText("lab42")
     page._slurm_partition.setText("gpu")
@@ -71,12 +69,10 @@ def test_new_fields_survive_save_and_load(page, tmp_path, capsys):
     stored, gui = _saved_and_loaded(page, tmp_path)
     capsys.readouterr()
     conv, cluster, readers = stored["conversion"], stored["cluster"], stored["readers"]
-    assert conv["writer"] == "ozp"
     assert conv["io_backend"] == page._io_backend.currentText()
     assert conv["export_acquisition_metadata"] is True
     assert stored["metadata"]["channel_intensity_limits"] == "auto"
     assert "micro_check_pixels" not in readers or readers["micro_check_pixels"] is False
-    assert cluster["max_concurrent_downscale_layers"] == 5
     assert (cluster["slurm_time"], cluster["slurm_account"], cluster["slurm_partition"],
             cluster["slurm_worker_timeout"], cluster["slurm_sif_path"]) == (
         "02:30:00", "lab42", "gpu", 123, "/images/eubi.sif")
@@ -87,12 +83,10 @@ def test_new_fields_survive_save_and_load(page, tmp_path, capsys):
     other = _fresh(page)
     try:
         other._load_config_to_ui(gui)
-        assert other._writer.currentText() == "ozp"
         assert other._io_backend.currentText() == page._io_backend.currentText()
         assert other._export_acquisition.currentData() is True
         assert other._channel_intensity.currentText() == "auto"
         assert other._codec.currentText() == "bz2"
-        assert other._max_concurrent_downscale_layers.value() == 5
         assert other._slurm_account.text() == "lab42"
         assert other._slurm_worker_timeout.value() == 123
         assert other._memory_budget.value() == 12.0
@@ -118,24 +112,18 @@ def test_the_run_receives_them(page):
     from eubi_bridge.utils.capabilities import has_bioformats
     _set(page)
     kwargs = _build_kwargs(page._ui_to_config())
-    assert kwargs["writer"] == "ozp"
     assert kwargs["io_backend"] == page._io_backend.currentText()
     assert kwargs["export_acquisition_metadata"] is True
     assert kwargs["channel_intensity_limits"] == "auto"
     assert kwargs["compressor"] == "bz2"
     # retired (decision 'D5: micro_check_pixels'): no longer on the form or in the run
     assert "micro_check_pixels" not in kwargs and not hasattr(page, "_micro_check_pixels")
-    assert kwargs["max_concurrent_downscale_layers"] == 5
+    # retired with eubi-bridge's own writer (0.2.0): not on the form, not in the run
+    assert {"writer", "queue_size", "max_concurrent_downscale_layers"}.isdisjoint(kwargs)
+    assert not any(hasattr(page, a) for a in ("_writer", "_queue_size",
+                                              "_max_concurrent_downscale_layers"))
     assert kwargs["memory_budget"] == "12GB" and kwargs["decode_memory"] == "0.5GB"
     assert kwargs["slurm_account"] == "lab42"
-
-
-def test_the_eubi_writer_pins_tensorstore(page):
-    page._writer.setCurrentText("eubi")
-    assert page._io_backend.currentText() == "tensorstore"
-    assert not page._io_backend.isEnabled()
-    page._writer.setCurrentText("auto")
-    assert page._io_backend.isEnabled()
 
 
 def test_an_older_payload_keeps_the_file_values(tmp_path, capsys):
@@ -155,9 +143,8 @@ def test_an_older_payload_keeps_the_file_values(tmp_path, capsys):
     assert stored["conversion"]["writer"] == "eubi"
 
 
-def test_eubi_writer_settings_follow_the_writer(page):
-    page._writer.setCurrentText("ozp")
-    assert not page._queue_size.isEnabled()
-    assert not page._max_concurrent_downscale_layers.isEnabled()
-    page._writer.setCurrentText("eubi")
-    assert page._queue_size.isEnabled() and page._max_concurrent_downscale_layers.isEnabled()
+def test_a_saved_eubi_writer_still_loads_and_writes_with_ozp(capsys):
+    """writer='eubi' (retired in 0.2.0) in a saved config, batch or script: accepted,
+    warned about once, written with ome_zarr_pyramid."""
+    from eubi_bridge.core.config_models import ConversionConfig
+    assert ConversionConfig(writer="eubi").writer == "ozp"

@@ -35,7 +35,7 @@ setup(
     long_description_content_type="text/markdown",
     url='https://github.com/Euro-BioImaging/EuBI-Bridge',
     license='MIT',
-    packages=find_packages(exclude=['tests', 'test_data', 'docs', '_archive', 'new_tests', 'eubi_bridge.bioformats', 'eubi_bridge.bioformats.*']),
+    packages=find_packages(exclude=['tests', 'test_data', 'docs', '_archive', 'new_tests', 'legacy_0_1', 'legacy_0_1.*', 'eubi_bridge.bioformats', 'eubi_bridge.bioformats.*']),
     include_package_data=True,
     package_data={
         "eubi_bridge": [

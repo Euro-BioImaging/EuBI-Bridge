@@ -31,9 +31,7 @@ from typing import Callable, Union
 import pandas as pd
 from natsort import natsorted
 
-from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
 from eubi_bridge.conversion.conversion_worker import (aggregative_worker_from_paths,
-                                                      aggregative_worker_sync,
                                                       unary_worker_sync)
 from eubi_bridge.conversion.worker_init import initialize_worker_process
 from eubi_bridge.core.config_models import (AggregativeConversionJob,
@@ -263,8 +261,6 @@ async def _dispatch_unary_with_slurm(jobs: list) -> list:
     return results
 
 
-
-
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Aggregative planning
@@ -286,8 +282,8 @@ def _build_aggregative_plan(
     """Determine output groups and allocate ``file_workers``.
 
     Uses dummy shapes for FileSet — grouping is purely tag-based and correct
-    regardless of shape values.  Actual shapes are determined inside each
-    worker via ``read_dataset()`` + ``digest()``.
+    regardless of shape values.  Each worker reads the actual shapes
+    (``aggregative_path.convert_group``).
     """
     from eubi_bridge.conversion.fileset_io import FileSet
 
@@ -326,7 +322,7 @@ def _build_aggregative_plan(
         # store_join, not os.path.join: on Windows the latter put a backslash into
         # a remote key (".../out\\name.zarr"), so an S3 output landed beside, not
         # under, the requested prefix
-        from eubi_bridge.core.writers import store_join
+        from eubi_bridge.core.output_store import store_join
         full_out = store_join(output_path, name)
         if full_out not in file_groups:
             file_groups[full_out] = {'source_files': []}
@@ -396,17 +392,15 @@ def dispatch_mixed_jobs(unary_jobs: list, aggregative_jobs: list) -> list:
     output counts as one task however many files it joins. Failures are reported once,
     at the end, for all of them.
 
-    On SLURM, and on the old path (EUBI_NEW_PATH=0), the two kinds still run one
-    after the other, as in 0.1.5."""
+    On SLURM the two kinds still run one after the other, as in 0.1.5."""
     import functools
 
-    from eubi_bridge.conversion import pyramid_path
     from eubi_bridge.core.memory import main_process_mb, process_mb
     jobs = list(unary_jobs) + list(aggregative_jobs)
     if not jobs:
         return []
     first = jobs[0].cluster
-    if first.on_slurm or not pyramid_path.enabled():
+    if first.on_slurm:
         results = dispatch_unary_jobs(unary_jobs) if unary_jobs else []
         if aggregative_jobs:
             results += dispatch_aggregative_jobs(aggregative_jobs)
@@ -749,12 +743,11 @@ def _aggregative_groups(
                     raise ValueError(channel_tag_format_error(
                         channel_tag, [Path(p).name for p in filepaths]))
 
-        from eubi_bridge.conversion import aggregative_path, pyramid_path
-        if pyramid_path.enabled():
-            # by name, before the files are grouped (a stray file with tags in its name
-            # would otherwise break the grouping): an OME companion is left out, files of
-            # mixed formats are refused (roadmap step 3)
-            filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
+        from eubi_bridge.conversion import aggregative_path
+        # by name, before the files are grouped (a stray file with tags in its name
+        # would otherwise break the grouping): an OME companion is left out, files of
+        # mixed formats are refused (roadmap step 3)
+        filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
         common_dir  = os.path.commonpath(filepaths_accepted)
         cluster_cfg = ClusterConfig(**{k: v for k, v in kwargs.items()
                                        if k in ClusterConfig.model_fields})
@@ -778,12 +771,12 @@ def _aggregative_groups(
                 f"file_workers={file_workers}"
             )
 
-    # ── Screen each output's files by name (the 0.2.0 path, roadmap step 3) ──
+    # ── Screen each output's files by name (roadmap step 3) ──
     # a plan made beforehand (the GUI's validate_aggregative): an OME companion is left
     # out (its files read it themselves); files of mixed formats are refused before
     # anything is opened
-    from eubi_bridge.conversion import aggregative_path, pyramid_path
-    if plan is not None and pyramid_path.enabled():
+    from eubi_bridge.conversion import aggregative_path
+    if plan is not None:
         screened = {out: aggregative_path.screen_group(paths, os.path.basename(out))
                     for out, paths in groups.items()}
         groups = {out: paths for out, paths in screened.items() if paths}

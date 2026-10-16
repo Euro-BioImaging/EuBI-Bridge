@@ -31,6 +31,8 @@ from pathlib import Path
 import pytest
 import zarr
 
+from tests.conftest import requires_full
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -242,7 +244,8 @@ def test_downscale_methods(tmp_path, method):
     ("--use_threading", "True"),
     ("--tensorstore_data_copy_concurrency", "2"),
     ("--bf_tile_size_mb", "256"),
-    ("--force_bioformats", "True"),
+    # Bio-Formats: eubi-bridge-lite refuses it with NeedsFullEubiBridge
+    pytest.param(("--force_bioformats", "True"), marks=requires_full),
 ])
 def test_cluster_params_run(tmp_path, opt):
     out = tmp_path / "o"

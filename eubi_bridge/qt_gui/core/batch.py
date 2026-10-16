@@ -144,6 +144,8 @@ _INDEX_TIP = ("'all', a single index, or a comma-separated list such as '0,2,3'.
 # sensible single-cell editor; those keep the baseline value.
 #: Bio-Formats installed (the full eubi-bridge); lite offers micro-reader only
 _BIOFORMATS = has_bioformats()
+#: the reader choices, editable per row only where there is a choice (the full one)
+_FULL_ONLY_KEYS = ("force_bioformats", "metadata_reader", "pixel_reader")
 
 _PARAM_SPECS: tuple[ParamSpec, ...] = (
     # ---- Paths ----
@@ -258,8 +260,6 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec("export_acquisition_metadata", "Acquisition metadata", "choice",
               ("auto", "on", "off"), tab="Conversion",
               tooltip="auto: on when one acquisition is split into several outputs."),
-    ParamSpec("writer", "Writer", "choice", _literal_options(ConversionConfig, "writer"),
-              tab="Conversion", group="Writer"),
     ParamSpec("io_backend", "Byte backend", "choice",
               _literal_options(ConversionConfig, "io_backend"),
               tab="Conversion", group="Writer"),
@@ -389,6 +389,8 @@ def uneditable_reason(key: str) -> str | None:
         return "edited together with 'compressor'"
     if key == "zarr_format":
         return "derived from 'OME-Zarr version': set that instead"
+    if not _BIOFORMATS and key in _FULL_ONLY_KEYS:
+        return "eubi-bridge-lite reads with micro-reader only: nothing to choose"
     if key not in _SPEC_BY_KEY:
         return "not editable per row"
     return None
@@ -1091,8 +1093,11 @@ class BatchModel:
         """Rows whose settings a conversion would refuse, found before anything runs:
         a choice the editor does not offer (an older CSV), or a combination the
         conversion's own rules reject (a codec the OME-Zarr version does not take).
-        Each distinct combination of settings is checked once."""
+        Each distinct combination of settings is checked once. In eubi-bridge-lite, a
+        row that needs the full one (a Bio-Formats reader from an older CSV) is reported
+        as the conversion would refuse it."""
         from eubi_bridge.core.config_models import ConversionJob
+        from eubi_bridge.utils.capabilities import NeedsFullEubiBridge, check_run
         base = self._effective_kwargs()
         found: list[str] = []
         verdicts: dict[str, str] = {}
@@ -1111,9 +1116,16 @@ class BatchModel:
                 if merged.get("dtype") == "auto":
                     merged["dtype"] = None
                 try:
-                    ConversionJob.from_kwargs(str(row.get("input_path") or ""),
-                                              str(row.get("output_path") or ""), merged)
+                    job = ConversionJob.from_kwargs(str(row.get("input_path") or ""),
+                                                    str(row.get("output_path") or ""), merged)
+                    check_run(job.metadata.metadata_reader, job.readers.pixel_reader,
+                              job.cluster.on_slurm, job.readers.force_bioformats)
                     verdicts[signature] = ""
+                except NeedsFullEubiBridge as exc:
+                    needs = [line.strip(" -") for line in str(exc).splitlines()
+                             if line.startswith("  - ")]
+                    verdicts[signature] = ("needs the full eubi-bridge: "
+                                           + "; ".join(needs))
                 except Exception as exc:                      # noqa: BLE001 - reported
                     errors = getattr(exc, "errors", None)
                     if callable(errors):

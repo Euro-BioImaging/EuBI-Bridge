@@ -2,8 +2,8 @@
 unchanged (eubi_bridge/core/micro_source.py).
 
 The mapping from eubi-bridge's selection (scene rank, tile, as_mosaic) to a
-micro-reader image, the safety net that keeps the standard reader whenever
-the two disagree, and one conversion end to end against the standard path.
+micro-reader image, the older readers handing micro-reader's pixels to the conversion
+(``LegacyFile``), and conversions end to end against the standard reader.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ pytest.importorskip("micro_reader")
 tifffile = pytest.importorskip("tifffile")
 
 from eubi_bridge.core import micro_source  # noqa: E402
-from eubi_bridge.core.micro_source import micro_array, swap_in, verify  # noqa: E402
+from eubi_bridge.core.micro_source import micro_array  # noqa: E402
 
 
 def _reader_source(arr):
@@ -25,6 +25,16 @@ def _reader_source(arr):
     one level down, in its adapter (``arr._source._source``)."""
     src = getattr(arr, "_source", None)
     return getattr(src, "_source", src)
+
+
+def _legacy_images(path, **kwargs):
+    """Every scene's image as the older readers hand it to the conversion
+    (conversion/legacy_image.py: ``LegacyFile``, the reader behind it kept open)."""
+    from eubi_bridge.conversion.legacy_image import LegacyFile
+    from eubi_bridge.core.config_models import ConversionJob
+    job = ConversionJob.from_kwargs(str(path), "out", {"scene_index": "all", **kwargs})
+    f = LegacyFile(job)
+    return [f.image(index) for index in f.indices]
 
 RNG = np.random.default_rng(5)
 
@@ -96,34 +106,6 @@ def test_out_of_range_and_unreadable_files_give_reasons(tmp_path):
     assert arr is None and "cannot read" in reason
 
 
-def test_verify_catches_shape_and_pixel_differences(tmp_path):
-    path, a, _ = _two_series(tmp_path)
-    arr, _ = micro_array(path, 0, None)
-    good = a.transpose(1, 0, 2, 3)[None]
-    assert verify(arr, good) == ""
-    assert "shape" in verify(arr, good[:, :, :2])
-    bad = good.copy()
-    bad[0, 0, 0, 10, 12] += 1                                     # inside the checked window
-    assert "pixels differ" in verify(arr, bad)
-
-
-class _Loader:
-    """What swap_in needs of eubi-bridge's image reader: its array."""
-    def __init__(self, arraydata):
-        self.arraydata = arraydata
-
-
-def test_swap_in_keeps_the_standard_reader_on_any_mismatch(tmp_path, caplog):
-    path, a, _ = _two_series(tmp_path)
-    good = a.transpose(1, 0, 2, 3)[None]
-    assert swap_in(_Loader(good), path, 0, None) is not None
-    bad = good.copy()
-    bad[0, 0, 0, 10, 12] += 1
-    assert swap_in(_Loader(bad), path, 0, None) is None           # pixels differ
-    assert swap_in(_Loader(good), path, 1, None) is None          # another scene's shape
-    assert swap_in(_Loader(good), path, 0, 3) is None             # no such tile
-
-
 def test_micro_source_survives_pickling_and_deep_copy(tmp_path):
     import copy
     path, a, _ = _two_series(tmp_path)
@@ -166,24 +148,16 @@ def test_conversion_writes_the_same_pixels_with_both_readers(tmp_path):
 @requires_full
 @pytest.mark.parametrize("reader,expect_micro", [("micro", True), ("standard", False)])
 def test_loaded_scenes_hold_micro_reader_arrays(tmp_path, reader, expect_micro):
-    """The layer the writer reads from: with pixel_reader='micro' each scene
-    manager's array is a micro-reader source, with 'standard' it is not."""
-    import asyncio
-
-    from eubi_bridge.core.data_manager import ArrayManager
+    """The layer the conversion reads from: with pixel_reader='micro' each scene's
+    array is a micro-reader source, with 'standard' it is not."""
     from eubi_bridge.core.micro_source import MicroSource
     from eubi_bridge.utils.jvm_manager import soft_start_jvm
     soft_start_jvm()                         # bfio metadata, as a conversion worker does
     path, a, _ = _two_series_ome(tmp_path)
-
-    async def load():
-        manager = ArrayManager(path, metadata_reader="bfio", pixel_reader=reader)
-        return await manager.load_scenes(scene_indices="all", mosaic_tile_index=0)
-
-    scenes = list(asyncio.run(load()).values())
+    scenes = _legacy_images(path, metadata_reader="bfio", pixel_reader=reader)
     assert len(scenes) == 2
-    for mgr in scenes:
-        assert isinstance(_reader_source(mgr.array), MicroSource) == expect_micro
+    for image in scenes:
+        assert isinstance(_reader_source(image.array), MicroSource) == expect_micro
     np.testing.assert_array_equal(np.asarray(scenes[0].array), a.transpose(1, 0, 2, 3)[None])
 
 
@@ -296,9 +270,8 @@ def test_a_file_in_use_is_not_closed(tmp_path, monkeypatch):
 
 def test_aggregative_conversion_reads_with_micro_reader(tmp_path, monkeypatch):
     """Aggregative mode forwarded no reader settings: pixel_reader must reach
-    each file's array (the old path: AggregativeConverter.read_dataset; the new
-    one: micro_source.micro_array), and the z stack must match the standard
-    reader's."""
+    each file's array (micro_source.micro_array), and the z stack must match the
+    standard reader's."""
     import zarr
 
     from eubi_bridge.core import micro_source as ms
@@ -335,59 +308,6 @@ def test_aggregative_conversion_reads_with_micro_reader(tmp_path, monkeypatch):
     assert opened.count(True) >= 5                                # every plane, micro-reader
     np.testing.assert_array_equal(written["micro"], written["standard"])
     np.testing.assert_array_equal(np.squeeze(written["micro"]), stack)
-
-
-# -- pixels checked once per layout (aggregative inputs) ----------------------------
-
-def _plane_files(tmp_path, n, shape=(24, 30), dtype="u2", prefix="p"):
-    paths, data = [], []
-    for k in range(n):
-        d = RNG.integers(0, 200, shape).astype(dtype)
-        path = str(tmp_path / f"{prefix}{k}.tif")
-        tifffile.imwrite(path, d)
-        paths.append(path)
-        data.append(d[None, None, None])                      # as T C Z Y X
-    return paths, data
-
-
-def test_pixels_are_checked_once_per_layout(tmp_path, monkeypatch):
-    """Reading the check window costs a whole plane through the standard
-    reader per file (45 s of a 2347-file run): once per layout is enough."""
-    windows = []
-    real = micro_source._window
-    monkeypatch.setattr(micro_source, "_window",
-                        lambda *a: windows.append(1) or real(*a))
-    paths, data = _plane_files(tmp_path, 4)
-    other, other_data = _plane_files(tmp_path, 1, shape=(10, 12), prefix="q")
-    verified = set()
-    for path, d in zip(paths + other, data + other_data):
-        assert swap_in(_Loader(d), path, 0, None, verified_layouts=verified) is not None
-    # first file of each of the two layouts: two windows each (micro + standard)
-    assert len(windows) == 2 * 2
-    assert len(verified) == 2
-
-
-def test_a_later_file_still_needs_shape_and_dtype_to_match(tmp_path):
-    paths, data = _plane_files(tmp_path, 3)
-    verified = set()
-    assert swap_in(_Loader(data[0]), paths[0], 0, None, verified_layouts=verified) is not None
-    assert swap_in(_Loader(data[1][..., :20]), paths[1], 0, None,
-                   verified_layouts=verified) is None                 # shape differs
-    assert swap_in(_Loader(data[2].astype("i4")), paths[2], 0, None,
-                   verified_layouts=verified) is None                 # dtype differs
-
-
-def test_a_failed_check_does_not_vouch_for_the_layout(tmp_path):
-    paths, data = _plane_files(tmp_path, 2)
-    verified = set()
-    bad = data[0].copy()
-    bad[..., 12, 15] += 1                                     # inside the checked window
-    assert swap_in(_Loader(bad), paths[0], 0, None, verified_layouts=verified) is None
-    assert not verified
-    wrong = data[1].copy()
-    wrong[..., 12, 15] += 1
-    assert swap_in(_Loader(wrong), paths[1], 0, None,
-                   verified_layouts=verified) is None                 # still pixel-checked
 
 
 # -- micro-reader as the reader: no standard reader opened ---------------------------
@@ -469,12 +389,9 @@ def test_rgb_channel_count_may_or_may_not_include_samples(tmp_path):
 
 @requires_full
 def test_scenes_load_without_opening_the_standard_reader(tmp_path, monkeypatch):
-    """The layer the writer reads from, with the standard TIFF reader made to
+    """The layer the conversion reads from, with the standard TIFF reader made to
     fail: pixel_reader='micro' must not need it."""
-    import asyncio
-
     from eubi_bridge.core import tiff_reader
-    from eubi_bridge.core.data_manager import ArrayManager
     from eubi_bridge.core.micro_source import MicroSource
     from eubi_bridge.utils.jvm_manager import soft_start_jvm
     soft_start_jvm()
@@ -487,14 +404,9 @@ def test_scenes_load_without_opening_the_standard_reader(tmp_path, monkeypatch):
     monkeypatch.setattr(tiff_reader, "read_tiff_image", no_standard_reader)
     monkeypatch.setattr(pff_reader, "read_pff", no_standard_reader)
     path, a, _ = _two_series_ome(tmp_path)
-
-    async def load():
-        manager = ArrayManager(path, metadata_reader="bfio", pixel_reader="micro")
-        return await manager.load_scenes(scene_indices="all", mosaic_tile_index=0)
-
-    scenes = list(asyncio.run(load()).values())
+    scenes = _legacy_images(path, metadata_reader="bfio", pixel_reader="micro")
     assert len(scenes) == 2
-    assert all(isinstance(_reader_source(m.array), MicroSource) for m in scenes)
+    assert all(isinstance(_reader_source(image.array), MicroSource) for image in scenes)
     np.testing.assert_array_equal(np.asarray(scenes[0].array), a.transpose(1, 0, 2, 3)[None])
 
 
@@ -503,20 +415,12 @@ def test_disagreement_with_the_metadata_keeps_the_standard_reader(tmp_path):
     """tifffile's own multi-series TIFF: micro-reader sees 2 scenes, Bio-Formats
     (the metadata) 8.  Who is right is not micro-reader's call: the file is
     read the standard way, as before."""
-    import asyncio
-
-    from eubi_bridge.core.data_manager import ArrayManager
     from eubi_bridge.core.micro_source import MicroSource
     from eubi_bridge.utils.jvm_manager import soft_start_jvm
     soft_start_jvm()
     path, _, _ = _two_series(tmp_path)
-
-    async def load():
-        manager = ArrayManager(path, metadata_reader="bfio", pixel_reader="micro")
-        return await manager.load_scenes(scene_indices=0, mosaic_tile_index=0)
-
-    (scene,) = asyncio.run(load()).values()
-    assert not isinstance(getattr(scene.array, "_source", None), MicroSource)
+    scene = _legacy_images(path, metadata_reader="bfio", pixel_reader="micro")[0]
+    assert not isinstance(_reader_source(scene.array), MicroSource)
 
 
 def test_views_count_as_images_against_bio_formats(tmp_path):
@@ -622,26 +526,19 @@ def test_imaris_reads_with_micro_reader_and_keeps_its_levels(tmp_path):
     """Imaris has its own route (IMSImageMeta, native metadata), which used to
     bypass pixel_reader: the base array and the kept levels must come from
     micro-reader and equal the file's."""
-    import asyncio
     pytest.importorskip("h5py")
     from tests._ims_writer import write_pyramid_ims
 
-    from eubi_bridge.core.data_manager import ArrayManager
     from eubi_bridge.core.micro_source import MicroSource
     data = RNG.integers(0, 4000, (1, 2, 5, 21, 27)).astype("u2")
     path = str(tmp_path / "pyr.ims")
     write_pyramid_ims(path, data)
 
-    async def load(**kw):
-        manager = ArrayManager(path, metadata_reader="bfio", **kw)
-        (mgr,) = (await manager.load_scenes(scene_indices=0, mosaic_tile_index=0)).values()
-        return mgr
-
-    mgr = asyncio.run(load(pixel_reader="micro", keep_existing_resolutions=True))
-    assert isinstance(_reader_source(mgr.array), MicroSource)
-    levels = list(mgr.pyr.layers.values())
+    (image,) = _legacy_images(path, metadata_reader="bfio", pixel_reader="micro",
+                              keep_existing_resolutions=True)
+    levels = [level.array for level in image.resolutions]
     assert len(levels) == 2 and all(isinstance(_reader_source(lv), MicroSource) for lv in levels)
     np.testing.assert_array_equal(np.asarray(levels[0]), data)
     np.testing.assert_array_equal(np.asarray(levels[1]), data[:, :, :, ::2, ::2])
-    standard = asyncio.run(load(pixel_reader="standard"))
-    assert not isinstance(getattr(standard.array, "_source", None), MicroSource)
+    (standard,) = _legacy_images(path, metadata_reader="bfio", pixel_reader="standard")
+    assert not isinstance(_reader_source(standard.array), MicroSource)

@@ -1,0 +1,118 @@
+{
+ "rgb.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "scene_index": 0,
+     "source_path": "<tmp>\\rgb.czi",
+     "tile_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          1.0,
+          1.0
+         ],
+         "type": "scale"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 2",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     3,
+     40,
+     48
+    ],
+    "uint8",
+    [
+     1,
+     40,
+     48
+    ],
+    "f21f3d2e417ab4fd2ac4fc26bc4957c867e2052f3fc65dea57eff3cda01130c6"
+   ]
+  ]
+ }
+}

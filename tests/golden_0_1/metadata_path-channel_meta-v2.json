@@ -1,0 +1,129 @@
+{
+ "attrs": {
+  "eubi_bridge": {
+   "acquisition": {
+    "scene_index": 0,
+    "source_path": "<tmp>\\two_channels.ome.tif",
+    "tile_index": 0
+   }
+  },
+  "multiscales": [
+   {
+    "axes": [
+     {
+      "name": "t",
+      "type": "time",
+      "unit": "second"
+     },
+     {
+      "name": "c",
+      "type": "channel"
+     },
+     {
+      "name": "z",
+      "type": "space",
+      "unit": "micrometer"
+     },
+     {
+      "name": "y",
+      "type": "space",
+      "unit": "micrometer"
+     },
+     {
+      "name": "x",
+      "type": "space",
+      "unit": "micrometer"
+     }
+    ],
+    "datasets": [
+     {
+      "coordinateTransformations": [
+       {
+        "scale": [
+         1.0,
+         1.0,
+         2.0,
+         0.5,
+         0.5
+        ],
+        "type": "scale"
+       }
+      ],
+      "path": "0"
+     },
+     {
+      "coordinateTransformations": [
+       {
+        "scale": [
+         1.0,
+         1.0,
+         4.0,
+         1.0,
+         1.0
+        ],
+        "type": "scale"
+       }
+      ],
+      "path": "1"
+     },
+     {
+      "coordinateTransformations": [
+       {
+        "scale": [
+         1.0,
+         1.0,
+         8.0,
+         2.0,
+         2.0
+        ],
+        "type": "scale"
+       }
+      ],
+      "path": "2"
+     }
+    ],
+    "metadata": {},
+    "name": "Series 0",
+    "version": "0.4"
+   }
+  ],
+  "omero": {
+   "channels": [
+    {
+     "active": true,
+     "coefficient": 1,
+     "color": "FFFFFF",
+     "family": "linear",
+     "inverted": false,
+     "label": "A",
+     "window": {
+      "end": 65535,
+      "max": 65535,
+      "min": 0,
+      "start": 0
+     }
+    },
+    {
+     "active": true,
+     "coefficient": 1,
+     "color": "FF00FF",
+     "family": "linear",
+     "inverted": false,
+     "label": "B",
+     "window": {
+      "end": 65535,
+      "max": 65535,
+      "min": 0,
+      "start": 0
+     }
+    }
+   ],
+   "rdefs": {
+    "defaultT": 0,
+    "defaultZ": 0,
+    "model": "greyscale"
+   }
+  }
+ },
+ "xml": "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.openmicroscopy.org/Schemas/OME/2016-06 http://www.openmicroscopy.org/Schemas/OME/2016-06/ome.xsd\">\n  <Image ID=\"Image:0\" Name=\"Default Image\">\n    <Pixels ID=\"Pixels:1\" DimensionOrder=\"XYCZT\" Type=\"uint16\" SizeX=\"320\" SizeY=\"300\" SizeZ=\"8\" SizeC=\"2\" SizeT=\"1\" PhysicalSizeX=\"0.5\" PhysicalSizeXUnit=\"\u00b5m\" PhysicalSizeY=\"0.5\" PhysicalSizeYUnit=\"\u00b5m\" PhysicalSizeZ=\"2.0\" PhysicalSizeZUnit=\"\u00b5m\" TimeIncrement=\"1.0\" TimeIncrementUnit=\"s\">\n      <Channel ID=\"Channel:0\" Name=\"DAPI\" SamplesPerPixel=\"1\"/>\n      <Channel ID=\"Channel:1\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n    </Pixels>\n  </Image>\n</OME>\n"
+}

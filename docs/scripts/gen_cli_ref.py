@@ -87,13 +87,16 @@ KWARGS_SECTIONS: dict[str, Any] = {
 
 # Not documented: deprecated parameters, still accepted so old configs and
 # scripts keep working but without effect (bf_tile_size_mb, and
-# config_models.RETIRED_SETTINGS: skip_dask, on_local_cluster), the old names
+# config_models.RETIRED_SETTINGS: skip_dask, on_local_cluster; micro_check_pixels;
+# eubi-bridge's own writer, retired in 0.2.0: writer, queue_size,
+# max_concurrent_downscale_layers, tensorstore_data_copy_concurrency), the old names
 # of renamed settings (config_models.RENAMED_SETTINGS: documented under their
 # new names), and ones eubi sets itself (concurrent_jobs: how many conversions
 # the dispatcher runs at once, for the region budget).
 _HIDDEN_PARAMS: frozenset[str] = frozenset({
     "bf_tile_size_mb", "skip_dask", "concurrent_jobs", "on_local_cluster",
-    "process_memory_mb",
+    "process_memory_mb", "micro_check_pixels", "writer", "queue_size",
+    "max_concurrent_downscale_layers", "tensorstore_data_copy_concurrency",
     *RENAMED_SETTINGS})
 
 # All field names covered by config models — used to exclude duplicates from
@@ -131,7 +134,7 @@ _FIELD_HINTS: dict[str, str] = {
     "max_concurrent_downscale_layers": "How many pyramid levels are downscaled in parallel per file (default 1 = sequential, lowest memory).",
     # ConversionConfig
     "writer": "Which engine writes the OME-Zarr: `auto` (default: `ozp`, and `eubi` only where ozp cannot write the output yet), `ozp` (ome_zarr_pyramid on dyna-zarr) or `eubi` (eubi-bridge's own writer).",
-    "io_backend": "The bytes backend of the `ozp` writer: `tensorstore` (default) or `zarrista` (`pip install \"dyna-zarr[zarrista]\"`). With either, shards larger than the region budget are written chunk by chunk in bounded memory (local outputs).",
+    "io_backend": "The bytes backend ome_zarr_pyramid writes with: `tensorstore` (default) or `zarrista` (`pip install \"dyna-zarr[zarrista]\"`). With either, shards larger than the region budget are written chunk by chunk in bounded memory (local outputs).",
     "ome_zarr_version": "OME-Zarr (NGFF) version to write: `0.4` (backed by Zarr v2) or `0.5` (backed by Zarr v3, which enables sharding). This is the preferred control and supersedes `zarr_format` — the underlying zarr container format is derived from it.",
     "zarr_format": "**Deprecated** — use `ome_zarr_version` instead. Zarr container version: `2` = OME-Zarr 0.4 (classic chunk-based); `3` = OME-Zarr 0.5 (sharding support).",
     "skip_dask": "**Deprecated** and ignored: micro-reader reads without dask. Accepted so existing scripts keep working.",
@@ -651,10 +654,6 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
 
     # ── configure_conversion ──────────────────────────────────────────────────
     "configure.conversion": {
-        "writer": [
-            "# Always use eubi-bridge's own writer",
-            "eubi configure conversion --writer eubi",
-        ],
         "ome_zarr_version": [
             "# Default to OME-Zarr 0.5 (Zarr v3, enables sharding)",
             "eubi configure conversion --ome_zarr_version 0.5",

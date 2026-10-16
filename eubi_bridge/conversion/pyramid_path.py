@@ -1,15 +1,13 @@
-"""The conversion path of eubi-bridge 0.2.0: micro-reader -> ome_zarr_pyramid, no ArrayManager.
+"""The conversion path of eubi-bridge 0.2.0: micro-reader -> ome_zarr_pyramid.
 
-A file is opened with micro-reader, every image becomes an ome_zarr_pyramid ``Pyramid``
-(``PyramidCollection.from_file``), the job's settings are applied to each Pyramid by small
-stateless steps, and each output is ONE ``IO().write_pyramid`` call. Nothing goes through
-``ArrayManager``, ``MicroReader`` or the ``ome_types`` round trip of the old micro path.
+A file is opened with micro-reader (else with the older readers, ``legacy_image.py``),
+every image becomes an ome_zarr_pyramid ``Pyramid`` (``PyramidCollection.from_file``), the
+job's settings are applied to each Pyramid by small stateless steps, and each output is
+ONE ``IO().write_pyramid`` call.
 
-The DEFAULT for the files micro-reader reads (roadmap step 1d), for the cases it
-reproduces (``unsupported``, ``NotYet``); every other job keeps the old path, with one log
-line saying why. Each case was compared with the reference set (eubi-bridge 0.1.5) before
-it was added. ``EUBI_NEW_PATH=0`` is a private way back to the old path until that is
-deleted (roadmap step 6).
+Every case was compared with eubi-bridge 0.1.x's output (the reference set, and the golden
+files of tests/_golden.py) before the 0.1.x path was retired (roadmap step 6; kept for
+reference in ``legacy_0_1/``).
 """
 from __future__ import annotations
 
@@ -27,15 +25,13 @@ from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-#: the private switch
-ENV = "EUBI_NEW_PATH"
-#: files the new path converts so far (grows case by case with the reference set)
+#: files micro-reader reads here (the others go to the older readers, as in 0.1.5)
 FORMATS = (".ome.tif", ".ome.tiff",
            ".tif", ".tiff", ".lsm", ".btf",                # step 1c, group 1
            ".nd2", ".lif", ".oir",                         # group 2
            ".czi",                                          # groups 3-5
            ".ims")                                          # group 6
-#: image indices the new path selects by so far
+#: image indices outputs are selected by
 INDICES = {"scene", "tile", "view", "illumination"}
 #: eubi-bridge's channel_intensity_limits -> ozp's write_pyramid(windows=...)
 WINDOWS = {"from_dtype": "dtype", "from_array": "data", "auto": "auto"}
@@ -44,12 +40,7 @@ NAME = "Series 0"
 
 
 class NotYet(Exception):
-    """This job needs something the new path does not do yet: the old path converts it."""
-
-
-def enabled() -> bool:
-    """On unless EUBI_NEW_PATH=0 (the old path, private, until step 6 deletes it)."""
-    return os.environ.get(ENV, "1") != "0"
+    """micro-reader does not take this file here: the older readers read it."""
 
 
 _warned_check_pixels = False
@@ -65,14 +56,6 @@ def _retired_settings(job) -> None:
             "micro_check_pixels no longer has an effect: micro-reader's pixels are not "
             "compared with the standard reader's any more. To compare, convert the file "
             "once more with pixel_reader='standard' and compare the two outputs.")
-
-
-def unsupported(job) -> str:
-    """Why the new path does not take this job yet, or ''. Settings only: which reader
-    takes the file is decided when it is opened (micro-reader, else ``LegacyFile``)."""
-    if job.conversion.writer == "eubi":
-        return "writer='eubi'"
-    return ""
 
 
 def _micro_reason(job) -> str:
@@ -260,7 +243,7 @@ def _load_input_collection(job):
     file's index first; only their images are read."""
     from ome_zarr_pyramid import PyramidCollection
 
-    from eubi_bridge.core.ozp_writer import _ozp_version
+    from eubi_bridge.core.output_store import _ozp_version
 
     f, reader = _open_input(job)
     try:
@@ -366,17 +349,18 @@ def _load_input_collection(job):
         for entry, plan_keys, group in plans:
             if group is None and source is not None and job.downscale.keep_existing_resolutions:
                 # an OME-Zarr input keeping its levels: the input Pyramid itself (its
-                # own scales per level, as the old path wrote them), named as eubi names
+                # own scales per level, as 0.1.x wrote them), named as eubi names
                 # every output
                 entry.pyramid = source.rename(NAME)
             elif group is None:
                 entry.pyramid = coll[plan_keys[0]]
             else:
-                if any("s" in str(getattr(images[k].source, "axes", "")) for k in plan_keys):
-                    raise NotYet("RGB views / illuminations joined")
-                parts = [coll[k] for k in plan_keys]
+                # RGB samples named per part first (plain white channels), then the
+                # joined labels View{v}_Illu{i}_<name> over them, as 0.1.5 wrote them
+                parts = [apply_rgb_channels(coll[k], images[k]) for k in plan_keys]
                 entry.pyramid = _join_labels(_joined(parts, path), group, parts,
                                              [images[k] for k in plan_keys], readers)
+                entry.rgb_named = True
                 # 0.1.5 kept the LAST joined image's wavelengths and position
                 entry.pyramid.acquisition = getattr(parts[-1], "acquisition", None)
             entry.image = images[plan_keys[-1]]
@@ -392,8 +376,8 @@ def _load_input_collection(job):
 # -- the job's settings, one step each (Pyramid in, Pyramid out) -------------------------
 
 def _shim(pyr) -> SimpleNamespace:
-    """What conversion_worker's parse_* helpers read from an ArrayManager, from a
-    Pyramid, so both paths parse the job's settings with the same code."""
+    """What conversion_worker's parse_* helpers read (``axes``, ``scaledict``,
+    ``unitdict``), from a Pyramid: the job's settings are parsed as in 0.1.x."""
     meta = pyr.meta
     axes = meta.axis_order
     scales = meta.get_scale(meta.resolution_paths[0])
@@ -445,7 +429,7 @@ def apply_rgb_channels(pyr, image):
 def apply_axis_metadata(pyr, job, scales_too: bool = True):
     """Scale and unit overrides: the config's values, a batch table row's (job.extra)
     winning. Unset ones keep what the file says. Kept resolution levels take the unit
-    overrides only, as on the old path (store_existing_pyramid had no scales)."""
+    overrides only, as in 0.1.x (its store_existing_pyramid had no scales)."""
     from eubi_bridge.conversion.conversion_worker import AXIS_PARAM_MAP, _axis_metadata_kwargs
     given = _axis_metadata_kwargs(job)
     scales, units = {}, {}
@@ -526,7 +510,7 @@ def apply_downscale(pyr, job):
 
 
 def acquisition_metadata(entry, pyr, job, origin: dict) -> Optional[dict]:
-    """conversion_worker.build_acquisition_metadata on the new path: what NGFF has no
+    """0.1.x's build_acquisition_metadata (conversion_worker): what NGFF has no
     field for (wavelengths, other index values), plus, when one acquisition is split
     into several outputs, where this output came from."""
     flag = getattr(job.conversion, "export_acquisition_metadata", None)
@@ -554,7 +538,7 @@ def acquisition_metadata(entry, pyr, job, origin: dict) -> Optional[dict]:
 
 
 def ome_xml(pyr, dtype) -> str:
-    """The small OME-XML eubi-bridge saves beside an output (ArrayManager.save_omexml):
+    """The small OME-XML eubi-bridge saves beside an output (0.1.x's ArrayManager.save_omexml):
     shape, axes, pixel sizes and units, dtype and channel names of what is written."""
     from eubi_bridge.core.data_manager import PFFImageMeta, create_ome_xml
     meta = pyr.meta
@@ -584,7 +568,7 @@ def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb
     """ONE write_pyramid call with the job's storage settings (eubi-bridge decides the
     chunk shape and shards; ozp writes)."""
     from eubi_bridge.conversion.conversion_worker import parse_chunks, parse_shard_coefs
-    from eubi_bridge.core.ozp_writer import _chunks, _memory_budget, _ozp_target_args
+    from eubi_bridge.core.output_store import _chunks, _memory_budget, _ozp_target_args
     from eubi_bridge.utils.optional_deps import dask_config
     conv, clus = job.conversion, job.cluster
     arr = pyr.base_array
@@ -602,10 +586,10 @@ def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb
                          dtype, conv.target_chunk_mb)
     shards = parse_shard_coefs(shim, job)
     target, storage_options = _ozp_target_args(output_path)
-    logger.info(f"{ENV}: {output_path} (chunks {chunks})")
+    logger.info(f"{output_path}: writing, chunks {chunks}")
     # a dask level (the older readers' bioio / IMS / H5 arrays) is written by dask's own
     # scheduler: no memory budget (dyna refuses one for it), and bioformats_threads caps
-    # its threads, as on the old path
+    # its threads, as in 0.1.x
     budget = _memory_budget([arr], {"memory_budget_mb": scene_budget_mb})
     dask_kw = ({"num_workers": clus.bioformats_threads}
                if clus.bioformats_threads is not None else {})
@@ -635,8 +619,8 @@ async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore) -
     """One output: the job's settings applied to the entry's Pyramid, then written."""
     from eubi_bridge.conversion.conversion_worker import (_memory_plan_for,
                                                           _warn_unused_writer_settings)
-    from eubi_bridge.core.ozp_writer import _eubi_attrs
-    from eubi_bridge.core.writers import store_exists
+    from eubi_bridge.core.output_store import _eubi_attrs
+    from eubi_bridge.core.output_store import store_exists
     async with sem:
         conv = job.conversion
         if not conv.overwrite and store_exists(output_path):
@@ -657,7 +641,8 @@ async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore) -
                         f"pyramid was found for {output_path}; rebuilding pyramid normally")
         acquisition = None if keep else acquisition_metadata(entry, pyr, job, origin)
 
-        pyr = apply_rgb_channels(pyr, entry.image)
+        if not getattr(entry, "rgb_named", False):     # joined parts are named already
+            pyr = apply_rgb_channels(pyr, entry.image)
         pyr = apply_axis_metadata(pyr, job, scales_too=not keep)
         pyr = apply_channels(pyr, job)
         if not keep:
@@ -692,23 +677,13 @@ def _translations(pyr) -> list:
     return out
 
 
-async def convert(job) -> bool:
-    """Convert the job on the new path; False (nothing written) when it is not a case
-    the new path takes yet, so the caller uses the old one."""
+async def convert(job) -> None:
+    """Convert the job: every output it asks for, one ``write_pyramid`` call each."""
     from eubi_bridge.conversion.conversion_worker import (_convert_safely,
                                                           _generate_output_path,
                                                           _report_failures)
-    reason = unsupported(job)
-    if not reason:
-        try:
-            f, entries, reader = await asyncio.to_thread(_load_input_collection, job)
-        except NotYet as exc:
-            reason = str(exc)
-    if reason:
-        logger.info(f"{ENV}: {job.input_path}: old path ({reason})")
-        return False
-    logger.info(f"{ENV}: {job.input_path}: new path, {len(entries)} output(s), "
-                f"{reader}")
+    f, entries, reader = await asyncio.to_thread(_load_input_collection, job)
+    logger.info(f"{job.input_path}: {len(entries)} output(s), read by {reader}")
     _retired_settings(job)
     try:
         sem = asyncio.Semaphore(job.cluster.max_concurrent_scenes)
@@ -723,4 +698,3 @@ async def convert(job) -> bool:
     finally:
         f.close()
     _report_failures(results, job)               # the count: the outputs asked for
-    return True

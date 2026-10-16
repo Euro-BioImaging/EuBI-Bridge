@@ -1,10 +1,12 @@
 """Aggregative conversion on the 0.2.0 path (eubi_bridge/conversion/aggregative_path.py,
 roadmap step 3): many files joined into one OME-Zarr image without ArrayManager.
 
-Both paths must write the same image (pixels, scales, chunks, channels), except the one
-decided change: unnamed channels are numbered across the output from 0, as on unary
-conversions ("Channel 0", "Channel 1"; 0.1.5 named them all "Channel 1"). Files that do
-not agree, stray files and multi-file OME-TIFFs give clear errors.
+It must write the image eubi-bridge 0.1.x wrote (pixels, scales, chunks, channels),
+except the one decided change: unnamed channels are numbered across the output from 0, as
+on unary conversions ("Channel 0", "Channel 1"; 0.1.5 named them all "Channel 1"). The
+0.1.x outputs are golden files (tests/_golden.py), recorded before the old path was
+retired (roadmap step 6). Files that do not agree, stray files, multi-file OME-TIFFs and
+files of several scenes give clear errors.
 """
 from __future__ import annotations
 
@@ -24,7 +26,22 @@ pytest.importorskip("ome_zarr_pyramid")
 tifffile = pytest.importorskip("tifffile")
 zarr = pytest.importorskip("zarr")
 
+from tests import _golden  # noqa: E402
+
 RNG = np.random.default_rng(11)
+
+
+@pytest.fixture(autouse=True)
+def _seeded():
+    """The same inputs whichever tests run before (golden outputs hash pixels)."""
+    global RNG
+    RNG = np.random.default_rng(11)
+
+
+def _labels(described: dict) -> list:
+    (store,) = described.values()
+    attrs = store["attrs"]
+    return [(c["label"], c["color"]) for c in attrs.get("ome", attrs)["omero"]["channels"]]
 
 
 def _eubi() -> str:
@@ -38,14 +55,14 @@ def _eubi() -> str:
     pytest.skip("no eubi executable next to this Python")
 
 
-def _run(src: Path, out: Path, new: bool, args: list) -> subprocess.CompletedProcess:
-    env = dict(os.environ, EUBI_NEW_PATH="1" if new else "0", COLUMNS="250")
+def _run(src: Path, out: Path, args: list) -> subprocess.CompletedProcess:
+    env = dict(os.environ, COLUMNS="250")
     return subprocess.run([_eubi(), "to_zarr", str(src), str(out), *args],
                           capture_output=True, text=True, env=env)
 
 
-def _convert(src: Path, out: Path, new: bool, args: list) -> str:
-    result = _run(src, out, new, args)
+def _convert(src: Path, out: Path, args: list) -> str:
+    result = _run(src, out, args)
     log = " ".join((result.stdout + result.stderr).split())
     assert result.returncode == 0, log[-3000:]
     return log
@@ -87,37 +104,51 @@ def _channels(store: Path) -> list:
     return (attrs.get("ome", attrs).get("omero") or {}).get("channels")
 
 
-def test_named_channels_on_both_paths(tmp_path):
+def test_named_channels_as_0_1_wrote_them(tmp_path):
     src = _channel_time_set(tmp_path / "in", names=["DAPI", "GFP"])
-    _convert(src, tmp_path / "old", False, CT)
-    log = _convert(src, tmp_path / "new", True, CT)
-    assert "new path, 6 file(s) joined" in log
-    old, new = _describe(tmp_path / "old"), _describe(tmp_path / "new")
+    log = _convert(src, tmp_path / "new", CT)
+    assert "6 file(s) joined" in log
+    old = _golden.golden("aggregative-named_channels")
+    new = _golden.describe(tmp_path / "new", tmp_path)
     assert list(old) == list(new) and len(new) == 1
     (name,) = new
-    (old_attrs, old_levels), (new_attrs, new_levels) = old[name], new[name]
     for key in ("multiscales", "omero"):
-        assert old_attrs[key] == new_attrs[key], key
-    assert len(old_levels) == len(new_levels)
-    for (s0, d0, c0, a0), (s1, d1, c1, a1) in zip(old_levels, new_levels):
-        assert (s0, d0, c0) == (s1, d1, c1)
-        np.testing.assert_array_equal(a0, a1)
-    assert new_levels[0][0] == (3, 2, 3, 40, 48)
-    assert [ch["label"] for ch in _channels(tmp_path / "new" / name)] == ["DAPI", "GFP"]
+        assert new[name]["attrs"][key] == old[name]["attrs"][key], key
+    assert new[name]["levels"] == old[name]["levels"]
+    assert new[name]["levels"][0][0] == [3, 2, 3, 40, 48]
+    assert [label for label, _ in _labels(new)] == ["DAPI", "GFP"]
 
 
 def test_unnamed_channels_are_numbered_across_the_output(tmp_path):
     src = _channel_time_set(tmp_path / "in")
-    _convert(src, tmp_path / "old", False, CT)
-    _convert(src, tmp_path / "new", True, CT)
-    (old_store,), (new_store,) = (tmp_path / "old").glob("*.zarr"), (tmp_path / "new").glob("*.zarr")
-    assert old_store.name == new_store.name
-    old, new = _channels(old_store), _channels(new_store)
-    assert [ch["label"] for ch in old] == ["Channel 1", "Channel 1"]          # 0.1.5
-    assert [ch["label"] for ch in new] == ["Channel 0", "Channel 1"]
-    assert [ch["color"] for ch in new] == [ch["color"] for ch in old] == ["FF0000", "00FF00"]
-    np.testing.assert_array_equal(np.asarray(zarr.open_group(str(old_store))["0"]),
-                                  np.asarray(zarr.open_group(str(new_store))["0"]))
+    _convert(src, tmp_path / "new", CT)
+    old = _golden.golden("aggregative-unnamed_channels")
+    new = _golden.describe(tmp_path / "new", tmp_path)
+    assert list(old) == list(new)
+    assert [label for label, _ in _labels(old)] == ["Channel 1", "Channel 1"]          # 0.1.5
+    assert [label for label, _ in _labels(new)] == ["Channel 0", "Channel 1"]
+    assert [c for _, c in _labels(new)] == [c for _, c in _labels(old)] == ["FF0000", "00FF00"]
+    assert [s["levels"] for s in new.values()] == [s["levels"] for s in old.values()]
+
+
+def test_rgb_files_are_joined_as_0_1_joined_them(tmp_path):
+    """Roadmap step 6 (0.1.x took them on its own path): samples become channels,
+    coloured red / green / blue, numbered from 0 (the decided naming)."""
+    src = tmp_path / "rgb"
+    src.mkdir()
+    for t in range(2):
+        tifffile.imwrite(str(src / f"img_T{t}.tif"),
+                         RNG.integers(0, 255, (24, 32, 3)).astype("u1"), photometric="rgb")
+    args = ["--time_tag", "T", "--concatenation_axes", "t"]
+    log = _convert(src, tmp_path / "new", args)
+    assert "2 file(s) joined" in log
+    old = _golden.golden("aggregative-rgb")
+    new = _golden.describe(tmp_path / "new", tmp_path)
+    assert _labels(old) == [("Channel 1", "FF0000"), ("Channel 2", "00FF00"),
+                            ("Channel 3", "0000FF")]                                  # 0.1.5
+    assert _labels(new) == [("Channel 0", "FF0000"), ("Channel 1", "00FF00"),
+                            ("Channel 2", "0000FF")]
+    assert [s["levels"] for s in new.values()] == [s["levels"] for s in old.values()]
 
 
 @pytest.mark.parametrize("what", ["dtype", "shape"])
@@ -129,7 +160,7 @@ def test_files_that_do_not_agree_give_a_clear_error(tmp_path, what):
             else RNG.integers(0, 4000, (3, 40, 50)).astype("u2"))
     tifffile.imwrite(str(odd), data, ome=True, photometric="minisblack",
                      metadata={"axes": "ZYX"})
-    result = _run(src, tmp_path / "new", True, CT)
+    result = _run(src, tmp_path / "new", CT)
     log = " ".join((result.stdout + result.stderr).split())
     assert "Channel2_T2.ome.tif" in log
     assert ("pixel type uint8" in log) if what == "dtype" else ("has 50 along x" in log), \
@@ -150,7 +181,7 @@ def test_screen_group_leaves_out_a_companion_and_refuses_mixed_formats(caplog):
 def test_a_stray_file_among_the_inputs_is_refused_before_anything_is_read(tmp_path):
     src = _channel_time_set(tmp_path / "in")
     (src / "Channel1_T1_thumb.png").write_bytes(b"not an image")
-    result = _run(src, tmp_path / "new", True, CT)
+    result = _run(src, tmp_path / "new", CT)
     log = " ".join((result.stdout + result.stderr).split())
     assert "Channel1_T1_thumb.png" in log and "--excludes" in log, log[-3000:]
 
@@ -182,7 +213,7 @@ def _multifile_ome(folder: Path, layout: str) -> Path:
 @pytest.mark.parametrize("layout", ["full", "stub"])
 def test_a_multi_file_ome_tiff_is_not_joined_as_the_whole_set_from_each_file(tmp_path, layout):
     src = _multifile_ome(tmp_path / "in", layout)
-    result = _run(src, tmp_path / "new", True,
+    result = _run(src, tmp_path / "new",
                   ["--time_tag", "T", "--concatenation_axes", "t"])
     log = " ".join((result.stdout + result.stderr).split())
     assert "multi-file OME-TIFF" in log and "img_T0.ome.tif" in log, log[-3000:]
@@ -212,22 +243,14 @@ def test_many_files_never_stay_open_together(tmp_path, monkeypatch):
     monkeypatch.setattr(micro_source, "_evict", evict)
     paths = [str(p) for p in sorted(src.glob("*.tif"))]
     out = tmp_path / "out" / "img_T_tset"
-    done = asyncio.run(aggregative_path.convert_group(paths, str(out), {
+    asyncio.run(aggregative_path.convert_group(paths, str(out), {
         "time_tag": "T", "concatenation_axes": "t", "metadata_reader": "micro",
         "overwrite": True, "squeeze": False}))
-    assert done
     assert 0 < peak[0] <= 8 + aggregative_path.OPEN_THREADS
     assert len(micro_source._files) <= 8                  # idle again: back to the cap
     arr = np.asarray(zarr.open_group(f"{out}.zarr", mode="r")["0"])
     assert arr.shape == (n, 1, 1, 16, 20)
     np.testing.assert_array_equal(arr[:, 0, 0, 0, 0], np.arange(n))
-
-
-def test_the_old_path_stays_reachable(tmp_path):
-    src = _channel_time_set(tmp_path / "in")
-    log = _convert(src, tmp_path / "old", False, CT)
-    assert "new path" not in log
-    assert len(list((tmp_path / "old").glob("*.zarr"))) == 1
 
 
 def test_a_conversion_table_runs_both_kinds_in_one_pool(tmp_path, caplog):
@@ -264,15 +287,19 @@ def test_scene_index_all_joins_files_of_one_scene_on_the_new_path(tmp_path):
     """The GUI's batch default is scene_index='all': with one scene per file the new path
     joins them (it used to hand every GUI aggregative group to the old path)."""
     src = _channel_time_set(tmp_path / "in")
-    log = _convert(src, tmp_path / "new", True, CT + ["--scene_index", "all"])
-    assert "new path, 6 file(s) joined" in log
-    _convert(src, tmp_path / "old", False, CT + ["--scene_index", "all"])
-    (old_store,), (new_store,) = (tmp_path / "old").glob("*.zarr"), (tmp_path / "new").glob("*.zarr")
-    np.testing.assert_array_equal(np.asarray(zarr.open_group(str(old_store))["0"]),
-                                  np.asarray(zarr.open_group(str(new_store))["0"]))
+    args = CT + ["--scene_index", "all"]
+    log = _convert(src, tmp_path / "new", args)
+    assert "6 file(s) joined" in log
+    old = _golden.golden("aggregative-scene_index_all")
+    new = _golden.describe(tmp_path / "new", tmp_path)
+    assert [s["levels"] for s in new.values()] == [s["levels"] for s in old.values()]
 
 
-def test_scene_index_all_with_files_of_several_scenes_stays_on_the_old_path(tmp_path):
+@pytest.mark.parametrize("scenes", ["all", "0,1"])
+def test_files_of_several_scenes_give_a_clear_error(tmp_path, scenes):
+    """Roadmap step 6: an aggregative output joins ONE scene of each file. 0.1.5 folded
+    the scenes of scene_index='all' into the joined axis (positions became time points)
+    and crashed on a list."""
     src = tmp_path / "in"
     src.mkdir()
     for t in range(2):
@@ -280,7 +307,9 @@ def test_scene_index_all_with_files_of_several_scenes_stays_on_the_old_path(tmp_
             for scene in range(2):
                 tw.write(np.full((16, 20), 10 * t + scene, "u2"), photometric="minisblack",
                          metadata={"axes": "YX"})
-    result = _run(src, tmp_path / "new", True,
-                  ["--time_tag", "T", "--concatenation_axes", "t", "--scene_index", "all"])
+    result = _run(src, tmp_path / "new",
+                  ["--time_tag", "T", "--concatenation_axes", "t", "--scene_index", scenes])
     log = " ".join((result.stdout + result.stderr).split())
-    assert "old path (scene_index='all' and img_T0.ome.tif has 2 scenes)" in log, log[-2000:]
+    assert result.returncode != 0
+    assert "joins one scene of each file" in log and "--scene_index" in log, log[-2000:]
+    assert not list((tmp_path / "new").glob("*.zarr/0"))

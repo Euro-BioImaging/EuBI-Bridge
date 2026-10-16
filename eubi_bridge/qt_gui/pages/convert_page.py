@@ -365,14 +365,8 @@ class ConvertPage(QWidget):
         )
         lay.addLayout(_row(QLabel("Max Processes:"), self._max_processes))
 
-        _, self._queue_size = _labeled_spin("Queue Size:", 1, 500, 4)
-        self._queue_size.setToolTip(
-            "eubi-bridge's own writer (Writer: eubi) only: how many read regions may\n"
-            "wait for writing in each conversion. The ozp writer has no queue: each\n"
-            "thread reads and writes its own region."
-        )
-        lay.addLayout(_row(QLabel("Queue Size:"), self._queue_size))
-
+        # (no Queue Size / Max Concurrent Downscale Layers: only eubi-bridge's own
+        # writer used them, retired in 0.2.0; saved configs still load)
         _, self._max_threads = _labeled_spin("Max Threads:", 1, 128, 4)
         self._max_threads.setToolTip(
             "Threads per conversion, each reading and writing one region at a\n"
@@ -380,14 +374,6 @@ class ConvertPage(QWidget):
             "or I/O bottlenecks."
         )
         lay.addLayout(_row(QLabel("Max Threads:"), self._max_threads))
-
-        _, self._max_concurrent_downscale_layers = _labeled_spin("Max Concurrent Downscale Layers:", 1, 16, 3)
-        self._max_concurrent_downscale_layers.setToolTip(
-            "eubi-bridge's own writer (Writer: eubi) only: how many pyramid levels to\n"
-            "downscale simultaneously. Reduce for large 3D datasets to avoid OOM errors.\n"
-            "The ozp writer writes all levels from one read, within the memory budget."
-        )
-        lay.addLayout(_row(QLabel("Max Concurrent Downscale Layers:"), self._max_concurrent_downscale_layers))
 
         _, self._max_concurrent_scenes = _labeled_spin("Max Concurrent Scenes:", 1, 64, 1)
         self._max_concurrent_scenes.setToolTip(
@@ -814,33 +800,22 @@ class ConvertPage(QWidget):
             "(views, illuminations), so the pieces stay related.")
         lay.addLayout(_form_row("Acquisition Metadata:", self._export_acquisition))
 
-        # Writer: which engine writes the OME-Zarr, and with which byte backend
+        # Writer: the byte backend ome_zarr_pyramid writes with (there is one writer
+        # since 0.2.0; the 'writer' choice is retired, roadmap step 6)
         writer_group = QGroupBox("Writer")
         writer_lay = QVBoxLayout(writer_group)
-        self._writer = QComboBox()
-        for w in ("auto", "ozp", "eubi"):
-            self._writer.addItem(w)
-        self._writer.setToolTip(
-            "Which engine writes the OME-Zarr.\n"
-            "ozp: ome_zarr_pyramid on dyna-zarr - all resolution levels from one read\n"
-            "of the source, within the memory budget.\n"
-            "eubi: eubi-bridge's own writer.\n"
-            "auto (recommended): ozp, and eubi only where ozp cannot write the output\n"
-            "yet. Both give the same pixels.")
-        writer_lay.addLayout(_form_row("Writer:", self._writer))
         self._io_backend = QComboBox()
         self._io_backend.addItem("tensorstore")
         if _zarrista_available():
             self._io_backend.addItem("zarrista")
         self._io_backend.setToolTip(
-            "How the ozp writer writes the bytes: TensorStore (default) or zarrista\n"
-            "(Rust, via zarrs). Both write big shards chunk by chunk within the\n"
-            "memory budget. eubi-bridge's own writer always uses TensorStore.")
+            "How the bytes are written: TensorStore (default) or zarrista (Rust, via\n"
+            "zarrs). Both write big shards chunk by chunk within the memory budget.")
         self._io_backend_row = _form_row("Byte Backend:", self._io_backend)
         writer_lay.addLayout(self._io_backend_row)
-        self._writer.currentTextChanged.connect(self._on_writer_changed)
         lay.addWidget(writer_group)
         # one choice only (zarrista not installed): nothing to choose, so not shown
+        writer_group.setVisible(self._io_backend.count() > 1)
         self._io_backend.setVisible(self._io_backend.count() > 1)
         for i in range(self._io_backend_row.count()):
             w = self._io_backend_row.itemAt(i).widget()
@@ -1640,8 +1615,7 @@ class ConvertPage(QWidget):
             lambda: self._tabs.setCurrentWidget(self._cluster_scroll))
         cluster_lay.addWidget(self._edit_cluster_btn, 0, Qt.AlignmentFlag.AlignTop)
         lay.addWidget(cluster_box)
-        for spin in (self._max_processes, self._queue_size, self._max_threads,
-                     self._max_concurrent_downscale_layers,
+        for spin in (self._max_processes, self._max_threads,
                      self._max_concurrent_scenes, self._region_size_mb,
                      self._memory_budget, self._slurm_worker_timeout,
                      self._slurm_worker_memory, self._decode_memory,
@@ -2343,9 +2317,7 @@ class ConvertPage(QWidget):
         """Populate all UI controls from a camelCase config dict."""
         c = cfg.get("cluster", {})
         self._max_processes.setValue(c.get("maxProcesses", 4))
-        self._queue_size.setValue(c.get("queueSize", 4))
         self._max_threads.setValue(c.get("maxThreads", 4))
-        self._max_concurrent_downscale_layers.setValue(c.get("maxConcurrentDownscaleLayers", 3))
         self._max_concurrent_scenes.setValue(c.get("maxConcurrentScenes", 1))
         self._region_size_mb.setValue(float(c.get("regionSizeMb") or 0.0))
         self._memory_budget.setValue(float(c.get("memoryBudget") or 0.0))
@@ -2396,8 +2368,6 @@ class ConvertPage(QWidget):
         self._verbose.setChecked(conv.get("verbose", False))
         self._overwrite.setChecked(conv.get("overwrite", False))
         self._squeeze.setChecked(conv.get("squeezeDimensions", True))
-        idx = self._writer.findText(conv.get("writer", "auto") or "auto")
-        self._writer.setCurrentIndex(max(0, idx))
         idx = self._io_backend.findText(conv.get("ioBackend", "tensorstore") or "tensorstore")
         self._io_backend.setCurrentIndex(max(0, idx))   # zarrista not installed: tensorstore
         idx = self._export_acquisition.findData(conv.get("exportAcquisitionMetadata"))
@@ -2482,17 +2452,6 @@ class ConvertPage(QWidget):
         # a config may ask for what this installation cannot do
         self._apply_capabilities()
 
-    def _on_writer_changed(self, writer: str) -> None:
-        """eubi-bridge's own writer writes with TensorStore only, and only it uses the
-        queue and concurrent-downscale-layers settings (Cluster tab)."""
-        if writer == "eubi":
-            self._io_backend.setCurrentText("tensorstore")
-        self._io_backend.setEnabled(writer != "eubi")
-        for spin in (getattr(self, "_queue_size", None),
-                     getattr(self, "_max_concurrent_downscale_layers", None)):
-            if spin is not None:
-                spin.setEnabled(writer == "eubi")
-
     def _apply_capabilities(self) -> None:
         """Fit the page to what this installation can do.
 
@@ -2521,15 +2480,12 @@ class ConvertPage(QWidget):
         if not has_slurm():
             self._use_slurm.setChecked(False)        # also hides the SLURM rows
             self._use_slurm.setVisible(False)
-        self._on_writer_changed(self._writer.currentText())
 
     def _ui_cluster_config(self) -> dict:
         """The Cluster tab's controls as a camelCase config section."""
         return {
             "maxProcesses":          self._max_processes.value(),
-            "queueSize":           self._queue_size.value(),
             "maxThreads":      self._max_threads.value(),
-            "maxConcurrentDownscaleLayers": self._max_concurrent_downscale_layers.value(),
             "maxConcurrentScenes": self._max_concurrent_scenes.value(),
             "regionSizeMb":        self._region_size_mb.value(),
             "memoryBudget":        self._memory_budget.value(),
@@ -2570,7 +2526,6 @@ class ConvertPage(QWidget):
             },
             "conversion": {
                 "omeZarrVersion":       self._ome_zarr_version.currentText(),
-                "writer":               self._writer.currentText(),
                 "ioBackend":            self._io_backend.currentText(),
                 "exportAcquisitionMetadata": self._export_acquisition.currentData(),
                 "dataType":             self._data_type.currentText(),

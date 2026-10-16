@@ -59,7 +59,7 @@ def _color(color) -> Optional[str]:
 
 
 def _channels(img, acquisition: dict) -> list:
-    """The reader's own channels (names, colours), as the old path writes them: an
+    """The reader's own channels (names, colours), as 0.1.x wrote them: an
     unnamed channel becomes ``Channel {i}`` in ozp's ``from_image``, a colourless one
     white; a file listing fewer channels than it has gets eubi-bridge's generated ones
     (the reader's ``get_channels``). Wavelengths only from micro-reader's metadata."""
@@ -83,7 +83,7 @@ class _SerialisedReads:
     """A resource-backed dask array read one region at a time. bioio-nd2's array and
     Bio-Formats-backed dask arrays read through one shared handle that is not
     thread-safe: read from several threads at once they return wrong pixels without an
-    error, or crash (writers._is_resource_backed; eubi-bridge's own writer locks them,
+    error, or crash (output_store._is_resource_backed; 0.1.x's own writer locked them,
     ozp's dask writer does not)."""
 
     def __init__(self, array):
@@ -99,7 +99,7 @@ def _thread_safe(array):
     """`array` as it is, or, when it is resource-backed, a dask array over the same
     chunks whose reads run one at a time (dask's per-array read lock); the writes stay
     parallel."""
-    from eubi_bridge.core.writers import _is_resource_backed
+    from eubi_bridge.core.output_store import _is_resource_backed
     if not _is_resource_backed(array):
         return array
     import dask.array as da
@@ -152,8 +152,7 @@ class LegacyFile:
             self.path, meta.metadata_reader, False, reader_kwargs=czi_kwargs,
             force_bioformats=readers.force_bioformats, as_mosaic=readers.as_mosaic,
             keep_existing_resolutions=job.downscale.keep_existing_resolutions,
-            pixel_reader=readers.pixel_reader,
-            micro_check_pixels=False)
+            pixel_reader=readers.pixel_reader)
         _run(self._loader._open())
         self._img = self._loader._img
         self.n_scenes = int(self._loader.n_scenes)
@@ -242,7 +241,7 @@ class LegacyFile:
 
     def _czi_tile_position(self, scene: int, tile: int, scales: dict, units: dict) -> dict:
         """A CZI tile's place from aicspylibczi's boxes (pixels x pixel size), as
-        ArrayManager.load_scenes sets it."""
+        0.1.x's ArrayManager.load_scenes set it."""
         from eubi_bridge.core.data_manager import czi_mosaic_tile_origins
         if scene not in self._tile_origins:
             self._tile_origins[scene] = czi_mosaic_tile_origins(self.path, scene=scene)
@@ -266,7 +265,7 @@ class NgffFile:
     def __init__(self, job):
         from ome_zarr_pyramid import IO
 
-        from eubi_bridge.core.ozp_writer import _ozp_target_args
+        from eubi_bridge.core.output_store import _ozp_target_args
         self.path = str(job.input_path)
         target, storage_options = _ozp_target_args(self.path)
         self._pyr = IO().read_pyramid(target, storage_options=storage_options)
@@ -292,7 +291,8 @@ class NgffFile:
                                     emission_wavelength=None, excitation_wavelength=None)
                     for ch in omero.get("channels") or []]
         return LegacyImage(array=self._pyr.layers[base], axes=axes, index=dict(index),
-                           name=meta.tag, pixel_sizes=pixel_sizes, channels=channels,
+                           name=meta.multiscales.get("name"), pixel_sizes=pixel_sizes,
+                           channels=channels,
                            position=position, index_values={})
 
     def close(self) -> None:

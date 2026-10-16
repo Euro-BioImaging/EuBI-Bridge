@@ -1,33 +1,42 @@
 """Roadmap step 2: the older readers (Bio-Formats, bioio, CZI, IMS, H5) on the new path,
 through ``LegacyFile`` / ``LegacyImage`` (eubi_bridge/conversion/legacy_image.py).
 
-Every case is converted by the new path (the older readers behind ``LegacyFile``) and by
-the old path (``EUBI_NEW_PATH=0``) through the real CLI; the outputs must be the same.
+Every case is converted through the real CLI and must write what eubi-bridge 0.1.x wrote
+(golden files, tests/_golden.py, recorded before the old path was retired in step 6).
 """
 from __future__ import annotations
 
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from tests.conftest import requires_full
-from tests.test_pyramid_path import _describe, _eubi, _ome_tiff, _same
+from tests import _golden
+from tests import test_pyramid_path as tp
+from tests.test_pyramid_path import _eubi, _ome_tiff
 
 tifffile = pytest.importorskip("tifffile")
 zarr = pytest.importorskip("zarr")
 pytestmark = requires_full                   # the older readers: not in eubi-bridge-lite
 
 RNG = np.random.default_rng(23)
+
+
+@pytest.fixture(autouse=True)
+def _seeded(monkeypatch):
+    """The same inputs whichever tests run before (golden outputs hash pixels)."""
+    global RNG
+    RNG = np.random.default_rng(23)
+    monkeypatch.setattr(tp, "RNG", np.random.default_rng(7))      # _ome_tiff's
 STANDARD = ["--pixel_reader", "standard", "--metadata_reader", "bfio"]
 
 
-def _convert(src: Path, out: Path, new: bool, args: list) -> str:
-    env = dict(os.environ, EUBI_NEW_PATH="1" if new else "0", COLUMNS="250")
+def _convert(src: Path, out: Path, args: list) -> str:
+    env = dict(os.environ, COLUMNS="250")
     result = subprocess.run([_eubi(), "to_zarr", str(src), str(out), *args],
                             capture_output=True, text=True, env=env)
     log = " ".join((result.stdout + result.stderr).split())
@@ -35,14 +44,11 @@ def _convert(src: Path, out: Path, new: bool, args: list) -> str:
     return log
 
 
-def _both(src: Path, tmp_path: Path, args: list) -> dict:
-    _convert(src, tmp_path / "old", False, args)
-    log = _convert(src, tmp_path / "new", True, args)
-    assert re.search(r"new path, \d+ output\(s\), older readers", log), log[-2000:]
-    old = _describe(tmp_path / "old")
-    assert old
-    _same(old, _describe(tmp_path / "new"))
-    return old
+def _both(src: Path, tmp_path: Path, args: list, name: str) -> dict:
+    """`src` converted, checked against 0.1.x's output (golden `name`)."""
+    log = _convert(src, tmp_path / "new", args)
+    assert re.search(r"\d+ output\(s\), read by older readers", log), log[-2000:]
+    return _golden.check(name, tmp_path / "new", tmp_path)
 
 
 def _two_series_btf(path: Path) -> Path:
@@ -57,11 +63,11 @@ def _two_series_btf(path: Path) -> Path:
 
 def test_bioformats_file_on_both_paths(tmp_path):
     out = _both(_two_series_btf(tmp_path / "two.ome.btf"), tmp_path,
-                ["--scene_index", "all", *STANDARD])
+                ["--scene_index", "all", *STANDARD], "legacy_image-bioformats_two_series")
     assert sorted(out) == ["two_scene0.zarr", "two_scene1.zarr"]
-    values = [np.unique(levels[0][3]).tolist() for _, levels in sorted(out.values(),
-              key=lambda v: str(v))]
-    assert sorted(values) == [[10], [200]]                  # each scene its own pixels
+    values = [np.unique(np.asarray(zarr.open_group(str(tmp_path / "new" / name))["0"])).tolist()
+              for name in sorted(out)]
+    assert values == [[10], [200]]                          # each scene its own pixels
 
 
 @pytest.mark.parametrize("args", [["--scene_index", "all"],
@@ -70,7 +76,8 @@ def test_bioformats_file_on_both_paths(tmp_path):
                          ids=["defaults", "settings"])
 def test_ome_tiff_with_the_standard_reader_on_both_paths(tmp_path, args):
     """bioio's OME-TIFF reader (dask) with bfio's metadata: names, colours, sizes."""
-    _both(_ome_tiff(tmp_path / "img.ome.tif"), tmp_path, [*args, *STANDARD])
+    _both(_ome_tiff(tmp_path / "img.ome.tif"), tmp_path, [*args, *STANDARD],
+          f"legacy_image-ome_tiff-{'defaults' if len(args) == 2 else 'settings'}")
 
 
 def test_imagej_tiff_with_the_standard_reader_on_both_paths(tmp_path):
@@ -78,7 +85,7 @@ def test_imagej_tiff_with_the_standard_reader_on_both_paths(tmp_path):
     tifffile.imwrite(str(src), RNG.integers(0, 4000, (5, 2, 30, 34)).astype("u2"),
                      imagej=True, resolution=(1 / 0.2, 1 / 0.2),
                      metadata={"axes": "ZCYX", "spacing": 1.5, "unit": "um"})
-    _both(src, tmp_path, STANDARD)
+    _both(src, tmp_path, STANDARD, "legacy_image-imagej_tiff")
 
 
 def test_legacy_file_reads_like_micro_reader(tmp_path):
@@ -162,7 +169,7 @@ def test_a_czi_phase_is_the_one_asked_for(tmp_path):
     values = {}
     for phase in (0, 1):
         out = tmp_path / f"phase{phase}"
-        log = _convert(src, out, True, ["--phase_index", str(phase)])
+        log = _convert(src, out, ["--phase_index", str(phase)])
         assert "older readers" in log, log[-1500:]
         (store,) = out.glob("*.zarr")
         values[phase] = np.unique(np.asarray(zarr.open_group(str(store), mode="r")["0"])).tolist()

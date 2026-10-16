@@ -1,13 +1,13 @@
-"""The 0.2.0 conversion path (eubi_bridge/conversion/pyramid_path.py, switched on with
-EUBI_NEW_PATH=1): micro-reader -> ome_zarr_pyramid, no ArrayManager.
+"""The conversion path of eubi-bridge 0.2.0 (eubi_bridge/conversion/pyramid_path.py):
+micro-reader (else the older readers) -> ome_zarr_pyramid, no ArrayManager.
 
-Every case is converted by both paths through the real CLI and the outputs must be the
-same: group metadata (minus the version stamp), and per level shape, dtype, chunks and
-pixels. Jobs the new path does not take yet must fall back to the old path.
+Every case is converted through the real CLI and must write what eubi-bridge 0.1.x
+wrote: group metadata (minus the version stamp), and per level shape, dtype, chunks and
+pixels. Until 0.2.0 each case ran on both paths; the old path is retired (legacy_0_1/),
+so its outputs are golden files (tests/_golden.py, tests/golden_0_1/).
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -23,7 +23,17 @@ pytest.importorskip("ome_zarr_pyramid")
 tifffile = pytest.importorskip("tifffile")
 zarr = pytest.importorskip("zarr")
 
+from tests import _golden  # noqa: E402
+
 RNG = np.random.default_rng(7)
+
+
+@pytest.fixture(autouse=True)
+def _seeded():
+    """Every test draws the same inputs, whichever tests run before it (the golden
+    outputs hash their pixels)."""
+    global RNG
+    RNG = np.random.default_rng(7)
 
 
 def _ome_tiff(path: Path) -> Path:
@@ -55,44 +65,13 @@ def _eubi() -> str:
     pytest.skip("no eubi executable next to this Python")
 
 
-def _convert(src: Path, out: Path, new: bool, args: list) -> str:
-    env = dict(os.environ, EUBI_NEW_PATH="1" if new else "0", COLUMNS="250")
+def _convert(src: Path, out: Path, args: list) -> str:
+    env = dict(os.environ, COLUMNS="250")
     result = subprocess.run([_eubi(), "to_zarr", str(src), str(out), *args],
                             capture_output=True, text=True, env=env)
     log = " ".join((result.stdout + result.stderr).split())
     assert result.returncode == 0, log[-3000:]
     return log
-
-
-def _strip_version(attrs: dict) -> dict:
-    attrs = json.loads(json.dumps(attrs))
-    for holder in (attrs, attrs.get("ome") or {}):
-        block = holder.get("eubi_bridge")
-        if isinstance(block, dict):
-            block.pop("version", None)
-    return attrs
-
-
-def _describe(root: Path) -> dict:
-    """{store name: (attrs, [(shape, dtype, chunks, pixels) per level])}."""
-    out = {}
-    for store in sorted(root.glob("*.zarr")):
-        group = zarr.open_group(str(store), mode="r")
-        levels = [(a.shape, str(a.dtype), a.chunks, np.asarray(a[...]))
-                  for _, a in sorted(group.arrays(), key=lambda kv: int(kv[0]))]
-        out[store.name] = (_strip_version(group.attrs.asdict()), levels)
-    return out
-
-
-def _same(old: dict, new: dict) -> None:
-    assert sorted(old) == sorted(new)
-    for name in old:
-        (attrs_o, levels_o), (attrs_n, levels_n) = old[name], new[name]
-        assert attrs_n == attrs_o, name
-        assert len(levels_n) == len(levels_o), name
-        for (so, do, co, po), (sn, dn, cn, pn) in zip(levels_o, levels_n):
-            assert (sn, dn, cn) == (so, do, co), name
-            np.testing.assert_array_equal(pn, po)
 
 
 ALL = ["--scene_index", "all", "--mosaic_tile_index", "all"]
@@ -110,17 +89,14 @@ CASES = {
 @pytest.mark.parametrize("case", sorted(CASES))
 def test_new_path_writes_what_the_old_one_does(tmp_path, case):
     src = _ome_tiff(tmp_path / "img.ome.tif")
-    _convert(src, tmp_path / "old", False, CASES[case])
-    log = _convert(src, tmp_path / "new", True, CASES[case])
-    assert re.search(r"EUBI_NEW_PATH: \S+ new path", log), log[-2000:]
-    old, new = _describe(tmp_path / "old"), _describe(tmp_path / "new")
-    assert old
-    _same(old, new)
+    log = _convert(src, tmp_path / "new", CASES[case])
+    assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
+    _golden.check(f"pyramid_path-ome_tiff-{case}", tmp_path / "new", tmp_path)
 
 
 def test_new_path_writes_the_ome_xml_in_the_same_write(tmp_path):
     src = _ome_tiff(tmp_path / "img.ome.tif")
-    _convert(src, tmp_path / "new", True, ["--scene_index", "0"])
+    _convert(src, tmp_path / "new", ["--scene_index", "0"])
     store = tmp_path / "new" / "img_scene0.zarr"
     xml = (store / "OME" / "METADATA.ome.xml").read_text(encoding="utf-8")
     assert 'Name="DAPI"' in xml and 'SizeX="48"' in xml
@@ -132,7 +108,7 @@ def test_auto_windows_come_from_the_coarsest_level(tmp_path):
     smallest written level, min / max the dtype's range (decided 2026-10-15; 0.1.5 wrote
     the dtype's range, as from_dtype)."""
     src = _ome_tiff(tmp_path / "img.ome.tif")
-    _convert(src, tmp_path / "new", True, ["--channel_intensity_limits", "auto"])
+    _convert(src, tmp_path / "new", ["--channel_intensity_limits", "auto"])
     group = zarr.open_group(str(tmp_path / "new" / "img_scene0.zarr"), mode="r")
     coarsest = np.asarray(group[str(len(list(group.array_keys())) - 1)])
     channels = group.attrs["omero"]["channels"]
@@ -144,11 +120,13 @@ def test_auto_windows_come_from_the_coarsest_level(tmp_path):
         assert 0 < ch["window"]["start"] < ch["window"]["end"] < 4000
 
 
-def test_jobs_the_new_path_does_not_take_yet_use_the_old_one(tmp_path):
-    """Since step 2 only writer='eubi' (to be retired) keeps the old path."""
+def test_writer_eubi_is_retired_and_writes_with_ozp(tmp_path):
+    """writer='eubi' (eubi-bridge's own writer, retired in 0.2.0, roadmap step 6): still
+    accepted, warned about once, written by ome_zarr_pyramid on the new path."""
     src = _ome_tiff(tmp_path / "img.ome.tif")
-    log = _convert(src, tmp_path / "out", True, ["--writer", "eubi"])
-    assert "old path (writer='eubi')" in log
+    log = _convert(src, tmp_path / "out", ["--writer", "eubi"])
+    assert "writer='eubi' is no longer available" in log
+    assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
     assert (tmp_path / "out" / "img_scene0.zarr").is_dir()
 
 
@@ -158,10 +136,9 @@ def test_an_imagej_hyperstack_on_both_paths(tmp_path):
     data = RNG.integers(0, 4000, (3, 2, 30, 34)).astype("u2")                 # Z C Y X
     tifffile.imwrite(str(src), data, imagej=True, resolution=(1 / 0.2, 1 / 0.2),
                      metadata={"axes": "ZCYX", "spacing": 1.5, "unit": "um"})
-    _convert(src, tmp_path / "old", False, [])
-    log = _convert(src, tmp_path / "new", True, [])
-    assert re.search(r"EUBI_NEW_PATH: \S+ new path", log), log[-2000:]
-    _same(_describe(tmp_path / "old"), _describe(tmp_path / "new"))
+    log = _convert(src, tmp_path / "new", [])
+    assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
+    _golden.check("pyramid_path-imagej_hyperstack", tmp_path / "new", tmp_path)
 
 
 def _mosaic_czi(path: Path, tiles_per_scene=(4, 4)) -> Path:
@@ -188,19 +165,18 @@ def _mosaic_czi(path: Path, tiles_per_scene=(4, 4)) -> Path:
 def test_czi_mosaics_on_both_paths(tmp_path, args):
     """Step 1c, group 3: tiles as separate outputs (named, positioned) or stitched."""
     src = _mosaic_czi(tmp_path / "mosaic.czi")
-    _convert(src, tmp_path / "old", False, args)
-    log = _convert(src, tmp_path / "new", True, args)
-    assert re.search(r"EUBI_NEW_PATH: \S+ new path", log), log[-2000:]
-    old = _describe(tmp_path / "old")
-    assert len(old) == (8 if args is ALL else 2)
-    _same(old, _describe(tmp_path / "new"))
+    log = _convert(src, tmp_path / "new", args)
+    assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
+    new = _golden.check(f"pyramid_path-czi_mosaic-{'tiles' if args is ALL else 'stitched'}",
+                        tmp_path / "new", tmp_path)
+    assert len(new) == (8 if args is ALL else 2)
 
 
 def test_each_scene_has_its_own_tiles(tmp_path):
     """Roadmap 'Bug: scenes with different tile counts': 0.1.5 used scene 0's tile count
     for every scene. The new path writes each scene's own tiles, at their own places."""
     src = _mosaic_czi(tmp_path / "mosaic.czi", tiles_per_scene=(2, 3))
-    _convert(src, tmp_path / "new", True, ALL)
+    _convert(src, tmp_path / "new", ALL)
     names = sorted(p.name for p in (tmp_path / "new").glob("*.zarr"))
     assert names == ["mosaic_scene0_tile0.zarr", "mosaic_scene0_tile1.zarr",
                      "mosaic_scene1_tile0.zarr", "mosaic_scene1_tile1.zarr",
@@ -231,11 +207,9 @@ def test_rgb_channels_on_both_paths(tmp_path, channels):
     """Step 1c, group 4: samples become channels, named by eubi-bridge's rule (one
     channel: plain white channels; several: "<name> R/G/B" tinted)."""
     src = _rgb_czi(tmp_path / "rgb.czi", channels)
-    _convert(src, tmp_path / "old", False, ALL)
-    _convert(src, tmp_path / "new", True, ALL)
-    old = _describe(tmp_path / "old")
-    _same(old, _describe(tmp_path / "new"))
-    labels = [ch["label"] for ch in next(iter(old.values()))[0]["omero"]["channels"]]
+    _convert(src, tmp_path / "new", ALL)
+    new = _golden.check(f"pyramid_path-rgb_czi-{channels}", tmp_path / "new", tmp_path)
+    labels = [ch["label"] for ch in next(iter(new.values()))["attrs"]["omero"]["channels"]]
     assert len(labels) == 3 * channels
 
 
@@ -261,13 +235,31 @@ def test_czi_views_on_both_paths(tmp_path, args):
     """Step 1c, group 5: one output per view (``_view{v}``), or the views joined along c
     (``_view_concat``, channels ``View{v}_<name>``)."""
     src = _views_czi(tmp_path / "views.czi")
-    _convert(src, tmp_path / "old", False, args)
-    log = _convert(src, tmp_path / "new", True, args)
-    assert re.search(r"EUBI_NEW_PATH: \S+ new path", log), log[-2000:]
-    old = _describe(tmp_path / "old")
-    assert sorted(old) == (["views_view0.zarr", "views_view1.zarr"] if len(args) == 2
+    log = _convert(src, tmp_path / "new", args)
+    assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
+    new = _golden.check(f"pyramid_path-czi_views-{'separate' if len(args) == 2 else 'joined'}",
+                        tmp_path / "new", tmp_path)
+    assert sorted(new) == (["views_view0.zarr", "views_view1.zarr"] if len(args) == 2
                            else ["views_view_concat.zarr"])
-    _same(old, _describe(tmp_path / "new"))
+
+
+def test_rgb_views_joined_as_0_1_joined_them(tmp_path):
+    """Roadmap step 6 (0.1.x took them on its own path): each view's RGB samples become
+    plain channels, joined as View{v}_Ch{i}."""
+    from tests._czi_writer import raw_payload, write_czi
+    tiles = [dict(scene=0, plane={"C": 0, "V": v}, x=0, y=0, height=24, width=32,
+                  dtype="u1", samples=3, compression=0,
+                  payload=raw_payload(RNG.integers(0, 255, (24, 32, 3)).astype("u1")))
+             for v in range(2)]
+    src = tmp_path / "rgb_views.czi"
+    write_czi(str(src), tiles)
+    args = ["--view_index", "all", "--concat_views"]
+    log = _convert(src, tmp_path / "new", args)
+    assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
+    new = _golden.check("pyramid_path-rgb_views_joined", tmp_path / "new", tmp_path)
+    attrs = next(iter(new.values()))["attrs"]
+    assert [c["label"] for c in attrs["omero"]["channels"]] == [
+        f"View{v}_Ch{i}" for v in range(2) for i in range(3)]
 
 
 def test_views_that_differ_are_not_joined(tmp_path):
@@ -275,7 +267,7 @@ def test_views_that_differ_are_not_joined(tmp_path):
     cannot share one OME-Zarr image; joining them is a clear error naming the way out.
     0.1.5 joined them and kept the last view's position for all channels."""
     src = _views_czi(tmp_path / "views.czi", view_offset_um=300.0)
-    env = dict(os.environ, EUBI_NEW_PATH="1", COLUMNS="250")
+    env = dict(os.environ, COLUMNS="250")
     result = subprocess.run([_eubi(), "to_zarr", str(src), str(tmp_path / "joined"),
                              "--view_index", "all", "--concat_views"],
                             capture_output=True, text=True, env=env)
@@ -283,7 +275,7 @@ def test_views_that_differ_are_not_joined(tmp_path):
     assert result.returncode != 0
     assert "cannot be joined" in log and "Convert without --concat_views" in log
     assert not list((tmp_path / "joined").glob("*.zarr"))
-    _convert(src, tmp_path / "separate", True, ["--view_index", "all"])
+    _convert(src, tmp_path / "separate", ["--view_index", "all"])
     places = []
     for name in ("views_view0.zarr", "views_view1.zarr"):
         attrs = zarr.open_group(str(tmp_path / "separate" / name), mode="r").attrs
@@ -292,27 +284,11 @@ def test_views_that_differ_are_not_joined(tmp_path):
     assert places[1][-1] - places[0][-1] == pytest.approx(300.0)
 
 
-def test_the_new_path_is_the_default_and_eubi_new_path_0_goes_back(tmp_path):
-    """Step 1d: micro-reader files take the new path without any switch; EUBI_NEW_PATH=0
-    is the private way back to the old path (until step 6 deletes it)."""
-    src = _ome_tiff(tmp_path / "img.ome.tif")
-    env = {k: v for k, v in os.environ.items() if k != "EUBI_NEW_PATH"}
-    env["COLUMNS"] = "250"
-    for name, extra in (("default", {}), ("old", {"EUBI_NEW_PATH": "0"})):
-        result = subprocess.run([_eubi(), "to_zarr", str(src), str(tmp_path / name),
-                                 "--scene_index", "0"], capture_output=True, text=True,
-                                env=dict(env, **extra))
-        log = " ".join((result.stdout + result.stderr).split())
-        assert result.returncode == 0, log[-2000:]
-        assert ("new path" in log) == (name == "default"), log[-2000:]
-    _same(_describe(tmp_path / "old"), _describe(tmp_path / "default"))
-
-
 def test_micro_check_pixels_is_retired_with_a_warning(tmp_path):
     """Decision 'D5: micro_check_pixels': saved configs still load; it warns once that
     it does nothing and how to compare instead."""
     src = _ome_tiff(tmp_path / "img.ome.tif")
-    log = _convert(src, tmp_path / "new", True, ["--scene_index", "0",
+    log = _convert(src, tmp_path / "new", ["--scene_index", "0",
                                                   "--micro_check_pixels", "True"])
     assert "micro_check_pixels no longer has an effect" in log
     assert "pixel_reader='standard'" in log
@@ -336,16 +312,15 @@ def _ome_zarr_input(path: Path, translation=None) -> Path:
 def test_an_ome_zarr_input_on_both_paths(tmp_path):
     """Roadmap step 2, part 3: read by ozp itself (NgffFile), the same output."""
     src = _ome_zarr_input(tmp_path / "in.ome.zarr")
-    _convert(src, tmp_path / "old", False, [])
-    log = _convert(src, tmp_path / "new", True, [])
-    assert "new path, 1 output(s), ome_zarr_pyramid" in log, log[-2000:]
-    _same(_describe(tmp_path / "old"), _describe(tmp_path / "new"))
+    log = _convert(src, tmp_path / "new", [])
+    assert "1 output(s), read by ome_zarr_pyramid" in log, log[-2000:]
+    _golden.check("pyramid_path-ome_zarr_input", tmp_path / "new", tmp_path)
 
 
 def test_an_ome_zarr_inputs_translation_is_kept(tmp_path):
     """Decided 2026-10-15: the input's translation is kept (0.1.5 dropped it)."""
     src = _ome_zarr_input(tmp_path / "in.ome.zarr", translation=[0.0, 0.0, 12.5, -3.0])
-    _convert(src, tmp_path / "new", True, [])
+    _convert(src, tmp_path / "new", [])
     attrs = zarr.open_group(str(tmp_path / "new" / "in.zarr"), mode="r").attrs
     transforms = attrs["multiscales"][0]["datasets"][0]["coordinateTransformations"]
     assert {"type": "translation", "translation": [0.0, 0.0, 12.5, -3.0]} in transforms
@@ -362,12 +337,35 @@ def test_kept_levels_on_both_paths(tmp_path):
     src = tmp_path / "levels.ome.zarr"
     IO().write_pyramid(pyr, str(src), overwrite=True)
     args = ["--keep_existing_resolutions"]
-    _convert(src, tmp_path / "old", False, args)
-    log = _convert(src, tmp_path / "new", True, args)
-    assert "new path, 1 output(s)" in log, log[-2000:]
-    old = _describe(tmp_path / "old")
-    assert len(next(iter(old.values()))[1]) == 3
-    _same(old, _describe(tmp_path / "new"))
+    log = _convert(src, tmp_path / "new", args)
+    assert "1 output(s), read by" in log, log[-2000:]
+    new = _golden.check("pyramid_path-kept_levels", tmp_path / "new", tmp_path)
+    assert len(next(iter(new.values()))["levels"]) == 3
+
+
+@pytest.mark.parametrize("keep", [False, True], ids=["computed", "kept"])
+def test_an_ome_zarr_input_without_a_name_and_with_named_levels(tmp_path, keep):
+    """NGFF leaves the multiscales name optional and names levels freely ('s0', 's1'):
+    such an input converts (it raised KeyError: 'name'), and kept levels keep their names
+    and pixels, as 0.1.x's own writer kept them."""
+    data = RNG.integers(0, 4000, (2, 64, 80)).astype("u2")
+    src = tmp_path / "in.ome.zarr"
+    group = zarr.open_group(str(src), mode="w", zarr_format=2)
+    group.create_array("s0", data=data, chunks=(1, 32, 32))
+    group.create_array("s1", data=data[:, ::2, ::2], chunks=(1, 32, 32))
+    axes = [{"name": "c", "type": "channel"}] + [
+        {"name": ax, "type": "space", "unit": "micrometer"} for ax in "yx"]
+    group.attrs["multiscales"] = [{"version": "0.4", "axes": axes, "datasets": [
+        {"path": p, "coordinateTransformations": [{"type": "scale", "scale": [1, s, s]}]}
+        for p, s in (("s0", 0.5), ("s1", 1.0))]}]
+    _convert(src, tmp_path / "out", ["--keep_existing_resolutions"] if keep else [])
+    (store,) = (tmp_path / "out").glob("*.zarr")
+    out = zarr.open_group(str(store), mode="r")
+    base = "s0" if keep else "0"
+    np.testing.assert_array_equal(np.squeeze(out[base][...]), data)
+    if keep:
+        assert sorted(out.array_keys()) == ["s0", "s1"]
+        np.testing.assert_array_equal(np.squeeze(out["s1"][...]), data[:, ::2, ::2])
 
 
 # -- the pieces ------------------------------------------------------------------------
@@ -382,13 +380,27 @@ def test_positions_follow_eubis_index_options(caplog):
         _positions(7, 3, "scene")
 
 
-def test_unsupported_names_the_reason():
-    from eubi_bridge.conversion.pyramid_path import _micro_reason, unsupported
+def test_micro_reader_names_why_it_does_not_take_a_file():
+    from eubi_bridge.conversion.pyramid_path import _micro_reason
     from eubi_bridge.core.config_models import ConversionJob
     job = ConversionJob.from_kwargs(input_path="a.ome.tif", output_path="o", kwargs={})
-    assert unsupported(job) == "" and _micro_reason(job) == ""
+    assert _micro_reason(job) == ""
     vsi = job.model_copy(update={"input_path": "a.vsi"})
-    assert unsupported(vsi) == ""                         # the older readers take it
-    assert "format" in _micro_reason(vsi)
-    job.conversion.writer = "eubi"
-    assert unsupported(job) == "writer='eubi'"
+    assert "format" in _micro_reason(vsi)                 # the older readers take it
+
+
+def test_smart_downscaling_makes_the_levels_isotropic(tmp_path):
+    """apply_smart_downscaling: z 2.0 um, y / x 0.5 um -> y and x shrink by 4 per level,
+    z stays, so the next level's voxels are isotropic (2.0 um)."""
+    src = tmp_path / "aniso.ome.tif"
+    data = RNG.integers(0, 4000, (8, 128, 160)).astype("u2")
+    tifffile.imwrite(str(src), data, ome=True, photometric="minisblack", metadata={
+        "axes": "ZYX", "PhysicalSizeZ": 2.0, "PhysicalSizeY": 0.5, "PhysicalSizeX": 0.5})
+    _convert(src, tmp_path / "out", ["--apply_smart_downscaling", "True", "--n_layers", "2"])
+    (store,) = (tmp_path / "out").glob("*.zarr")
+    group = zarr.open_group(str(store), mode="r")
+    attrs = group.attrs.asdict()
+    datasets = attrs.get("ome", attrs)["multiscales"][0]["datasets"]
+    scales = [d["coordinateTransformations"][0]["scale"][-3:] for d in datasets]
+    assert scales == [[2.0, 0.5, 0.5], [2.0, 2.0, 2.0]]
+    assert group[datasets[1]["path"]].shape[-3:] == (8, 32, 40)

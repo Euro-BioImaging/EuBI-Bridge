@@ -1,0 +1,160 @@
+{
+ "rgb.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "scene_index": 0,
+     "source_path": "<tmp>\\rgb.czi",
+     "tile_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          1.0,
+          1.0
+         ],
+         "type": "scale"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FF0000",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0 R",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "00FF00",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0 G",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "0000FF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0 B",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FF0000",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1 R",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "00FF00",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1 G",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "0000FF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1 B",
+      "window": {
+       "end": 255,
+       "max": 255,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     6,
+     40,
+     48
+    ],
+    "uint8",
+    [
+     1,
+     40,
+     48
+    ],
+    "989ec10ac3f4f0da9ba8f4685e36deb2d2dfda198bedb5d68960d926608b8d3b"
+   ]
+  ]
+ }
+}

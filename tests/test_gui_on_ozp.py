@@ -2,13 +2,13 @@
 
 The Inspect tab's plane server reads stores with ozp's Pyramid, and its metadata edits
 (pixel sizes, channels) are ozp ``IO().update_metadata`` calls. Every server answer must
-be what it was on eubi-bridge's own Pyramid (EUBI_NEW_PATH=0, until step 6 removes it).
+be what it was on eubi-bridge 0.1.x's own Pyramid (golden file, tests/_golden.py, recorded
+before step 6 retired it).
 """
 from __future__ import annotations
 
 import io
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -23,6 +23,8 @@ pytest.importorskip("ome_zarr_pyramid")
 tifffile = pytest.importorskip("tifffile")
 zarr = pytest.importorskip("zarr")
 Image = pytest.importorskip("PIL.Image")
+
+from tests import _golden  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "eubi_bridge" / "qt_gui" / "server" / "zarr_plane_server.py"
@@ -42,9 +44,8 @@ def store(tmp_path_factory):
     return path
 
 
-def _start(flag: str, port: int) -> subprocess.Popen:
-    env = dict(os.environ, EUBI_NEW_PATH=flag)
-    proc = subprocess.Popen([sys.executable, str(SERVER), str(port)], env=env,
+def _start(port: int) -> subprocess.Popen:
+    proc = subprocess.Popen([sys.executable, str(SERVER), str(port)],
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     for line in proc.stdout:
         if '"ready"' in line:
@@ -90,31 +91,39 @@ def _answers(port, path) -> dict:
     return out
 
 
-def test_the_plane_server_answers_alike_on_both_pyramids(store, tmp_path):
-    old, new = _start("0", 5791), _start("1", 5792)
+SCALES = [{"axis": "x", "value": 0.33, "unit": "micrometer"},
+          {"axis": "z", "value": 1.7, "unit": "nanometer"}]
+
+
+def _comparable(answers: dict, store: Path, tmp_path: Path) -> dict:
+    """Answers as golden files hold them: images as fingerprints, paths as <tmp>."""
+    out = {k: _golden.fingerprint(v) if isinstance(v, np.ndarray) else v
+           for k, v in answers.items()}
+    return _golden._normalise(_golden._normalise(out, store.parent), tmp_path)
+
+
+def _answers_and_update(port: int, store: Path, tmp_path: Path) -> dict:
+    server = _start(port)
     try:
-        a, b = _answers(5791, str(store)), _answers(5792, str(store))
-        assert a.keys() == b.keys()
-        assert a["metadata"]["resolutionLevels"] == 3
-        for key in a:
-            if isinstance(a[key], np.ndarray):
-                np.testing.assert_array_equal(a[key], b[key], err_msg=key)
-            else:
-                assert a[key] == b[key], key
-        scales = [{"axis": "x", "value": 0.33, "unit": "micrometer"},
-                  {"axis": "z", "value": 1.7, "unit": "nanometer"}]
-        after = []
-        for port in (5791, 5792):
-            copy = tmp_path / str(port) / "copy.zarr"
-            shutil.copytree(store, copy)
-            assert _post(port, "/update_scales", {"path": str(copy), "scales": scales}) == {"ok": True}
-            after.append(_get(port, "/metadata", path=str(copy)))
-        assert after[0] == after[1]
-        x = next(s for s in after[1]["scales"] if s.get("axis") == "x")
-        assert x["value"] == pytest.approx(0.33)
+        out = _answers(port, str(store))
+        copy = tmp_path / str(port) / "copy.zarr"
+        shutil.copytree(store, copy)
+        assert _post(port, "/update_scales", {"path": str(copy), "scales": SCALES}) == {"ok": True}
+        out["metadata after update"] = _get(port, "/metadata", path=str(copy))
+        return _comparable(out, store, tmp_path / str(port))
     finally:
-        old.terminate()
-        new.terminate()
+        server.terminate()
+
+
+def test_the_plane_server_answers_as_on_0_1(store, tmp_path):
+    old = _golden.value("gui-plane_server")
+    new = _answers_and_update(5791, store, tmp_path)
+    assert new.keys() == old.keys()
+    assert new["metadata"]["resolutionLevels"] == 3
+    for key in old:
+        assert new[key] == old[key], key
+    x = next(s for s in new["metadata after update"]["scales"] if s.get("axis") == "x")
+    assert x["value"] == pytest.approx(0.33)
 
 
 def _ngff(path: Path) -> dict:
@@ -127,7 +136,6 @@ def test_the_inspect_pages_edits_are_ozp_updates(store, tmp_path, monkeypatch):
     copy = tmp_path / "edited.zarr"
     shutil.copytree(store, copy)
     chunks = sorted(p.stat().st_mtime_ns for p in copy.rglob("c/*"))
-    monkeypatch.setenv("EUBI_NEW_PATH", "1")
     page._update_scales_on_disk(str(copy), [{"axis": "x", "value": 0.25, "unit": "micrometer"}])
     page._update_channels_on_disk(str(copy), [
         {"label": "Hoechst", "color": "#0000FF", "visible": True, "intensityMin": 10,
@@ -212,7 +220,6 @@ def test_a_gui_batch_runs_every_row_with_its_own_settings(tmp_path, monkeypatch)
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))       # never the user's config
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("EUBI_CONFIG_DIR", str(tmp_path / "home" / ".eubi_bridge"))
-    monkeypatch.setenv("EUBI_NEW_PATH", "1")
     rng = np.random.default_rng(9)
     src = tmp_path / "in"
     src.mkdir()

@@ -15,7 +15,6 @@ import numpy as np
 import zarr
 
 from eubi_bridge.core.reader_interface import ImageReader
-from eubi_bridge.ngff.multiscales import Pyramid
 from eubi_bridge.utils.logging_config import get_logger
 
 if TYPE_CHECKING:

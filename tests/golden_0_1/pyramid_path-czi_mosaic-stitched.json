@@ -1,0 +1,186 @@
+{
+ "mosaic_scene0.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 992.25,
+      "y": 492.25
+     },
+     "scene_index": 0,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          492.25,
+          992.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     64,
+     64
+    ],
+    "uint16",
+    [
+     64,
+     64
+    ],
+    "ec693b8eef95538682847486bffc8f591ba9929aef20ae201ccb2910ade55660"
+   ]
+  ]
+ },
+ "mosaic_scene1.zarr": {
+  "attrs": {
+   "eubi_bridge": {
+    "acquisition": {
+     "origin_um": {
+      "x": 1092.25,
+      "y": 492.25
+     },
+     "scene_index": 1,
+     "source_path": "<tmp>\\mosaic.czi",
+     "tile_index": 0
+    }
+   },
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        },
+        {
+         "translation": [
+          492.25,
+          1092.25
+         ],
+         "type": "translation"
+        }
+       ],
+       "path": "0"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FFFFFF",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     64,
+     64
+    ],
+    "uint16",
+    [
+     64,
+     64
+    ],
+    "9aedc11a0cdc17eb4d13741f3092442b94b1a75232cb8115efc0e8952fb01c4d"
+   ]
+  ]
+ }
+}

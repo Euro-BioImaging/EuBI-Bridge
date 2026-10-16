@@ -81,17 +81,6 @@ class TestAutoColors:
         assert [auto_channel_color(i) for i in range(15)] == \
                [auto_channel_color(i) for i in range(15)]
 
-    def test_both_metadata_modules_agree(self):
-        """Two copies of the palette existed; they must not drift apart."""
-        import numpy as np
-        from eubi_bridge.utils.metadata_utils import generate_channel_metadata
-        from eubi_bridge.ngff.multiscales import (
-            generate_channel_metadata as ngff_variant)
-        mine = [c["color"] for c in generate_channel_metadata(12, np.uint16)]
-        theirs = [c["color"]
-                  for c in ngff_variant(12, np.uint16)["omero"]["channels"]]
-        assert mine == theirs
-
 
 class TestColorOverrides:
     """`channel_colors` uses the CLI's "idx,RRGGBB;..." format."""
@@ -113,29 +102,30 @@ class TestColorOverrides:
 
 
 class TestUnaryForwarding:
-    """The unary path must forward channel parameters to parse_channels.
+    """A single-file conversion must apply the channel settings.
 
-    Regression guard: it previously did not, so ``--channel_colors`` and
+    Regression guard: 0.1.x once did not, so ``--channel_colors`` and
     ``--channel_labels`` silently did nothing for single-file conversions while
     the aggregative path honoured them.  It also hardcoded
     ``channel_intensity_limits``, overriding the user's choice.
     """
 
-    def _unary_call_source(self) -> str:
-        import inspect
-        from eubi_bridge.conversion import conversion_worker
-        source = inspect.getsource(conversion_worker._process_single_scene)
-        start = source.index("parse_channels(")
-        return source[start:start + 600]
+    def test_channel_labels_and_colors_reach_the_output(self, tmp_path):
+        import json
 
-    def test_channel_kwargs_are_forwarded(self):
-        call = self._unary_call_source()
-        assert "channel_colors" in call,             "unary path drops channel_colors; the CLI flag would do nothing"
-        assert "channel_labels" in call,             "unary path drops channel_labels; the CLI flag would do nothing"
+        import numpy as np
+        import tifffile
 
-    def test_intensity_limits_are_not_hardcoded(self):
-        call = self._unary_call_source()
-        assert "meta.channel_intensity_limits" in call,             "unary path ignores the user's channel_intensity_limits setting"
+        from eubi_bridge.ebridge import EuBIBridge
+        source = tmp_path / "img.tif"
+        tifffile.imwrite(source, np.zeros((2, 2, 16, 16), np.uint8), imagej=True,
+                         metadata={"axes": "ZCYX"})
+        out = tmp_path / "out"
+        EuBIBridge().to_zarr(str(source), str(out), channel_labels="0,Red;1,Green",
+                             channel_colors="0,FF0000;1,00FF00", verbose=False)
+        attrs = json.loads((next(out.glob("*.zarr")) / ".zattrs").read_text())
+        assert [(ch["label"], ch["color"]) for ch in attrs["omero"]["channels"]] == [
+            ("Red", "FF0000"), ("Green", "00FF00")]
 
     @pytest.mark.parametrize("limits, expected", [
         ("from_dtype", [(0, 255), (0, 255)]),
@@ -179,16 +169,6 @@ class TestUnaryForwarding:
             {"channel_colors": "0,FF0000", "channel_labels": "0,Red"})
         assert job.metadata.channel_colors == "0,FF0000"
         assert job.metadata.channel_labels == "0,Red"
-
-    def test_both_paths_forward_the_same_keys(self):
-        """Aggregative already worked; the two must not diverge again."""
-        import inspect
-        from eubi_bridge.conversion import conversion_worker
-        source = inspect.getsource(conversion_worker)
-        # Both parse_channels call sites pass each key explicitly, preferring a
-        # per-row override from job.extra over the configured default.
-        assert source.count("channel_labels=job.extra.get(") == 2
-        assert source.count("channel_colors=job.extra.get(") == 2
 
 
 class TestGuiSerialisation:

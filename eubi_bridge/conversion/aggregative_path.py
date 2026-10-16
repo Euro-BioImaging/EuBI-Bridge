@@ -2,8 +2,8 @@
 
 Many files become one OME-Zarr image, joined along t / c / z by the tags in their names.
 The parent still plans the outputs (``dispatcher._build_aggregative_plan``); each worker
-gets one output's files and converts them here, without ``AggregativeConverter``,
-``BatchFile`` or ``ArrayManager``:
+gets one output's files and converts them here (0.1.x's ``AggregativeConverter`` /
+``BatchFile`` / ``ArrayManager`` route is retired, ``legacy_0_1/``):
 
 1. Every file's pixels, lazily: micro-reader files through ``micro_array`` (the files are
    opened through micro_source's bounded cache, so thousands of them never stay open at
@@ -137,9 +137,13 @@ class _Inputs:
         self._legacy: dict = {}
 
     def _one_scene(self, path: str, count: int) -> None:
-        from eubi_bridge.conversion.pyramid_path import NotYet
         if self.all_scenes and count != 1:
-            raise NotYet(f"scene_index='all' and {os.path.basename(path)} has {count} scenes")
+            # 0.1.5 folded the scenes into the joined axis (positions became time
+            # points); an aggregative output joins ONE scene of each file
+            raise ValueError(
+                f"Aggregative conversion joins one scene of each file, and "
+                f"{os.path.basename(path)} has {count} scenes. Choose the scene with "
+                f"--scene_index (0 to {count - 1}); for every scene, run once per scene.")
 
     # -- pixels --------------------------------------------------------------
     def array(self, path: str):
@@ -327,14 +331,13 @@ def _distinct_colors(pyr):
     return pyr.set_channels({i: {"color": d["color"]} for i, d in enumerate(defaults)})
 
 
-#: scene_index='all': every scene of every file; the new path joins files of one scene
-#: each (the GUI's default), files of several scenes stay on the old path
+#: scene_index='all' (the GUI's default): files of one scene each are joined; files of
+#: several scenes are refused (``_Inputs``: 0.1.5 folded their scenes into the joined axis)
 ALL_SCENES = "all"
 
 
 def _scene(job_kwargs: dict):
     """The scene joined from each file (an int), or ALL_SCENES."""
-    from eubi_bridge.conversion.pyramid_path import NotYet
     value = job_kwargs.get("scene_index", 0)
     value = 0 if value is None else value
     if value == ALL_SCENES:
@@ -342,7 +345,11 @@ def _scene(job_kwargs: dict):
     try:
         return int(value)
     except (TypeError, ValueError):
-        raise NotYet(f"scene_index={value!r} (one scene per file is joined)") from None
+        # 0.1.5 crashed on a list (TypeError in set_scene)
+        raise ValueError(
+            f"Aggregative conversion joins one scene of each file: --scene_index "
+            f"{value!r} names several. Give one scene index; for several scenes, run "
+            f"once per scene.") from None
 
 
 def _build_entry(paths: list, job, job_kwargs: dict):
@@ -352,8 +359,8 @@ def _build_entry(paths: list, job, job_kwargs: dict):
 
     from eubi_bridge.conversion.fileset_io import FileSet
     from eubi_bridge.conversion.legacy_image import LegacyImage
-    from eubi_bridge.conversion.pyramid_path import NAME, NotYet
-    from eubi_bridge.core.ozp_writer import _ozp_version
+    from eubi_bridge.conversion.pyramid_path import NAME
+    from eubi_bridge.core.output_store import _ozp_version
 
     paths = natsorted(str(p) for p in paths)
     scene = _scene(job_kwargs)
@@ -377,9 +384,10 @@ def _build_entry(paths: list, job, job_kwargs: dict):
         (_, array), = outputs.values()
 
         samples = _channel_groups(paths, job_kwargs) if 1 in joined_axes else [paths[0]]
+        # RGB files: their samples are channels already (micro-reader / the older readers);
+        # a file describing fewer channels than it has gets unnamed ones, numbered and
+        # coloured red / green / blue as 0.1.5 did (_channels)
         images = {p: inputs.image(p) for p in dict.fromkeys([paths[0]] + samples)}
-        if any("s" in images[p].axes.lower() for p in images):
-            raise NotYet("RGB files joined")
         first = images[paths[0]].metadata
         image = LegacyImage(
             array=array, axes=AXES, index={"scene": scene}, name=images[paths[0]].name,
@@ -399,39 +407,28 @@ def _build_entry(paths: list, job, job_kwargs: dict):
         raise
 
 
-async def convert_group(file_paths: list, output_path: str, job_kwargs: dict) -> bool:
-    """Convert one output's files on the new path; False (nothing written) when the job
-    is not one it takes yet, so the caller uses the old one."""
+async def convert_group(file_paths: list, output_path: str, job_kwargs: dict) -> None:
+    """Convert one output's files: joined into one Pyramid, one ``write_pyramid`` call."""
     from eubi_bridge.conversion.conversion_worker import _convert_safely
-    from eubi_bridge.conversion.pyramid_path import (ENV, NotYet, _convert_entry,
-                                                     _retired_settings, unsupported)
+    from eubi_bridge.conversion.pyramid_path import _convert_entry, _retired_settings
     from eubi_bridge.core.config_models import ConversionJob
 
     if job_kwargs.get("metadata_reader", "micro") == "micro":
-        # micro-reader's metadata comes with its pixels, as on the old path
+        # micro-reader's metadata comes with its pixels, as in 0.1.x
         job_kwargs = {**job_kwargs, "pixel_reader": "micro"}
     if job_kwargs.get("dtype", "auto") == "auto":
-        job_kwargs = {**job_kwargs, "dtype": None}         # the source's (ozp_writer's rule)
+        job_kwargs = {**job_kwargs, "dtype": None}         # the source's (as 0.1.x's ozp writer)
     # a mosaic file is read as its first tile, pixels and metadata alike (0.1.5 never
     # passed as_mosaic on to the files it joins)
     job_kwargs = {**job_kwargs, "as_mosaic": False}
     out = output_path if str(output_path).endswith(".zarr") else f"{output_path}.zarr"
     paths = [str(p) for p in file_paths]
     job = ConversionJob.from_kwargs(input_path=paths[0], output_path=out, kwargs=job_kwargs)
-    reason = unsupported(job)
-    if not reason:
-        try:
-            entry, inputs = await asyncio.to_thread(_build_entry, paths, job, job_kwargs)
-        except NotYet as exc:
-            reason = str(exc)
-    if reason:
-        logger.info(f"{ENV}: {out}: old path ({reason})")
-        return False
-    logger.info(f"{ENV}: {out}: new path, {len(paths)} file(s) joined along "
+    entry, inputs = await asyncio.to_thread(_build_entry, paths, job, job_kwargs)
+    logger.info(f"{out}: {len(paths)} file(s) joined along "
                 f"{job_kwargs.get('concatenation_axes')}")
     _retired_settings(job)
     try:
         await _convert_safely(_convert_entry(entry, out, job, asyncio.Semaphore(1)), out)
     finally:
         inputs.close()
-    return True

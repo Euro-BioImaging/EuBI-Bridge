@@ -107,7 +107,6 @@ def test_choices_agree_between_form_edit_cells_and_conversion(page):
     assert set(B.spec_for("compressor").choices) - {"none"} <= SUPPORTED_COMPRESSORS_ANY
     assert form(page._downscale_method) == list(B.spec_for("downscale_method").choices)
     assert form(page._ome_zarr_version) == list(B.spec_for("ome_zarr_version").choices)
-    assert form(page._writer) == sorted(B.spec_for("writer").choices, key=form(page._writer).index)
     assert set(form(page._io_backend)) <= set(B.spec_for("io_backend").choices)
     assert set(form(page._data_type)) <= set(B.spec_for("dtype").choices)
     assert [page._export_acquisition.itemText(i) for i in range(page._export_acquisition.count())] \
@@ -128,7 +127,7 @@ def test_a_form_change_shows_in_the_queue_without_a_false_warning(page):
     base = page._ui_to_config()
     for section, key, value, column in (
             ("conversion", "omeZarrVersion", "0.5", "ome_zarr_version"),
-            ("conversion", "writer", "eubi", "writer"),
+            ("conversion", "ioBackend", "zarrista", "io_backend"),
             ("conversion", "exportAcquisitionMetadata", True, "export_acquisition_metadata"),
             ("metadata", "channelIntensityLimits", "auto", "channel_intensity_limits")):
         changed = deepcopy(base)

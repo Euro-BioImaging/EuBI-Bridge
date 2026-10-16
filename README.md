@@ -455,12 +455,9 @@ Set them once with `eubi configure cluster`, or in the Cluster tab of the graphi
 interface. On a SLURM cluster, `--slurm_worker_memory` sets the memory of each worker
 job instead.
 
-The OME-Zarr is written by [ome_zarr_pyramid](https://pypi.org/project/ome_zarr_pyramid/)
-by default. If you need to, you can choose:
-
-- `--writer eubi`: EuBI-Bridge's own writer. It gives the same pixels.
-- `--io_backend zarrista`: write with the Rust-based zarrista library. Install it with
-  `pip install "dyna-zarr[zarrista]"`.
+The OME-Zarr is written by [ome_zarr_pyramid](https://pypi.org/project/ome_zarr_pyramid/).
+To write with the Rust-based zarrista library, use `--io_backend zarrista`. Install it with
+`pip install "dyna-zarr[zarrista]"`.
 
 ## Additional Notes
 

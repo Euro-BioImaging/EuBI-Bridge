@@ -1,19 +1,18 @@
-"""micro-reader as eubi-bridge's pixel reader (``readers.pixel_reader="micro"``).
+"""micro-reader inside eubi-bridge's older readers and the aggregative path.
 
-A first, opt-in version: metadata, scene counting, channels and the writer
-are unchanged; only the pixels of each (scene, tile, view, illumination)
-snapshot come from micro-reader instead of the standard reader, through
-``MicroSource`` -- an array-like that ``DynamicArray`` wraps, as it wraps
-``_BioFormatsSource``.
+``MicroSource`` / ``micro_array``: micro-reader's pixels of one (scene, tile, view,
+illumination) image as an array-like that ``DynamicArray`` wraps (as it wraps
+``_BioFormatsSource``), from a pool of open files (``_using``). ``MicroReader``:
+micro-reader as a reader of its own behind ``PFFImageMeta`` (``metadata_reader='micro'``),
+with its metadata as OME (``micro_omemeta``) and the extras NGFF has no field for
+(``micro_extras``).
 
-Safety net: every micro-reader array is checked against the standard
-reader's array for the same snapshot -- the same T C Z Y X shape, and the
-same pixels in a small window of the first and last plane.  Anything that
-does not map or does not match keeps the standard array and logs why.
+eubi-bridge 0.1.x could also check micro-reader's pixels against the standard reader's
+(``micro_check_pixels``: ``swap_in`` / ``verify``); that check is retired (kept for
+reference in ``legacy_0_1/``).
 """
 from __future__ import annotations
 
-import os
 import threading
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -35,9 +34,6 @@ RENAME = {"sequence": "z"}
 #: (block, emission, excitation, lifetime) is left to the standard reader
 SELECTABLE = {"scene", "tile", "rotation", "view", "illumination", "phase", "resolution"}
 STANDARD = "tczyx"
-#: side of the window compared per plane by ``verify``
-CHECK_SIDE = 64
-
 #: files kept open per process, least recently used closed first: an
 #: aggregative input of thousands of files must not hold them all open (each
 #: holds a handle per reading thread; "Too many open files" at ~500 of 2347).
@@ -238,79 +234,6 @@ def _find(f, path: str, tiles: str, scene: int, tile: Optional[int], *, view: in
     source = MicroSource(path, tiles, f.images.index(image), view_.shape, view_.dtype,
                          read_unit=view_.read_unit)
     return from_array(source), ""
-
-
-def _window(arr, t, c, z, ny, nx) -> np.ndarray:
-    """A CHECK_SIDE window in the middle of one plane, asked for with slices
-    only (eubi-bridge's own lazy arrays mishandle integer indices)."""
-    y0, x0 = max(0, ny // 2 - CHECK_SIDE // 2), max(0, nx // 2 - CHECK_SIDE // 2)
-    key = (slice(t, t + 1), slice(c, c + 1), slice(z, z + 1),
-           slice(y0, min(ny, y0 + CHECK_SIDE)), slice(x0, min(nx, x0 + CHECK_SIDE)))
-    part = arr[key]
-    if hasattr(part, "compute"):
-        part = part.compute()
-    return np.asarray(part)
-
-
-def verify(micro, standard, pixels: bool = True) -> str:
-    """'' when *micro* matches *standard* -- shape, dtype and, with *pixels*,
-    the pixels in a window of the first and last plane; otherwise why not.
-    Shape and dtype cost nothing; the pixel windows are read from both."""
-    if tuple(micro.shape) != tuple(standard.shape):
-        return f"shape {tuple(micro.shape)} vs standard {tuple(standard.shape)}"
-    if np.dtype(micro.dtype) != np.dtype(standard.dtype):
-        return f"dtype {np.dtype(micro.dtype)} vs standard {np.dtype(standard.dtype)}"
-    if not pixels:
-        return ""
-    nt, nc, nz, ny, nx = micro.shape
-    for t, c, z in {(0, 0, 0), (nt - 1, nc - 1, nz - 1)}:
-        a, b = _window(micro, t, c, z, ny, nx), _window(standard, t, c, z, ny, nx)
-        if a.shape != b.shape or not np.array_equal(a, b):
-            return f"pixels differ at t{t} c{c} z{z}"
-    return ""
-
-
-def layout(path: str, arr) -> tuple:
-    """What files whose arrays map alike share: file type, shape, dtype."""
-    return os.path.splitext(path)[1].lower(), tuple(arr.shape), str(np.dtype(arr.dtype))
-
-
-def swap_in(loader_img, path: str, scene: int, tile: Optional[int], *, as_mosaic=False,
-            view=0, illumination=0, rotation=0, phase=0, verify_pixels: bool = True,
-            verified_layouts: Optional[set] = None):
-    """micro-reader's array for this snapshot when it maps and matches the
-    standard one (``loader_img.arraydata``), else None (and a log line).
-
-    *verified_layouts*: for many files of one kind (an aggregative input),
-    pixels are compared once per ``layout`` -- the first file that passes
-    the full check adds its layout to the set -- and every other file only
-    by shape and dtype.  The pixel check reads a whole plane through the
-    standard reader for each file, ~20 ms (45 s of a 2347-file run)."""
-    standard = loader_img.arraydata
-    if standard is None:
-        return None
-    arr, reason = micro_array(path, scene, tile, as_mosaic=as_mosaic, view=view,
-                              illumination=illumination, rotation=rotation, phase=phase)
-    if arr is None:
-        logger.warning(f"pixel_reader=micro: {path} scene {scene} tile {tile}: standard "
-                       f"reader kept ({reason})")
-        return None
-    if verify_pixels:
-        key = layout(path, arr)
-        pixels = verified_layouts is None or key not in verified_layouts
-        try:
-            problem = verify(arr, standard, pixels=pixels)
-        except Exception as exc:                    # noqa: BLE001 - fall back, say why
-            problem = f"check failed: {type(exc).__name__}: {exc}"
-        if problem:
-            logger.warning(f"pixel_reader=micro: {path} scene {scene} tile {tile}: standard "
-                           f"reader kept ({problem})")
-            return None
-        if pixels and verified_layouts is not None:
-            verified_layouts.add(key)
-    logger.info(f"pixel_reader=micro: {path} scene {scene} tile {tile} view {view} "
-                f"illumination {illumination}: micro-reader {tuple(arr.shape)} {arr.dtype}")
-    return arr
 
 
 # -- micro-reader as a reader of its own (no standard reader opened) ---------------

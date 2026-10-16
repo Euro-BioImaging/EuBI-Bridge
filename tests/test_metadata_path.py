@@ -2,8 +2,9 @@
 roadmap step 4).
 
 - update_pixel_meta / update_channel_meta: one ozp ``IO().update_metadata`` call, on
-  threads. The same store is updated on both paths; the results must be the same, except
-  the decided differences: ``auto`` windows are the coarsest level's percentiles (as for
+  threads. The results must be what eubi-bridge 0.1.x wrote (golden files,
+  tests/_golden.py, recorded before the old path was retired in step 6), except the
+  decided differences: ``auto`` windows are the coarsest level's percentiles (as for
   conversions; the old path left the windows), and the OME-XML carries the new channel
   names (the old path rewrote it with the old ones).
 - show_pixel_meta: a file's metadata as a conversion writes it (same reader, same
@@ -23,7 +24,16 @@ pytest.importorskip("ome_zarr_pyramid")
 tifffile = pytest.importorskip("tifffile")
 zarr = pytest.importorskip("zarr")
 
+from tests import _golden  # noqa: E402
+
 RNG = np.random.default_rng(5)
+
+
+@pytest.fixture(autouse=True)
+def _seeded():
+    """The same inputs whichever tests run before (golden outputs hash pixels)."""
+    global RNG
+    RNG = np.random.default_rng(5)
 
 
 @pytest.fixture
@@ -50,7 +60,6 @@ def _source(tmp_path, names=("DAPI", "GFP")) -> Path:
 
 @pytest.fixture(params=[2, 3], ids=["v2", "v3"])
 def store(request, bridge, tmp_path, monkeypatch):
-    monkeypatch.setenv("EUBI_NEW_PATH", "1")
     out = tmp_path / "converted"
     bridge.to_zarr(str(_source(tmp_path)), str(out), squeeze=False, verbose=False,
                    zarr_format=request.param)
@@ -69,16 +78,23 @@ def _ngff(store: Path) -> dict:
     return attrs.get("ome", attrs)
 
 
-def _both(bridge, store, tmp_path, monkeypatch, command, **kwargs):
-    """`command` on a copy of `store` on each path: (old copy, new copy)."""
-    copies = []
-    for flag in ("0", "1"):
-        copy = tmp_path / f"{command}_{flag}_{store.name}"
-        shutil.copytree(store, copy)
-        monkeypatch.setenv("EUBI_NEW_PATH", flag)
-        getattr(bridge, command)(str(copy), **kwargs)
-        copies.append(copy)
-    return copies
+def _both(bridge, store, tmp_path, monkeypatch, command, name, **kwargs):
+    """`command` on a copy of `store`: (0.1.x's result as {"attrs", "xml"}, from the golden
+    file `name`; the updated copy). Attributes compare with `_golden.comparable`."""
+    fmt = "v3" if (store / "zarr.json").exists() else "v2"
+    expected = _golden.value(f"metadata_path-{name}-{fmt}")
+    copy = tmp_path / f"{command}_{store.name}"
+    shutil.copytree(store, copy)
+    getattr(bridge, command)(str(copy), **kwargs)
+    return expected, copy
+
+
+def _same_attrs(expected: dict, store: Path, tmp_path: Path) -> None:
+    assert _golden.comparable(_attrs(store), tmp_path) == expected["attrs"]
+
+
+def _old_ngff(expected: dict) -> dict:
+    return expected["attrs"].get("ome", expected["attrs"])
 
 
 def _xml(store: Path) -> str:
@@ -86,30 +102,30 @@ def _xml(store: Path) -> str:
 
 
 def test_pixel_meta_on_both_paths(bridge, store, tmp_path, monkeypatch):
-    old, new = _both(bridge, store, tmp_path, monkeypatch, "update_pixel_meta",
+    old, new = _both(bridge, store, tmp_path, monkeypatch, "update_pixel_meta", "pixel_meta",
                      x_scale=0.3, z_scale=1.5, z_unit="nanometer", time_unit="millisecond")
-    assert _attrs(old) == _attrs(new)
+    _same_attrs(old, new, tmp_path)
     datasets = _ngff(new)["multiscales"][0]["datasets"]
     assert len(datasets) > 1
     assert datasets[1]["coordinateTransformations"][0]["scale"][-1] == pytest.approx(0.6)
-    for xml in (_xml(old), _xml(new)):
+    for xml in (old["xml"], _xml(new)):
         assert 'PhysicalSizeX="0.3"' in xml and 'PhysicalSizeZ="1.5"' in xml
 
 
 def test_channel_meta_on_both_paths(bridge, store, tmp_path, monkeypatch):
-    old, new = _both(bridge, store, tmp_path, monkeypatch, "update_channel_meta",
+    old, new = _both(bridge, store, tmp_path, monkeypatch, "update_channel_meta", "channel_meta",
                      channel_labels="0,A;1,B", channel_colors="1,magenta")
-    assert _attrs(old) == _attrs(new)
+    _same_attrs(old, new, tmp_path)
     assert [(c["label"], c["color"]) for c in _ngff(new)["omero"]["channels"]] == \
         [("A", "FFFFFF"), ("B", "FF00FF")]
     assert 'Name="A"' in _xml(new) and 'Name="B"' in _xml(new)     # the new names
-    assert 'Name="DAPI"' in _xml(old)                              # 0.1.x kept the old ones
+    assert 'Name="DAPI"' in old["xml"]                             # 0.1.x kept the old ones
 
 
 def test_from_array_windows_on_both_paths(bridge, store, tmp_path, monkeypatch):
     old, new = _both(bridge, store, tmp_path, monkeypatch, "update_channel_meta",
-                     channel_intensity_limits="from_array")
-    assert _attrs(old) == _attrs(new)
+                     "from_array_windows", channel_intensity_limits="from_array")
+    _same_attrs(old, new, tmp_path)
     window = _ngff(new)["omero"]["channels"][0]["window"]
     assert (window["min"], window["max"]) == (0, 65535) and 100 <= window["start"] < 200
 
@@ -117,8 +133,8 @@ def test_from_array_windows_on_both_paths(bridge, store, tmp_path, monkeypatch):
 def test_auto_windows_are_the_coarsest_levels_percentiles(bridge, store, tmp_path,
                                                           monkeypatch):
     old, new = _both(bridge, store, tmp_path, monkeypatch, "update_channel_meta",
-                     channel_intensity_limits="auto")
-    assert _ngff(old)["omero"] == _ngff(store)["omero"]            # 0.1.x left them
+                     "auto_windows", channel_intensity_limits="auto")
+    assert _old_ngff(old)["omero"] == _ngff(store)["omero"]        # 0.1.x left them
     datasets = _ngff(new)["multiscales"][0]["datasets"]
     coarsest = np.asarray(zarr.open_group(str(new), mode="r")[datasets[-1]["path"]])
     for k, ch in enumerate(_ngff(new)["omero"]["channels"]):
@@ -129,29 +145,32 @@ def test_auto_windows_are_the_coarsest_levels_percentiles(bridge, store, tmp_pat
 
 def test_pixel_meta_keeps_the_windows(bridge, store, monkeypatch):
     from ome_zarr_pyramid import IO
-    monkeypatch.setenv("EUBI_NEW_PATH", "1")
     IO().update_metadata(str(store), channels={0: {"window": {"start": 7, "end": 9}}})
     bridge.update_pixel_meta(str(store), x_scale=0.25)
     assert _ngff(store)["omero"]["channels"][0]["window"]["start"] == 7
 
 
 def test_updates_run_on_threads(bridge, store, monkeypatch):
-    """No Java VM and no ArrayManager: a process pool is not needed (nor started)."""
+    """No Java VM: a process pool is not needed (0.1.x started one)."""
+    from concurrent.futures import ThreadPoolExecutor
+
     from eubi_bridge.conversion import updater
+    pools = []
 
-    def refuse(*args, **kwargs):
-        raise AssertionError("a process pool was started")
+    class Counted(ThreadPoolExecutor):
+        def __init__(self, *args, **kwargs):
+            pools.append(self)
+            super().__init__(*args, **kwargs)
 
-    monkeypatch.setenv("EUBI_NEW_PATH", "1")
-    monkeypatch.setattr(updater, "ProcessPoolExecutor", refuse)
+    monkeypatch.setattr(updater, "ThreadPoolExecutor", Counted)
     bridge.update_pixel_meta(str(store), y_scale=0.4)
+    assert len(pools) == 1
     assert _ngff(store)["multiscales"][0]["datasets"][0]["coordinateTransformations"][0][
         "scale"][-2] == 0.4
 
 
 def test_show_pixel_meta_shows_what_a_conversion_writes(bridge, tmp_path, monkeypatch):
     from eubi_bridge.conversion.metadata_path import read_metadata
-    monkeypatch.setenv("EUBI_NEW_PATH", "1")
     src = _source(tmp_path, names=None)                    # unnamed channels
     bridge.to_zarr(str(src), str(tmp_path / "out"), squeeze=False, verbose=False)
     (written,) = (tmp_path / "out").glob("*.zarr")
@@ -170,7 +189,6 @@ def test_show_pixel_meta_shows_what_a_conversion_writes(bridge, tmp_path, monkey
 
 def test_show_pixel_meta_lists_every_scene_asked_for(tmp_path, monkeypatch):
     from eubi_bridge.conversion.metadata_path import read_metadata
-    monkeypatch.setenv("EUBI_NEW_PATH", "1")
     src = tmp_path / "two_scenes.ome.tif"
     with tifffile.TiffWriter(str(src), ome=True) as tw:
         tw.write(np.zeros((2, 16, 20), "u2"), photometric="minisblack",
@@ -189,11 +207,10 @@ def test_renaming_a_channel_keeps_its_window(bridge, store, tmp_path, monkeypatc
     from ome_zarr_pyramid import IO
     IO().update_metadata(str(store), channels={0: {"window": {"start": 7, "end": 9}}})
     old, new = _both(bridge, store, tmp_path, monkeypatch, "update_channel_meta",
-                     channel_labels="0,Hoechst")
-    for copy in (old, new):
-        channel = _ngff(copy)["omero"]["channels"][0]
+                     "renamed_channel", channel_labels="0,Hoechst")
+    for ngff in (_old_ngff(old), _ngff(new)):
+        channel = ngff["omero"]["channels"][0]
         assert channel["label"] == "Hoechst"
         assert (channel["window"]["start"], channel["window"]["end"]) == (7, 9)
-    monkeypatch.setenv("EUBI_NEW_PATH", "1")
     bridge.update_channel_meta(str(new), channel_intensity_limits="from_dtype")
     assert _ngff(new)["omero"]["channels"][0]["window"]["end"] == 65535   # when asked

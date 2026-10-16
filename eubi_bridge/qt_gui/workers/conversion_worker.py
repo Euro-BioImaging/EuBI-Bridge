@@ -187,10 +187,8 @@ def _build_kwargs(config: dict) -> dict:
 
     kwargs: dict = {
         "max_processes":              cluster_config.get("maxProcesses", 4),
-        "queue_size":               cluster_config.get("queueSize", 10),
         "region_size_mb":           _float_or_auto(cluster_config.get("regionSizeMb", 0)),
         "max_threads":          cluster_config.get("maxThreads", 4),
-        "max_concurrent_downscale_layers": cluster_config.get("maxConcurrentDownscaleLayers", 3),
         "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 1),
         "memory_budget":            _gb_or_auto(cluster_config.get("memoryBudget", 0)),
         "slurm_worker_memory":      _gb_to_memory_str(cluster_config.get("slurmWorkerMemory", 3)),
@@ -249,7 +247,6 @@ def _build_kwargs(config: dict) -> dict:
         "save_omexml":              conv_config.get("saveOmeXml", True),
         "squeeze":                  conv_config.get("squeezeDimensions", True),
         "dtype":                    conv_config.get("dataType", "auto") or "auto",
-        "writer":                   conv_config.get("writer", "auto") or "auto",
         "io_backend":               conv_config.get("ioBackend", "tensorstore") or "tensorstore",
         "export_acquisition_metadata": conv_config.get("exportAcquisitionMetadata"),
         "n_layers":                 None if downscale_config.get("autoDetectLayers", True) else downscale_config.get("numLayers", 4),

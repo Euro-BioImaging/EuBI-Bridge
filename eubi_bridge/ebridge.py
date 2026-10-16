@@ -105,7 +105,7 @@ def _row_metadata_readers(input_path, default: str, force_default: bool) -> tupl
 # Heavy imports are deferred — config commands don't need zarr/dask/JVM.
 def _ensure_heavy_imports():
     """Lazy-load heavy modules only when needed for actual conversions."""
-    global np, psutil, s3fs, zarr, AggregativeConverter, run_updates, _heavy_imported
+    global np, psutil, s3fs, zarr, run_updates, _heavy_imported
     if _heavy_imported:
         return
     from eubi_bridge.utils.optional_deps import is_installed
@@ -127,7 +127,6 @@ def _ensure_heavy_imports():
         "ignore", message="Could not parse tiff pixel size",
         category=UserWarning, module="bioio_tifffile.reader",
     )
-    from eubi_bridge.conversion.aggregative_conversion_base import AggregativeConverter
     from eubi_bridge.conversion.updater import run_updates
     _heavy_imported = True
 
@@ -977,7 +976,8 @@ class ConfigureGroup:
         Args:
             max_processes: Images converted at once, one per worker process
                 (default 4). Formerly ``max_workers``.
-            queue_size: Internal write-queue depth per worker (default 4).
+            queue_size: RETIRED in 0.2.0 with eubi-bridge's own writer: does nothing
+                (warned about once when set).
             region_size_mb: Size of one read region in MB, or ``'auto'`` (default):
                 each scene's write budget over 3 x its threads, 8 to 256 MB.
             memory_budget: The memory the whole run may use on this machine, e.g.
@@ -991,15 +991,15 @@ class ConfigureGroup:
             max_concurrent_scenes: Parallel scenes within one file (default 1);
                 they share ``max_threads``. Increase only when writing a
                 multi-scene file to a large store.
-            max_concurrent_downscale_layers: Number of downscaled pyramid layers
-                written concurrently per scene (default 3).
+            max_concurrent_downscale_layers: RETIRED in 0.2.0 with eubi-bridge's own
+                writer: does nothing (warned about once when set).
             on_local_cluster: DEPRECATED and ignored: conversions run in this
                 machine's worker processes.
             on_slurm: Submit jobs to a SLURM cluster (default False; the full
                 eubi-bridge only).
             use_threading: Use ThreadPool instead of ProcessPool (default False).
-            tensorstore_data_copy_concurrency: TensorStore internal copy threads
-                (default 4).
+            tensorstore_data_copy_concurrency: RETIRED in 0.2.0 with eubi-bridge's own
+                writer: does nothing (warned about once when set).
             max_retries: Retries on broken worker process (default 10).
             bioformats_threads: Threads for parallel Bio-Formats tile reads
                 (default 4).  ``None`` lets dask choose (cpu_count). Formerly
@@ -1070,9 +1070,9 @@ class ConfigureGroup:
             pixel_reader: ``'micro'`` (default): read the pixels with
                 micro-reader (a file it does not read falls back to the
                 standard reader with a warning), or ``'standard'``.
-            micro_check_pixels: with ``pixel_reader='micro'``, also open the
-                standard reader and compare its pixels with micro-reader's
-                (slower; default False: checked against the metadata only).
+            micro_check_pixels: RETIRED: does nothing (warned about once when set).
+                To compare, convert once more with ``pixel_reader='standard'`` and
+                compare the two outputs.
         """
         return self._cfg.configure_readers(**{k: v for k, v in locals().items() if k != 'self'})
 
@@ -1143,18 +1143,14 @@ class ConfigureGroup:
                 splits an acquisition into several containers, since that is when
                 the relationship between the pieces would otherwise be lost.
             verbose: Log verbose progress output (default False).
-            writer: Which engine writes the OME-Zarr: ``'auto'`` (default),
-                ``'ozp'`` or ``'eubi'``. ``'ozp'`` is ome_zarr_pyramid on dyna-zarr:
-                the same output as eubi-bridge's own writer (``'eubi'``), with all
-                levels from one read of the source and lower peak memory.
-                ``'auto'`` uses ``'ozp'``, and ``'eubi'`` only where ozp cannot write
-                the output yet (kept resolution levels not named 0..n-1).
-            io_backend: The bytes backend of the ``'ozp'`` writer:
+            writer: RETIRED in 0.2.0: ome_zarr_pyramid (on dyna-zarr) writes every
+                output. ``'eubi'`` (eubi-bridge's own writer) is accepted with a
+                warning and written by ome_zarr_pyramid too.
+            io_backend: The bytes backend ome_zarr_pyramid writes with:
                 ``'tensorstore'`` (default) or ``'zarrista'`` (Rust, via zarrs;
                 ``pip install "dyna-zarr[zarrista]"``). With either, shards larger than
                 the region budget are written chunk by chunk in bounded memory (local
                 outputs).
-                Not available with ``writer='eubi'``.
         """
         return self._cfg.configure_conversion(**{k: v for k, v in locals().items() if k != 'self'})
 
@@ -1670,10 +1666,9 @@ class ConversionManager:
         eff_tags = [concat_p['time_tag'], concat_p['channel_tag'],
                     concat_p['z_tag'], concat_p['y_tag'], concat_p['x_tag']]
         filepaths_accepted = _parse_filepaths_with_tags(filepaths, eff_tags)
-        from eubi_bridge.conversion import aggregative_path, pyramid_path
-        if pyramid_path.enabled():
-            # by name, before grouping: OME companions left out, mixed formats refused
-            filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
+        from eubi_bridge.conversion import aggregative_path
+        # by name, before grouping: OME companions left out, mixed formats refused
+        filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
 
         common_dir  = os.path.commonpath(filepaths_accepted)
         output_base = output_path or common_dir
@@ -1804,12 +1799,11 @@ class MetadataManager:
                 conversion_p.get('zarr_format', 2), warn=True)
             if series is None:
                 series = readers_p['scene_index']
-            from eubi_bridge.conversion import pyramid_path
             combined = {
                 **cluster_p, **readers_p, **conversion_p,
-                # the 0.2.0 path: the configured metadata reader, as a conversion reads
-                # the file (the old path always read with bfio here)
-                **({'metadata_reader': metadata_reader} if pyramid_path.enabled() else {}),
+                # the configured metadata reader, as a conversion reads the file
+                # (0.1.x always read with bfio here)
+                'metadata_reader': metadata_reader,
                 'series': series,
                 'use_threading': True,
                 'max_processes': min(16, max(8, len(df['input_path']) if df is not None else 8)),

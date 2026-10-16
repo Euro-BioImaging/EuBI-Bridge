@@ -1,6 +1,5 @@
 import asyncio
-# from distributed import LocalCluster, Client
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -50,14 +49,9 @@ async def run_updates_on_filepaths(
             job_kwargs
         )
 
-    # --- Run all conversions ---
-    # the 0.2.0 path edits metadata through ozp only (no Java VM, no ArrayManager), so
-    # threads do; the old path keeps its process pool
-    from concurrent.futures import ThreadPoolExecutor
-
-    from eubi_bridge.conversion import pyramid_path
-    executor = ThreadPoolExecutor if pyramid_path.enabled() else ProcessPoolExecutor
-    with executor(max_workers) as pool:
+    # --- Run all updates ---
+    # metadata is edited through ozp only (no Java VM), so threads do
+    with ThreadPoolExecutor(max_workers) as pool:
         tasks = [_run_one(row) for _, row in df.iterrows()]
         results = await asyncio.gather(*tasks)
 

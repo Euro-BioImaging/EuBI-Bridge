@@ -1,0 +1,166 @@
+{
+ "levels.zarr": {
+  "attrs": {
+   "eubi_bridge": {},
+   "multiscales": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "z",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "datasets": [
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          2.0,
+          0.5,
+          0.5
+         ],
+         "type": "scale"
+        }
+       ],
+       "path": "0"
+      },
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          4.0,
+          1.0,
+          1.0
+         ],
+         "type": "scale"
+        }
+       ],
+       "path": "1"
+      },
+      {
+       "coordinateTransformations": [
+        {
+         "scale": [
+          1.0,
+          8.0,
+          2.0,
+          2.0
+         ],
+         "type": "scale"
+        }
+       ],
+       "path": "2"
+      }
+     ],
+     "metadata": {},
+     "name": "Series 0",
+     "version": "0.4"
+    }
+   ],
+   "omero": {
+    "channels": [
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "FF0000",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 0",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     },
+     {
+      "active": true,
+      "coefficient": 1,
+      "color": "00FF00",
+      "family": "linear",
+      "inverted": false,
+      "label": "Channel 1",
+      "window": {
+       "end": 65535,
+       "max": 65535,
+       "min": 0,
+       "start": 0
+      }
+     }
+    ],
+    "rdefs": {
+     "defaultT": 0,
+     "defaultZ": 0,
+     "model": "greyscale"
+    }
+   }
+  },
+  "levels": [
+   [
+    [
+     2,
+     4,
+     96,
+     80
+    ],
+    "uint16",
+    [
+     1,
+     4,
+     96,
+     80
+    ],
+    "ab28ace2796a07a141601ee9230bec109202ed40ede13a43d01dac5ea6f667df"
+   ],
+   [
+    [
+     2,
+     2,
+     48,
+     40
+    ],
+    "uint16",
+    [
+     1,
+     2,
+     48,
+     40
+    ],
+    "69be5190926715a4ce62903a6579879d9aaf6f0c92fff0603093ec49258b9839"
+   ],
+   [
+    [
+     2,
+     1,
+     24,
+     20
+    ],
+    "uint16",
+    [
+     1,
+     1,
+     24,
+     20
+    ],
+    "1dba54a3f2d3e0f9d7312678e22ece754ace4553364025b75e82aaaff8623d73"
+   ]
+  ]
+ }
+}

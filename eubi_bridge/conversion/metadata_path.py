@@ -3,7 +3,7 @@
 - ``update_store``: ``update_pixel_meta`` / ``update_channel_meta`` on one OME-Zarr, as
   ONE ``ome_zarr_pyramid.IO().update_metadata`` call: the store is read by ozp, its
   scales, units, channels and windows edited, and only the metadata (and the OME-XML)
-  written back. No ArrayManager, no Java VM, so the updates run on threads.
+  written back. No Java VM, so the updates run on threads.
 - ``read_metadata``: ``show_pixel_meta`` for a file, as the conversion would write it:
   the file opened like a conversion opens it (micro-reader, else the older readers;
   ``pyramid_path._open_input``) and the image turned into a ``Pyramid`` by
@@ -45,7 +45,7 @@ def update_store(input_path: str, kwargs: dict):
 
     from eubi_bridge.conversion.pyramid_path import channel_overrides, ome_xml
     from eubi_bridge.core.config_models import MetadataUpdateConfig
-    from eubi_bridge.core.ozp_writer import _ozp_target_args
+    from eubi_bridge.core.output_store import _ozp_target_args
     from eubi_bridge.utils.path_utils import is_zarr_group
 
     if not is_zarr_group(str(input_path)):
@@ -103,7 +103,7 @@ def read_ome_zarr(path: str) -> dict:
     """show_pixel_meta's summary of an OME-Zarr, read by ozp (no pixels)."""
     from ome_zarr_pyramid import IO
 
-    from eubi_bridge.core.ozp_writer import _ozp_target_args
+    from eubi_bridge.core.output_store import _ozp_target_args
     try:
         target, storage_options = _ozp_target_args(str(path))
         pyr = IO().read_pyramid(target, include_labels=False, storage_options=storage_options)
@@ -130,7 +130,7 @@ def read_metadata(input_path: str, kwargs: dict):
 
     from eubi_bridge.conversion.pyramid_path import NAME, _open_input, apply_rgb_channels
     from eubi_bridge.core.config_models import ConversionJob
-    from eubi_bridge.core.ozp_writer import _ozp_version
+    from eubi_bridge.core.output_store import _ozp_version
     from eubi_bridge.utils.path_utils import is_zarr_group
 
     path = str(input_path)

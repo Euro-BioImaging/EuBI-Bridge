@@ -184,7 +184,7 @@ class ZarrMetadataExtractor(MetadataExtractor):
     Zarr/NGFF metadata extractor (placeholder).
     
     Zarr/NGFF pyramids don't need traditional OME metadata extraction.
-    The pyramid_reader and NGFFImageMeta handle metadata internally.
+    OME-Zarr inputs are read by ome_zarr_pyramid (legacy_image.NgffFile).
     Returns None since metadata extraction is not applicable.
     """
     
