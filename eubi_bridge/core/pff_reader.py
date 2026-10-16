@@ -155,40 +155,42 @@ def read_pff(
         'concat_views', 'concat_illuminations',
     }
 
-    # Route to specialized readers first
-    if input_path.endswith(('.ome.tiff', '.ome.tif')):
+    # Route to specialized readers first (suffixes regardless of case: .CZI, .TIF or
+    # .ND2 went to Bio-Formats until 0.1.6)
+    suffix = str(input_path).lower()
+    if suffix.endswith(('.ome.tiff', '.ome.tif')):
         from bioio_ome_tiff.reader import Reader as reader
         logger.info("Using bioio-ome-tiff reader")
         kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
         img = reader(input_path, **kw)
         return BioIOReader(input_path, img, **kw)
 
-    elif input_path.endswith(('.tif', '.tiff')):
+    elif suffix.endswith(('.tif', '.tiff')):
         from eubi_bridge.core.tiff_reader import read_tiff_image
         logger.info("Using native tifffile reader")
         kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
         return read_tiff_image(input_path, aszarr=True, **kw)
 
-    elif input_path.endswith('.czi'):
+    elif suffix.endswith('.czi'):
         from eubi_bridge.core.czi_reader import read_czi
         logger.info("Using CZI-specific reader")
         return read_czi(input_path, **kwargs)
 
-    elif input_path.endswith('.lif'):
+    elif suffix.endswith('.lif'):
         from bioio_lif.reader import Reader as reader
         logger.info("Using bioio-lif reader")
         kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
         img = reader(input_path, **kw)
         return BioIOReader(input_path, img, **kw)
 
-    elif input_path.endswith('.nd2'):
+    elif suffix.endswith('.nd2'):
         from bioio_nd2.reader import Reader as reader
         logger.info("Using bioio-nd2 reader")
         kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}
         img = reader(input_path, **kw)
         return BioIOReader(input_path, img, **kw)
 
-    elif input_path.endswith(('.png', '.jpg', '.jpeg')):
+    elif suffix.endswith(('.png', '.jpg', '.jpeg')):
         from bioio_imageio.reader import Reader as reader
         logger.info("Using bioio-imageio reader")
         kw = {k: v for k, v in kwargs.items() if k not in _CZI_ONLY_KWARGS}

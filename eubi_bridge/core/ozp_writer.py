@@ -56,6 +56,32 @@ def _memory_budget(arrays, kwargs) -> Optional[float]:
     return budget
 
 
+class _SerialisedReads:
+    """A resource-backed dask array read one region at a time. bioio-nd2's array (and
+    a Bio-Formats-backed dask array) reads through one shared handle that is not
+    thread-safe: read from several threads at once it can return wrong pixels without
+    an error, or crash. eubi-bridge's own writer locks such reads (writers._read_region);
+    the ozp writer hands dask arrays to dask's scheduler, so the lock is put here."""
+
+    def __init__(self, array):
+        self._array = array
+        self.shape, self.dtype, self.ndim = tuple(array.shape), array.dtype, array.ndim
+
+    def __getitem__(self, key):
+        return np.asarray(self._array[key].compute(scheduler="synchronous"))
+
+
+def _read_safely(arr):
+    """`arr` as it is, or, when it is resource-backed, a dask array over the same chunks
+    whose reads run one at a time (dask's per-array read lock); writes stay parallel."""
+    from eubi_bridge.core.writers import _is_resource_backed
+    if not _is_resource_backed(arr):
+        return arr
+    import dask.array as da
+    return da.from_array(_SerialisedReads(arr), chunks=arr.chunks, lock=True,
+                         meta=np.empty((0,) * arr.ndim, dtype=arr.dtype))
+
+
 def _level_keys(pyr):
     from natsort import natsorted
     return natsorted(pyr.layers.keys())
@@ -173,7 +199,7 @@ def _store_existing_sync(src, output_path, axes, units, channel_meta, zarr_forma
         raise NotImplementedError(
             f"writer='ozp' writes resolution levels as 0..n-1; this source names them "
             f"{keys}. Use writer='auto' or 'eubi' for it.")
-    arrays = [src.layers[k] for k in keys]
+    arrays = [_read_safely(src.layers[k]) for k in keys]
     dtype = np.dtype(kwargs.get('dtype') or arrays[0].dtype)
     version = _ozp_version(zarr_format, kwargs.get('ome_zarr_version'))
     axes = ''.join(axes)
@@ -249,6 +275,7 @@ def _store_multiscale_sync(arr, output_path, axes, scales, units, translation,
     _require_ozp()
     from ome_zarr_pyramid import IO, Pyramid
 
+    arr = _read_safely(arr)
     dtype = kwargs.get('dtype') or arr.dtype
     dtype = np.dtype(dtype)
     version = _ozp_version(zarr_format, kwargs.get('ome_zarr_version'))

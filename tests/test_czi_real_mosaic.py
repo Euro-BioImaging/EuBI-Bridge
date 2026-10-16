@@ -106,3 +106,42 @@ def test_conversion_stitches_the_mosaic(zeiss_mosaic, tmp_path):
         tile_shape = czi.images[0].shape
     assert stitched.shape[-2] > tile_shape[-2]
     assert stitched.shape[-1] > tile_shape[-1]
+
+
+@requires_full
+def test_each_scene_places_its_own_tiles(zeiss_mosaic, tmp_path):
+    """Tiles are numbered per scene. Until 0.1.5 the tile positions the standard reader
+    takes from aicspylibczi were keyed by tile number alone, so scene 1's tiles sat at
+    scene 0's places. Read with the standard reader, each scene's tiles now sit at their
+    own places, as micro-reader (each tile's stage position) puts them."""
+    import json
+    import re
+
+    from eubi_bridge.core.data_manager import czi_mosaic_tile_origins
+    from eubi_bridge.ebridge import EuBIBridge
+
+    scene0 = czi_mosaic_tile_origins(zeiss_mosaic, scene=0)
+    scene1 = czi_mosaic_tile_origins(zeiss_mosaic, scene=1)
+    assert len(scene0) == len(scene1) == 4 and scene0 != scene1
+
+    places = {}
+    for reader, kw in (("micro", {}),
+                       ("standard", {"pixel_reader": "standard", "metadata_reader": "bfio"})):
+        out = tmp_path / reader
+        EuBIBridge(configpath=str(tmp_path / f"cfg_{reader}")).to_zarr(
+            zeiss_mosaic, str(out), as_mosaic=False, scene_index="all",
+            mosaic_tile_index="all", verbose=False, **kw)
+        for store in out.glob("*.zarr"):
+            scene, tile = map(int, re.search(r"_scene(\d+)_tile(\d+)", store.name).groups())
+            transforms = json.loads((store / ".zattrs").read_text())[
+                "multiscales"][0]["datasets"][0]["coordinateTransformations"]
+            places[reader, scene, tile] = next(
+                t["translation"][-2:] for t in transforms if t["type"] == "translation")
+    assert len(places) == 16
+    step = 0.1                                         # um per pixel in this file
+    for scene in (0, 1):
+        for tile in range(4):
+            for k in (0, 1):                           # y, x relative to scene 0 tile 0
+                micro = places["micro", scene, tile][k] - places["micro", 0, 0][k]
+                standard = places["standard", scene, tile][k] - places["standard", 0, 0][k]
+                assert standard == pytest.approx(micro, abs=2 * step)

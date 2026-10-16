@@ -647,7 +647,7 @@ class PFFImageMeta(ImageReader):
                                    if k != 'pixel_reader'}
             logger.info(f"metadata_reader=micro: {self.root}: Bio-Formats metadata "
                         f"and the standard reader used")
-        if self.root.endswith('ome') or self.root.endswith('xml'):
+        if self.root.lower().endswith(('ome', 'xml')):
             from ome_types import OME
             omemeta = OME().from_xml(self.root)
         elif self.root.lower().endswith('.czi') and self._meta_reader == 'czi_native':
@@ -787,7 +787,7 @@ class PFFImageMeta(ImageReader):
 
     @property
     def n_scenes(self) -> int:
-        if self.reader is None or self.root.endswith('.lsm'):
+        if self.reader is None or self.root.lower().endswith('.lsm'):
             # OME-XML (read_omemeta) is the single source of truth for series count.
             return self._n_scenes or 1
         return self.reader.n_scenes
@@ -835,10 +835,14 @@ class PFFImageMeta(ImageReader):
         await self._check_micro_reader(**kwargs)
 
         if _is_bioformats_backed(self.reader):
-            # bioio_bioformats fallback — Bio-Formats can't read >2 GB planes in one call.
-            # Set the flag BEFORE calling set_scene so it doesn't overwrite self.arraydata.
+            # A format without a native reader: read it exactly as force_bioformats
+            # does -- bfio pixels per series, the scene count from the (collapsed)
+            # OME metadata. bioio's Bio-Formats reader is dropped: kept, it made every
+            # scene read series 0's pixels (set_scene does not rebuild the array while
+            # a reader is set; eubi-bridge 0.1.2-0.1.5), and its scene count included
+            # resolution levels (a false "PARTIAL READ - DAMAGED FILE" warning).
+            self.reader = None
             self._bfio_tiling = True
-            self.reader.set_scene(self._series)
             shape, dtype = self._bfio_shape_from_meta()
             self.arraydata = _build_bioformats_array(
                 self.root, self._series, shape, dtype)
@@ -1036,7 +1040,7 @@ class H5ImageMeta(PFFImageMeta):
     essential_omexml_fields = PFFImageMeta.essential_omexml_fields
 
     def __init__(self, path, meta_reader="bioio", **kwargs):
-        if not path.endswith('.h5'):
+        if not path.lower().endswith('.h5'):
             raise ValueError(f"Not an HDF5 file: {path}")
         super().__init__(path, meta_reader, aszarr=False, **kwargs)
 
@@ -1634,7 +1638,7 @@ class SceneLoader:
         if await asyncio.to_thread(is_zarr_group, path):
             self._img = await asyncio.to_thread(NGFFImageMeta, path, self._skip_dask)
             self.is_ngff = True
-        elif path.endswith('.h5'):
+        elif path.lower().endswith('.h5'):
             self._img = await asyncio.to_thread(H5ImageMeta, path, self._meta_reader)
         elif (path.lower().endswith('.ims')
               and (self._meta_reader != 'micro' or self._force_bioformats)):
@@ -1834,36 +1838,38 @@ class SceneLoader:
                     f"{os.path.basename(str(self.path))} has {self.n_scenes} "
                     f"scene(s), so valid indices are 0..{self.n_scenes - 1}.")
 
-            if mosaic_tile_index is not None:
+            # Tiles are counted per scene: scenes of one file can hold different
+            # numbers of tiles (0.1.2-0.1.5 used scene 0's count for every scene, so a
+            # scene with fewer tiles was written several times over and one with more
+            # lost its last tiles).
+            asked_tiles: List[int] = []
+            for scene_idx in valid:
+                await self._img.set_scene_isolated(scene_idx)
+                if mosaic_tile_index is None:
+                    managers.append(await self._snapshot(scene_idx))
+                    continue
+                n_tiles = self._img.n_tiles
+                self.n_tiles = max(self.n_tiles, n_tiles)        # names: some scene is tiled
                 if mosaic_tile_index == 'all':
-                    tile_indices: List[int] = list(range(self.n_tiles))
+                    tile_indices: List[int] = list(range(n_tiles))
                 elif np.isscalar(mosaic_tile_index):
                     tile_indices = [int(mosaic_tile_index)]
                 else:
                     tile_indices = list(mosaic_tile_index)
-                valid_tiles = [t for t in tile_indices if 0 <= t < self.n_tiles]
+                asked_tiles += tile_indices
+                valid_tiles = [t for t in tile_indices if 0 <= t < n_tiles]
                 if len(valid_tiles) < len(tile_indices):
                     logger.warning(
-                        f"Skipping out-of-range tile indices: "
-                        f"{set(tile_indices) - set(valid_tiles)}")
-                if not valid_tiles:
-                    raise ValueError(
-                        f"No valid mosaic tile index in {sorted(set(tile_indices))}: "
-                        f"{os.path.basename(str(self.path))} has {self.n_tiles} "
-                        f"tile(s), so valid indices are 0..{self.n_tiles - 1}. "
-                        f"Note that tiles only exist when reading an unstitched "
-                        f"mosaic (as_mosaic=False).")
-            else:
-                valid_tiles = None
-
-            for scene_idx in valid:
-                await self._img.set_scene_isolated(scene_idx)
-                if valid_tiles is None:
-                    managers.append(await self._snapshot(scene_idx))
-                else:
-                    for tile_idx in valid_tiles:
-                        await self._img.set_tile(tile_idx)
-                        managers.append(await self._snapshot(scene_idx, tile_idx))
+                        f"Skipping out-of-range tile indices in scene {scene_idx} "
+                        f"({n_tiles} tile(s)): {set(tile_indices) - set(valid_tiles)}")
+                for tile_idx in valid_tiles:
+                    await self._img.set_tile(tile_idx)
+                    managers.append(await self._snapshot(scene_idx, tile_idx))
+            if not managers:
+                raise ValueError(
+                    f"No valid mosaic tile index in {sorted(set(asked_tiles))}: no scene "
+                    f"of {os.path.basename(str(self.path))} has such a tile. Note that "
+                    f"tiles only exist when reading an unstitched mosaic (as_mosaic=False).")
         finally:
             self._img = None
         return managers
@@ -1874,14 +1880,19 @@ class SceneLoader:
 # ---------------------------------------------------------------------------
 
 
-def czi_mosaic_tile_origins(path: str) -> dict:
-    """Map mosaic tile index -> {'y': px, 'x': px} origin, or {} if unavailable.
+def czi_mosaic_tile_origins(path: str, scene: int = 0) -> dict:
+    """Map mosaic tile index -> {'y': px, 'x': px} origin of the tiles of *scene*, or
+    {} if unavailable.
 
     CZI stores each tile's position on the stage; splitting a mosaic into one
     container per tile discards it unless it is carried over explicitly.  Origins
-    are returned in pixels and shifted so the minimum is zero, because NGFF
-    translations are offsets within a shared coordinate system and CZI centres
-    its mosaic on zero (giving negative coordinates).
+    are returned in pixels and shifted so the minimum over the WHOLE file is zero
+    (every scene in one coordinate system), because NGFF translations are offsets
+    within a shared coordinate system and CZI centres its mosaic on zero (giving
+    negative coordinates).
+
+    Tiles are numbered per scene: until 0.1.5 the boxes were keyed by tile number
+    alone, so scenes after the first took another scene's tile positions.
 
     Only CZI files have them; aicspylibczi (the full eubi-bridge) reads them.
     Files micro-reader reads carry each tile's position already.
@@ -1897,18 +1908,19 @@ def czi_mosaic_tile_origins(path: str) -> dict:
     except Exception:
         return {}
 
-    origins: dict = {}
+    origins: dict = {}                       # (scene, tile) -> origin
     for key, box in boxes.items():
         m = getattr(key, 'm_index', None)
         if m is None:
             continue
-        origins.setdefault(int(m), {'y': float(box.y), 'x': float(box.x)})
+        s = (getattr(key, 'dimension_coordinates', None) or {}).get('S', 0)
+        origins.setdefault((int(s), int(m)), {'y': float(box.y), 'x': float(box.x)})
     if not origins:
         return {}
     min_y = min(o['y'] for o in origins.values())
     min_x = min(o['x'] for o in origins.values())
     return {m: {'y': o['y'] - min_y, 'x': o['x'] - min_x}
-            for m, o in origins.items()}
+            for (s, m), o in origins.items() if s == int(scene)}
 
 
 class ArrayManager:
@@ -1958,6 +1970,8 @@ class ArrayManager:
         self._keep_existing_resolutions = bool(kwargs.get('keep_existing_resolutions', False))
         self._pixel_reader       = kwargs.get('pixel_reader', 'standard')
         self._micro_check_pixels = bool(kwargs.get('micro_check_pixels', False))
+        #: reader options (a CZI's phase_index / rotation_index)
+        self._reader_kwargs: dict = dict(kwargs.get('reader_kwargs') or {})
 
         self.loaded_scenes:  Optional[dict] = None
         self.loaded_tiles:   Optional[dict] = None
@@ -2108,6 +2122,7 @@ class ArrayManager:
                              force_bioformats=self._force_bioformats,
                              as_mosaic=self._as_mosaic,
                              keep_existing_resolutions=self._keep_existing_resolutions,
+                             reader_kwargs=self._reader_kwargs,
                              pixel_reader=self._pixel_reader,
                              micro_check_pixels=self._micro_check_pixels)
         managers = await loader.load(scene_indices=scene_indices,
@@ -2125,10 +2140,14 @@ class ArrayManager:
         # through load_scenes, and a tile without its position cannot be put back
         # where it belongs.
         if mosaic_tile_index is not None and any(not m.origindict for m in managers):
-            tile_origins = czi_mosaic_tile_origins(str(self.path))
-            if tile_origins:
+            by_scene: dict = {}                 # each scene's own tiles
+            for m in managers:
+                if m.series not in by_scene:
+                    by_scene[m.series] = czi_mosaic_tile_origins(str(self.path),
+                                                                 scene=m.series)
+            if any(by_scene.values()):
                 for m in managers:
-                    o = tile_origins.get(int(m.mosaic_tile_index or 0))
+                    o = by_scene[m.series].get(int(m.mosaic_tile_index or 0))
                     if not o or m.origindict:       # micro-reader's position kept
                         continue
                     sd = getattr(m, 'scaledict', None) or {}
@@ -2222,7 +2241,8 @@ class ArrayManager:
             force_bioformats=self._force_bioformats,
             as_mosaic=self._as_mosaic,
             keep_existing_resolutions=self._keep_existing_resolutions,
-            reader_kwargs={'view_index': 'all', 'illumination_index': 'all'},
+            reader_kwargs={**self._reader_kwargs,
+                           'view_index': 'all', 'illumination_index': 'all'},
             pixel_reader=self._pixel_reader,
             micro_check_pixels=self._micro_check_pixels,
         )
@@ -2311,7 +2331,8 @@ class ArrayManager:
                     # Carry the tile's stage position through as a physical
                     # origin so the split mosaic can be reassembled downstream.
                     tile_origins = ({} if mgr.origindict      # micro-reader's position kept
-                                    else czi_mosaic_tile_origins(str(loader.path)))
+                                    else czi_mosaic_tile_origins(str(loader.path),
+                                                                 scene=scene_idx))
                     o = tile_origins.get(int(tile_idx)) if tile_origins else None
                     if o and not mgr.origindict:
                         sd = getattr(mgr, 'scaledict', {}) or {}
