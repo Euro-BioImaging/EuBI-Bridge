@@ -119,13 +119,15 @@ async def _dispatch(
     executor_kwargs: dict,
     use_threading: bool,
     label: str = "Main",
+    tsc=None,
 ) -> list:
     """Shared coroutine: submit all jobs to a pool, gather, report failures.
 
     Staggers ProcessPool submissions by 0.2 s to serialise worker init.
     Falls back to a temporary single-worker pool on BrokenProcessPool.
     """
-    tsc  = jobs[0].cluster.tensorstore_data_copy_concurrency if jobs else 1
+    if tsc is None:
+        tsc = jobs[0].cluster.tensorstore_data_copy_concurrency if jobs else 1
     loop = asyncio.get_running_loop()
 
     async def _submit_one(pool, idx: int, job: ConversionJob):
@@ -381,6 +383,67 @@ def dispatch_aggregative_job(
     ))
 
 
+def _call(task):
+    """Run one pool task: a picklable ``functools.partial`` of a worker function."""
+    return task()
+
+
+def dispatch_mixed_jobs(unary_jobs: list, aggregative_jobs: list) -> list:
+    """A conversion table's one-to-one jobs and aggregative groups in ONE pool, running
+    at the same time (roadmap step 3): every unary job and every aggregative output is
+    one task, up to ``max_processes`` at once, in the table's order. The run's memory
+    budget is split over the tasks running at once, as for unary jobs; an aggregative
+    output counts as one task however many files it joins. Failures are reported once,
+    at the end, for all of them.
+
+    On SLURM, and on the old path (EUBI_NEW_PATH=0), the two kinds still run one
+    after the other, as in 0.1.5."""
+    import functools
+
+    from eubi_bridge.conversion import pyramid_path
+    from eubi_bridge.core.memory import main_process_mb, process_mb
+    jobs = list(unary_jobs) + list(aggregative_jobs)
+    if not jobs:
+        return []
+    first = jobs[0].cluster
+    if first.on_slurm or not pyramid_path.enabled():
+        results = dispatch_unary_jobs(unary_jobs) if unary_jobs else []
+        if aggregative_jobs:
+            results += dispatch_aggregative_jobs(aggregative_jobs)
+        return results
+
+    planned = []
+    for job in aggregative_jobs:
+        groups, _, job_kwargs = _aggregative_groups(
+            job.input_path, output_path=job.output_path, includes=job.includes,
+            excludes=job.excludes, time_tag=job.time_tag, channel_tag=job.channel_tag,
+            z_tag=job.z_tag, y_tag=job.y_tag, x_tag=job.x_tag,
+            concatenation_axes=job.concatenation_axes, plan=None,
+            **job.to_conversion_kwargs())
+        planned += [(paths, out, job_kwargs) for out, paths in groups.items()]
+
+    running = max(1, min(first.max_processes, len(unary_jobs) + len(planned)))
+    use_threading = first.use_threading
+    per_process = process_mb(first, running, 0.0 if use_threading else main_process_mb())
+    memory = {'concurrent_jobs': running, 'process_memory_mb': per_process}
+    tasks = [functools.partial(unary_worker_sync, job.model_copy(update={
+                 'cluster': job.cluster.model_copy(update=memory)}))
+             for job in unary_jobs]
+    tasks += [functools.partial(aggregative_worker_from_paths, paths, out,
+                                {**job_kwargs, **memory})
+              for paths, out, job_kwargs in planned]
+    logger.info(f"Conversion table: {len(unary_jobs)} one-to-one job(s) and "
+                f"{len(planned)} aggregative output(s) in one pool, {running} at once.")
+
+    if first.jvm_memory:
+        os.environ['EUBI_JVM_MEMORY'] = str(first.jvm_memory)
+    exc_cls, exc_kw = _build_executor(first.model_copy(update={'max_processes': running}),
+                                      use_threading)
+    return asyncio.run(_dispatch(tasks, _call, exc_cls, exc_kw, use_threading,
+                                 label="Conversion table",
+                                 tsc=first.tensorstore_data_copy_concurrency))
+
+
 def dispatch_aggregative_jobs(jobs: list) -> list:
     """Dispatch several aggregative jobs, one after another.
 
@@ -485,6 +548,8 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
                 except Exception as e2:
                     logger.error(f"Force shutdown failed: {e2}")
 
+    # a file asked for several scenes gives one summary per scene
+    results = [x for r in results for x in (r if isinstance(r, list) else [r])]
     failed = []
     for i, r in enumerate(results):
         if isinstance(r, Exception):
@@ -610,7 +675,7 @@ async def run_aggregative_with_slurm(input_path, output_path, **kwargs):
     return result
 
 
-async def run_conversions_with_concatenation(
+def _aggregative_groups(
         input_path,
         output_path,
         scene_index: Union[int, tuple] = None,
@@ -623,18 +688,15 @@ async def run_conversions_with_concatenation(
         metadata_reader: str = 'bfio',
         plan: 'AggregativePlan | None' = None,
         **kwargs,
-):
-    """Aggregative conversion: plan groups in the main process, write in parallel.
+) -> tuple:
+    """``(groups, file_workers, job_kwargs)`` of an aggregative conversion, planned in
+    the main process: ``{output path: its files}``, the outputs written at once, and
+    the plain settings each worker gets.
 
     If *plan* is provided the pre-computed group assignments and worker
     counts are used directly (no re-planning, no header reads).  Without a
     plan the groups are derived via pure filename matching and worker counts
     are auto-computed from ``max_processes`` ÷ ``n_outputs``.
-
-    Each group is dispatched to a pool worker (ProcessPool by default;
-    ThreadPool when ``use_threading=True``).  Workers run their own complete
-    pipeline (open files → concat → write zarr) so no non-picklable objects
-    cross the process boundary.
     """
     from eubi_bridge.core.config_models import ClusterConfig
 
@@ -687,6 +749,12 @@ async def run_conversions_with_concatenation(
                     raise ValueError(channel_tag_format_error(
                         channel_tag, [Path(p).name for p in filepaths]))
 
+        from eubi_bridge.conversion import aggregative_path, pyramid_path
+        if pyramid_path.enabled():
+            # by name, before the files are grouped (a stray file with tags in its name
+            # would otherwise break the grouping): an OME companion is left out, files of
+            # mixed formats are refused (roadmap step 3)
+            filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
         common_dir  = os.path.commonpath(filepaths_accepted)
         cluster_cfg = ClusterConfig(**{k: v for k, v in kwargs.items()
                                        if k in ClusterConfig.model_fields})
@@ -710,6 +778,17 @@ async def run_conversions_with_concatenation(
                 f"file_workers={file_workers}"
             )
 
+    # ── Screen each output's files by name (the 0.2.0 path, roadmap step 3) ──
+    # a plan made beforehand (the GUI's validate_aggregative): an OME companion is left
+    # out (its files read it themselves); files of mixed formats are refused before
+    # anything is opened
+    from eubi_bridge.conversion import aggregative_path, pyramid_path
+    if plan is not None and pyramid_path.enabled():
+        screened = {out: aggregative_path.screen_group(paths, os.path.basename(out))
+                    for out, paths in groups.items()}
+        groups = {out: paths for out, paths in screened.items() if paths}
+        file_workers = max(1, min(file_workers, len(groups)))
+
     # ── Build job kwargs (workers receive everything they need) ───────────
     job_kwargs = dict(
         time_tag=time_tag, channel_tag=channel_tag,
@@ -726,7 +805,21 @@ async def run_conversions_with_concatenation(
     jvm_memory = kwargs.get('jvm_memory')
     if jvm_memory:
         os.environ['EUBI_JVM_MEMORY'] = str(jvm_memory)
+    return groups, file_workers, job_kwargs
 
+
+async def run_conversions_with_concatenation(input_path, output_path, **kwargs):
+    """Aggregative conversion: plan groups in the main process (``_aggregative_groups``,
+    same arguments), write in parallel.
+
+    Each group is dispatched to a pool worker (ProcessPool by default;
+    ThreadPool when ``use_threading=True``).  Workers run their own complete
+    pipeline (open files → concat → write zarr) so no non-picklable objects
+    cross the process boundary.
+    """
+    from eubi_bridge.core.config_models import ClusterConfig
+
+    groups, file_workers, job_kwargs = _aggregative_groups(input_path, output_path, **kwargs)
     use_threading = kwargs.get('use_threading', False)
     if not use_threading and mp.current_process().daemon:
         # A dask worker (SLURM: dask-jobqueue's nanny starts it daemonic) cannot start

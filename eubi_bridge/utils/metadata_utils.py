@@ -451,9 +451,12 @@ def read_ome_zarr_metadata(zarr_path: str) -> dict:
         - channels: List of channel metadata
         - error: Error message (if status is "error")
     """
+    from eubi_bridge.conversion import metadata_path, pyramid_path
+    if pyramid_path.enabled():
+        return metadata_path.read_ome_zarr(zarr_path)       # read by ozp (step 4)
     try:
         from eubi_bridge.ngff.multiscales import Pyramid
-        
+
         pyr = Pyramid(zarr_path)
         
         return {

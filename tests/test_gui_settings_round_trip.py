@@ -40,8 +40,8 @@ def _set(page):
         page._io_backend.setCurrentText("zarrista")
     page._export_acquisition.setCurrentIndex(page._export_acquisition.findData(True))
     page._use_micro_reader.setChecked(True)
-    if has_bioformats():
-        page._micro_check_pixels.setChecked(True)
+    page._channel_intensity.setCurrentText("auto")      # 'auto' was saved / run as from_array
+    page._codec.setCurrentText("bz2")
     page._max_concurrent_downscale_layers.setValue(5)
     page._slurm_time.setText("02:30:00")
     page._slurm_account.setText("lab42")
@@ -74,7 +74,8 @@ def test_new_fields_survive_save_and_load(page, tmp_path, capsys):
     assert conv["writer"] == "ozp"
     assert conv["io_backend"] == page._io_backend.currentText()
     assert conv["export_acquisition_metadata"] is True
-    assert readers["micro_check_pixels"] is has_bioformats()
+    assert stored["metadata"]["channel_intensity_limits"] == "auto"
+    assert "micro_check_pixels" not in readers or readers["micro_check_pixels"] is False
     assert cluster["max_concurrent_downscale_layers"] == 5
     assert (cluster["slurm_time"], cluster["slurm_account"], cluster["slurm_partition"],
             cluster["slurm_worker_timeout"], cluster["slurm_sif_path"]) == (
@@ -89,7 +90,8 @@ def test_new_fields_survive_save_and_load(page, tmp_path, capsys):
         assert other._writer.currentText() == "ozp"
         assert other._io_backend.currentText() == page._io_backend.currentText()
         assert other._export_acquisition.currentData() is True
-        assert other._micro_check_pixels.isChecked() is has_bioformats()
+        assert other._channel_intensity.currentText() == "auto"
+        assert other._codec.currentText() == "bz2"
         assert other._max_concurrent_downscale_layers.value() == 5
         assert other._slurm_account.text() == "lab42"
         assert other._slurm_worker_timeout.value() == 123
@@ -119,7 +121,10 @@ def test_the_run_receives_them(page):
     assert kwargs["writer"] == "ozp"
     assert kwargs["io_backend"] == page._io_backend.currentText()
     assert kwargs["export_acquisition_metadata"] is True
-    assert kwargs["micro_check_pixels"] is has_bioformats()
+    assert kwargs["channel_intensity_limits"] == "auto"
+    assert kwargs["compressor"] == "bz2"
+    # retired (decision 'D5: micro_check_pixels'): no longer on the form or in the run
+    assert "micro_check_pixels" not in kwargs and not hasattr(page, "_micro_check_pixels")
     assert kwargs["max_concurrent_downscale_layers"] == 5
     assert kwargs["memory_budget"] == "12GB" and kwargs["decode_memory"] == "0.5GB"
     assert kwargs["slurm_account"] == "lab42"

@@ -537,7 +537,7 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
             "# Compute per-channel min/max from the pixel data",
             "eubi update_channel_meta /data/output --channel_intensity_limits from_array",
             "",
-            "# Let the viewer decide (OMERO-style auto-scaling)",
+            "# From the smallest resolution level's 0.1 / 99.9 percentiles",
             "eubi update_channel_meta /data/output --channel_intensity_limits auto",
         ],
         "max_processes": [

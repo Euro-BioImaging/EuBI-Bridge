@@ -609,6 +609,14 @@ class ConversionConfig(BaseModel):
             )
         return v
 
+    @field_validator("export_acquisition_metadata", mode="before")
+    @classmethod
+    def _tristate_words(cls, v):
+        """'auto' / 'on' / 'off', as the GUI and a batch cell spell the three states."""
+        if isinstance(v, str):
+            return {"auto": None, "on": True, "off": False}.get(v.strip().lower(), v)
+        return v
+
     @field_validator("skip_dask")
     @classmethod
     def _retired(cls, v):

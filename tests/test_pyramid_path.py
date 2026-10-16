@@ -145,9 +145,10 @@ def test_auto_windows_come_from_the_coarsest_level(tmp_path):
 
 
 def test_jobs_the_new_path_does_not_take_yet_use_the_old_one(tmp_path):
+    """Since step 2 only writer='eubi' (to be retired) keeps the old path."""
     src = _ome_tiff(tmp_path / "img.ome.tif")
-    log = _convert(src, tmp_path / "out", True, ["--keep_existing_resolutions"])
-    assert "old path (keep_existing_resolutions)" in log
+    log = _convert(src, tmp_path / "out", True, ["--writer", "eubi"])
+    assert "old path (writer='eubi')" in log
     assert (tmp_path / "out" / "img_scene0.zarr").is_dir()
 
 
@@ -318,6 +319,57 @@ def test_micro_check_pixels_is_retired_with_a_warning(tmp_path):
     assert (tmp_path / "new" / "img_scene0.zarr").is_dir()
 
 
+def _ome_zarr_input(path: Path, translation=None) -> Path:
+    """An OME-Zarr 0.4 image (c z y x, named + coloured channels) as a conversion input."""
+    from ome_zarr_pyramid import IO, Pyramid
+    data = RNG.integers(0, 4000, (2, 6, 48, 56)).astype("u2")
+    pyr = Pyramid().from_arrays([data], axis_order="czyx", scales=[[1, 2.0, 0.5, 0.5]],
+                                unit_list=[None, "micrometer", "micrometer", "micrometer"],
+                                version="0.4")
+    pyr = pyr.set_channels({0: {"label": "DAPI", "color": "0000FF"}, 1: {"label": "GFP"}})
+    if translation:
+        pyr.meta.update_translation("0", translation)
+    IO().write_pyramid(pyr, str(path), overwrite=True)
+    return path
+
+
+def test_an_ome_zarr_input_on_both_paths(tmp_path):
+    """Roadmap step 2, part 3: read by ozp itself (NgffFile), the same output."""
+    src = _ome_zarr_input(tmp_path / "in.ome.zarr")
+    _convert(src, tmp_path / "old", False, [])
+    log = _convert(src, tmp_path / "new", True, [])
+    assert "new path, 1 output(s), ome_zarr_pyramid" in log, log[-2000:]
+    _same(_describe(tmp_path / "old"), _describe(tmp_path / "new"))
+
+
+def test_an_ome_zarr_inputs_translation_is_kept(tmp_path):
+    """Decided 2026-10-15: the input's translation is kept (0.1.5 dropped it)."""
+    src = _ome_zarr_input(tmp_path / "in.ome.zarr", translation=[0.0, 0.0, 12.5, -3.0])
+    _convert(src, tmp_path / "new", True, [])
+    attrs = zarr.open_group(str(tmp_path / "new" / "in.zarr"), mode="r").attrs
+    transforms = attrs["multiscales"][0]["datasets"][0]["coordinateTransformations"]
+    assert {"type": "translation", "translation": [0.0, 0.0, 12.5, -3.0]} in transforms
+
+
+def test_kept_levels_on_both_paths(tmp_path):
+    """Roadmap step 2, part 4: keep_existing_resolutions writes an input's stored levels
+    as they are (an OME-Zarr input with 3 levels here), on both paths alike."""
+    from ome_zarr_pyramid import IO, Pyramid
+    data = RNG.integers(0, 4000, (2, 4, 96, 80)).astype("u2")
+    pyr = Pyramid().from_arrays([data], axis_order="czyx", scales=[[1, 2.0, 0.5, 0.5]],
+                                unit_list=[None, "micrometer", "micrometer", "micrometer"],
+                                version="0.4").downscale(n_layers=3, defer=False)
+    src = tmp_path / "levels.ome.zarr"
+    IO().write_pyramid(pyr, str(src), overwrite=True)
+    args = ["--keep_existing_resolutions"]
+    _convert(src, tmp_path / "old", False, args)
+    log = _convert(src, tmp_path / "new", True, args)
+    assert "new path, 1 output(s)" in log, log[-2000:]
+    old = _describe(tmp_path / "old")
+    assert len(next(iter(old.values()))[1]) == 3
+    _same(old, _describe(tmp_path / "new"))
+
+
 # -- the pieces ------------------------------------------------------------------------
 
 def test_positions_follow_eubis_index_options(caplog):
@@ -331,10 +383,12 @@ def test_positions_follow_eubis_index_options(caplog):
 
 
 def test_unsupported_names_the_reason():
-    from eubi_bridge.conversion.pyramid_path import unsupported
+    from eubi_bridge.conversion.pyramid_path import _micro_reason, unsupported
     from eubi_bridge.core.config_models import ConversionJob
     job = ConversionJob.from_kwargs(input_path="a.ome.tif", output_path="o", kwargs={})
-    assert unsupported(job) == ""
-    assert "format" in unsupported(job.model_copy(update={"input_path": "a.vsi"}))
-    job.downscale.keep_existing_resolutions = True
-    assert unsupported(job) == "keep_existing_resolutions"
+    assert unsupported(job) == "" and _micro_reason(job) == ""
+    vsi = job.model_copy(update={"input_path": "a.vsi"})
+    assert unsupported(vsi) == ""                         # the older readers take it
+    assert "format" in _micro_reason(vsi)
+    job.conversion.writer = "eubi"
+    assert unsupported(job) == "writer='eubi'"

@@ -63,6 +63,12 @@ def _normalise_row_overrides(overrides: dict) -> dict:
     n_layers = normalised.get('n_layers')
     if isinstance(n_layers, str) and n_layers.strip().lower() == 'auto':
         normalised['n_layers'] = None
+    # the acquisition block's three states as a batch cell spells them
+    export = normalised.get('export_acquisition_metadata')
+    if isinstance(export, str):
+        normalised['export_acquisition_metadata'] = {
+            'auto': None, 'on': True, 'off': False, 'true': True, 'false': False,
+        }.get(export.strip().lower(), export)
     return normalised
 
 
@@ -1512,8 +1518,7 @@ class ConversionManager:
         table, which is the point of the column: a batch should not have to be
         split by hand into two separate runs.
         """
-        from eubi_bridge.conversion.dispatcher import (
-            dispatch_aggregative_jobs, dispatch_unary_jobs)
+        from eubi_bridge.conversion.dispatcher import dispatch_mixed_jobs
         from eubi_bridge.core.config_models import ConversionJob
         from eubi_bridge.utils.path_utils import (
             AGGREGATIVE_GROUP_COLUMN, PER_GROUP_CONCAT_KEYS,
@@ -1591,10 +1596,9 @@ class ConversionManager:
             f"Conversion table: {len(unary_jobs)} one-to-one job(s), "
             f"{len(aggregative_jobs)} aggregative group(s).")
 
-        if unary_jobs:
-            dispatch_unary_jobs(unary_jobs)
-        if aggregative_jobs:
-            dispatch_aggregative_jobs(aggregative_jobs)
+        # one pool for both kinds, running at the same time (roadmap step 3; on SLURM
+        # and on the old path they still run one after the other)
+        dispatch_mixed_jobs(unary_jobs, aggregative_jobs)
 
 
     def validate_aggregative(
@@ -1666,6 +1670,10 @@ class ConversionManager:
         eff_tags = [concat_p['time_tag'], concat_p['channel_tag'],
                     concat_p['z_tag'], concat_p['y_tag'], concat_p['x_tag']]
         filepaths_accepted = _parse_filepaths_with_tags(filepaths, eff_tags)
+        from eubi_bridge.conversion import aggregative_path, pyramid_path
+        if pyramid_path.enabled():
+            # by name, before grouping: OME companions left out, mixed formats refused
+            filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
 
         common_dir  = os.path.commonpath(filepaths_accepted)
         output_base = output_path or common_dir
@@ -1796,8 +1804,12 @@ class MetadataManager:
                 conversion_p.get('zarr_format', 2), warn=True)
             if series is None:
                 series = readers_p['scene_index']
+            from eubi_bridge.conversion import pyramid_path
             combined = {
                 **cluster_p, **readers_p, **conversion_p,
+                # the 0.2.0 path: the configured metadata reader, as a conversion reads
+                # the file (the old path always read with bfio here)
+                **({'metadata_reader': metadata_reader} if pyramid_path.enabled() else {}),
                 'series': series,
                 'use_threading': True,
                 'max_processes': min(16, max(8, len(df['input_path']) if df is not None else 8)),
@@ -1846,7 +1858,8 @@ class MetadataManager:
             **self._config._collect_params('readers',    **kwargs),
             **self._config._collect_params('conversion', **kwargs),
         }
-        combined['channel_intensity_limits'] = 'auto'
+        # the windows stay as they are ('auto' sets them from the data, as conversions do)
+        combined['channel_intensity_limits'] = 'keep'
         # metadata_reader moved to the 'metadata' section, which is not
         # collected wholesale here: its scales/units are the arguments above.
         combined['metadata_reader'] = self._config._collect_params(
@@ -1863,11 +1876,12 @@ class MetadataManager:
                             input_path: Union[Path, str],
                             channel_labels: str = '',
                             channel_colors: str = '',
-                            channel_intensity_limits='from_dtype',
+                            channel_intensity_limits=None,
                             includes=None,
                             excludes=None,
                             **kwargs) -> None:
-        """Update channel label, color, and intensity metadata on existing OME-Zarr files."""
+        """Update channel label, color, and intensity metadata on existing OME-Zarr files.
+        The display windows stay as they are unless channel_intensity_limits is given."""
         from eubi_bridge.conversion.updater import run_updates
         combined = {
             **self._config._collect_params('cluster',    **kwargs),
@@ -1877,7 +1891,9 @@ class MetadataManager:
         # Both keys live in the 'metadata' section now, so collecting
         # 'conversion' silently dropped them.  The section is not merged
         # wholesale: its channel_labels/colors are this method's own arguments.
-        combined['channel_intensity_limits'] = channel_intensity_limits
+        # not given: the windows stay as they are (eubi-bridge 0.1.x reset them to the
+        # dtype's range on every update, a renamed channel included)
+        combined['channel_intensity_limits'] = channel_intensity_limits or 'keep'
         combined['metadata_reader'] = self._config._collect_params(
             'metadata', **kwargs)['metadata_reader']
         extra = {k: v for k, v in kwargs.items() if k not in combined}
@@ -2243,7 +2259,7 @@ class EuBIBridge:
         input_path: Union[Path, str],
         channel_labels: str = '',
         channel_colors: str = '',
-        channel_intensity_limits: Literal["from_dtype", "from_array", "auto"] = "from_dtype",
+        channel_intensity_limits: Optional[Literal["from_dtype", "from_array", "auto"]] = None,
         includes: Optional[str] = None,
         excludes: Optional[str] = None,
         max_processes: Optional[int] = None,
@@ -2255,11 +2271,13 @@ class EuBIBridge:
             input_path: OME-Zarr path or directory of OME-Zarr files.
             channel_labels: Index/name pairs, e.g. ``"0,DAPI;1,GFP"``.
             channel_colors: Index/hex pairs, e.g. ``"0,0000FF;1,00FF00"``.
-            channel_intensity_limits: ``'from_dtype'`` (default),
-                ``'from_array'``, or ``'auto'``.
+            channel_intensity_limits: The display windows stay as they are unless
+                this is given. ``'from_dtype'`` sets the data type's full range,
+                ``'from_array'`` each channel's lowest and highest value, ``'auto'``
+                the 0.1 and 99.9 percentiles of the smallest level, as conversions do.
             includes: Comma-separated filename patterns to include.
             excludes: Comma-separated filename patterns to exclude.
-            max_processes: Number of files to process in parallel. Formerly
+            max_processes: Number of files to process at once. Formerly
                 ``max_workers``, which still works.
         """
         kwargs = rename_settings({k: v for k, v in dict(

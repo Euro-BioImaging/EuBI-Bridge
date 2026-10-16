@@ -68,19 +68,21 @@ def _retired_settings(job) -> None:
 
 
 def unsupported(job) -> str:
-    """Why the new path does not take this job yet, or ''. Settings only: the file's own
-    content (its image indices) is checked when it is opened (``NotYet``)."""
-    path = str(job.input_path)
-    if not path.lower().endswith(FORMATS):
-        return f"format not on the new path yet ({', '.join(FORMATS)})"
+    """Why the new path does not take this job yet, or ''. Settings only: which reader
+    takes the file is decided when it is opened (micro-reader, else ``LegacyFile``)."""
+    if job.conversion.writer == "eubi":
+        return "writer='eubi'"
+    return ""
+
+
+def _micro_reason(job) -> str:
+    """Why micro-reader does not read this job's file here (the older readers do), or ''."""
+    if not str(job.input_path).lower().endswith(FORMATS):
+        return f"format not on micro-reader's route yet ({', '.join(FORMATS)})"
     if job.metadata.metadata_reader != "micro" or job.readers.pixel_reader != "micro":
         return "the standard reader was asked for"
     if job.readers.force_bioformats:
         return "force_bioformats"
-    if job.conversion.writer == "eubi":
-        return "writer='eubi'"
-    if job.downscale.keep_existing_resolutions:
-        return "keep_existing_resolutions"
     return ""
 
 
@@ -188,43 +190,87 @@ def _join_labels(pyr, group, parts, images, readers):
     return pyr.set_channels(labels)
 
 
-def _load_input_collection(job):
-    """``(file, entries)``: the opened micro-reader file and one entry per output, each
-    ``SimpleNamespace(pyramid, image, scene, tile, series_path, basename, name_scene,
-    name_tile)`` in eubi's terms (scene / tile / view / illumination = positions among the
-    file's own values), named as 0.1.5 names them."""
+class _MicroFile:
+    """A micro-reader File behind the loader's interface: ``indices``, ``image(key)``,
+    ``close()``."""
+
+    def __init__(self, f):
+        self._f, self.path = f, f.path
+        self._images = {tuple((k, v) for k, v in dict(img.index).items() if k != "resolution"):
+                        img for img in f.images
+                        if int(dict(img.index).get("resolution", 0)) == 0}
+        self.indices = [dict(k) for k in self._images]
+
+    def image(self, key):
+        return self._images[tuple(key)]
+
+    def close(self):
+        self._f.close()
+
+
+def _open_micro(job) -> _MicroFile:
+    """The file opened with micro-reader, or ``NotYet`` when it is not micro-reader's."""
     import micro_reader
-    from ome_zarr_pyramid import PyramidCollection
 
     from eubi_bridge.core.micro_source import RENAME, set_read_concurrency
-    from eubi_bridge.core.ozp_writer import _ozp_version
-
+    reason = _micro_reason(job)
+    if reason:
+        raise NotYet(reason)
     set_read_concurrency(job.cluster.decode_threads)
     path = str(job.input_path)
-    readers = job.readers
-    tiles = "stitched" if readers.as_mosaic else "separate"
+    tiles = "stitched" if job.readers.as_mosaic else "separate"
     try:
         f = micro_reader.open(path, tiles=tiles, rename=RENAME, axes="tczyx",
                               samples="channels")
     except micro_reader.UnsupportedFormatError as exc:
         raise NotYet(f"micro-reader does not read it ({exc})") from exc
+    names = set().union(*(set(k) for k in f.indices)) - {"resolution"}
+    problem = ""
+    if names - INDICES:
+        problem = f"image indices {sorted(names - INDICES)}"
+    elif names - {"scene"} and not path.lower().endswith(".czi"):
+        # 0.1.5 reads tiles / views / illuminations outside a CZI with the standard reader
+        problem = f"{sorted(names - {'scene'})} outside a CZI"
+    if problem:
+        f.close()
+        raise NotYet(problem)
+    return _MicroFile(f)
+
+
+def _open_input(job):
+    """``(file, reader)``: an OME-Zarr input read by ozp itself; else micro-reader's when
+    it takes the file, else the older readers' (``LegacyFile``, roadmap step 2), with the
+    reason micro-reader did not."""
+    from eubi_bridge.utils.path_utils import is_zarr_group
+    if is_zarr_group(str(job.input_path)):
+        from eubi_bridge.conversion.legacy_image import NgffFile
+        return NgffFile(job), "ome_zarr_pyramid (an OME-Zarr input)"
     try:
-        names = set().union(*(set(k) for k in f.indices)) - {"resolution"}
-        if names - INDICES:
-            raise NotYet(f"image indices {sorted(names - INDICES)}")
-        if names - {"scene"} and not path.lower().endswith(".czi"):
-            # 0.1.5 reads tiles / views / illuminations outside a CZI with the standard
-            # reader
-            raise NotYet(f"{sorted(names - {'scene'})} outside a CZI")
-        version = _ozp_version(job.conversion.zarr_format, job.conversion.ome_zarr_version)
-        coll = PyramidCollection.from_file(f, version=version, name=NAME,
-                                           resolutions="base")
-        images = {tuple((k, v) for k, v in dict(img.index).items() if k != "resolution"): img
-                  for img in f.images if int(dict(img.index).get("resolution", 0)) == 0}
+        return _open_micro(job), "micro-reader"
+    except NotYet as exc:
+        from eubi_bridge.conversion.legacy_image import LegacyFile
+        return LegacyFile(job), f"older readers ({exc})"
+
+
+def _load_input_collection(job):
+    """``(file, entries, reader)``: the opened file and one entry per output, each
+    ``SimpleNamespace(pyramid, image, scene, tile, series_path, basename, name_scene,
+    name_tile)`` in eubi's terms (scene / tile / view / illumination = positions among the
+    file's own values), named as 0.1.5 names them. The outputs are chosen from the
+    file's index first; only their images are read."""
+    from ome_zarr_pyramid import PyramidCollection
+
+    from eubi_bridge.core.ozp_writer import _ozp_version
+
+    f, reader = _open_input(job)
+    try:
+        path = str(job.input_path)
+        readers = job.readers
+        keys = [tuple((k, v) for k, v in index.items()) for index in f.indices]
         stem = job.resolved_basename or os.path.basename(path).split(".")[0]
         file = pathlib.Path(path)
 
-        scene_values = _values(coll, "scene")
+        scene_values = _values(keys, "scene")
         scenes = _positions(readers.scene_index, len(scene_values), "scene")
         n_scenes = len(scene_values)
         concat_views, concat_illus = readers.concat_views, readers.concat_illuminations
@@ -237,7 +283,7 @@ def _load_input_collection(job):
         if by_view or by_illu:
             view_option = view_option if by_view else 0
             illu_option = illu_option if by_illu else 0
-            first = [k for k in coll if dict(k)["scene"] == scene_values[scenes[0]]]
+            first = [k for k in keys if dict(k)["scene"] == scene_values[scenes[0]]]
             n_views_file = len([v for v in _values(first, "view") if v is not None]) or 1
             n_illus_file = len([v for v in _values(first, "illumination")
                                 if v is not None]) or 1
@@ -245,9 +291,9 @@ def _load_input_collection(job):
                 by_view = by_illu = False             # nothing to iterate
 
         option = readers.mosaic_tile_index
-        entries, tiled = [], False
+        plans, tiled = [], False                  # (entry, keys, group or None)
         for scene in scenes:
-            here = [k for k in coll if dict(k)["scene"] == scene_values[scene]]
+            here = [k for k in keys if dict(k)["scene"] == scene_values[scene]]
             tile_values = _values(here, "tile")
             views, illus = _values(here, "view"), _values(here, "illumination")
             tiled = tiled or len(tile_values) > 1
@@ -261,11 +307,12 @@ def _load_input_collection(job):
                 tile_value = tile_values[tile or 0]
                 if not (by_view or by_illu):
                     key = _key(scene_values[scene], tile_value, views[0], illus[0])
-                    entries.append(SimpleNamespace(
-                        pyramid=coll[key], image=images[key], scene=scene, tile=tile,
+                    plans.append((SimpleNamespace(
+                        scene=scene, tile=tile,
                         series_path=f"{path}_{scene}" + (f"_tile{tile}" if tile else ""),
                         basename=job.resolved_basename,
-                        name_scene=scene if n_scenes > 1 else None, name_tile=tile))
+                        name_scene=scene if n_scenes > 1 else None, name_tile=tile),
+                        [key], None))
                     continue
                 # views / illuminations, as 0.1.5's load_views_illuminations
                 tile_named = tile if tile is not None and len(tile_values) > 1 else None
@@ -290,31 +337,53 @@ def _load_input_collection(job):
                         suffix += "_illu_concat" if concat_illus else f"_illu{illumination}"
                     if tile_named is not None:
                         suffix += f"_tile{tile_named}"
-                    keys = [_key(scene_values[scene], tile_value, views[v], illus[i])
-                            for v, i in group]
-                    if concat_views or concat_illus:
-                        if any("s" in str(getattr(images[k].source, "axes", "")) for k in keys):
-                            raise NotYet("RGB views / illuminations joined")
-                        parts = [coll[k] for k in keys]
-                        pyr = _join_labels(_joined(parts, path), group, parts,
-                                           [images[k] for k in keys], readers)
-                        # 0.1.5 kept the LAST joined image's wavelengths and position
-                        pyr.acquisition = getattr(parts[-1], "acquisition", None)
-                    else:
-                        pyr = coll[keys[0]]
-                    entries.append(SimpleNamespace(
-                        pyramid=pyr, image=images[keys[-1]], scene=scene, tile=tile_named,
+                    group_keys = [_key(scene_values[scene], tile_value, views[v], illus[i])
+                                  for v, i in group]
+                    plans.append((SimpleNamespace(
+                        scene=scene, tile=tile_named,
                         series_path=str(file.parent / (file.stem + suffix + file.suffix)),
                         basename=stem + suffix,
-                        name_scene=scene if n_scenes > 1 else None, name_tile=None))
-        if not tiled:
-            for entry in entries:
-                entry.name_tile = None
-        if not entries:
+                        name_scene=scene if n_scenes > 1 else None, name_tile=None),
+                        group_keys,
+                        group if (concat_views or concat_illus) else None))
+        if not plans:
             raise ValueError(f"No valid mosaic tile index in {option!r} for "
                              f"{os.path.basename(path)}: tiles only exist when reading an "
                              f"unstitched mosaic (as_mosaic=False).")
-        return f, entries
+
+        # only the images the outputs need, read one at a time
+        needed = list(dict.fromkeys(k for _, plan_keys, _ in plans for k in plan_keys))
+        images = {k: f.image(k) for k in needed}
+        version = _ozp_version(job.conversion.zarr_format, job.conversion.ome_zarr_version)
+        coll = PyramidCollection.from_file(
+            SimpleNamespace(images=[images[k] for k in needed], path=path),
+            version=version, name=NAME,
+            # keep_existing_resolutions: the file's stored levels too (folded into the
+            # image's Pyramid by from_file)
+            resolutions="all" if job.downscale.keep_existing_resolutions else "base")
+        source = getattr(f, "source_pyramid", None)
+        entries = []
+        for entry, plan_keys, group in plans:
+            if group is None and source is not None and job.downscale.keep_existing_resolutions:
+                # an OME-Zarr input keeping its levels: the input Pyramid itself (its
+                # own scales per level, as the old path wrote them), named as eubi names
+                # every output
+                entry.pyramid = source.rename(NAME)
+            elif group is None:
+                entry.pyramid = coll[plan_keys[0]]
+            else:
+                if any("s" in str(getattr(images[k].source, "axes", "")) for k in plan_keys):
+                    raise NotYet("RGB views / illuminations joined")
+                parts = [coll[k] for k in plan_keys]
+                entry.pyramid = _join_labels(_joined(parts, path), group, parts,
+                                             [images[k] for k in plan_keys], readers)
+                # 0.1.5 kept the LAST joined image's wavelengths and position
+                entry.pyramid.acquisition = getattr(parts[-1], "acquisition", None)
+            entry.image = images[plan_keys[-1]]
+            if not tiled:
+                entry.name_tile = None
+            entries.append(entry)
+        return f, entries, reader
     except BaseException:
         f.close()
         raise
@@ -373,9 +442,10 @@ def apply_rgb_channels(pyr, image):
     return pyr.set_channels(overrides)
 
 
-def apply_axis_metadata(pyr, job):
+def apply_axis_metadata(pyr, job, scales_too: bool = True):
     """Scale and unit overrides: the config's values, a batch table row's (job.extra)
-    winning. Unset ones keep what the file says."""
+    winning. Unset ones keep what the file says. Kept resolution levels take the unit
+    overrides only, as on the old path (store_existing_pyramid had no scales)."""
     from eubi_bridge.conversion.conversion_worker import AXIS_PARAM_MAP, _axis_metadata_kwargs
     given = _axis_metadata_kwargs(job)
     scales, units = {}, {}
@@ -386,31 +456,25 @@ def apply_axis_metadata(pyr, job):
         for name, out in ((names[2], scales), (names[4], units)):
             if name is not None and name in given and not pd.isna(given[name]):
                 out[ax] = given[name]
-    if scales:
+    if scales and scales_too:
         pyr.update_scales(**{ax: float(v) for ax, v in scales.items()})
     if units:
         pyr.update_units(**units)
     return pyr
 
 
-def apply_channels(pyr, job):
-    """Channel labels and colours from the job (``"0,DAPI;1,GFP"``; colour names or
-    hex); a channel out of range is skipped with a warning, '' and 'auto' leave it."""
+def channel_overrides(labels, colors, count: int, where) -> dict:
+    """``set_channels`` overrides from eubi-bridge's channel options (``"0,DAPI;1,GFP"``;
+    colour names or hex): a channel out of range is skipped with a warning, '' and
+    'auto' leave it. Conversions and metadata updates parse them alike."""
     from eubi_bridge.utils.metadata_utils import ChannelMap, ChannelParser
-    meta = job.metadata
     parse = ChannelParser(None)._parse_indexed_string
-    labels = parse(job.extra.get("channel_labels", meta.channel_labels))
-    colors = parse(job.extra.get("channel_colors", meta.channel_colors))
-    if not labels and not colors:
-        return pyr
-    axes = pyr.meta.axis_order
-    count = pyr.base_array.shape[axes.index("c")] if "c" in axes else 1
+    labels, colors = parse(labels or ""), parse(colors or "")
     names = ChannelMap()
     overrides = {}
     for idx in sorted(set(labels) | set(colors)):
         if not 0 <= idx < count:
-            logger.warning(f"Channel {idx} out of range [0:{count - 1}] for "
-                           f"{job.input_path}, skipping")
+            logger.warning(f"Channel {idx} out of range [0:{count - 1}] for {where}, skipping")
             continue
         fields = {}
         if labels.get(idx, "") not in ("", "auto"):
@@ -419,6 +483,17 @@ def apply_channels(pyr, job):
             fields["color"] = names[colors[idx]] or colors[idx]
         if fields:
             overrides[idx] = fields
+    return overrides
+
+
+def apply_channels(pyr, job):
+    """Channel labels and colours from the job (``channel_overrides``)."""
+    meta = job.metadata
+    axes = pyr.meta.axis_order
+    count = pyr.base_array.shape[axes.index("c")] if "c" in axes else 1
+    overrides = channel_overrides(job.extra.get("channel_labels", meta.channel_labels),
+                                  job.extra.get("channel_colors", meta.channel_colors),
+                                  count, job.input_path)
     return pyr.set_channels(overrides) if overrides else pyr
 
 
@@ -494,6 +569,9 @@ def ome_xml(pyr, dtype) -> str:
            for ax in "tzyx"},
         dtype=str(np.dtype(dtype)), channel_names=[ch.get("label") for ch in channels])
     pixels = ome.images[0].pixels
+    # one image per document: a fixed id (ome_types counts ids up per process, so the
+    # n-th output of a run said "Pixels:n")
+    pixels.id = "Pixels:0"
     pixels.model_fields_set.update(PFFImageMeta.essential_omexml_fields - pixels.model_fields_set)
     ome.images[0].pixels = pixels
     return ome.to_xml()
@@ -505,24 +583,46 @@ def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb
            xml: Optional[str]) -> None:
     """ONE write_pyramid call with the job's storage settings (eubi-bridge decides the
     chunk shape and shards; ozp writes)."""
-    from ome_zarr_pyramid import IO
-
-    from eubi_bridge.conversion.conversion_worker import (_threads_per_scene, parse_chunks,
-                                                          parse_shard_coefs)
-    from eubi_bridge.core.ozp_writer import _chunks, _ozp_target_args
+    from eubi_bridge.conversion.conversion_worker import parse_chunks, parse_shard_coefs
+    from eubi_bridge.core.ozp_writer import _chunks, _memory_budget, _ozp_target_args
+    from eubi_bridge.utils.optional_deps import dask_config
     conv, clus = job.conversion, job.cluster
     arr = pyr.base_array
     dtype = np.dtype(conv.dtype or arr.dtype)
     shim = _shim(pyr)
-    chunks = _chunks(arr, pyr.meta.axis_order, conv.auto_chunk, parse_chunks(shim, job),
-                     dtype, conv.target_chunk_mb)
+    axes = pyr.meta.axis_order
+    if job.downscale.keep_existing_resolutions and len(pyr.meta.resolution_paths) > 1:
+        # kept levels: each level's own chunk shape (store_existing_pyramid_ozp)
+        layers = pyr.layers
+        chunks = {i: _chunks(layers[path], axes, conv.auto_chunk, parse_chunks(shim, job),
+                             dtype, conv.target_chunk_mb)
+                  for i, path in enumerate(pyr.meta.resolution_paths)}
+    else:
+        chunks = _chunks(arr, axes, conv.auto_chunk, parse_chunks(shim, job),
+                         dtype, conv.target_chunk_mb)
     shards = parse_shard_coefs(shim, job)
     target, storage_options = _ozp_target_args(output_path)
     logger.info(f"{ENV}: {output_path} (chunks {chunks})")
+    # a dask level (the older readers' bioio / IMS / H5 arrays) is written by dask's own
+    # scheduler: no memory budget (dyna refuses one for it), and bioformats_threads caps
+    # its threads, as on the old path
+    budget = _memory_budget([arr], {"memory_budget_mb": scene_budget_mb})
+    dask_kw = ({"num_workers": clus.bioformats_threads}
+               if clus.bioformats_threads is not None else {})
+    with dask_config(**dask_kw):
+        _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dtype, arr,
+                       region_size_mb, budget, job, xml)
+
+
+def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dtype, arr,
+                   region_size_mb, budget, job, xml):
+    from ome_zarr_pyramid import IO
+
+    from eubi_bridge.conversion.conversion_worker import _threads_per_scene
     IO().write_pyramid(
         pyr, target, storage_options=storage_options, overwrite=conv.overwrite,
         max_threads=_threads_per_scene(clus), region_size_mb=float(region_size_mb),
-        memory_budget_mb=scene_budget_mb, io_backend=conv.io_backend,
+        memory_budget_mb=budget, io_backend=conv.io_backend,
         chunk_shape=chunks,
         shard_coefficients=tuple(shards) if int(pyr.meta.zarr_format) == 3 else None,
         compressor=conv.compressor, compressor_params=conv.compressor_params or {},
@@ -548,12 +648,20 @@ async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore) -
         meta = pyr.meta
         entry.units = {ax: u for ax, u in zip(meta.axis_order, meta.unit_list) if u}
         origin = _origin(entry.image, entry.units)
-        acquisition = acquisition_metadata(entry, pyr, job, origin)
+        # keep_existing_resolutions with stored levels: written as they are, as the old
+        # path's store_existing_pyramid did: no squeeze / crop, no scale overrides, no
+        # downscaling, no acquisition split info, chunks computed per level
+        keep = job.downscale.keep_existing_resolutions and len(meta.resolution_paths) > 1
+        if job.downscale.keep_existing_resolutions and not keep:
+            logger.info(f"keep_existing_resolutions is set but no existing multiscale "
+                        f"pyramid was found for {output_path}; rebuilding pyramid normally")
+        acquisition = None if keep else acquisition_metadata(entry, pyr, job, origin)
 
         pyr = apply_rgb_channels(pyr, entry.image)
-        pyr = apply_axis_metadata(pyr, job)
+        pyr = apply_axis_metadata(pyr, job, scales_too=not keep)
         pyr = apply_channels(pyr, job)
-        pyr = apply_squeeze_and_crop(pyr, job)
+        if not keep:
+            pyr = apply_squeeze_and_crop(pyr, job)
         axes = pyr.meta.axis_order
         if origin and not any(any(t) for t in _translations(pyr)):
             # an all-zero position is written too: the tile at (0, 0) belongs to the
@@ -562,7 +670,8 @@ async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore) -
                 pyr.meta.update_translation(path, [origin.get(ax, 0.0) for ax in axes])
         dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
         xml = ome_xml(pyr, dtype) if conv.save_omexml else None
-        pyr = apply_downscale(pyr, job)
+        if not keep:
+            pyr = apply_downscale(pyr, job)
         pyr.meta.set_custom("eubi_bridge", _eubi_attrs(acquisition))
 
         scene_budget_mb, region_size_mb = _memory_plan_for(pyr.base_array, job)
@@ -592,13 +701,14 @@ async def convert(job) -> bool:
     reason = unsupported(job)
     if not reason:
         try:
-            f, entries = await asyncio.to_thread(_load_input_collection, job)
+            f, entries, reader = await asyncio.to_thread(_load_input_collection, job)
         except NotYet as exc:
             reason = str(exc)
     if reason:
         logger.info(f"{ENV}: {job.input_path}: old path ({reason})")
         return False
-    logger.info(f"{ENV}: {job.input_path}: new path, {len(entries)} output(s)")
+    logger.info(f"{ENV}: {job.input_path}: new path, {len(entries)} output(s), "
+                f"{reader}")
     _retired_settings(job)
     try:
         sem = asyncio.Semaphore(job.cluster.max_concurrent_scenes)

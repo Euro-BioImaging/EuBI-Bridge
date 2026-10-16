@@ -1125,9 +1125,13 @@ def aggregative_worker_from_paths(
     soft_start_jvm()
 
     def _run():
+        from eubi_bridge.conversion import aggregative_path, pyramid_path
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            if pyramid_path.enabled() and loop.run_until_complete(
+                    aggregative_path.convert_group(file_paths, output_path, job_kwargs)):
+                return None                         # the 0.2.0 path (roadmap step 3)
             with dask_config(scheduler='synchronous'):
                 return loop.run_until_complete(
                     _aggregative_group_pipeline(file_paths, output_path, job_kwargs)
@@ -1170,6 +1174,11 @@ def metadata_reader_sync(input_path: Union[str, ArrayManager],
     """
     if kwargs.get('verbose', False):
         logger.info(f"[MetadataReader] Reading metadata: {input_path}")
+
+    from eubi_bridge.conversion import metadata_path, pyramid_path
+    if pyramid_path.enabled():
+        # the 0.2.0 path (roadmap step 4): what a conversion would write, via ozp
+        return metadata_path.read_metadata(input_path, kwargs)
 
     try:
         # Extract relevant parameters

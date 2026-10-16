@@ -296,8 +296,9 @@ def test_a_file_in_use_is_not_closed(tmp_path, monkeypatch):
 
 def test_aggregative_conversion_reads_with_micro_reader(tmp_path, monkeypatch):
     """Aggregative mode forwarded no reader settings: pixel_reader must reach
-    each file's array (AggregativeConverter.read_dataset), and the z stack
-    must match the standard reader's."""
+    each file's array (the old path: AggregativeConverter.read_dataset; the new
+    one: micro_source.micro_array), and the z stack must match the standard
+    reader's."""
     import zarr
 
     from eubi_bridge.core import micro_source as ms
@@ -309,13 +310,20 @@ def test_aggregative_conversion_reads_with_micro_reader(tmp_path, monkeypatch):
         tifffile.imwrite(folder / f"cell_{z:04d}.tif", plane)
     opened = []
     real = ms.MicroReader.open.__func__
+    real_array = ms.micro_array
 
     def counting(cls, *args, **kwargs):
         out = real(cls, *args, **kwargs)
         opened.append(out is not None)
         return out
 
+    def counting_array(*args, **kwargs):
+        out = real_array(*args, **kwargs)
+        opened.append(out[0] is not None)
+        return out
+
     monkeypatch.setattr(ms.MicroReader, "open", classmethod(counting))
+    monkeypatch.setattr(ms, "micro_array", counting_array)
     written = {}
     for reader in ("standard", "micro"):
         out = tmp_path / reader

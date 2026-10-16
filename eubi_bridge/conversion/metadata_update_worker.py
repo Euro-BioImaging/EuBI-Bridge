@@ -32,6 +32,14 @@ async def update_worker(input_path: Union[str, ArrayManager], **kwargs):
     Metadata only: the arrays are never touched, so conversion settings that
     change pixels (squeeze, crop ranges, dtype) are ignored here.
     """
+    from eubi_bridge.conversion import metadata_path, pyramid_path
+    if pyramid_path.enabled():
+        # the 0.2.0 path (roadmap step 4): one ozp update_metadata call
+        await asyncio.to_thread(metadata_path.update_store, input_path, kwargs)
+        return
+    if kwargs.get("channel_intensity_limits") == "keep":
+        # update_pixel_meta: leave the windows ('auto' meant that on this old path)
+        kwargs = {**kwargs, "channel_intensity_limits": "auto"}
     cfg = MetadataUpdateConfig(**kwargs)
 
     if not is_zarr_group(input_path):

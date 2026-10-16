@@ -217,7 +217,6 @@ def _build_kwargs(config: dict) -> dict:
         "rotation_index":           _parse_index(reader_config.get("rotationIndex", "0")),
         "sample_index":             _parse_index(reader_config.get("sampleIndex", "0")),
         "force_bioformats":         reader_config.get("forceBioformats", False),
-        "micro_check_pixels":       bool(reader_config.get("microCheckPixels", False)),
         "verbose":                  conv_config.get("verbose", False),
         "zarr_format":              zarr_format,
         "ome_zarr_version":         ome_zarr_version,
@@ -239,7 +238,10 @@ def _build_kwargs(config: dict) -> dict:
         "x_range":                  _parse_range(conv_config.get("dimRangeX", "")),
         "overwrite":                conv_config.get("overwrite", False),
         "override_channel_names":   conv_config.get("overrideChannelNames", False),
-        "channel_intensity_limits": "from_dtype" if meta_config.get("channelIntensityLimits", "from_datatype") == "from_datatype" else "from_array",
+        # the form's names -> the conversion's ('auto' was mapped to 'from_array')
+        "channel_intensity_limits": {"from_datatype": "from_dtype", "from_dtype": "from_dtype",
+                                     "from_array": "from_array", "auto": "auto"}.get(
+            meta_config.get("channelIntensityLimits", "from_datatype"), "from_dtype"),
         "metadata_reader":          meta_config.get("metadataReader", "micro"),
         # "idx,RRGGBB;..." as the CLI expects; empty means every channel is
         # coloured automatically.
@@ -388,7 +390,11 @@ class ConversionWorker(QThread):
             """Strip any residual ANSI escape sequences from queue messages."""
             return _ANSI_ESC.sub("", msg).strip()
 
-        # Drain log queue while the process runs
+        # Drain both queues while the process runs. The result is read here too, not
+        # only after the process exits: a process cannot exit before what it put on a
+        # queue has been read, so a failed run's long traceback kept it alive forever
+        # while this loop waited for it to end (the GUI hung on every such failure).
+        result = None
         while self._conv_proc.is_alive():
             try:
                 msg = log_queue.get(timeout=0.1)
@@ -396,6 +402,11 @@ class ConversionWorker(QThread):
                     self.log_line.emit(_clean(msg))
             except Exception:
                 pass
+            if result is None:
+                try:
+                    result = result_queue.get_nowait()
+                except Exception:
+                    pass
 
         # Drain any remaining messages after process exits
         while True:
@@ -413,7 +424,7 @@ class ConversionWorker(QThread):
 
         # Read result
         try:
-            status, data = result_queue.get_nowait()
+            status, data = result if result is not None else result_queue.get(timeout=5)
         except Exception:
             self.failed.emit(
                 f"Conversion process exited unexpectedly "

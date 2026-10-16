@@ -570,12 +570,8 @@ class ConvertPage(QWidget):
         micro_lay.addLayout(_form_row("Decode Memory (GB):", self._decode_memory))
         self._decode_memory.setEnabled(False)    # until ticked in the Reader tab
 
-        self._micro_check_pixels = QCheckBox("Check pixels against the standard reader")
-        self._micro_check_pixels.setToolTip(
-            "Also read every file with the format's usual reader and compare its pixels\n"
-            "with micro-reader's (slower; for checking a new format or file).")
-        micro_lay.addWidget(self._micro_check_pixels)
-        self._micro_check_pixels.setEnabled(False)  # until ticked in the Reader tab
+        # (no "Check pixels against the standard reader" box: micro_check_pixels is
+        # retired, decision 'D5: micro_check_pixels'; saved configs still load)
 
         lay.addWidget(micro_group)
 
@@ -753,12 +749,10 @@ class ConvertPage(QWidget):
         self._use_micro_reader.setChecked(True)
         self._use_micro_reader.toggled.connect(self._decode_threads.setEnabled)
         self._use_micro_reader.toggled.connect(self._decode_memory.setEnabled)
-        self._use_micro_reader.toggled.connect(self._micro_check_pixels.setEnabled)
         # ticked by default: the concurrency is live from the start, not only
         # after the box is toggled (setChecked above ran before this connection)
         self._decode_threads.setEnabled(self._use_micro_reader.isChecked())
         self._decode_memory.setEnabled(self._use_micro_reader.isChecked())
-        self._micro_check_pixels.setEnabled(self._use_micro_reader.isChecked())
         backend_lay.addWidget(self._use_micro_reader)
         lay.addWidget(self._reader_backend)
 
@@ -858,11 +852,16 @@ class ConvertPage(QWidget):
         comp_layout = QVBoxLayout(comp_group)
 
         self._codec = QComboBox()
-        for c in ("blosc", "gzip", "zstd", "lz4", "none"):
+        # the codecs a conversion accepts (config_models.SUPPORTED_COMPRESSORS_*); a
+        # plain 'lz4' was offered here but refused by every conversion: LZ4 is
+        # Blosc's inner codec ('lz4' below)
+        for c in ("blosc", "gzip", "zstd", "bz2", "none"):
             self._codec.addItem(c)
         self._codec.setToolTip(
             "Compression codec applied to every Zarr chunk.\n"
-            "'blosc' is the fastest general-purpose choice (configurable below).\n"
+            "'blosc' is the fastest general-purpose choice (configurable below; its\n"
+            "inner codec 'lz4' gives LZ4 compression).\n"
+            "'bz2' works with OME-Zarr 0.4 only.\n"
             "'none' stores raw uncompressed data."
         )
         comp_layout.addLayout(_form_row("Codec:", self._codec))
@@ -1280,11 +1279,12 @@ class ConvertPage(QWidget):
         lay.addWidget(self._metadata_reader_row)
 
         self._channel_intensity = QComboBox()
-        self._channel_intensity.addItems(["from_datatype", "from_array"])
+        self._channel_intensity.addItems(["from_datatype", "from_array", "auto"])
         self._channel_intensity.setToolTip(
             "Source for the display intensity range stored in OME-Zarr channel metadata.\n"
             "'from_datatype' uses the full range of the pixel type (e.g. 0–65535 for uint16).\n"
-            "'from_array' samples actual pixel values to find the min/max."
+            "'from_array' uses each channel's lowest and highest pixel value.\n"
+            "'auto' uses the 0.1 and 99.9 percentiles of the smallest resolution level."
         )
         lay.addLayout(_form_row("Channel Intensity Limits:", self._channel_intensity))
 
@@ -2378,7 +2378,6 @@ class ConvertPage(QWidget):
         self._sample_index.setText(str(r.get("sampleIndex", "0")))
         self._force_bioformats.setChecked(r.get("forceBioformats", False))
         self._use_micro_reader.setChecked(r.get("useMicroReader", True))
-        self._micro_check_pixels.setChecked(r.get("microCheckPixels", False))
 
         conv = cfg.get("conversion", {})
         # Prefer the OME-Zarr version; fall back to the (deprecated) zarrFormat
@@ -2510,9 +2509,8 @@ class ConvertPage(QWidget):
             self._metadata_reader.setCurrentText("micro")
             self._use_micro_reader.setChecked(True)
             self._force_bioformats.setChecked(False)
-            self._micro_check_pixels.setChecked(False)
             for widget in (self._reader_backend, self._metadata_reader_row,
-                           self._bf_group, self._micro_note, self._micro_check_pixels):
+                           self._bf_group, self._micro_note):
                 widget.setVisible(False)
             self._micro_group.setTitle("Reading")
             self._decode_threads_label.setText("Read Threads:")
@@ -2569,7 +2567,6 @@ class ConvertPage(QWidget):
                 "sampleIndex":       self._sample_index.text().strip(),
                 "forceBioformats":   self._force_bioformats.isChecked(),
                 "useMicroReader":    self._use_micro_reader.isChecked(),
-                "microCheckPixels":  self._micro_check_pixels.isChecked(),
             },
             "conversion": {
                 "omeZarrVersion":       self._ome_zarr_version.currentText(),

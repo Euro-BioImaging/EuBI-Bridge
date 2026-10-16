@@ -59,6 +59,10 @@ _COUPLED_KEYS: tuple[frozenset[str], ...] = (
 # own. compressor_params rides along with compressor and must reach the CSV.
 _COUPLED_ALL: frozenset[str] = frozenset().union(*_COUPLED_KEYS)
 
+# Keys derived from another key a row stores: zarr_format follows ome_zarr_version
+# (the conversion resolves the pair), so a row changing the version changes it too.
+_DERIVED = frozenset({"zarr_format"})
+
 # Coupled members with no editor of their own.  They belong in the CSV but not
 # in the queue view, where they would be an uneditable column.
 _COUPLED_RIDERS: frozenset[str] = frozenset({"compressor_params"})
@@ -249,6 +253,16 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec("override_channel_names", "Override channel names", "bool",
               tab="Conversion"),
     ParamSpec("verbose", "Verbose", "bool", tab="Conversion"),
+    # tri-state on the form (auto / on / off); a cell spells it the same way, since
+    # a blank cell already means "use the config"
+    ParamSpec("export_acquisition_metadata", "Acquisition metadata", "choice",
+              ("auto", "on", "off"), tab="Conversion",
+              tooltip="auto: on when one acquisition is split into several outputs."),
+    ParamSpec("writer", "Writer", "choice", _literal_options(ConversionConfig, "writer"),
+              tab="Conversion", group="Writer"),
+    ParamSpec("io_backend", "Byte backend", "choice",
+              _literal_options(ConversionConfig, "io_backend"),
+              tab="Conversion", group="Writer"),
 
     # ---- Downscaling tab ----
     # 'auto' is a value the row states, not an absence: it means auto-detect the
@@ -292,7 +306,7 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
               _literal_options(MetadataConfig, "channel_intensity_limits"),
               tab="Metadata"),
     *([ParamSpec("metadata_reader", "Metadata reader", "choice",
-                 ("micro", "bfio", "bioio", "bioformats"), tab="Metadata")]
+                 ("micro", "bfio", "bioio"), tab="Metadata")]
       if _BIOFORMATS else []),                     # lite: one reader, no column
     # Edited as raw text here rather than with a colour picker: a batch row is
     # one cell, and the CLI's own format is the clearest thing to show.
@@ -547,10 +561,16 @@ def values_equal(a: Any, b: Any) -> bool:
 _AUTO_SENTINEL_KEYS = frozenset({"n_layers"})
 
 
+#: tri-state settings a cell spells as words: None / True / False
+_TRISTATE = {"export_acquisition_metadata": {None: "auto", True: "on", False: "off"}}
+
+
 def _to_sentinel(key: str, value: Any) -> Any:
     """Render *value* for a cell, turning an auto-meaning None into 'auto'."""
     if key in _AUTO_SENTINEL_KEYS and value is None:
         return "auto"
+    if key in _TRISTATE and (value is None or isinstance(value, bool)):
+        return _TRISTATE[key][value]
     return value
 
 
@@ -558,6 +578,9 @@ def from_sentinel(key: str, value: Any) -> Any:
     """Invert :func:`_to_sentinel`, so 'auto' becomes None for the CLI."""
     if key in _AUTO_SENTINEL_KEYS and isinstance(value, str)             and value.strip().lower() == "auto":
         return None
+    if key in _TRISTATE and isinstance(value, str):
+        words = {word: state for state, word in _TRISTATE[key].items()}
+        return words.get(value.strip().lower(), value)
     return value
 
 
@@ -780,6 +803,8 @@ class BatchModel:
             # Anything without a per-row editor keeps the baseline value, so the
             # user must be told rather than have their change silently dropped.
             # Coupled riders are exempt: they travel with the key that owns them.
+            if key in _DERIVED:
+                continue                     # follows its source key, stored per row
             if (key in _NON_ROW_OVERRIDABLE or not _overridable(value)
                     or (key not in _COUPLED_RIDERS
                         and uneditable_reason(key) is not None)):
@@ -1062,6 +1087,45 @@ class BatchModel:
 
     # -- validation ------------------------------------------------------
 
+    def _setting_problems(self) -> list[str]:
+        """Rows whose settings a conversion would refuse, found before anything runs:
+        a choice the editor does not offer (an older CSV), or a combination the
+        conversion's own rules reject (a codec the OME-Zarr version does not take).
+        Each distinct combination of settings is checked once."""
+        from eubi_bridge.core.config_models import ConversionJob
+        base = self._effective_kwargs()
+        found: list[str] = []
+        verdicts: dict[str, str] = {}
+        for i, row in enumerate(self._rows, 1):
+            values = {k: v for k, v in row.items()
+                      if k not in _PATH_COLUMNS and k != _EXPLICIT
+                      and v is not None and v == v}
+            for key, value in values.items():
+                spec = _SPEC_BY_KEY.get(key)
+                if spec is not None and spec.kind == "choice" and str(value) not in spec.choices:
+                    found.append(f"Row {i}: {spec.label} '{value}' is not one of "
+                                 f"{', '.join(spec.choices)}.")
+            signature = repr(sorted(((k, str(v)) for k, v in values.items())))
+            if signature not in verdicts:
+                merged = {**base, **{k: from_sentinel(k, v) for k, v in values.items()}}
+                if merged.get("dtype") == "auto":
+                    merged["dtype"] = None
+                try:
+                    ConversionJob.from_kwargs(str(row.get("input_path") or ""),
+                                              str(row.get("output_path") or ""), merged)
+                    verdicts[signature] = ""
+                except Exception as exc:                      # noqa: BLE001 - reported
+                    errors = getattr(exc, "errors", None)
+                    if callable(errors):
+                        first = errors()[0]
+                        message = str(first.get("msg", exc)).removeprefix("Value error, ")
+                    else:
+                        message = str(exc).splitlines()[0]
+                    verdicts[signature] = message
+            if verdicts[signature]:
+                found.append(f"Row {i}: {verdicts[signature]}")
+        return found
+
     def validate(self) -> list[str]:
         """Check the batch for problems that would only surface mid-run."""
         problems: list[str] = []
@@ -1083,6 +1147,8 @@ class BatchModel:
                     parse_scale(row.get(f"{ax}_scale"), f"{ax.capitalize()} scale")
                 except ValueError as exc:
                     problems.append(f"Row {i}: {exc}")
+
+        problems.extend(self._setting_problems())
 
         # Concatenation settings that will not take effect.  Checked here rather
         # than when a row is added because the queue can reach this state later

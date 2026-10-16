@@ -647,7 +647,7 @@ class PFFImageMeta(ImageReader):
                                    if k != 'pixel_reader'}
             logger.info(f"metadata_reader=micro: {self.root}: Bio-Formats metadata "
                         f"and the standard reader used")
-        if self.root.endswith('ome') or self.root.endswith('xml'):
+        if self.root.lower().endswith(('ome', 'xml')):
             from ome_types import OME
             omemeta = OME().from_xml(self.root)
         elif self.root.lower().endswith('.czi') and self._meta_reader == 'czi_native':
@@ -787,7 +787,7 @@ class PFFImageMeta(ImageReader):
 
     @property
     def n_scenes(self) -> int:
-        if self.reader is None or self.root.endswith('.lsm'):
+        if self.reader is None or self.root.lower().endswith('.lsm'):
             # OME-XML (read_omemeta) is the single source of truth for series count.
             return self._n_scenes or 1
         return self.reader.n_scenes
@@ -1040,7 +1040,7 @@ class H5ImageMeta(PFFImageMeta):
     essential_omexml_fields = PFFImageMeta.essential_omexml_fields
 
     def __init__(self, path, meta_reader="bioio", **kwargs):
-        if not path.endswith('.h5'):
+        if not path.lower().endswith('.h5'):
             raise ValueError(f"Not an HDF5 file: {path}")
         super().__init__(path, meta_reader, aszarr=False, **kwargs)
 
@@ -1638,7 +1638,7 @@ class SceneLoader:
         if await asyncio.to_thread(is_zarr_group, path):
             self._img = await asyncio.to_thread(NGFFImageMeta, path, self._skip_dask)
             self.is_ngff = True
-        elif path.endswith('.h5'):
+        elif path.lower().endswith('.h5'):
             self._img = await asyncio.to_thread(H5ImageMeta, path, self._meta_reader)
         elif (path.lower().endswith('.ims')
               and (self._meta_reader != 'micro' or self._force_bioformats)):

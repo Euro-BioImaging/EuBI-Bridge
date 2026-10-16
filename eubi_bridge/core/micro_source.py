@@ -77,12 +77,26 @@ def _using(path: str, tiles: str):
     key = (path, tiles)
     with _files_lock:
         entry = _files.get(key)
-        if entry is None:
-            entry = _files[key] = _Open(micro_reader.open(path, tiles=tiles, rename=RENAME))
-        else:
+        if entry is not None:
             _files.move_to_end(key)
-        entry.users += 1
-        _evict()
+            entry.users += 1
+            _evict()
+    if entry is None:
+        # opened outside the lock, so several files open at once (an aggregative
+        # input's files are opened on a thread pool); a file two threads opened at
+        # once is kept once
+        opened = micro_reader.open(path, tiles=tiles, rename=RENAME)
+        with _files_lock:
+            entry = _files.get(key)
+            if entry is None:
+                entry = _files[key] = _Open(opened)
+                opened = None
+            else:
+                _files.move_to_end(key)
+            entry.users += 1
+            _evict()
+        if opened is not None:
+            opened.close()
     try:
         yield entry
     finally:

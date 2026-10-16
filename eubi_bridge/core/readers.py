@@ -61,7 +61,9 @@ async def read_single_image(
     # (core/micro_source.py); it falls back to the routing below for files it
     # does not read.  Never forwarded: the standard readers do not take it.
     pixel_reader = kwargs.pop('pixel_reader', 'standard')
-    if pixel_reader == 'micro' and not input_path.endswith(('.zarr', '.h5')):
+    # suffixes regardless of case: .CZI, .TIF or .ND2 went to Bio-Formats until 0.1.6
+    suffix = str(input_path).lower()
+    if pixel_reader == 'micro' and not suffix.endswith(('.zarr', '.h5')):
         from eubi_bridge.core.micro_source import MicroReader
         reader = MicroReader.open(input_path, **kwargs)
         if reader is not None:
@@ -71,11 +73,11 @@ async def read_single_image(
             return reader
 
     # Route to appropriate reader
-    if input_path.endswith('.zarr'):
+    if suffix.endswith('.zarr'):
         from eubi_bridge.core.pyramid_reader import read_pyramid
         logger.debug("Detected NGFF/Zarr format")
         reader = read_pyramid(input_path, aszarr=aszarr, **kwargs)
-    elif input_path.endswith('.h5'):
+    elif suffix.endswith('.h5'):
         from eubi_bridge.core.h5_reader import read_h5
         logger.debug("Detected HDF5 format")
         reader = read_h5(input_path, **kwargs)
@@ -83,15 +85,15 @@ async def read_single_image(
         from eubi_bridge.core.ims_reader import read_ims
         logger.debug("Detected Imaris format")
         reader = read_ims(input_path, **kwargs)
-    elif input_path.endswith(('.ome.tiff', '.ome.tif')) and not aszarr:
+    elif suffix.endswith(('.ome.tiff', '.ome.tif')) and not aszarr:
         from eubi_bridge.core.pff_reader import read_pff
         logger.debug("Detected OME-TIFF format (using pff reader)")
         reader = read_pff(input_path, **kwargs)
-    elif input_path.endswith(('.tif', '.tiff')):
+    elif suffix.endswith(('.tif', '.tiff')):
         from eubi_bridge.core.tiff_reader import read_tiff_image
         logger.debug("Detected TIFF format")
         reader = read_tiff_image(input_path, aszarr=aszarr, **kwargs)
-    elif input_path.endswith('.lsm'):
+    elif suffix.endswith('.lsm'):
         from eubi_bridge.core.tiff_reader import read_tiff_image
         logger.debug("Detected LSM format")
         reader = read_tiff_image(input_path, aszarr=False, **kwargs)
