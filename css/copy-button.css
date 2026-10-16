@@ -1,0 +1,25 @@
+/* Make sure the pre is positioned and has top padding */
+pre {
+  position: relative;
+  padding-top: 2.5em; /* This makes space for the button */
+  min-height: 10px; /* Optional: make the block taller */
+}
+
+/* Adjust code element too if needed */
+pre > code {
+  display: block;
+}
+
+/* Button styling */
+.copy-button {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  z-index: 2;
+  font-size: 0.75em;
+  padding: 2px 6px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.9); /* semi-opaque */
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
