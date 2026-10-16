@@ -31,13 +31,26 @@ def _strip_version(attrs: dict) -> dict:
     return attrs
 
 
+def _portable(value):
+    """`value` with every path under <tmp> written with '/' separators: the golden files
+    were recorded on Windows, and the same output names its source file with '/' on
+    Linux and macOS."""
+    if isinstance(value, str):
+        return value.replace("\\", "/") if value.startswith("<tmp>") else value
+    if isinstance(value, dict):
+        return {k: _portable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_portable(v) for v in value]
+    return value
+
+
 def _normalise(value, tmp: Path):
     """`value` (JSON-able) with every spelling of the test's temporary folder as <tmp>."""
     text = json.dumps(value)
     tmp = str(tmp)
     for spelling in (tmp.replace("\\", "\\\\"), tmp.replace("\\", "/"), tmp):
         text = text.replace(spelling, "<tmp>")
-    return json.loads(text)
+    return _portable(json.loads(text))
 
 
 def describe(root: Path, tmp: Path) -> dict:
@@ -60,7 +73,7 @@ def load(name: str) -> dict:
     path = GOLDEN / f"{name}.json"
     if not path.exists():
         raise AssertionError(f"no golden output {path.name} (see tests/_golden.py)")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _portable(json.loads(path.read_text(encoding="utf-8")))
 
 
 def golden(name: str) -> dict:
