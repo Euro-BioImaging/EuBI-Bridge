@@ -104,8 +104,7 @@ def test_scenes_load_from_micro_reader_alone(tmp_path, monkeypatch):
     def no_bio_formats(*args, **kwargs):
         raise AssertionError("Bio-Formats metadata was read")
 
-    for name in ("read_metadata_via_bfio", "read_metadata_via_bioio_bioformats",
-                 "read_metadata_via_extension"):
+    for name in ("read_metadata_via_bfio", "read_metadata_via_extension"):
         monkeypatch.setattr(data_manager, name, no_bio_formats)
     path, a, b = _ome_tiff(tmp_path)
     first, second = _load(path)

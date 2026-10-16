@@ -2,7 +2,6 @@ aicspylibczi>=0.0.0
 bfio>=0.0.0
 bioformats_jar>=0.0.0
 bioio-base>=0.0.0
-bioio-bioformats==1.1.0
 bioio-czi==2.1.0
 bioio-imageio==1.1.0
 bioio-lif==1.1.0

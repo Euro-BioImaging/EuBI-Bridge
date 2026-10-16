@@ -26,9 +26,9 @@ from ome_types.model import (OME, Channel, Image, Pixels,
                              UnitsTime)
 
 from eubi_bridge.core.czi_reader import CZIReader
+from eubi_bridge.core.pff_reader import NoNativeReader
 from eubi_bridge.core.readers import (
-    read_metadata_via_bfio, read_metadata_via_bioio_bioformats,
-    read_metadata_via_extension, read_single_image)
+    read_metadata_via_bfio, read_metadata_via_extension, read_single_image)
 from dyna_zarr import DynamicArray, from_array
 from ome_zarr_pyramid import Pyramid
 from eubi_bridge.utils.array_utils import normalise_basic_index
@@ -47,19 +47,6 @@ unit_map = {'t': 'second', 'c': 'Channel', 'z': 'micrometer', 'y': 'micrometer',
 # ---------------------------------------------------------------------------
 # bfio tiled reading helpers (bioformats fallback path only)
 # ---------------------------------------------------------------------------
-
-def _is_bioformats_backed(reader: object) -> bool:
-    """Return True when *reader* is backed by the ``bioio_bioformats`` plugin.
-
-    This is the fallback reader for formats without a native bioio extension
-    (e.g. ``.mrc``, ``.dm4``).  Native plugins (CZI, ND2, LIF, TIFF…) return
-    False and keep their existing ``get_image_dask_data()`` path.
-    """
-    try:
-        return "bioio_bioformats" in type(reader.img).__module__
-    except AttributeError:
-        return False
-
 
 # Thread-local BioReader cache — one open reader per PATH per dask thread.
 #
@@ -132,8 +119,8 @@ def _bioformats_resolution_count(path: str) -> Optional[int]:
 def _collapse_resolution_series(omemeta: OME, path: str) -> OME:
     """Collapse Bio-Formats-flattened resolution-pyramid <Image> entries.
 
-    bioio_bioformats reports each internal resolution level of a pyramidal
-    image as a separate <Image> (flattenedResolutions=True). When
+    Bio-Formats reports each internal resolution level of a pyramidal image as a
+    separate <Image> (flattenedResolutions=True). When
     CoreMetadata.resolutionCount for series 0 equals the number of reported
     <Image> elements, every one of them is a resolution level of a single
     image -- keep only the full-resolution (first) one.
@@ -650,17 +637,18 @@ class PFFImageMeta(ImageReader):
             meta_reader = ('bfio' if self._meta_reader in ('czi_native', 'micro')
                            else self._meta_reader)
             if meta_reader == 'bioio':
+                # bioio's format plugins; a format without one (or a failed read)
+                # gets Bio-Formats' metadata through bfio
                 try:
                     omemeta = await read_metadata_via_extension(self.root, series=self._series)
                 except Exception as e:
-                    logger.debug(f"bioio extension reader failed for {self.root}: {e}. Falling back.")
-                    omemeta = await read_metadata_via_bioio_bioformats(self.root, series=self._series)
-            elif meta_reader == 'bfio':
-                try:
+                    logger.debug(f"bioio extension reader failed for {self.root}: {e}. "
+                                 f"Reading the metadata with bfio.")
+                    omemeta = None
+                if omemeta is None:
                     omemeta = await read_metadata_via_bfio(self.root)
-                except Exception as e:
-                    logger.debug(f"bfio reader failed for {self.root}: {e}. Falling back.")
-                    omemeta = await read_metadata_via_bioio_bioformats(self.root, series=self._series)
+            elif meta_reader == 'bfio':
+                omemeta = await read_metadata_via_bfio(self.root)
             else:
                 raise ValueError(f"Unsupported metadata reader: {self._meta_reader}")
         self.omemeta = _collapse_resolution_series(omemeta, self.root)
@@ -817,17 +805,20 @@ class PFFImageMeta(ImageReader):
                 self.root, self._series, shape, dtype)
             return
 
-        self.reader = await read_single_image(self.root, aszarr=self._aszarr, as_mosaic=self._as_mosaic, **{**self._reader_kwargs, **kwargs})
-        await self._check_micro_reader(**kwargs)
+        try:
+            self.reader = await read_single_image(
+                self.root, aszarr=self._aszarr, as_mosaic=self._as_mosaic,
+                **{**self._reader_kwargs, **kwargs})
+            await self._check_micro_reader(**kwargs)
+        except NoNativeReader:
+            self.reader = None
 
-        if _is_bioformats_backed(self.reader):
+        if self.reader is None:
             # A format without a native reader: read it exactly as force_bioformats
             # does -- bfio pixels per series, the scene count from the (collapsed)
-            # OME metadata. bioio's Bio-Formats reader is dropped: kept, it made every
-            # scene read series 0's pixels (set_scene does not rebuild the array while
-            # a reader is set; eubi-bridge 0.1.2-0.1.5), and its scene count included
-            # resolution levels (a false "PARTIAL READ - DAMAGED FILE" warning).
-            self.reader = None
+            # OME metadata. (Until 0.2.0 bioio-bioformats opened it first, only to be
+            # dropped here: kept, it made every scene read series 0's pixels in
+            # eubi-bridge 0.1.2-0.1.5, and counted resolution levels as scenes.)
             self._bfio_tiling = True
             shape, dtype = self._bfio_shape_from_meta()
             self.arraydata = _build_bioformats_array(

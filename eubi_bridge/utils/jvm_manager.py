@@ -125,7 +125,7 @@ def jvm_lazy() -> bool:
 
 
 def _install_lazy_start(jvm_memory: Optional[str] = None) -> None:
-    """Route scyjava's own JVM start -- which bfio and bioio-bioformats call
+    """Route scyjava's own JVM start -- which bfio calls
     on first use (``scyjava.start_jvm`` / ``jimport``) -- to the bundled-JAR
     start, so the JVM starts exactly when a file needs Bio-Formats."""
     global _original_start_jvm

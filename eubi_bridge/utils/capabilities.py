@@ -22,7 +22,7 @@ INSTALL_FULL = ("Needs the full eubi-bridge: pip uninstall eubi-bridge-lite, "
 
 
 #: the modules the Bio-Formats path imports
-BIOFORMATS_MODULES = ("bfio", "bioio_base", "bioio_bioformats", "scyjava")
+BIOFORMATS_MODULES = ("bfio", "bioio_base", "scyjava")
 
 
 class NeedsFullEubiBridge(ImportError):

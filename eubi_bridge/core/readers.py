@@ -196,35 +196,9 @@ def get_metadata_reader_by_path(input_path: str, **kwargs):
     elif path_lower.endswith(('.png','.jpg','.jpeg')):
         from bioio_imageio.reader import Reader as reader
     else:
-        from bioio_bioformats.reader import Reader as reader
+        from eubi_bridge.core.pff_reader import NoNativeReader
+        raise NoNativeReader(input_path)
     return reader
-
-
-async def read_metadata_via_bioio_bioformats(input_path: str, **kwargs):
-    """
-    Extract OME metadata using bioio-bioformats reader.
-    
-    Uses the MetadataExtractorFactory to route to the appropriate extractor.
-    This provides better separation of concerns and easier strategy swapping.
-    
-    Parameters
-    ----------
-    input_path : str
-        Path to the image file.
-    **kwargs
-        Additional arguments (series, etc.).
-        
-    Returns
-    -------
-    ome_types.model.OME
-        OME metadata object.
-    """
-    from eubi_bridge.core.metadata_extractors import \
-        BioFormatsMetadataExtractor
-    
-    series = kwargs.get('series', None)
-    extractor = BioFormatsMetadataExtractor()
-    return await extractor.extract(input_path, series=series)
 
 
 async def read_metadata_via_bfio(input_path: str, **kwargs):

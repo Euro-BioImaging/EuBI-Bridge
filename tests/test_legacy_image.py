@@ -182,11 +182,9 @@ def test_suffixes_are_matched_regardless_of_case(tmp_path, name):
     suffixes case-sensitively); it gets bioio's OME-TIFF reader whatever the case."""
     import asyncio
 
-    from eubi_bridge.core.data_manager import _is_bioformats_backed
     from eubi_bridge.core.readers import read_single_image
     src = tmp_path / name
     tifffile.imwrite(str(src), RNG.integers(0, 255, (2, 16, 20)).astype("u1"), ome=True,
                      photometric="minisblack", metadata={"axes": "CYX"})
     reader = asyncio.run(read_single_image(str(src), pixel_reader="standard"))
     assert type(reader.img).__module__.startswith("bioio_ome_tiff"), type(reader.img).__module__
-    assert not _is_bioformats_backed(reader)
