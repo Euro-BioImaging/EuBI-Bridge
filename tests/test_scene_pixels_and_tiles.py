@@ -59,7 +59,7 @@ def test_each_series_of_a_bioformats_file_keeps_its_pixels(tmp_path):
                  metadata={"axes": "CYX"})
         tw.write(np.full((2, 32, 40), 200, "u1"), photometric="minisblack",
                  metadata={"axes": "CYX"})
-    _convert(src, tmp_path / "out", "--scene_index", "all", "--metadata_reader", "bfio",
+    _convert(src, tmp_path / "out", "--series_index", "all", "--metadata_reader", "bfio",
              "--pixel_reader", "standard")
     assert _values(tmp_path / "out") == {"two_scene0.zarr": [10], "two_scene1.zarr": [200]}
 
@@ -81,7 +81,7 @@ def test_each_scene_writes_its_own_tiles(tmp_path):
                                     "StageYPosition": 500 + 0.5 * y}))
     src = tmp_path / "mosaic.czi"
     write_czi(str(src), tiles, metadata=scaling)
-    _convert(src, tmp_path / "out", "--scene_index", "all", "--mosaic_tile_index", "all")
+    _convert(src, tmp_path / "out", "--series_index", "all", "--mosaic_tile_index", "all")
     assert _values(tmp_path / "out") == {
         "mosaic_scene0_tile0.zarr": [10], "mosaic_scene0_tile1.zarr": [20],
         "mosaic_scene1_tile0.zarr": [30], "mosaic_scene1_tile1.zarr": [40],

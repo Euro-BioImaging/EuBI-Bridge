@@ -11,11 +11,13 @@ bioio-tifffile-fork-by-bugra>=0.0.1b2
 dask>=2024.12.1
 dask-jobqueue>=0.0.0
 distributed>=2024.12.1
+dyna-zarr>=0.1.0,<0.2
 fire>=0.0.0
-micro-reader>=0.0.3
+micro-reader>=0.1.0,<0.2
 natsort>=0.0.0
 nd2>=0.0.0
 numpy>=1.24
+ome_zarr_pyramid[remote]>=0.3.0,<0.4
 pydantic>=2.11.7
 pylibczirw>=0.0.0
 readlif==0.6.5

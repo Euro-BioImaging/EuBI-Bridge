@@ -31,6 +31,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+from eubi_bridge.conversion.pyramid_path import SERIES
 from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -131,19 +132,20 @@ class _Inputs:
 
     def __init__(self, paths: list, job, scene):
         self.paths, self.job = paths, job
-        #: scene_index='all' joins each file's only scene (one scene per file, checked)
+        #: series_index='all' joins each file's only series (one per file, checked)
         self.all_scenes = scene == ALL_SCENES
         self.scene = 0 if self.all_scenes else scene
         self._legacy: dict = {}
 
     def _one_scene(self, path: str, count: int) -> None:
         if self.all_scenes and count != 1:
-            # 0.1.5 folded the scenes into the joined axis (positions became time
-            # points); an aggregative output joins ONE scene of each file
+            # 0.1.5 folded the series into the joined axis (positions became time
+            # points); an aggregative output joins ONE series of each file
             raise ValueError(
-                f"Aggregative conversion joins one scene of each file, and "
-                f"{os.path.basename(path)} has {count} scenes. Choose the scene with "
-                f"--scene_index (0 to {count - 1}); for every scene, run once per scene.")
+                f"Aggregative conversion joins one series of each file, and "
+                f"{os.path.basename(path)} has {count} series. Choose the series with "
+                f"--series_index (0 to {count - 1}); for every series, run once per "
+                f"series.")
 
     # -- pixels --------------------------------------------------------------
     def array(self, path: str):
@@ -157,7 +159,7 @@ class _Inputs:
             if arr is not None:
                 if self.all_scenes:
                     with _using(path, "separate", multifile=False) as entry:
-                        self._one_scene(path, len({k["scene"] for k in entry.file.indices}))
+                        self._one_scene(path, len({k[SERIES] for k in entry.file.indices}))
                 return arr
             logger.info(f"{os.path.basename(path)}: older readers ({why})")
         image = self._legacy_image(path)
@@ -173,12 +175,12 @@ class _Inputs:
 
     def _legacy_image(self, path: str):
         f = self._legacy_file(path)
-        keys = sorted({int(k["scene"]) for k in f.indices})
+        keys = sorted({int(k[SERIES]) for k in f.indices})
         self._one_scene(path, len(keys))
         if not 0 <= self.scene < len(keys):
-            raise ValueError(f"{os.path.basename(path)}: no scene {self.scene} (it has "
+            raise ValueError(f"{os.path.basename(path)}: no series {self.scene} (it has "
                              f"{len(keys)})")
-        first = next(k for k in f.indices if int(k["scene"]) == keys[self.scene])
+        first = next(k for k in f.indices if int(k[SERIES]) == keys[self.scene])
         return f.image(first)
 
     # -- metadata ------------------------------------------------------------
@@ -192,18 +194,22 @@ class _Inputs:
         except NotYet:
             return self._legacy_image(path)
         try:
-            scenes = sorted({k["scene"] for k in f.indices})
+            scenes = sorted({k[SERIES] for k in f.indices})
             if not 0 <= self.scene < len(scenes):
-                raise ValueError(f"{os.path.basename(path)}: no scene {self.scene} (it has "
-                                 f"{len(scenes)})")
-            # the scene's first image (a mosaic's tile 0, as 0.1.5 read it)
-            index = min((k for k in f.indices if k["scene"] == scenes[self.scene]),
+                raise ValueError(f"{os.path.basename(path)}: no series {self.scene} (it "
+                                 f"has {len(scenes)})")
+            # the series' first image (a mosaic's tile 0, as 0.1.5 read it)
+            index = min((k for k in f.indices if k[SERIES] == scenes[self.scene]),
                         key=lambda k: tuple(k.values()))
             image = f.image(tuple(index.items()))
             meta = image.metadata
+            source = getattr(image, "source", image)
             return SimpleNamespace(
                 name=getattr(image, "name", None),
-                axes=str(getattr(getattr(image, "source", image), "axes", "")),
+                axes=str(getattr(source, "axes", "")),
+                # the unfolded axes and shape: its RGB samples (rgb_sample_channels)
+                source=SimpleNamespace(axes=str(getattr(source, "axes", "")),
+                                       shape=tuple(getattr(source, "shape", ()))),
                 metadata=SimpleNamespace(
                     pixel_sizes=dict(meta.pixel_sizes or {}),
                     channels=list(meta.channels or []),
@@ -289,14 +295,21 @@ def _channel_groups(paths: list, job_kwargs: dict) -> list:
 
 
 def _channels(samples: list, images: dict, sizes: dict, total: int, job_kwargs: dict) -> list:
-    """The output's channels: each sample file's own (a file listing another count than
-    it has: that many unnamed ones), joined; with override_channel_names and a list of
-    channel tags, the tags are the names."""
+    """The output's channels: each sample file's own (RGB samples named and tinted as a
+    single file's: ``rgb_sample_channels``; a file listing another count than it has:
+    that many unnamed ones), joined; with override_channel_names and a list of channel
+    tags, the tags are the names."""
+    from eubi_bridge.conversion.pyramid_path import rgb_sample_channels
     blank = SimpleNamespace(name=None, color=None, emission_wavelength=None,
                             excitation_wavelength=None)
     out = []
     for path in samples:
         own = list(images[path].metadata.channels)
+        rgb = rgb_sample_channels(images[path]) if len(own) != sizes[path] else None
+        if rgb is not None and len(rgb) == sizes[path]:
+            # an unnamed single RGB channel has no label: numbered in the output
+            own = [SimpleNamespace(name=label, color=color, emission_wavelength=None,
+                                   excitation_wavelength=None) for label, color in rgb]
         out.extend(own if len(own) == sizes[path] else [blank] * sizes[path])
     if len(out) != total:
         return []                                  # say nothing: ozp generates them
@@ -333,14 +346,16 @@ def _distinct_colors(pyr):
     return pyr.set_channels({i: {"color": d["color"]} for i, d in enumerate(defaults)})
 
 
-#: scene_index='all' (the GUI's default): files of one scene each are joined; files of
-#: several scenes are refused (``_Inputs``: 0.1.5 folded their scenes into the joined axis)
+#: series_index='all' (the GUI's default): files of one series each are joined; files
+#: of several are refused (``_Inputs``: 0.1.5 folded their series into the joined axis)
 ALL_SCENES = "all"
 
 
 def _scene(job_kwargs: dict):
-    """The scene joined from each file (an int), or ALL_SCENES."""
-    value = job_kwargs.get("scene_index", 0)
+    """The series joined from each file (an int), or ALL_SCENES (series_index; the old
+    name still works: config_models.rename_settings)."""
+    from eubi_bridge.core.config_models import rename_settings
+    value = rename_settings(job_kwargs).get("series_index", 0)
     value = 0 if value is None else value
     if value == ALL_SCENES:
         return ALL_SCENES
@@ -349,9 +364,9 @@ def _scene(job_kwargs: dict):
     except (TypeError, ValueError):
         # 0.1.5 crashed on a list (TypeError in set_scene)
         raise ValueError(
-            f"Aggregative conversion joins one scene of each file: --scene_index "
-            f"{value!r} names several. Give one scene index; for several scenes, run "
-            f"once per scene.") from None
+            f"Aggregative conversion joins one series of each file: --series_index "
+            f"{value!r} names several. Give one series index; for several series, run "
+            f"once per series.") from None
 
 
 def _build_entry(paths: list, job, job_kwargs: dict):
@@ -369,7 +384,7 @@ def _build_entry(paths: list, job, job_kwargs: dict):
     joined_axes = _axis_list(job_kwargs.get("concatenation_axes"))
     _refuse_multifile_ome(paths)
     inputs = _Inputs(paths, job, scene)
-    scene = inputs.scene                                   # 'all': each file's only scene
+    scene = inputs.scene                                   # 'all': each file's only series
     try:
         with ThreadPoolExecutor(max_workers=min(OPEN_THREADS, len(paths))) as pool:
             arrays = list(pool.map(inputs.array, paths))
@@ -392,14 +407,14 @@ def _build_entry(paths: list, job, job_kwargs: dict):
         images = {p: inputs.image(p) for p in dict.fromkeys([paths[0]] + samples)}
         first = images[paths[0]].metadata
         image = LegacyImage(
-            array=array, axes=AXES, index={"scene": scene}, name=images[paths[0]].name,
+            array=array, axes=AXES, index={SERIES: scene}, name=images[paths[0]].name,
             pixel_sizes=first.pixel_sizes,
             channels=_channels(samples, images, sizes, int(array.shape[1]), job_kwargs),
             position=first.position, index_values=first.index_values)
         version = _ozp_version(job.conversion.zarr_format, job.conversion.ome_zarr_version)
         coll = PyramidCollection.from_file(SimpleNamespace(images=[image], path=paths[0]),
                                            version=version, name=NAME, resolutions="base")
-        pyr = _distinct_colors(coll[(("scene", scene),)])
+        pyr = _distinct_colors(coll[((SERIES, scene),)])
         entry = SimpleNamespace(pyramid=pyr, image=image, scene=scene, tile=None,
                                 series_path=f"{paths[0]}_{scene}", basename=None,
                                 name_scene=None, name_tile=None)

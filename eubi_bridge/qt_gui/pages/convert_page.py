@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from eubi_bridge.core.config_models import series_ui, series_ui_pairs
 from eubi_bridge.utils.metadata_utils import (
     DEFAULT_CHANNEL_COLORS, auto_channel_color)
 from eubi_bridge.qt_gui.core.batch import (
@@ -566,28 +567,28 @@ class ConvertPage(QWidget):
     def _build_reader_tab(self):
         _, lay = self._scrolled_tab("Reader")
 
-        # ── Scenes ────────────────────────────────────────────────────────────
-        scene_group = QGroupBox("Scenes")
-        scene_lay = QVBoxLayout(scene_group)
-        self._read_all_scenes = QCheckBox("Read All")
-        self._read_all_scenes.setChecked(True)
-        self._read_all_scenes.setToolTip(
-            "Convert every scene (series) found in the file.\n"
-            "Uncheck to specify a subset of scene indices below."
+        # ── Series ────────────────────────────────────────────────────────────
+        series_group = QGroupBox("Series")
+        series_lay = QVBoxLayout(series_group)
+        self._read_all_series = QCheckBox("Read All")
+        self._read_all_series.setChecked(True)
+        self._read_all_series.setToolTip(
+            "Convert every series (scene) found in the file.\n"
+            "Uncheck to specify a subset of series indices below."
         )
-        scene_lay.addWidget(self._read_all_scenes)
-        self._scene_indices = QLineEdit()
-        self._scene_indices.setPlaceholderText("0,1,2  (blank = all)")
-        self._scene_indices.setToolTip(
-            "Comma-separated list of scene (series) indices to convert.\n"
+        series_lay.addWidget(self._read_all_series)
+        self._series_indices = QLineEdit()
+        self._series_indices.setPlaceholderText("0,1,2  (blank = all)")
+        self._series_indices.setToolTip(
+            "Comma-separated list of series (scene) indices to convert.\n"
             "Only active when 'Read All' is unchecked. Example: 0,2,4"
         )
-        scene_lay.addLayout(_form_row("Indices:", self._scene_indices))
-        self._read_all_scenes.toggled.connect(
-            lambda c: self._scene_indices.setEnabled(not c)
+        series_lay.addLayout(_form_row("Indices:", self._series_indices))
+        self._read_all_series.toggled.connect(
+            lambda c: self._series_indices.setEnabled(not c)
         )
-        self._scene_indices.setEnabled(False)
-        lay.addWidget(scene_group)
+        self._series_indices.setEnabled(False)
+        lay.addWidget(series_group)
 
         # ── Tiles ─────────────────────────────────────────────────────────────
         tile_group = QGroupBox("Tiles")
@@ -2333,9 +2334,9 @@ class ConvertPage(QWidget):
         self._jvm_memory.setValue(float(c.get("jvmMemory", 2.0)))
         self._decode_threads.setValue(c.get("decodeThreads", 4))
 
-        r = cfg.get("reader", {})
-        self._read_all_scenes.setChecked(r.get("readAllScenes", True))
-        self._scene_indices.setText(r.get("sceneIndices", ""))
+        r = series_ui(cfg.get("reader", {}))     # a 0.2.x config: its scene keys
+        self._read_all_series.setChecked(r.get("readAllSeries", True))
+        self._series_indices.setText(r.get("seriesIndices", ""))
         self._read_all_tiles.setChecked(r.get("readAllTiles", True))
         self._mosaic_tile_indices.setText(r.get("mosaicTileIndices", ""))
         self._read_as_mosaic.setChecked(r.get("readAsMosaic", False))
@@ -2507,8 +2508,9 @@ class ConvertPage(QWidget):
         return {
             "cluster": self._ui_cluster_config(),
             "reader": {
-                "readAllScenes":     self._read_all_scenes.isChecked(),
-                "sceneIndices":      self._scene_indices.text().strip(),
+                # the series keys and the 0.2.x scene keys, for several releases
+                **series_ui_pairs(self._read_all_series.isChecked(),
+                                  self._series_indices.text().strip()),
                 "readAllTiles":      self._read_all_tiles.isChecked(),
                 "mosaicTileIndices": self._mosaic_tile_indices.text().strip(),
                 "readAsMosaic":         self._read_as_mosaic.isChecked(),

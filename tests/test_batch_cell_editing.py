@@ -245,8 +245,8 @@ class TestOrdering:
         assert sort_keys(["dtype", "output_path", "input_path"])[:2] ==             list(_PATH_COLUMNS)
 
     def test_form_order_not_alphabetical(self):
-        """scene_index (Reader) precedes dtype (Conversion) despite d < s."""
-        assert sort_keys(["dtype", "scene_index"]) == ["scene_index", "dtype"]
+        """series_index (Reader) precedes dtype (Conversion) despite d < s."""
+        assert sort_keys(["dtype", "series_index"]) == ["series_index", "dtype"]
 
     def test_related_params_stay_adjacent(self):
         """Chunk axes keep their t,c,z,y,x order rather than sorting by name."""
@@ -265,9 +265,9 @@ class TestOrdering:
 
     def test_queue_columns_follow_form_order(self, batch):
         batch.update_cells([0], "dtype", "uint16")
-        batch.update_cells([0], "scene_index", "1")
+        batch.update_cells([0], "series_index", "1")
         columns = [c for c in batch.columns() if c not in _PATH_COLUMNS]
-        assert columns == ["scene_index", "dtype"]
+        assert columns == ["series_index", "dtype"]
 
 
 class TestGroupedSpecs:
@@ -291,7 +291,7 @@ class TestGroupedSpecs:
 
     def test_tabs_follow_form_order(self):
         result = grouped_specs(
-            ["channel_intensity_limits", "dtype", "scene_index", "y_scale_factor"])
+            ["channel_intensity_limits", "dtype", "series_index", "y_scale_factor"])
         assert [tab for tab, _ in result] == [
             "Reader", "Conversion", "Downscaling", "Metadata"]
 
@@ -787,8 +787,8 @@ class TestCategorySeparators:
     """A thin blank gutter marks each category boundary."""
 
     def test_separator_between_categories(self):
-        out = with_separators(["scene_index", "dtype"])
-        assert out == ["scene_index", SEPARATOR, "dtype"]
+        out = with_separators(["series_index", "dtype"])
+        assert out == ["series_index", SEPARATOR, "dtype"]
 
     def test_no_separator_within_a_category(self):
         out = with_separators(["z_chunk", "dtype"])
@@ -800,7 +800,7 @@ class TestCategorySeparators:
 
     def test_never_doubled(self):
         out = with_separators(
-            ["input_path", "scene_index", "dtype", "n_layers"])
+            ["input_path", "series_index", "dtype", "n_layers"])
         assert not any(a == SEPARATOR and b == SEPARATOR
                        for a, b in zip(out, out[1:]))
 
@@ -813,7 +813,7 @@ class TestCategorySeparators:
         assert SEPARATOR not in {s.key for s in _PARAM_SPECS}
 
     def test_real_columns_are_preserved_in_order(self):
-        columns = ["input_path", "scene_index", "dtype", "n_layers"]
+        columns = ["input_path", "series_index", "dtype", "n_layers"]
         out = [c for c in with_separators(columns) if c != SEPARATOR]
         assert out == columns
 

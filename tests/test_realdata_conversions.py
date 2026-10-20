@@ -15,7 +15,7 @@ Each conversion runs through the real ``eubi`` CLI (matching how users invoke it
 and asserts the *observable effect* of the parameter on the output OME-Zarr.
 
 Reader-dimension coverage tests BOTH modes:
-  * **extraction**  — one OME-Zarr per index (``scene_index all``,
+  * **extraction**  — one OME-Zarr per index (``series_index all``,
     ``mosaic_tile_index all``, ``view_index all``, ``illumination_index all``).
   * **combination** — multiple indices grouped into a single OME-Zarr
     (``as_mosaic``, ``concat_views``, ``concat_illuminations``).
@@ -263,9 +263,9 @@ def test_cluster_params_run(tmp_path, opt):
 # ===========================================================================
 
 def test_reader_scene_extraction(tmp_path):
-    """scene_index all -> one OME-Zarr per scene."""
+    """series_index all -> one OME-Zarr per scene."""
     out = tmp_path / "o"
-    _convert(_path("czi_scenes"), out, "--scene_index", "all")
+    _convert(_path("czi_scenes"), out, "--series_index", "all")
     z = _output_zarrs(out)
     assert len(z) >= 2, f"scene extraction expected >=2 outputs, got {len(z)}"
 
@@ -274,7 +274,7 @@ def test_reader_tile_extraction(tmp_path):
     """mosaic_tile_index all (as_mosaic False) -> one OME-Zarr per tile (scene 0)."""
     out = tmp_path / "o"
     _convert(_path("czi_mosaic"), out,
-             "--scene_index", "0", "--as_mosaic", "False",
+             "--series_index", "0", "--as_mosaic", "False",
              "--mosaic_tile_index", "all")
     z = _output_zarrs(out)
     assert len(z) >= 2, f"tile extraction expected >=2 outputs, got {len(z)}"
@@ -307,7 +307,7 @@ def test_reader_illumination_extraction(tmp_path):
 def test_reader_tile_combination(tmp_path):
     """as_mosaic True -> tiles stitched into a single OME-Zarr (scene 0)."""
     out = tmp_path / "o"
-    _convert(_path("czi_mosaic"), out, "--scene_index", "0", "--as_mosaic", "True")
+    _convert(_path("czi_mosaic"), out, "--series_index", "0", "--as_mosaic", "True")
     z = _output_zarrs(out)
     assert len(z) == 1, f"mosaic combination expected 1 output, got {len(z)}"
 

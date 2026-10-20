@@ -30,7 +30,9 @@ from eubi_bridge.core.config_models import (
     ConversionConfig,
     drop_retired,
     rename_config_keys,
+    with_both_index_names,
     rename_settings,
+    RENAMED_INDEX_SETTINGS,
     RENAMED_SETTINGS,
     resolve_ome_zarr_target,
     DownscaleConfig,
@@ -213,7 +215,7 @@ class ConfigManager:
             view_index=0,
             phase_index=0,
             illumination_index=0,
-            scene_index=0,
+            series_index=0,
             rotation_index=0,
             mosaic_tile_index=0,
             sample_index=0,
@@ -331,7 +333,8 @@ class ConfigManager:
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with open(path, 'w') as f:
-                json.dump(config, f, indent=2)
+                # both index names, equal, for several releases (plan 8.32)
+                json.dump(with_both_index_names(config), f, indent=2)
         except IOError as e:
             logger.warning(f"Failed to save config JSON: {e}")
 
@@ -357,7 +360,12 @@ class ConfigManager:
             # every existing config already has the section it belongs to.
             # Renamed settings (config_models.RENAMED_SETTINGS): the value is kept
             # under its new name, before the backfill below adds the default.
-            if rename_config_keys(config):
+            # The series index is saved under both names (plan 8.32): a file
+            # lacking scene_index is written again with it.
+            readers = config.get('readers')
+            if isinstance(readers, dict) and 'scene_index' not in readers:
+                dirty = True
+            if rename_config_keys(config, where=f"{self._get_json_path()}: "):
                 dirty = True
             for section, defaults in self._ROOT_DEFAULTS.items():
                 if section not in config:
@@ -520,7 +528,7 @@ class ConfigManager:
                           view_index: int = 'default',
                           phase_index: int = 'default',
                           illumination_index: int = 'default',
-                          scene_index: int = 'default',
+                          series_index: int = 'default',
                           rotation_index: int = 'default',
                           mosaic_tile_index: int = 'default',
                           sample_index: int = 'default',
@@ -528,9 +536,15 @@ class ConfigManager:
                           concat_views: bool = 'default',
                           concat_illuminations: bool = 'default',
                           pixel_reader: str = 'default',
-                          micro_check_pixels: bool = 'default') -> None:
-        """Update reader parameters. Omitted arguments keep their current values."""
-        params = {k: v for k, v in locals().items() if k != 'self'}
+                          micro_check_pixels: bool = 'default',
+                          **kwargs) -> None:
+        """Update reader parameters. Omitted arguments keep their current values.
+        The old name ``scene_index`` still works, with a FutureWarning."""
+        params = {k: v for k, v in locals().items() if k not in ('self', 'kwargs')}
+        unknown = set(kwargs) - set(RENAMED_INDEX_SETTINGS)
+        if unknown:
+            raise TypeError(f"configure_readers got unknown setting(s): {sorted(unknown)}")
+        params.update(rename_settings({k: v for k, v in kwargs.items() if v != 'default'}))
         for key, val in params.items():
             if key in self.config['readers'] and val != 'default':
                 self.config['readers'][key] = val
@@ -728,7 +742,7 @@ class ConfigManager:
         dirpath.mkdir(parents=True, exist_ok=True)
         path = dirpath / f'{name}.json'
         with open(path, 'w') as f:
-            json.dump(self.config, f, indent=2)
+            json.dump(with_both_index_names(self.config), f, indent=2)
         logger.info(f"Config saved as '{name}' → {path}")
 
     def with_config(self, name: str) -> 'ConfigManager':
@@ -802,7 +816,7 @@ class ConfigManager:
         config_snapshot = self.config
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, 'w') as f:
-            _json.dump(config_snapshot, f, indent=2)
+            _json.dump(with_both_index_names(config_snapshot), f, indent=2)
         logger.info(f"Config written → {target}")
 
     def delete_config(self, name: str) -> None:
@@ -933,7 +947,7 @@ class ConfigureGroup:
     * ``cluster``       - parallelism / cluster / JVM settings
     * ``conversion``    - Zarr output, chunking, compression, dtype
     * ``downscale``     - pyramid level count and per-axis scale factors
-    * ``readers``       - scene / view / illumination / mosaic selection
+    * ``readers``       - series / view / illumination / mosaic selection
     * ``concatenation`` - aggregative axes and filename tags
     * ``metadata``      - metadata reader, channel names / colours / limits, pixel scales and units
 
@@ -1036,7 +1050,7 @@ class ConfigureGroup:
                 view_index: int = 'default',
                 phase_index: int = 'default',
                 illumination_index: int = 'default',
-                scene_index: int = 'default',
+                series_index: int = 'default',
                 rotation_index: int = 'default',
                 mosaic_tile_index: int = 'default',
                 sample_index: int = 'default',
@@ -1044,7 +1058,8 @@ class ConfigureGroup:
                 concat_views: bool = 'default',
                 concat_illuminations: bool = 'default',
                 pixel_reader: str = 'default',
-                micro_check_pixels: bool = 'default') -> None:
+                micro_check_pixels: bool = 'default',
+                **kwargs) -> None:
         """Update file-reader parameters. Omitted arguments keep their current values.
 
         Args:
@@ -1054,8 +1069,10 @@ class ConfigureGroup:
             phase_index: Phase index (default 0).
             illumination_index: Illumination index (default 0). Pass ``'all'`` or a
                 comma-separated list to expose multiple illuminations.
-            scene_index: Scene / series index to read.  Pass an integer, ``'all'``,
-                or a comma-separated list such as ``'0,2,4'`` (default 0).
+            series_index: Series index to read (a series is what some formats call
+                a scene).  Pass an integer, ``'all'``, or a comma-separated list such
+                as ``'0,2,4'`` (default 0).  Formerly ``scene_index``, which still
+                works, with a FutureWarning.
             rotation_index: Rotation index (default 0).
             mosaic_tile_index: Mosaic tile index.  Pass an integer, ``'all'``,
                 or a comma-separated list (default None = all tiles).
@@ -1074,7 +1091,8 @@ class ConfigureGroup:
                 To compare, convert once more with ``pixel_reader='standard'`` and
                 compare the two outputs.
         """
-        return self._cfg.configure_readers(**{k: v for k, v in locals().items() if k != 'self'})
+        args = {k: v for k, v in locals().items() if k not in ('self', 'kwargs')}
+        return self._cfg.configure_readers(**args, **kwargs)
 
     def conversion(self,
                    ome_zarr_version: str = 'default',
@@ -1344,7 +1362,9 @@ class ConversionManager:
         cli_kwargs = drop_retired(cli_kwargs)
         # Renamed settings (config_models.RENAMED_SETTINGS): the old names work
         cli_kwargs = rename_settings(cli_kwargs)
-        kwargs = {k: v for k, v in rename_settings(kwargs).items() if k in cli_kwargs}
+        renames = {**RENAMED_SETTINGS, **RENAMED_INDEX_SETTINGS}
+        kwargs = {renames.get(k, k): cli_kwargs[renames.get(k, k)] for k in kwargs
+                  if renames.get(k, k) in cli_kwargs}
 
         # Build effective params (config defaults merged with CLI overrides).
         # Pydantic validates each section — catches bad CLI values early (Path 1).
@@ -1764,7 +1784,7 @@ class MetadataManager:
             input_path: Path to input file or directory.
             includes: Filename patterns to include (comma-separated).
             excludes: Filename patterns to exclude (comma-separated).
-            series: Series index. Defaults to configured scene_index.
+            series: Series index. Defaults to configured series_index.
             output_file: Save output as plain text (any ext) or HTML (.html).
         """
         import asyncio
@@ -1798,7 +1818,7 @@ class MetadataManager:
                 conversion_p.get('ome_zarr_version') or kwargs.get('ome_zarr_version'),
                 conversion_p.get('zarr_format', 2), warn=True)
             if series is None:
-                series = readers_p['scene_index']
+                series = readers_p['series_index']
             combined = {
                 **cluster_p, **readers_p, **conversion_p,
                 # the configured metadata reader, as a conversion reads the file
@@ -2199,7 +2219,7 @@ class EuBIBridge:
             input_path: File path or directory.
             includes: Comma-separated filename patterns to include.
             excludes: Comma-separated filename patterns to exclude.
-            series: Series / scene index (default: configured scene_index).
+            series: Series index (default: configured series_index).
             output_file: Write output to this path; use ``.html`` for HTML output.
         """
         return self._meta.show_pixel_meta(

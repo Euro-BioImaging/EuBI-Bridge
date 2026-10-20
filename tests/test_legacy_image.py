@@ -63,15 +63,15 @@ def _two_series_btf(path: Path) -> Path:
 
 def test_bioformats_file_on_both_paths(tmp_path):
     out = _both(_two_series_btf(tmp_path / "two.ome.btf"), tmp_path,
-                ["--scene_index", "all", *STANDARD], "legacy_image-bioformats_two_series")
+                ["--series_index", "all", *STANDARD], "legacy_image-bioformats_two_series")
     assert sorted(out) == ["two_scene0.zarr", "two_scene1.zarr"]
     values = [np.unique(np.asarray(zarr.open_group(str(tmp_path / "new" / name))["0"])).tolist()
               for name in sorted(out)]
     assert values == [[10], [200]]                          # each scene its own pixels
 
 
-@pytest.mark.parametrize("args", [["--scene_index", "all"],
-                                  ["--scene_index", "1", "--channel_labels", "0,A",
+@pytest.mark.parametrize("args", [["--series_index", "all"],
+                                  ["--series_index", "1", "--channel_labels", "0,A",
                                    "--dtype", "uint8", "--channel_intensity_limits", "auto"]],
                          ids=["defaults", "settings"])
 def test_ome_tiff_with_the_standard_reader_on_both_paths(tmp_path, args):
@@ -102,8 +102,8 @@ def test_legacy_file_reads_like_micro_reader(tmp_path):
                                     {"pixel_reader": "standard", "metadata_reader": "bioio"})
     f = LegacyFile(job)
     try:
-        assert f.indices == [{"scene": 0}]
-        image = f.image({"scene": 0})
+        assert f.indices == [{"series": 0}]
+        image = f.image({"series": 0})
         assert image.axes == "tczyx" and image.shape == (1, 2, 3, 32, 40)
         assert hasattr(image.array, "dask")                       # the reader's own array
         assert image.metadata.pixel_sizes["z"].value == 2.0

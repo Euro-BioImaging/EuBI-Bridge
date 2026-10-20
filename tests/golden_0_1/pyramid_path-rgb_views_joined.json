@@ -4,6 +4,7 @@
    "eubi_bridge": {
     "acquisition": {
      "scene_index": 0,
+     "series_index": 0,
      "source_path": "<tmp>\\rgb_views.czi"
     }
    },

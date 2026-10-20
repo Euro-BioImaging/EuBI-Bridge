@@ -27,7 +27,9 @@ from copy import deepcopy
 from typing import Any, Iterable, NamedTuple
 
 from eubi_bridge.core.config_models import (
-    ConversionConfig, DownscaleConfig, MetadataConfig, parse_scale)
+    ConversionConfig, DownscaleConfig, MetadataConfig, parse_scale, INDEX_SAVE_KEEPS,
+    INDEX_SAVE_REPLACES, RENAMED_INDEX_SETTINGS, rename_settings, resolve_index_pair,
+    series_ui)
 from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
 from eubi_bridge.utils.capabilities import has_bioformats
 from eubi_bridge.utils.path_utils import (
@@ -189,8 +191,9 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
               depends_on="aggregative_group", active_when=NON_BLANK),
 
     # ---- Reader tab ----
-    ParamSpec("scene_index", "Scene index", "text", tooltip=_INDEX_TIP,
-              tab="Reader", group="Scenes"),
+    # was scene_index: a 0.2.x batch.csv column of that name loads as this one
+    ParamSpec("series_index", "Series index", "text", tooltip=_INDEX_TIP,
+              tab="Reader", group="Series"),
     ParamSpec("mosaic_tile_index", "Mosaic tile index", "text",
               tooltip=_INDEX_TIP, tab="Reader", group="Tiles"),
     ParamSpec("as_mosaic", "Read as mosaic", "bool",
@@ -490,13 +493,60 @@ _RENAMED_UI_KEYS = {"maxWorkers": "maxProcesses", "maxConcurrency": "maxThreads"
 
 def _renamed_snapshot(config: Any) -> Any:
     """A saved batch's config snapshot with renamed cluster keys under their new
-    names (the value kept)."""
+    names (the value kept), and the series keys beside a 0.2.x snapshot's scene keys
+    (``series_ui``: a FutureWarning; both pairs are written back, as they are: pairs
+    that differ stay so, and their warning says it)."""
     cluster = config.get("cluster") if isinstance(config, dict) else None
     if isinstance(cluster, dict):
         for old, new in _RENAMED_UI_KEYS.items():
             if old in cluster:
                 cluster.setdefault(new, cluster.pop(old))
+    reader = config.get("reader") if isinstance(config, dict) else None
+    if isinstance(reader, dict):
+        config["reader"] = series_ui(reader, on_save=INDEX_SAVE_KEEPS)
     return config
+
+
+def _renamed_columns(columns) -> dict:
+    """{column: the setting it holds} for a batch.csv header: the old names of renamed
+    settings (a 0.2.x ``scene_index`` column) under their new names, warned about once
+    per table (``rename_settings``). An old index column beside its new one (a batch
+    eubi-bridge 0.3.0 saved: both, plan 8.32) is left out here and merged per row
+    (``_merge_index_columns``)."""
+    columns = [c for c in columns if c]
+    columns = [c for c in columns if not (c in RENAMED_INDEX_SETTINGS
+                                          and RENAMED_INDEX_SETTINGS[c] in columns)]
+    kept = rename_settings({c: c for c in columns})
+    return {column: name for name, column in kept.items()}
+
+
+def _merge_index_columns(row: dict, raw: dict, where: str) -> None:
+    """Into *row*, the old index column's cell of *raw* (a batch.csv holding both
+    names): taken when the row's new cell is blank, else checked against it
+    (``resolve_index_pair``: silent when equal, a SeriesIndexConflictWarning naming
+    both when not; the new one is kept, and saving the batch writes it under both
+    names, which the warning says)."""
+    for old, new in RENAMED_INDEX_SETTINGS.items():
+        if new not in raw or raw.get(old) in (None, ""):
+            continue
+        if new in row:
+            resolve_index_pair(raw[old], row[new], where=where,
+                               on_save=INDEX_SAVE_REPLACES)
+        else:
+            row[new] = raw[old]
+
+
+def _with_old_index_columns(columns: list) -> list:
+    """*columns* with each renamed index setting's old name right after the new one:
+    a saved batch.csv carries both, equal, for several releases (plan 8.32), so an
+    eubi-bridge 0.2.x opening it reads the same series."""
+    old_of = {new: old for old, new in RENAMED_INDEX_SETTINGS.items()}
+    out = []
+    for column in columns:
+        out.append(column)
+        if column in old_of:
+            out.append(old_of[column])
+    return out
 
 
 # ── value serialisation ───────────────────────────────────────────────────────
@@ -613,7 +663,7 @@ def _overridable(value: Any) -> bool:
             return False
         return True
     # Sequences of ints round-trip as "1,2" and are understood by the
-    # scene/view/illumination/tile index validators.
+    # series/view/illumination/tile index validators.
     return (isinstance(value, (list, tuple))
             and all(isinstance(v, int) for v in value))
 
@@ -1238,15 +1288,17 @@ class BatchModel:
         os.makedirs(base_dir, exist_ok=True)
 
         columns = self.columns(for_csv=True)
+        # the series index under both names, equal (plan 8.32; RENAMED_INDEX_SETTINGS)
+        header = _with_old_index_columns(columns)
         with open(csv_path, "w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
-            writer.writerow(columns)
+            writer.writerow(header)
             for row in self._rows:
-                writer.writerow([
-                    to_cell(_relativise(row.get(col), base_dir)
-                            if col in _PATH_COLUMNS else self.cell(row, col))
-                    for col in columns
-                ])
+                cells = {col: to_cell(_relativise(row.get(col), base_dir)
+                                      if col in _PATH_COLUMNS else self.cell(row, col))
+                         for col in columns}
+                writer.writerow([cells[RENAMED_INDEX_SETTINGS.get(col, col)]
+                                 for col in header])
 
         if self._base_config is not None:
             with open(os.path.join(base_dir, CONFIG_SNAPSHOT_NAME),
@@ -1263,8 +1315,12 @@ class BatchModel:
 
         model = cls()
         with open(csv_path, newline="", encoding="utf-8") as fh:
-            for raw in csv.DictReader(fh):
-                row = {k: v for k, v in raw.items() if k and v not in (None, "")}
+            reader = csv.DictReader(fh)
+            names = _renamed_columns(reader.fieldnames or [])
+            for i, raw in enumerate(reader, start=1):
+                row = {names[k]: v for k, v in raw.items()
+                       if k in names and v not in (None, "")}
+                _merge_index_columns(row, raw, where=f"{csv_path}, row {i}: ")
                 for col in _PATH_COLUMNS:
                     if row.get(col):
                         row[col] = _absolutise(row[col], base_dir)

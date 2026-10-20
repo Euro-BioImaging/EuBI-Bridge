@@ -1,6 +1,6 @@
 """micro-reader inside eubi-bridge's older readers and the aggregative path.
 
-``MicroSource`` / ``micro_array``: micro-reader's pixels of one (scene, tile, view,
+``MicroSource`` / ``micro_array``: micro-reader's pixels of one (series, tile, view,
 illumination) image as an array-like that ``DynamicArray`` wraps (as it wraps
 ``_BioFormatsSource``), from a pool of open files (``_using``). ``MicroReader``:
 micro-reader as a reader of its own behind ``PFFImageMeta`` (``metadata_reader='micro'``),
@@ -21,6 +21,7 @@ from typing import Optional
 
 import numpy as np
 
+from eubi_bridge.conversion.pyramid_path import SERIES
 from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -29,10 +30,10 @@ PIXEL_READERS = ("standard", "micro")
 #: a dimension a file does not name (plain multi-page TIFF pages) is z, as
 #: Bio-Formats reads it
 RENAME = {"sequence": "z"}
-#: image indices eubi-bridge selects by (its scene / tile / view /
+#: image indices eubi-bridge selects by (its series / tile / view /
 #: illumination / rotation / phase options); a file with any other index
 #: (block, emission, excitation, lifetime) is left to the standard reader
-SELECTABLE = {"scene", "tile", "rotation", "view", "illumination", "phase", "resolution"}
+SELECTABLE = {SERIES, "tile", "rotation", "view", "illumination", "phase", "resolution"}
 STANDARD = "tczyx"
 #: files kept open per process, least recently used closed first: an
 #: aggregative input of thousands of files must not hold them all open (each
@@ -41,6 +42,51 @@ STANDARD = "tczyx"
 #: tile of it (dyna write_levels: slabs of e.g. 96 planes); at 32, every file was
 #: opened again for every tile (2347 files x 4 tiles: 6.7 min instead of ~1.3).
 MAX_OPEN_FILES = 128
+#: the micro-reader releases this eubi-bridge reads: 0.1.x names the series index
+#: SERIES; older ones call it "scene" (pyproject: micro-reader>=0.1.0,<0.2)
+MICRO_READER_RANGE = ((0, 1), (0, 2))
+MICRO_READER_FIX = 'pip install -U "micro-reader>=0.1,<0.2"'
+
+
+class MicroReaderVersionError(ImportError):
+    """The installed micro-reader is outside the releases this eubi-bridge reads
+    (MICRO_READER_RANGE). Without this, its files would go to the older readers
+    without a word (a forced or ``--no-deps`` install that ``pip check`` reports)."""
+
+
+_micro_reader_checked = False
+
+
+def require_micro_reader() -> None:
+    """Raise MicroReaderVersionError, naming the fix, when the installed micro-reader
+    is outside MICRO_READER_RANGE; checked once per process. A micro-reader without a
+    version (a source tree on the path) is taken as it is."""
+    global _micro_reader_checked
+    if _micro_reader_checked:
+        return
+    import micro_reader
+    version = getattr(micro_reader, "__version__", None)
+    if version is None:
+        try:
+            from importlib.metadata import version as dist_version
+            version = dist_version("micro-reader")
+        except Exception:                           # noqa: BLE001 - no version known
+            version = None
+    if version is not None:
+        try:
+            got = tuple(int(part) for part in str(version).split(".")[:2])
+        except ValueError:
+            got = None
+        low, high = MICRO_READER_RANGE
+        if got is not None and not (low <= got < high):
+            older = got < low
+            raise MicroReaderVersionError(
+                f"eubi-bridge needs micro-reader >=0.1.0,<0.2, but micro-reader "
+                f"{version} is installed"
+                + (" (it names the series index 'scene'; micro-reader 0.1.0 renamed it "
+                   f"'{SERIES}', the name this eubi-bridge reads)" if older else "")
+                + f". Fix: {MICRO_READER_FIX}")
+    _micro_reader_checked = True
 
 
 class _Open:
@@ -72,6 +118,7 @@ def _using(path: str, tiles: str, multifile: bool = True):
     option -- False opens a file of a multi-file OME set alone (the aggregative
     path joins the files itself), True the whole set."""
     import micro_reader
+    require_micro_reader()
     key = (path, tiles, bool(multifile))
     with _files_lock:
         entry = _files.get(key)
@@ -185,11 +232,11 @@ class MicroSource:
 def micro_array(path: str, scene: int, tile: Optional[int], *, as_mosaic: bool = False,
                 view: int = 0, illumination: int = 0, rotation: int = 0, phase: int = 0,
                 multifile: bool = True):
-    """The micro-reader image eubi-bridge means by (scene index, tile, view,
+    """The micro-reader image eubi-bridge means by (series index, tile, view,
     illumination, rotation, phase), as a ``DynamicArray`` -- or (None,
     reason) when micro-reader cannot read the file or has no such image.
 
-    eubi-bridge's rules: *scene* is the rank among the file's scenes;
+    eubi-bridge's rules: *scene* is the rank among the file's series;
     *as_mosaic* stitches tiles, otherwise *tile* is the mosaic tile index
     (CZI ``M``; None: tile 0), and on a file without tiles tile 0 is the
     whole image (``set_tile`` is a no-op there).  *multifile*: False reads a
@@ -197,14 +244,15 @@ def micro_array(path: str, scene: int, tile: Optional[int], *, as_mosaic: bool =
     """
     import micro_reader
     from dyna_zarr import from_array
-    tiles = "stitched" if as_mosaic else "separate"
+    tiles = "mosaic" if as_mosaic else "separate"
+    require_micro_reader()          # a wrong micro-reader is not a fallback
     try:
         with _using(path, tiles, multifile) as entry:
             return _find(entry.file, path, tiles, scene, tile, view=view,
                          illumination=illumination, rotation=rotation, phase=phase,
                          multifile=multifile)
     except micro_reader.UnsupportedFormatError as exc:
-        if tiles == "stitched":                      # tiled, but not composable
+        if tiles == "mosaic":                        # tiled, but not composable
             return None, f"micro-reader: {exc}"
         return None, f"micro-reader cannot read it: {exc}"
     except Exception as exc:                        # noqa: BLE001 - fall back, say why
@@ -215,10 +263,10 @@ def _find(f, path: str, tiles: str, scene: int, tile: Optional[int], *, view: in
           illumination: int, rotation: int, phase: int, multifile: bool = True):
     """``micro_array``'s lookup in the open file *f*."""
     from dyna_zarr import from_array
-    scenes = sorted({k["scene"] for k in f.indices})
+    scenes = sorted({k[SERIES] for k in f.indices})
     if not 0 <= scene < len(scenes):
-        return None, f"scene index {scene}: micro-reader has {len(scenes)} scenes"
-    want = {"scene": scenes[scene]}
+        return None, f"series index {scene}: micro-reader has {len(scenes)} series"
+    want = {SERIES: scenes[scene]}
     levels = f.index_range
     if "tile" in levels:
         want["tile"] = int(tile or 0)
@@ -260,10 +308,10 @@ def _resolve_index(value, total: int):
 
 class MicroReader:
     """eubi-bridge's reader interface (``reader_interface.ImageReader``) over
-    a micro-reader file: scenes, tiles, views and illuminations from its
+    a micro-reader file: series, tiles, views and illuminations from its
     image indices, pixels as ``MicroSource`` arrays.  No standard reader is
-    opened.  Semantics follow eubi-bridge's CZI reader (scene = rank, tile =
-    position within the scene, view / illumination exposure, series_path).
+    opened.  Semantics follow eubi-bridge's CZI reader (scene = the series' rank,
+    tile = position within the series, view / illumination exposure, series_path).
 
     ``MicroReader.open`` returns None when micro-reader cannot read the file,
     or when the file has tiles / views / rotations outside a CZI (eubi-bridge's
@@ -274,7 +322,7 @@ class MicroReader:
                  view_index=0, illumination_index=0, phase_index=0, rotation_index=0):
         self._path, self._tiles, self._keys = path, tiles, keys
         self.as_mosaic = as_mosaic
-        self._scene_values = sorted({k["scene"] for k in keys})
+        self._scene_values = sorted({k[SERIES] for k in keys})
         self._phase, self._rotation = int(phase_index or 0), int(rotation_index or 0)
         self._view_index, self._illumination_index = view_index, illumination_index
         #: a CZI may have views / illuminations (SceneLoader's probe)
@@ -288,7 +336,8 @@ class MicroReader:
     def open(cls, path: str, *, as_mosaic: bool = False, view_index=0, illumination_index=0,
              phase_index=0, rotation_index=0, **_ignored):
         import micro_reader
-        tiles = "stitched" if as_mosaic else "separate"
+        tiles = "mosaic" if as_mosaic else "separate"
+        require_micro_reader()          # a wrong micro-reader is not a fallback
         try:
             with _using(path, tiles) as entry:
                 keys = [dict(k) for k in entry.file.indices]
@@ -299,7 +348,7 @@ class MicroReader:
             logger.warning(f"pixel_reader=micro: {path}: standard reader "
                            f"({type(exc).__name__}: {exc})")
             return None
-        levels = set().union(*keys) - {"scene", "resolution"}
+        levels = set().union(*keys) - {SERIES, "resolution"}
         if (levels - SELECTABLE) or (levels and not path.lower().endswith(".czi")):
             logger.info(f"pixel_reader=micro: {path}: standard reader (micro-reader sees "
                         f"{sorted(levels)}, which eubi-bridge reads differently here)")
@@ -346,7 +395,7 @@ class MicroReader:
             raise IndexError(f"Scene index {scene_index} out of range [0, {self.n_scenes})")
         self.series = int(scene_index)
         scene = self._scene_values[self.series]
-        here = [k for k in self._keys if k["scene"] == scene]
+        here = [k for k in self._keys if k[SERIES] == scene]
         self._tile_values = sorted({k["tile"] for k in here if "tile" in k})
         views = sorted({k["view"] for k in here if "view" in k}) or [0]
         self.view, self._n_views = _resolve_index(self._view_index, len(views))
@@ -402,10 +451,10 @@ class MicroReader:
     # -- the image the selection means -----------------------------------------
 
     def _key(self) -> dict:
-        key = {"scene": self._scene_values[self.series]}
+        key = {SERIES: self._scene_values[self.series]}
         if self._tile_values:
             key["tile"] = self._tile_values[self.tile]
-        sample = next(k for k in self._keys if k["scene"] == key["scene"])
+        sample = next(k for k in self._keys if k[SERIES] == key[SERIES])
         if "view" in sample:
             key["view"] = self.view
         if "rotation" in sample:
@@ -437,7 +486,7 @@ def _with_levels(path: str) -> list:
     if not path.lower().endswith(".czi"):
         return []
     try:
-        with _using(path, "stitched") as entry:
+        with _using(path, "mosaic") as entry:
             return [level for image in entry.file.images for level in image.resolutions]
     except Exception:                               # noqa: BLE001 - just no count
         return []
@@ -463,7 +512,7 @@ def metadata_mismatch(reader: "MicroReader", omemeta) -> str:
         keys, imgs = entry.file.indices, entry.file.images
         combos, illuminations = {}, {}
         for key, image in zip(keys, imgs):          # first tile stands for its image
-            combo = (key["scene"], key.get("rotation", 0), key.get("view", 0))
+            combo = (key[SERIES], key.get("rotation", 0), key.get("view", 0))
             combos.setdefault(combo, image)
             illuminations.setdefault(combo, set()).add(key.get("illumination", 0))
         tiled = any("tile" in key for key in keys)

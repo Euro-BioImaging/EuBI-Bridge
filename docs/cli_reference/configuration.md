@@ -705,18 +705,18 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--scene_index</code></summary>
+    <summary><code>--series_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
     <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Scene / series index to read.  Pass an integer, `'all'`, or a comma-separated list such as `'0,2,4'` (default 0).</p>
-    <pre><code># Always read scene 2 from multi-scene files
-    eubi configure readers --scene_index 2
+    <p>Series index to read (a series is what some formats call a scene).  Pass an integer, `'all'`, or a comma-separated list such as `'0,2,4'` (default 0).  Formerly `scene_index`, which still works, with a FutureWarning.</p>
+    <pre><code># Always read series 2 from multi-series files
+    eubi configure readers --series_index 2
     </code></pre>
-    <pre><code># Convert each scene to a separate OME-Zarr group
-    eubi configure readers --scene_index all
+    <pre><code># Convert each series to a separate OME-Zarr group
+    eubi configure readers --series_index all
     </code></pre>
-    <pre><code># Convert only scenes 0, 2 and 4
-    eubi configure readers --scene_index 0,2,4
+    <pre><code># Convert only series 0, 2 and 4
+    eubi configure readers --series_index 0,2,4
     </code></pre>
     </details>
 

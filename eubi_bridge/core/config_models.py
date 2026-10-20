@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import re
+import warnings
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import (BaseModel, ConfigDict, Field, ValidationInfo, field_validator,
@@ -207,44 +208,218 @@ RENAMED_SETTINGS: Dict[str, str] = {
     # per-process setting lives on as the SLURM worker's memory
     "memory_per_worker": "slurm_worker_memory",
 }
+#: The series index renamed with micro-reader 0.1.0's index ('scene' became 'series',
+#: eubi-bridge 0.3.0): old -> new, same meaning. Given anywhere a user gives settings,
+#: the old name still works, with a FutureWarning. Kept for several releases: removed
+#: in a planned minor release after the alias has shipped in at least three releases.
+RENAMED_INDEX_SETTINGS: Dict[str, str] = {
+    "scene_index": "series_index",
+}
 _renamed_warned: set = set()
+
+
+def _rename_message(old: str, new: str) -> str:
+    if old in RENAMED_INDEX_SETTINGS:
+        return f"{old} is deprecated; it is now called {new} (same meaning)"
+    return f"'{old}' is now called '{new}' (same meaning); please use the new name"
+
+
+class SeriesIndexConflictWarning(UserWarning):
+    """``scene_index`` and ``series_index`` were both given, with different values:
+    ``series_index`` is used. A file both eubi-bridge 0.2.x and 0.3.0 write (a saved
+    config, a batch.csv) gets this when 0.2.x changed only its own key."""
+
+
+def _index_text(value: Any) -> str:
+    """An index value as text that compares equal across the forms it is saved in:
+    ``1`` / ``1.0`` (a pandas column with gaps) / ``"1"``, ``[0, 2]`` / ``"0,2"``."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, (list, tuple)):
+        value = ",".join(_index_text(v) for v in value)
+    return str(value).replace(" ", "").strip("[]()").lower()
+
+
+def same_index(a: Any, b: Any) -> bool:
+    """True when two index values name the same selection (``_index_text``)."""
+    return _index_text(a) == _index_text(b)
+
+
+#: what saving does to a pair that differs (``resolve_index_pair(on_save=...)``):
+#: a saved config and a batch.csv are written from the series index alone (both
+#: names, equal), a batch_config.json as it was loaded
+INDEX_SAVE_REPLACES = "replaces"
+INDEX_SAVE_KEEPS = "keeps"
+
+
+def resolve_index_pair(scene: Any, series: Any, where: str = "",
+                       on_save: Optional[str] = None) -> Any:
+    """The series index from a place holding both names (plan 8.32: eubi-bridge 0.3.0
+    writes both, for several releases): *series*. Silent when the two agree; when
+    they differ, a SeriesIndexConflictWarning (and the log) names both values, since
+    eubi-bridge 0.2.x reads the other one. *where* prefixes the message (a file, a
+    batch row). *on_save*, for a file eubi-bridge saves again: INDEX_SAVE_REPLACES
+    (the message says the next save writes series_index's value under both names,
+    so the differing scene_index is gone) or INDEX_SAVE_KEEPS (saved as it is)."""
+    if not same_index(scene, series):
+        msg = (f"{where}scene_index={scene!r} and series_index={series!r} differ; "
+               f"series_index={series!r} is used. scene_index is the name eubi-bridge "
+               "0.2.x reads and writes, so one of them was changed by an older "
+               "eubi-bridge. Set the one you want as series_index: eubi-bridge 0.3.0 "
+               "writes both.")
+        if on_save == INDEX_SAVE_REPLACES:
+            msg += (" The next time eubi-bridge 0.3.0 saves this file (any setting "
+                    "saved, or a load that updates the file) it writes "
+                    f"series_index={series!r} under both names: scene_index={scene!r} "
+                    f"is then replaced, and eubi-bridge 0.2.x reads {series!r} too.")
+        elif on_save == INDEX_SAVE_KEEPS:
+            msg += (" Saving it again in eubi-bridge 0.3.0 keeps both values as they "
+                    "are.")
+        warnings.warn(msg, SeriesIndexConflictWarning, stacklevel=3)
+        _logger.warning(msg)
+    return series
 
 
 def rename_settings(params: dict) -> dict:
     """*params* with the old names of renamed settings replaced by the new ones
-    (RENAMED_SETTINGS), warning once per old name. Given both, the new one wins."""
-    if not isinstance(params, dict) or not RENAMED_SETTINGS.keys() & params.keys():
+    (RENAMED_SETTINGS, RENAMED_INDEX_SETTINGS), warning once per old name in the log;
+    the index renames also raise a FutureWarning each time. Given both, the new one
+    wins; for the index, both given and equal is silent (a file eubi-bridge 0.3.0
+    wrote both into) and both given and different is a SeriesIndexConflictWarning
+    (``resolve_index_pair``)."""
+    renames = {**RENAMED_SETTINGS, **RENAMED_INDEX_SETTINGS}
+    if not isinstance(params, dict) or not renames.keys() & params.keys():
         return params
     out = dict(params)
-    for old, new in RENAMED_SETTINGS.items():
+    for old, new in renames.items():
         if old not in out:
             continue
         value = out.pop(old)
+        if new in out and old in RENAMED_INDEX_SETTINGS:
+            resolve_index_pair(value, out[new])
+            continue
         if new in out:
             msg = f"'{old}' and its new name '{new}' were both given; '{new}' is used"
         else:
             out[new] = value
-            msg = f"'{old}' is now called '{new}' (same meaning); please use the new name"
+            msg = _rename_message(old, new)
+        if old in RENAMED_INDEX_SETTINGS:
+            warnings.warn(msg, FutureWarning, stacklevel=2)
         if old not in _renamed_warned:
             _renamed_warned.add(old)
             _logger.warning(f"DEPRECATION: {msg}.")
     return out
 
 
-def rename_config_keys(config: dict) -> bool:
-    """Rename old keys in a config's ``cluster`` section in place (the value kept);
-    True when something was renamed."""
-    section = config.get("cluster") if isinstance(config, dict) else None
-    if not isinstance(section, dict):
+#: The same rename in the GUI's reader settings (its saved config, a batch's
+#: batch_config.json): 0.2.x name -> 0.3.0 name. The GUI writes both pairs for several
+#: releases (an eubi-bridge 0.2.x GUI reads its own) and reads the new pair first.
+RENAMED_UI_INDEX_KEYS: Dict[str, str] = {
+    "readAllScenes": "readAllSeries",
+    "sceneIndices": "seriesIndices",
+}
+
+
+def series_ui(reader: Any, on_save: Optional[str] = None) -> Any:
+    """A GUI reader config with the series keys (``readAllSeries``, ``seriesIndices``):
+    taken from the 0.2.x scene keys, with a FutureWarning, when it has only those.
+    The scene keys stay, so the result can be written back as both pairs. *on_save*:
+    what saving the file it came from does to pairs that differ
+    (``resolve_index_pair``)."""
+    if not isinstance(reader, dict):
+        return reader
+    _check_ui_pairs(reader, on_save)
+    old = [k for k, new in RENAMED_UI_INDEX_KEYS.items() if k in reader and new not in reader]
+    if not old:
+        return reader
+    out = dict(reader)
+    for key in old:
+        out[RENAMED_UI_INDEX_KEYS[key]] = out[key]
+    msg = (" and ".join(old) + (" are" if len(old) > 1 else " is") + " deprecated; now "
+           + " and ".join(RENAMED_UI_INDEX_KEYS[k] for k in old) + " (same meaning)")
+    warnings.warn(msg, FutureWarning, stacklevel=2)
+    if "ui:series" not in _renamed_warned:
+        _renamed_warned.add("ui:series")
+        _logger.warning(f"DEPRECATION: {msg}.")
+    return out
+
+
+def _check_ui_pairs(reader: dict, on_save: Optional[str] = None) -> None:
+    """Warn (SeriesIndexConflictWarning) when a GUI reader config holds both pairs of
+    series keys and they select different series; the series pair is used."""
+    if all(k in reader for pair in RENAMED_UI_INDEX_KEYS.items() for k in pair):
+        def selection(read_all: str, indices: str) -> Any:
+            return "all" if reader[read_all] else (reader[indices] or "0")
+        resolve_index_pair(selection("readAllScenes", "sceneIndices"),
+                           selection("readAllSeries", "seriesIndices"),
+                           where="GUI reader settings (readAllScenes / sceneIndices "
+                                 "against readAllSeries / seriesIndices): ",
+                           on_save=on_save)
+        return
+    for old, new in RENAMED_UI_INDEX_KEYS.items():
+        if old in reader and new in reader:
+            resolve_index_pair(reader[old], reader[new],
+                               where=f"GUI reader settings ({old} against {new}): ",
+                               on_save=on_save)
+
+
+def series_ui_pairs(read_all: bool, indices: str) -> dict:
+    """The GUI's series setting as both pairs of keys (plan 8.32)."""
+    return {"readAllSeries": read_all, "seriesIndices": indices,
+            "readAllScenes": read_all, "sceneIndices": indices}
+
+
+def with_both_index_names(config: dict) -> dict:
+    """A config to save: its ``readers`` section with ``scene_index`` beside
+    ``series_index``, equal (plan 8.32: for several releases, so an eubi-bridge 0.2.x
+    sharing the config folder reads the same series). The config itself is unchanged."""
+    readers = config.get("readers") if isinstance(config, dict) else None
+    if not isinstance(readers, dict) or "series_index" not in readers:
+        return config
+    section = {}
+    for key, value in readers.items():
+        if key == "scene_index":
+            continue
+        section[key] = value
+        if key == "series_index":
+            section["scene_index"] = value
+    return {**config, "readers": section}
+
+
+#: the config sections renamed settings live in
+_RENAMED_BY_SECTION = {"cluster": RENAMED_SETTINGS, "readers": RENAMED_INDEX_SETTINGS}
+
+
+def rename_config_keys(config: dict, where: str = "") -> bool:
+    """Rename old keys in a config's ``cluster`` and ``readers`` sections in place
+    (the value kept); True when something was renamed. A saved config is the user's
+    choice from before the rename, so this only logs. A ``readers`` section holding
+    both index names (eubi-bridge 0.3.0 saves both, ``with_both_index_names``) keeps
+    ``series_index``: silently when the two agree, else with a
+    SeriesIndexConflictWarning naming both (*where* names the file) and saying that
+    the next save writes ``series_index`` under both names (``with_both_index_names``),
+    replacing the differing ``scene_index``."""
+    if not isinstance(config, dict):
         return False
-    renamed = [old for old in RENAMED_SETTINGS if old in section]
-    for old in renamed:
-        value = section.pop(old)
-        section.setdefault(RENAMED_SETTINGS[old], value)
-    if renamed:
-        _logger.info("Config: renamed " + ", ".join(
-            f"'{old}' to '{RENAMED_SETTINGS[old]}'" for old in renamed) + " (same meaning).")
-    return bool(renamed)
+    done = []
+    for name, renames in _RENAMED_BY_SECTION.items():
+        section = config.get(name)
+        if not isinstance(section, dict):
+            continue
+        for old in [old for old in renames if old in section]:
+            value = section.pop(old)
+            new = renames[old]
+            if new not in section:
+                section[new] = value
+                done.append(f"'{old}' to '{new}'")
+            elif name == "readers":
+                resolve_index_pair(value, section[new], where=where,
+                                   on_save=INDEX_SAVE_REPLACES)
+            else:
+                done.append(f"'{old}' to '{new}'")      # the new one kept
+    if done:
+        _logger.info("Config: renamed " + ", ".join(done) + " (same meaning).")
+    return bool(done)
 
 
 def drop_retired(params: dict) -> dict:
@@ -421,7 +596,7 @@ class ClusterConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ReaderConfig(BaseModel):
-    """Reader / scene-selection parameters."""
+    """Reader / series-selection parameters."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -431,8 +606,9 @@ class ReaderConfig(BaseModel):
     phase_index: int = Field(default=0, ge=0)
     # Accept int, 'all', or comma-separated ints (e.g. '0,1')
     illumination_index: Union[int, str] = 0
-    # Accept int, 'all', or comma-separated ints (e.g. '0,2,4')
-    scene_index: Union[int, str] = 0
+    # Accept int, 'all', or comma-separated ints (e.g. '0,2,4'). Was scene_index
+    # (RENAMED_INDEX_SETTINGS: still accepted, with a FutureWarning).
+    series_index: Union[int, str] = 0
     rotation_index: int = Field(default=0, ge=0)
     mosaic_tile_index: Union[int, str, None] = None
     sample_index: int = Field(default=0, ge=0)
@@ -450,9 +626,14 @@ class ReaderConfig(BaseModel):
     concat_views: bool = False
     concat_illuminations: bool = False
 
-    @field_validator('scene_index', mode='before')
+    @model_validator(mode="before")
     @classmethod
-    def _validate_scene_index(cls, v):
+    def _renamed(cls, data):
+        return rename_settings(data) if isinstance(data, dict) else data
+
+    @field_validator('series_index', mode='before')
+    @classmethod
+    def _validate_series_index(cls, v):
         if isinstance(v, int) or v == 'all':
             return v
         if isinstance(v, (tuple, list)):
@@ -463,7 +644,7 @@ class ReaderConfig(BaseModel):
                 parts = [int(x.strip()) for x in v.split(',')]
                 return parts[0] if len(parts) == 1 else v
             except ValueError:
-                raise ValueError(f"scene_index must be an int, 'all', or comma-separated ints; got {v!r}")
+                raise ValueError(f"series_index must be an int, 'all', or comma-separated ints; got {v!r}")
         return v
 
     @field_validator('view_index', 'illumination_index', mode='before')
@@ -960,8 +1141,10 @@ class ConversionJob(BaseModel):
 
         Each config section is validated independently (``extra='ignore'`` on
         the sub-models silently drops unknown keys).  Keys not belonging to any
-        model go into ``extra`` for passthrough to the worker.
+        model go into ``extra`` for passthrough to the worker. Renamed settings are
+        renamed first, so an old name never lands in ``extra``.
         """
+        kwargs = rename_settings(kwargs)
         return cls(
             input_path=input_path,
             output_path=output_path,
@@ -1059,6 +1242,7 @@ class AggregativeConversionJob(BaseModel):
         kwargs: dict,
     ) -> "AggregativeConversionJob":
         """Build from a flat merged-kwargs dict (mirrors ConversionJob.from_kwargs)."""
+        kwargs = rename_settings(kwargs)
         agg_keys = _AGGREGATIVE_KEYS
         return cls(
             input_path=input_path,

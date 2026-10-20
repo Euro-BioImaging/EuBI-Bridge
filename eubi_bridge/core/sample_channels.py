@@ -4,12 +4,14 @@ A pixel with ``S`` samples in each of ``C`` channels becomes ``C x S``
 channels, channel-major (c0 R, c0 G, c0 B, c1 R, ...), samples in R, G, B
 order.  Nothing is dropped.  Readers used to keep only the first sample
 whenever a file had real channels *and* samples (e.g. a 2-channel RGB ND2
-wrote 2 channels of red only); single-channel RGB already became 3 channels,
-and still does, unchanged.
+wrote 2 channels of red only); single-channel RGB already became 3 channels.
+
+Their names and colours (``sample_channel_labels``) are the same on every
+path: "<name> R/G/B" tinted red / green / blue; an unnamed single channel
+stays ``Channel 0/1/2``, tinted too (0.3.0: it used to be white, and a named
+single channel lost its name).
 """
 from __future__ import annotations
-
-from typing import Optional
 
 import numpy as np
 
@@ -73,15 +75,33 @@ class SamplesAsChannels:
         return np.ascontiguousarray(out)
 
 
+def sample_channel_labels(names, samples: int) -> list:
+    """``(label, colour)`` for each channel the samples of the channels named
+    *names* (one entry per real channel, None for unnamed) become, channel-major.
+
+    "<name> R" / "G" / "B" ("A"), tinted from ``SAMPLE_COLORS``; an unnamed
+    channel among several is "Channel {c} R" / ...  A single unnamed channel
+    keeps the writer's own labels (label None: ``Channel 0/1/2``), tinted too.
+    Sample counts without labels (e.g. 2) are numbered ("<name> 0") and get no
+    colour (None: the writer's white).
+    """
+    names = list(names)
+    labels = SAMPLE_LABELS.get(samples, tuple(str(i) for i in range(samples)))
+    colors = SAMPLE_COLORS.get(samples) or (None,) * samples
+    if len(names) == 1 and not names[0]:
+        return [(None, colors[i]) for i in range(samples)]
+    return [(f"{name or f'Channel {c}'} {labels[i]}", colors[i])
+            for c, name in enumerate(names) for i in range(samples)]
+
+
 def expand_channel_metadata(pixels, channels: int, samples: int):
     """Make OME *pixels* describe the ``channels x samples`` channels of the
     folded data, in place; returns *pixels*.
 
     Already right (e.g. Bio-Formats lists RGB as 3 channels): left as is.
-    Single-channel RGB otherwise: ``samples`` plain channels, exactly what
-    eubi-bridge wrote before.  Several real channels (the case that used to
-    lose samples): each becomes ``samples`` channels named "<name> R/G/B"
-    and tinted red, green, blue.
+    Otherwise each channel becomes ``samples`` channels, named and tinted by
+    ``sample_channel_labels``: "<name> R/G/B" in red, green, blue (a single
+    unnamed channel: no name, so the writer's ``Channel 0/1/2``, tinted).
     """
     from ome_types.model import Channel
 
@@ -89,20 +109,14 @@ def expand_channel_metadata(pixels, channels: int, samples: int):
     current = list(getattr(pixels, "channels", None) or [])
     if pixels.size_c == total and len(current) == total:
         return pixels
+    originals = current if len(current) == channels else [None] * channels
+    names = [getattr(original, "name", None) for original in originals]
     expanded = []
-    if channels == 1:
-        expanded = [Channel(id=f"Channel:{i}", samples_per_pixel=1) for i in range(samples)]
-    else:
-        labels = SAMPLE_LABELS.get(samples, tuple(str(i) for i in range(samples)))
-        colors = SAMPLE_COLORS.get(samples)
-        originals = current if len(current) == channels else [None] * channels
-        for c, original in enumerate(originals):
-            base = getattr(original, "name", None) or f"Channel {c}"
-            for i in range(samples):
-                name: Optional[str] = f"{base} {labels[i]}"
-                kwargs = {"color": colors[i]} if colors else {}
-                expanded.append(Channel(id=f"Channel:{len(expanded)}", name=name,
-                                        samples_per_pixel=1, **kwargs))
+    for name, color in sample_channel_labels(names, samples):
+        kwargs: dict = {"name": name} if name else {}
+        if color:
+            kwargs["color"] = color
+        expanded.append(Channel(id=f"Channel:{len(expanded)}", samples_per_pixel=1, **kwargs))
     pixels.size_c = total
     pixels.channels = expanded
     return pixels

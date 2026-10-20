@@ -31,6 +31,7 @@ from eubi_bridge.core.config_models import (
     DownscaleConfig,
     MetadataConfig,
     ReaderConfig,
+    RENAMED_INDEX_SETTINGS,
     RENAMED_SETTINGS,
     SUPPORTED_COMPRESSORS_V2,
     SUPPORTED_COMPRESSORS_V3,
@@ -90,14 +91,14 @@ KWARGS_SECTIONS: dict[str, Any] = {
 # config_models.RETIRED_SETTINGS: skip_dask, on_local_cluster; micro_check_pixels;
 # eubi-bridge's own writer, retired in 0.2.0: writer, queue_size,
 # max_concurrent_downscale_layers, tensorstore_data_copy_concurrency), the old names
-# of renamed settings (config_models.RENAMED_SETTINGS: documented under their
-# new names), and ones eubi sets itself (concurrent_jobs: how many conversions
+# of renamed settings (config_models.RENAMED_SETTINGS, RENAMED_INDEX_SETTINGS:
+# documented under their new names), and ones eubi sets itself (concurrent_jobs: how many conversions
 # the dispatcher runs at once, for the region budget).
 _HIDDEN_PARAMS: frozenset[str] = frozenset({
     "bf_tile_size_mb", "skip_dask", "concurrent_jobs", "on_local_cluster",
     "process_memory_mb", "micro_check_pixels", "writer", "queue_size",
     "max_concurrent_downscale_layers", "tensorstore_data_copy_concurrency",
-    *RENAMED_SETTINGS})
+    *RENAMED_SETTINGS, *RENAMED_INDEX_SETTINGS})
 
 # All field names covered by config models — used to exclude duplicates from
 # the "CLI-only options" section (they already appear in the override sections).
@@ -197,16 +198,18 @@ _FIELD_HINTS: dict[str, str] = {
     "y_smart_scale_factor": "Override the smart-downscaling factor for the y axis (used when `apply_smart_downscaling=True`).",
     "x_smart_scale_factor": "Override the smart-downscaling factor for the x axis (used when `apply_smart_downscaling=True`).",
     # ReaderConfig
-    "scene_index": (
-        "Scene / series index to read. Pass an integer for a single scene, "
-        "`all` to convert each scene to a separate zarr group, "
-        "or comma-separated integers (e.g. `0,2,4`) for a subset of scenes."
+    "series_index": (
+        "Series index to read (a series is what some formats call a scene). Pass an "
+        "integer for a single series, `all` to convert each series to a separate zarr "
+        "group, or comma-separated integers (e.g. `0,2,4`) for a subset of series. "
+        "The outputs are still named `_scene{N}`. Formerly `scene_index`, which still "
+        "works, with a warning."
     ),
     "mosaic_tile_index": (
         "Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or "
         "comma-separated integers; each selected tile becomes a separate OME-Zarr "
         "(named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. "
-        "Composes with scene / view / illumination selection (cartesian product)."
+        "Composes with series / view / illumination selection (cartesian product)."
     ),
     "as_mosaic": "Stitch all mosaic tiles into a single full field-of-view output (instead of one OME-Zarr per tile).",
     "view_index": (
@@ -375,15 +378,15 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "x_smart_scale_factor": "eubi to_zarr /data/input /data/output --apply_smart_downscaling --x_smart_scale_factor 2",
     "time_smart_scale_factor": "eubi to_zarr /data/input /data/output --apply_smart_downscaling --time_smart_scale_factor 1",
     # ── ReaderConfig (to_zarr context) ───────────────────────────────────────
-    "scene_index": [
-        "# Convert only scene 2 from a multi-scene file",
-        "eubi to_zarr /data/input /data/output --scene_index 2",
+    "series_index": [
+        "# Convert only series 2 from a multi-series file",
+        "eubi to_zarr /data/input /data/output --series_index 2",
         "",
-        "# Convert every scene to a separate OME-Zarr group",
-        "eubi to_zarr /data/input /data/output --scene_index all",
+        "# Convert every series to a separate OME-Zarr group",
+        "eubi to_zarr /data/input /data/output --series_index all",
         "",
-        "# Convert scenes 0, 2 and 4 only",
-        "eubi to_zarr /data/input /data/output --scene_index 0,2,4",
+        "# Convert series 0, 2 and 4 only",
+        "eubi to_zarr /data/input /data/output --series_index 0,2,4",
     ],
     "as_mosaic": [
         "# Stitch all mosaic tiles into a single full field-of-view output",
@@ -838,15 +841,15 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
             "# Stitch tiled acquisitions into a single mosaic array on read",
             "eubi configure readers --as_mosaic",
         ],
-        "scene_index": [
-            "# Always read scene 2 from multi-scene files",
-            "eubi configure readers --scene_index 2",
+        "series_index": [
+            "# Always read series 2 from multi-series files",
+            "eubi configure readers --series_index 2",
             "",
-            "# Convert each scene to a separate OME-Zarr group",
-            "eubi configure readers --scene_index all",
+            "# Convert each series to a separate OME-Zarr group",
+            "eubi configure readers --series_index all",
             "",
-            "# Convert only scenes 0, 2 and 4",
-            "eubi configure readers --scene_index 0,2,4",
+            "# Convert only series 0, 2 and 4",
+            "eubi configure readers --series_index 0,2,4",
         ],
         "mosaic_tile_index": [
             "# Write every tile separately (default)",

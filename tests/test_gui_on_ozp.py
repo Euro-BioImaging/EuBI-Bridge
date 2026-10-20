@@ -254,7 +254,7 @@ def test_a_gui_batch_runs_every_row_with_its_own_settings(tmp_path, monkeypatch)
     model.update_cells([1], "dtype", "uint16")
     model.update_cells([1], "n_layers", 2)
     if czi.exists():
-        model.update_cells([2], "scene_index", "all")
+        model.update_cells([2], "series_index", "all")
         model.update_cells([2], "as_mosaic", True)
     model.update_cells(group, "aggregative_group", "G")
     model.update_cells(group, "concatenation_axes", "t")

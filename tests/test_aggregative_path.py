@@ -314,10 +314,10 @@ def test_a_conversion_table_runs_both_kinds_in_one_pool(tmp_path, caplog):
 
 
 def test_scene_index_all_joins_files_of_one_scene_on_the_new_path(tmp_path):
-    """The GUI's batch default is scene_index='all': with one scene per file the new path
+    """The GUI's batch default is series_index='all': with one scene per file the new path
     joins them (it used to hand every GUI aggregative group to the old path)."""
     src = _channel_time_set(tmp_path / "in")
-    args = CT + ["--scene_index", "all"]
+    args = CT + ["--series_index", "all"]
     log = _convert(src, tmp_path / "new", args)
     assert "6 file(s) joined" in log
     old = _golden.golden("aggregative-scene_index_all")
@@ -328,7 +328,7 @@ def test_scene_index_all_joins_files_of_one_scene_on_the_new_path(tmp_path):
 @pytest.mark.parametrize("scenes", ["all", "0,1"])
 def test_files_of_several_scenes_give_a_clear_error(tmp_path, scenes):
     """Roadmap step 6: an aggregative output joins ONE scene of each file. 0.1.5 folded
-    the scenes of scene_index='all' into the joined axis (positions became time points)
+    the scenes of series_index='all' into the joined axis (positions became time points)
     and crashed on a list."""
     src = tmp_path / "in"
     src.mkdir()
@@ -338,8 +338,8 @@ def test_files_of_several_scenes_give_a_clear_error(tmp_path, scenes):
                 tw.write(np.full((16, 20), 10 * t + scene, "u2"), photometric="minisblack",
                          metadata={"axes": "YX"})
     result = _run(src, tmp_path / "new",
-                  ["--time_tag", "T", "--concatenation_axes", "t", "--scene_index", scenes])
+                  ["--time_tag", "T", "--concatenation_axes", "t", "--series_index", scenes])
     log = " ".join((result.stdout + result.stderr).split())
     assert result.returncode != 0
-    assert "joins one scene of each file" in log and "--scene_index" in log, log[-2000:]
+    assert "joins one series of each file" in log and "--series_index" in log, log[-2000:]
     assert not list((tmp_path / "new").glob("*.zarr/0"))
