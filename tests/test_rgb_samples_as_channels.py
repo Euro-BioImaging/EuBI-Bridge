@@ -192,9 +192,9 @@ def test_tiff_bioio_reader_keeps_every_sample(tmp_path):
 
 # -- real ND2 (skipped when the test data are not on this machine) --------------------
 
-REAL_ND2 = Path(os.environ.get("EUBI_TEST_DATA",
-                               "C:/Users/oezdemir/Desktop/quarantine/temp/ome/input")) \
-    / "medium_dataset" / "imageJ_test.nd2"
+REAL_ND2 = Path(os.environ.get("MICROSCOPY_DATA") or os.environ.get("EUBI_TEST_DATA")
+                or "C:/Users/oezdemir/Desktop/data/microscopy") \
+    / "formats" / "nd2" / "assorted" / "imageJ_test.nd2"
 
 
 @pytest.mark.skipif(not REAL_ND2.exists(), reason="real ND2 test data not available")

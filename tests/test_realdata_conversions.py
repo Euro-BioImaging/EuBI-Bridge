@@ -4,7 +4,8 @@ Real-microscopy conversion audit — exercises ALL to_zarr parameter categories
 ND2 / LSM files, not just synthetic TIFFs.
 
 Files are referenced *in place* (never copied — some are GB-scale) from
-``EUBI_TEST_DATA`` (default: ``C:/Users/oezdemir/Desktop/quarantine/temp/ome/input``). Every test
+``MICROSCOPY_DATA`` (or ``EUBI_TEST_DATA``; default: ``C:/Users/oezdemir/Desktop/data/microscopy``,
+see its ``catalogue.csv``). Every test
 skips automatically when its source file is absent, so the suite is safe to run
 anywhere. Marked ``realdata`` so it is opt-in:
 
@@ -49,17 +50,19 @@ pytestmark = pytest.mark.realdata
 # File manifest — relative to the real-data root (skip-if-absent).
 # ---------------------------------------------------------------------------
 
-DATA_ROOT = Path(os.environ.get("EUBI_TEST_DATA", r"C:/Users/oezdemir/Desktop/quarantine/temp/ome/input"))
+DATA_ROOT = Path(os.environ.get("MICROSCOPY_DATA") or os.environ.get("EUBI_TEST_DATA")
+                 or r"C:/Users/oezdemir/Desktop/data/microscopy")
 
 FILES = {
-    "czi_workhorse": "czi/7015307/T=3_Z=5_CH=2.czi",          # tczyx (3,2,5,256,256)
-    "czi_scenes":    "czi/7015307/S=2_T=3_Z=5_CH=1.czi",      # 2 scenes, 1 tile
-    "czi_mosaic":    "czi/7015307/S=2_2x2_CH=1.czi",          # 2 scenes x 2x2 tiles
-    "czi_rgb":       "czi/synthetic_rgb.czi",                 # RGB samples
-    "czi_views":     "czi/MouseBrain_41Slices_1Tile_3Channel_2Illuminations_2Angles.czi",
-    "lsm":           "small_dataset/FtsZ2-1_GFP_KO2-1_no10G.lsm",  # tczyx (1,3,12,512,512)
-    "lif":           "medium_dataset/19_07_19_Lennard.lif",
-    "nd2":           "medium_dataset/190821_L1_IRS-Akt_CS2003.nd2",
+    "czi_workhorse": "formats/czi/zenodo-7015307/T=3_Z=5_CH=2.czi",       # tczyx (3,2,5,256,256)
+    "czi_scenes":    "formats/czi/zenodo-7015307/S=2_T=3_Z=5_CH=1.czi",   # 2 scenes, 1 tile
+    "czi_mosaic":    "formats/czi/zenodo-7015307/S=2_2x2_CH=1.czi",       # 2 scenes x 2x2 tiles
+    "czi_rgb":       "synthetic/czi/synthetic_rgb.czi",                   # RGB samples
+    "czi_views":     "formats/czi/mousebrain-lightsheet/"
+                     "MouseBrain_41Slices_1Tile_3Channel_2Illuminations_2Angles.czi",
+    "lsm":           "formats/lsm/assorted/FtsZ2-1_GFP_KO2-1_no10G.lsm",  # tczyx (1,3,12,512,512)
+    "lif":           "formats/lif/assorted/19_07_19_Lennard.lif",
+    "nd2":           "formats/nd2/assorted/190821_L1_IRS-Akt_CS2003.nd2",
 }
 
 # Known full (un-squeezed) base shape for the workhorse, in tczyx order.

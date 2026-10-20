@@ -220,6 +220,36 @@ def test_a_multi_file_ome_tiff_is_not_joined_as_the_whole_set_from_each_file(tmp
     assert not list((tmp_path / "new").glob("*.zarr/0"))
 
 
+def test_companion_members_are_joined_one_file_each(tmp_path):
+    """Members whose BinaryOnly stub points to a .companion.ome (Viventis): micro-reader
+    opens a member as its whole set by default (multifile=True); the aggregative path
+    reads each file alone (multifile=False), so the joined image has one plane per file."""
+    src = tmp_path / "in"
+    src.mkdir()
+    ns = "http://www.openmicroscopy.org/Schemas/OME/2016-06"
+    names = [f"img_T{t}.ome.tif" for t in range(3)]
+    uuids = [f"urn:uuid:{uuid.uuid4()}" for _ in names]
+    this = f"urn:uuid:{uuid.uuid4()}"
+    tiffdata = "".join(
+        f'<TiffData FirstT="{t}" FirstC="0" FirstZ="0" IFD="0" PlaneCount="1">'
+        f'<UUID FileName="{n}">{u}</UUID></TiffData>' for t, (n, u) in enumerate(zip(names, uuids)))
+    (src / "set.companion.ome").write_text(
+        f'<OME xmlns="{ns}" UUID="{this}"><Image ID="Image:0"><Pixels ID="Pixels:0" '
+        f'DimensionOrder="XYZCT" Type="uint16" SizeX="32" SizeY="24" SizeZ="1" SizeC="1" '
+        f'SizeT="3" PhysicalSizeX="0.5" PhysicalSizeY="0.5"><Channel ID="Channel:0:0" '
+        f'SamplesPerPixel="1"/>{tiffdata}</Pixels></Image></OME>', encoding="utf-8")
+    for t, (name, own) in enumerate(zip(names, uuids)):
+        stub = f'<OME xmlns="{ns}" UUID="{own}"><BinaryOnly MetadataFile="set.companion.ome" UUID="{this}"/></OME>'
+        tifffile.imwrite(str(src / name), np.full((24, 32), 100 * (t + 1), "u2"),
+                         description=stub, metadata=None, photometric="minisblack")
+    result = _run(src, tmp_path / "new", ["--time_tag", "T", "--concatenation_axes", "t"])
+    assert result.returncode == 0, (result.stdout + result.stderr)[-3000:]
+    (store,) = list((tmp_path / "new").glob("*.zarr"))
+    arr = np.asarray(zarr.open_group(str(store), mode="r")["0"])
+    assert arr.shape[0] == 3 and arr.size == 3 * 24 * 32          # one plane per file
+    assert [int(arr[t].max()) for t in range(3)] == [100, 200, 300]
+
+
 def test_many_files_never_stay_open_together(tmp_path, monkeypatch):
     """600 files joined along t through micro-reader's bounded file cache (shrunk to 8
     here): it never holds more than that plus the files being read at that moment (one

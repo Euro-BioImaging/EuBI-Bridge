@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -215,8 +216,8 @@ def test_a_gui_batch_runs_every_row_with_its_own_settings(tmp_path, monkeypatch)
     from tests.conftest import qt_available
     if not qt_available():
         pytest.skip("PyQt6 unavailable or no usable Qt platform plugin")
-    czi = Path(r"C:\Users\oezdemir\Desktop\quarantine\temp\ome\input\czi\7015307"
-               r"\S=2_2x2_T=3_Z=4_CH=1.czi")
+    czi = Path(os.environ.get("MICROSCOPY_DATA") or r"C:\Users\oezdemir\Desktop\data\microscopy",
+               "formats", "czi", "zenodo-7015307", "S=2_2x2_T=3_Z=4_CH=1.czi")
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))       # never the user's config
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("EUBI_CONFIG_DIR", str(tmp_path / "home" / ".eubi_bridge"))

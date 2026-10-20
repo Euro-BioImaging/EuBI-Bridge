@@ -79,5 +79,5 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "realdata: real-microscopy conversion audit; requires sample files "
-        "(EUBI_TEST_DATA dir). Skipped automatically when files are absent.",
+        "(MICROSCOPY_DATA dir). Skipped automatically when files are absent.",
     )

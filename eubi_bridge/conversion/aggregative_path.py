@@ -151,10 +151,12 @@ class _Inputs:
         from eubi_bridge.core.micro_source import _using, micro_array
         job = _file_job(self.job, path)
         if not _micro_reason(job):
-            arr, why = micro_array(path, self.scene, None)
+            # each file alone, also a member of a multi-file OME set: this path joins
+            # the files itself (micro-reader's multifile=True would open the set)
+            arr, why = micro_array(path, self.scene, None, multifile=False)
             if arr is not None:
                 if self.all_scenes:
-                    with _using(path, "separate") as entry:
+                    with _using(path, "separate", multifile=False) as entry:
                         self._one_scene(path, len({k["scene"] for k in entry.file.indices}))
                 return arr
             logger.info(f"{os.path.basename(path)}: older readers ({why})")

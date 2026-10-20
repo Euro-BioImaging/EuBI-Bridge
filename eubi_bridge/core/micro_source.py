@@ -50,7 +50,7 @@ class _Open:
         self.file, self.views, self.users = file, {}, 0
 
 
-#: (path, tiles) -> _Open, oldest first
+#: (path, tiles, multifile) -> _Open, oldest first
 _files: "OrderedDict[tuple, _Open]" = OrderedDict()
 _files_lock = threading.Lock()
 
@@ -66,11 +66,13 @@ def _evict() -> None:
 
 
 @contextmanager
-def _using(path: str, tiles: str):
-    """The open file for (*path*, *tiles*), opened (again) if needed, held
-    open while the block runs."""
+def _using(path: str, tiles: str, multifile: bool = True):
+    """The open file for (*path*, *tiles*, *multifile*), opened (again) if
+    needed, held open while the block runs.  *multifile*: micro-reader's
+    option -- False opens a file of a multi-file OME set alone (the aggregative
+    path joins the files itself), True the whole set."""
     import micro_reader
-    key = (path, tiles)
+    key = (path, tiles, bool(multifile))
     with _files_lock:
         entry = _files.get(key)
         if entry is not None:
@@ -81,7 +83,7 @@ def _using(path: str, tiles: str):
         # opened outside the lock, so several files open at once (an aggregative
         # input's files are opened on a thread pool); a file two threads opened at
         # once is kept once
-        opened = micro_reader.open(path, tiles=tiles, rename=RENAME)
+        opened = micro_reader.open(path, tiles=tiles, rename=RENAME, multifile=bool(multifile))
         with _files_lock:
             entry = _files.get(key)
             if entry is None:
@@ -147,8 +149,10 @@ class MicroSource:
     file from the process's bounded cache, reopening it if it was closed."""
 
     def __init__(self, path: str, tiles: str, index: int, shape, dtype, level: int = 0,
-                 read_unit=None):
+                 read_unit=None, multifile: bool = True):
         self.path, self.tiles, self.index = path, tiles, int(index)
+        #: micro-reader's ``multifile`` the file was opened with (``_using``)
+        self.multifile = bool(multifile)
         #: resolution level of the image (0: full resolution)
         self.level = int(level)
         self.shape = tuple(int(n) for n in shape)
@@ -163,7 +167,7 @@ class MicroSource:
         self.read_unit = None if read_unit is None else tuple(int(n) for n in read_unit)
 
     def __getitem__(self, key):
-        with _using(self.path, self.tiles) as entry:
+        with _using(self.path, self.tiles, getattr(self, "multifile", True)) as entry:
             view_key = (self.index, self.level)
             view = entry.views.get(view_key)
             if view is None:
@@ -179,7 +183,8 @@ class MicroSource:
 
 
 def micro_array(path: str, scene: int, tile: Optional[int], *, as_mosaic: bool = False,
-                view: int = 0, illumination: int = 0, rotation: int = 0, phase: int = 0):
+                view: int = 0, illumination: int = 0, rotation: int = 0, phase: int = 0,
+                multifile: bool = True):
     """The micro-reader image eubi-bridge means by (scene index, tile, view,
     illumination, rotation, phase), as a ``DynamicArray`` -- or (None,
     reason) when micro-reader cannot read the file or has no such image.
@@ -187,15 +192,17 @@ def micro_array(path: str, scene: int, tile: Optional[int], *, as_mosaic: bool =
     eubi-bridge's rules: *scene* is the rank among the file's scenes;
     *as_mosaic* stitches tiles, otherwise *tile* is the mosaic tile index
     (CZI ``M``; None: tile 0), and on a file without tiles tile 0 is the
-    whole image (``set_tile`` is a no-op there).
+    whole image (``set_tile`` is a no-op there).  *multifile*: False reads a
+    file of a multi-file OME set alone (the aggregative path), True the set.
     """
     import micro_reader
     from dyna_zarr import from_array
     tiles = "stitched" if as_mosaic else "separate"
     try:
-        with _using(path, tiles) as entry:
+        with _using(path, tiles, multifile) as entry:
             return _find(entry.file, path, tiles, scene, tile, view=view,
-                         illumination=illumination, rotation=rotation, phase=phase)
+                         illumination=illumination, rotation=rotation, phase=phase,
+                         multifile=multifile)
     except micro_reader.UnsupportedFormatError as exc:
         if tiles == "stitched":                      # tiled, but not composable
             return None, f"micro-reader: {exc}"
@@ -205,7 +212,7 @@ def micro_array(path: str, scene: int, tile: Optional[int], *, as_mosaic: bool =
 
 
 def _find(f, path: str, tiles: str, scene: int, tile: Optional[int], *, view: int,
-          illumination: int, rotation: int, phase: int):
+          illumination: int, rotation: int, phase: int, multifile: bool = True):
     """``micro_array``'s lookup in the open file *f*."""
     from dyna_zarr import from_array
     scenes = sorted({k["scene"] for k in f.indices})
@@ -232,7 +239,7 @@ def _find(f, path: str, tiles: str, scene: int, tile: Optional[int], *, view: in
     image = found[0]
     view_ = image.as_axes(STANDARD, samples="channels")
     source = MicroSource(path, tiles, f.images.index(image), view_.shape, view_.dtype,
-                         read_unit=view_.read_unit)
+                         read_unit=view_.read_unit, multifile=multifile)
     return from_array(source), ""
 
 
