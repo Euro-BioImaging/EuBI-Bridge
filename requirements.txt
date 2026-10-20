@@ -18,7 +18,7 @@ micro-reader>=0.0.3,<0.1
 natsort>=0.0.0
 nd2>=0.0.0
 numpy>=1.24
-ome_zarr_pyramid[remote]>=0.1.0,<0.3
+ome_zarr_pyramid[remote]>=0.1.0,<0.2
 pydantic>=2.11.7
 pylibczirw>=0.0.0
 readlif==0.6.5
