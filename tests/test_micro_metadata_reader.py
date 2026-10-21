@@ -81,7 +81,7 @@ def _load(path, metadata_reader="micro"):
     from eubi_bridge.conversion.legacy_image import LegacyFile
     from eubi_bridge.core.config_models import ConversionJob
     job = ConversionJob.from_kwargs(path, "out", {"metadata_reader": metadata_reader,
-                                                  "scene_index": "all"})
+                                                  "series_index": "all"})
     f = LegacyFile(job)
     return [f.image(index) for index in f.indices]
 
@@ -160,7 +160,7 @@ def test_conversion_with_micro_metadata_starts_no_jvm(tmp_path):
         import jpype
         from eubi_bridge.ebridge import EuBIBridge
         EuBIBridge().to_zarr({path!r}, {str(out)!r}, metadata_reader="micro",
-                             use_threading=True, verbose=False, scene_index=0)
+                             use_threading=True, verbose=False, series_index=0)
         print("JVM", jpype.isJVMStarted())
     """)
     assert "JVM False" in stdout
@@ -219,7 +219,7 @@ def test_a_batch_from_the_gui_starts_no_jvm(tmp_path):
             logs, result = queue.Queue(), queue.Queue()
             _conversion_subprocess({{"input_path": table, "output_path": None,
                                      "to_zarr_kwargs": {{"use_threading": True,
-                                                         "scene_index": 0}}}}, logs, result)
+                                                         "series_index": 0}}}}, logs, result)
             import sys
             sys.__stdout__.write(str(result.get()) + "\\n")
             import jpype
@@ -243,6 +243,6 @@ def test_table_rows_decide_whether_java_is_needed(tmp_path):
                                "output_path": [{str(tmp_path / 'out')!r}],
                                "metadata_reader": ["micro"]}})
         EuBIBridge(configpath={str(config)!r}).to_zarr(table, None, use_threading=True,
-                                                       verbose=False, scene_index=0)
+                                                       verbose=False, series_index=0)
     """)
     assert "JVM False" in stdout

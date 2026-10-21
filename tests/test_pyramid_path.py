@@ -74,15 +74,15 @@ def _convert(src: Path, out: Path, args: list) -> str:
     return log
 
 
-ALL = ["--scene_index", "all", "--mosaic_tile_index", "all"]
+ALL = ["--series_index", "all", "--mosaic_tile_index", "all"]
 CASES = {
     "defaults": ALL,
     "settings": ALL + ["--channel_labels", "0,Nuclei;1,auto", "--channel_colors", "1,red",
                        "--z_scale", "3", "--y_range", "0,24", "--dtype", "uint8",
                        "--channel_intensity_limits", "from_array"],
-    "v05_no_squeeze": ["--scene_index", "1", "--ome_zarr_version", "0.5", "--squeeze",
+    "v05_no_squeeze": ["--series_index", "1", "--ome_zarr_version", "0.5", "--squeeze",
                        "False"],
-    "auto_windows": ["--scene_index", "0", "--channel_intensity_limits", "auto"],
+    "auto_windows": ["--series_index", "0", "--channel_intensity_limits", "auto"],
 }
 
 
@@ -96,7 +96,7 @@ def test_new_path_writes_what_the_old_one_does(tmp_path, case):
 
 def test_new_path_writes_the_ome_xml_in_the_same_write(tmp_path):
     src = _ome_tiff(tmp_path / "img.ome.tif")
-    _convert(src, tmp_path / "new", ["--scene_index", "0"])
+    _convert(src, tmp_path / "new", ["--series_index", "0"])
     store = tmp_path / "new" / "img_scene0.zarr"
     xml = (store / "OME" / "METADATA.ome.xml").read_text(encoding="utf-8")
     assert 'Name="DAPI"' in xml and 'SizeX="48"' in xml
@@ -160,7 +160,7 @@ def _mosaic_czi(path: Path, tiles_per_scene=(4, 4)) -> Path:
     return path
 
 
-@pytest.mark.parametrize("args", [ALL, ["--scene_index", "all", "--as_mosaic"]],
+@pytest.mark.parametrize("args", [ALL, ["--series_index", "all", "--as_mosaic"]],
                          ids=["tiles", "stitched"])
 def test_czi_mosaics_on_both_paths(tmp_path, args):
     """Step 1c, group 3: tiles as separate outputs (named, positioned) or stitched."""
@@ -202,13 +202,30 @@ def _rgb_czi(path: Path, channels: int) -> Path:
     return path
 
 
+def _check_rgb_tinted(name: str, new_root: Path, tmp: Path) -> dict:
+    """The output against the golden 0.1.x output *name*, whose one-channel RGB samples
+    were white: from 0.3.0 they are tinted red / green / blue (decided 2026-10-20),
+    everything else as recorded."""
+    expected = _golden.golden(name)
+    for store in expected.values():
+        attrs = store["attrs"]
+        for i, channel in enumerate(attrs.get("ome", attrs)["omero"]["channels"]):
+            assert channel["color"] == "FFFFFF"                 # as 0.1.x wrote them
+            channel["color"] = ("FF0000", "00FF00", "0000FF")[i % 3]
+    actual = _golden.describe(new_root, tmp)
+    _golden.assert_same(expected, actual, name)
+    return actual
+
+
 @pytest.mark.parametrize("channels", [1, 2])
 def test_rgb_channels_on_both_paths(tmp_path, channels):
-    """Step 1c, group 4: samples become channels, named by eubi-bridge's rule (one
-    channel: plain white channels; several: "<name> R/G/B" tinted)."""
+    """Step 1c, group 4: samples become channels, named by eubi-bridge's rule: "<name>
+    R/G/B", tinted; one unnamed channel: Channel 0/1/2, tinted from 0.3.0 (0.1.x: white)."""
     src = _rgb_czi(tmp_path / "rgb.czi", channels)
     _convert(src, tmp_path / "new", ALL)
-    new = _golden.check(f"pyramid_path-rgb_czi-{channels}", tmp_path / "new", tmp_path)
+    name = f"pyramid_path-rgb_czi-{channels}"
+    new = (_check_rgb_tinted(name, tmp_path / "new", tmp_path) if channels == 1
+           else _golden.check(name, tmp_path / "new", tmp_path))
     labels = [ch["label"] for ch in next(iter(new.values()))["attrs"]["omero"]["channels"]]
     assert len(labels) == 3 * channels
 
@@ -245,7 +262,7 @@ def test_czi_views_on_both_paths(tmp_path, args):
 
 def test_rgb_views_joined_as_0_1_joined_them(tmp_path):
     """Roadmap step 6 (0.1.x took them on its own path): each view's RGB samples become
-    plain channels, joined as View{v}_Ch{i}."""
+    channels, joined as View{v}_Ch{i}; tinted red / green / blue from 0.3.0."""
     from tests._czi_writer import raw_payload, write_czi
     tiles = [dict(scene=0, plane={"C": 0, "V": v}, x=0, y=0, height=24, width=32,
                   dtype="u1", samples=3, compression=0,
@@ -256,7 +273,7 @@ def test_rgb_views_joined_as_0_1_joined_them(tmp_path):
     args = ["--view_index", "all", "--concat_views"]
     log = _convert(src, tmp_path / "new", args)
     assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
-    new = _golden.check("pyramid_path-rgb_views_joined", tmp_path / "new", tmp_path)
+    new = _check_rgb_tinted("pyramid_path-rgb_views_joined", tmp_path / "new", tmp_path)
     attrs = next(iter(new.values()))["attrs"]
     assert [c["label"] for c in attrs["omero"]["channels"]] == [
         f"View{v}_Ch{i}" for v in range(2) for i in range(3)]
@@ -288,7 +305,7 @@ def test_micro_check_pixels_is_retired_with_a_warning(tmp_path):
     """Decision 'D5: micro_check_pixels': saved configs still load; it warns once that
     it does nothing and how to compare instead."""
     src = _ome_tiff(tmp_path / "img.ome.tif")
-    log = _convert(src, tmp_path / "new", ["--scene_index", "0",
+    log = _convert(src, tmp_path / "new", ["--series_index", "0",
                                                   "--micro_check_pixels", "True"])
     assert "micro_check_pixels no longer has an effect" in log
     assert "pixel_reader='standard'" in log
@@ -372,12 +389,12 @@ def test_an_ome_zarr_input_without_a_name_and_with_named_levels(tmp_path, keep):
 
 def test_positions_follow_eubis_index_options(caplog):
     from eubi_bridge.conversion.pyramid_path import _positions
-    assert _positions("all", 3, "scene") == [0, 1, 2]
-    assert _positions("0,2", 3, "scene") == [0, 2]
-    assert _positions(1, 3, "scene") == [1]
-    assert _positions([2, 5], 3, "scene") == [2]                 # 5 skipped, with a warning
+    assert _positions("all", 3, "series") == [0, 1, 2]
+    assert _positions("0,2", 3, "series") == [0, 2]
+    assert _positions(1, 3, "series") == [1]
+    assert _positions([2, 5], 3, "series") == [2]                 # 5 skipped, with a warning
     with pytest.raises(ValueError, match="valid indices are 0..2"):
-        _positions(7, 3, "scene")
+        _positions(7, 3, "series")
 
 
 def test_micro_reader_names_why_it_does_not_take_a_file():

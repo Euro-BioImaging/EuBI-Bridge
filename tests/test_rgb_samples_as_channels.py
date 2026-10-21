@@ -3,7 +3,8 @@
 Files with real channels *and* RGB samples used to lose samples: every reader
 kept sample 0 only (a 2-channel RGB ND2 wrote 2 channels of red; CZI logged a
 warning; the TIFF readers called S "spurious" and dropped it).  Single-channel
-RGB already became 3 channels and must stay exactly as it was.
+RGB already became 3 channels; from 0.3.0 they are named and tinted as several
+channels' samples are ("<name> R/G/B"; unnamed: Channel 0/1/2, tinted).
 """
 from __future__ import annotations
 
@@ -90,6 +91,212 @@ def test_metadata_for_several_rgb_channels():
                                                  "Channel 1 R", "Channel 1 G", "Channel 1 B"]
     assert [c.color.as_hex().upper() for c in pixels.channels] == \
         ["#F00", "#0F0", "#00F"] * 2
+
+
+# -- one RGB channel: named and tinted like several (decided 2026-10-20) --------------
+
+RED, GREEN, BLUE, WHITE = "#F00", "#0F0", "#00F", "#FFF"
+
+
+def _pixels(names, samples, size_c=None):
+    """OME pixels as a reader leaves them: one entry per real channel, ``size_c`` either
+    the real channels (Bio-Formats) or already C x S (micro_omemeta)."""
+    from ome_types.model import Channel, Pixels
+    channels = [Channel(id=f"Channel:{i}", samples_per_pixel=samples, **({"name": n} if n else {}))
+                for i, n in enumerate(names)]
+    return Pixels(dimension_order="XYZCT", type="uint8", size_x=4, size_y=4, size_z=1,
+                  size_t=1, size_c=size_c or len(names), channels=channels)
+
+
+def _named(pixels):
+    return [(c.name, c.color.as_hex().upper()) for c in pixels.channels]
+
+
+@pytest.mark.parametrize("size_c", [1, 3], ids=["bioformats", "micro"])
+def test_one_named_rgb_channel_is_named_like_several(size_c):
+    """Carlos' pollen ND2 ('Brightfield') and CZI ('Bright'): one channel of 3 samples. It
+    lost its name (Channel 0/1/2) before; now "<name> R/G/B", tinted red / green / blue."""
+    pixels = expand_channel_metadata(_pixels(["Brightfield"], 3, size_c), 1, 3)
+    expand_channel_metadata(pixels, 1, 3)                      # idempotent
+    assert pixels.size_c == 3
+    assert _named(pixels) == [("Brightfield R", RED), ("Brightfield G", GREEN),
+                              ("Brightfield B", BLUE)]
+
+
+@pytest.mark.parametrize("names", [[None], [""], []], ids=["unnamed", "empty", "none listed"])
+def test_one_unnamed_rgb_channel_keeps_its_numbers_and_is_tinted(names):
+    """No name: no label, so the writer's Channel 0/1/2 as before; tinted now (it was
+    white)."""
+    pixels = expand_channel_metadata(_pixels(names, 3, size_c=1), 1, 3)
+    assert pixels.size_c == 3
+    assert _named(pixels) == [(None, RED), (None, GREEN), (None, BLUE)]
+
+
+def test_rgba_and_sample_counts_without_labels():
+    """RGBA: R / G / B / A, the alpha white. Two samples: numbered, no tint (white)."""
+    assert _named(expand_channel_metadata(_pixels(["DIC"], 4), 1, 4)) == [
+        ("DIC R", RED), ("DIC G", GREEN), ("DIC B", BLUE), ("DIC A", WHITE)]
+    assert _named(expand_channel_metadata(_pixels([None], 4), 1, 4)) == [
+        (None, RED), (None, GREEN), (None, BLUE), (None, WHITE)]
+    assert _named(expand_channel_metadata(_pixels(["DIC"], 2), 1, 2)) == [
+        ("DIC 0", WHITE), ("DIC 1", WHITE)]
+    assert _named(expand_channel_metadata(_pixels([None], 2), 1, 2)) == [
+        (None, WHITE), (None, WHITE)]
+    assert _named(expand_channel_metadata(_pixels(["A", None], 2), 2, 2)) == [
+        ("A 0", WHITE), ("A 1", WHITE), ("Channel 1 0", WHITE), ("Channel 1 1", WHITE)]
+
+
+class _Image:
+    """A micro-reader image with RGB samples folded into c: its ``source`` keeps the S
+    axis, its metadata one channel per real channel."""
+
+    def __init__(self, names, samples):
+        from types import SimpleNamespace
+        c = len(names)
+        self.source = SimpleNamespace(axes="tczyxs", shape=(1, c, 1, 4, 4, samples))
+        self.axes, self.shape = "tczyx", (1, c * samples, 1, 4, 4)
+        self.metadata = SimpleNamespace(channels=[
+            SimpleNamespace(name=n, color="#FFFFFF", emission_wavelength=None,
+                            excitation_wavelength=None) for n in names])
+
+
+def _short(hex6):
+    """FF0000 -> #F00, as ome_types writes it."""
+    from ome_types.model.simple_types import Color
+    return Color(hex6).as_hex().upper()
+
+
+@pytest.mark.parametrize("names, samples", [
+    (["Brightfield"], 3), ([None], 3), (["DIC"], 4), ([None], 4), (["DIC"], 2), ([None], 2),
+    (["DIC", None], 3), ([None, None], 3)])
+def test_every_path_names_samples_alike(names, samples):
+    """The older readers (expand_channel_metadata), micro-reader's images on the ozp path
+    (apply_rgb_channels, also show_pixel_meta's) and joined files (aggregative _channels)
+    name and tint the sample channels alike."""
+    from eubi_bridge.conversion.aggregative_path import _channels
+    from eubi_bridge.conversion.pyramid_path import rgb_sample_channels
+    legacy = [(c.name or f"Channel {i}", c.color.as_hex().upper())
+              for i, c in enumerate(expand_channel_metadata(_pixels(names, samples),
+                                                            len(names), samples).channels)]
+    micro = [(label or f"Channel {i}", _short(color))
+             for i, (label, color) in enumerate(rgb_sample_channels(_Image(names, samples)))]
+    assert micro == legacy
+    total = len(names) * samples
+    joined = _channels(["f"], {"f": _Image(names, samples)}, {"f": total}, total, {})
+    assert [(c.name or f"Channel {i}", _short(c.color)) for i, c in enumerate(joined)] == legacy
+
+
+def test_a_file_without_samples_is_not_renamed():
+    from types import SimpleNamespace
+    from eubi_bridge.conversion.pyramid_path import apply_rgb_channels, rgb_sample_channels
+    image = SimpleNamespace(axes="tczyx", shape=(1, 3, 1, 4, 4), metadata=None)
+    assert rgb_sample_channels(image) is None
+    pyr = object()
+    assert apply_rgb_channels(pyr, image) is pyr
+
+
+def _named_rgb_czi(path: Path, name: str = "Bright") -> Path:
+    """One Bgr24 channel named *name* (as Carlos' pollen CZIs: 'Bright')."""
+    from tests._czi_writer import raw_payload, write_czi
+    meta = ('<Information><Image><Dimensions><Channels><Channel Id="Channel:0" '
+            f'Name="{name}"></Channel></Channels></Dimensions></Image></Information>')
+    rgb = np.random.default_rng(4).integers(0, 255, (H, W, 3), dtype=np.uint8)
+    write_czi(str(path), [dict(scene=0, plane={"C": 0}, x=0, y=0, height=H, width=W,
+                               dtype="u1", samples=3, compression=0,
+                               payload=raw_payload(rgb))], metadata=meta)
+    return path
+
+
+def _rgb_tiff(path: Path, name=None) -> Path:
+    import tifffile
+    rgb = np.random.default_rng(5).integers(0, 255, (H, W, 3), dtype=np.uint8)
+    if name is None:
+        tifffile.imwrite(str(path), rgb, photometric="rgb")
+    else:
+        tifffile.imwrite(str(path), rgb, photometric="rgb", ome=True,
+                         metadata={"axes": "YXS", "Channel": {"Name": name}})
+    return path
+
+
+def _convert_one(src: Path, out: Path, **kwargs):
+    from eubi_bridge.ebridge import EuBIBridge
+    EuBIBridge().to_zarr(str(src), str(out), squeeze=False, verbose=False, **kwargs)
+    (store,) = out.glob("*.zarr")
+    return _omero_channels(store)
+
+
+RGB_TINTS = ["FF0000", "00FF00", "0000FF"]
+
+
+@pytest.mark.parametrize("kind, name", [("czi", "Bright"), ("ome.tif", "Brightfield")])
+def test_one_named_rgb_channel_end_to_end(tmp_path, kind, name):
+    src = (_named_rgb_czi(tmp_path / "rgb.czi", name) if kind == "czi"
+           else _rgb_tiff(tmp_path / "rgb.ome.tif", name))
+    labels = _convert_one(src, tmp_path / "out")
+    assert labels == [(f"{name} {s}", c) for s, c in zip("RGB", RGB_TINTS)]
+
+
+def test_one_unnamed_rgb_channel_end_to_end(tmp_path):
+    labels = _convert_one(_rgb_tiff(tmp_path / "rgb.tif"), tmp_path / "out")
+    assert labels == [(f"Channel {i}", c) for i, c in enumerate(RGB_TINTS)]
+
+
+@requires_full
+def test_one_named_rgb_channel_on_the_older_readers(tmp_path):
+    """metadata_reader='bfio' (Bio-Formats' metadata, the older pixel reader):
+    expand_channel_metadata names it as micro-reader's path does."""
+    src = _rgb_tiff(tmp_path / "rgb.ome.tif", "Brightfield")
+    labels = _convert_one(src, tmp_path / "out", metadata_reader="bfio")
+    assert labels == [(f"Brightfield {s}", c) for s, c in zip("RGB", RGB_TINTS)]
+
+
+def test_the_users_channel_labels_and_colours_still_win(tmp_path):
+    """channel_labels / channel_colors (CLI, GUI, batch settings) over the sample names;
+    'auto' and unlisted channels keep them."""
+    src = _named_rgb_czi(tmp_path / "rgb.czi")
+    labels = _convert_one(src, tmp_path / "out", channel_labels="0,Red;2,auto",
+                          channel_colors="1,white;2,auto")
+    assert labels == [("Red", "FF0000"), ("Bright G", "FFFFFF"), ("Bright B", "0000FF")]
+
+
+def test_a_conversion_tables_channel_labels_still_win(tmp_path):
+    """A batch / conversion table row's channel_labels and channel_colors win too."""
+    src = _named_rgb_czi(tmp_path / "rgb.czi")
+    table = tmp_path / "table.csv"
+    table.write_text("input_path,channel_labels,channel_colors\n"
+                     f"{src.as_posix()},\"1,Green\",\"0,magenta\"\n")
+    labels = _convert_one(table, tmp_path / "out")
+    assert labels == [("Bright R", "FF00FF"), ("Green", "00FF00"), ("Bright B", "0000FF")]
+
+
+def test_joined_views_of_a_named_rgb_channel_keep_the_name(tmp_path):
+    """Views joined along c (View{v}_<name>): the samples' names, as one view's."""
+    from tests._czi_writer import raw_payload, write_czi
+    meta = ('<Information><Image><Dimensions><Channels><Channel Id="Channel:0" '
+            'Name="Bright"></Channel></Channels></Dimensions></Image></Information>')
+    rng = np.random.default_rng(6)
+    tiles = [dict(scene=0, plane={"C": 0, "V": v}, x=0, y=0, height=H, width=W, dtype="u1",
+                  samples=3, compression=0,
+                  payload=raw_payload(rng.integers(0, 255, (H, W, 3)).astype("u1")))
+             for v in range(2)]
+    write_czi(str(tmp_path / "views.czi"), tiles, metadata=meta)
+    labels = _convert_one(tmp_path / "views.czi", tmp_path / "out", view_index="all",
+                          concat_views=True)
+    assert labels == [(f"View{v}_Bright {s}", c) for v in range(2)
+                      for s, c in zip("RGB", RGB_TINTS)]
+
+
+def test_joined_named_rgb_files_keep_the_name(tmp_path):
+    """Aggregative: two named one-channel RGB files along t, named as one file is."""
+    src = tmp_path / "set"
+    src.mkdir()
+    for t in range(2):
+        _rgb_tiff(src / f"img_T{t}.ome.tif", "Brightfield")
+    from eubi_bridge.ebridge import EuBIBridge
+    EuBIBridge().to_zarr(str(src), str(tmp_path / "out"), time_tag="T",
+                         concatenation_axes="t", squeeze=False, verbose=False)
+    (store,) = (tmp_path / "out").glob("*.zarr")
+    assert _omero_channels(store) == [(f"Brightfield {s}", c) for s, c in zip("RGB", RGB_TINTS)]
 
 
 # -- bioio readers (ND2, LIF, bioio OME-TIFF, PNG/JPG, Bio-Formats fallback) -----------
@@ -192,9 +399,9 @@ def test_tiff_bioio_reader_keeps_every_sample(tmp_path):
 
 # -- real ND2 (skipped when the test data are not on this machine) --------------------
 
-REAL_ND2 = Path(os.environ.get("EUBI_TEST_DATA",
-                               "C:/Users/oezdemir/Desktop/quarantine/temp/ome/input")) \
-    / "medium_dataset" / "imageJ_test.nd2"
+REAL_ND2 = Path(os.environ.get("MICROSCOPY_DATA") or os.environ.get("EUBI_TEST_DATA")
+                or "C:/Users/oezdemir/Desktop/data/microscopy") \
+    / "formats" / "nd2" / "assorted" / "imageJ_test.nd2"
 
 
 @pytest.mark.skipif(not REAL_ND2.exists(), reason="real ND2 test data not available")

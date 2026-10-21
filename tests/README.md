@@ -13,8 +13,9 @@ metadata and edge cases.
   (`test_gui_*`, `test_inspect_page`, `test_convert_page_actions`, batch mode), the
   ozp writer, memory budget, renamed / retired settings, and eubi-bridge-lite
   (`test_lite_*`).
-- **Markers:** `realdata` (real-microscopy conversion audit; needs the `EUBI_TEST_DATA`
-  directory, skipped when the files are absent) and `requires_full` (needs the full
+- **Markers:** `realdata` (real-microscopy conversion audit; needs the sample-data
+  folder named by `MICROSCOPY_DATA`, default `C:/Users/oezdemir/Desktop/data/microscopy`;
+  skipped when the files are absent) and `requires_full` (needs the full
   eubi-bridge with Bio-Formats / dask; skipped in eubi-bridge-lite). Both are in
   `conftest.py`.
 

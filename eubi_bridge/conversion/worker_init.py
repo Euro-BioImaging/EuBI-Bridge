@@ -221,12 +221,15 @@ def safe_worker_wrapper(func):
     Decorator to wrap worker functions with exception handling.
 
     Converts unpicklable exceptions to picklable RuntimeError with full details.
+    A MicroReaderVersionError (a wrong micro-reader installed) is raised again as
+    itself, so a script can catch it by its type (its message names the fix).
     """
     import functools
     import traceback
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        version_error = None
         try:
             # Ensure worker is initialized (redundant safety check)
             if not _worker_initialized:
@@ -252,12 +255,18 @@ def safe_worker_wrapper(func):
             )
 
             logger.error(f"[Worker Error] {error_msg}")
+            # raised there, so already imported (no import that could fail here)
+            micro_source = sys.modules.get("eubi_bridge.core.micro_source")
+            if micro_source is not None and isinstance(e, micro_source.MicroReaderVersionError):
+                version_error = micro_source.MicroReaderVersionError(exc_msg)
 
         # Raised only once the except block has closed.  Raising inside it
         # chains the original exception back on as __context__ -- clearing the
         # attribute beforehand does not survive the raise -- and a Java
         # exception there cannot be pickled, so the pool broke ("terminated
         # abruptly") instead of reporting the error, and the task was retried.
+        if version_error is not None:
+            raise version_error
         raise RuntimeError(error_msg)
 
     return wrapper

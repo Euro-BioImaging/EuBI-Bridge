@@ -92,7 +92,7 @@ These are given to the command only:
 | `--includes`           | `str`                       | Include filter for filenames    |
 | `--excludes`           | `str`                       | Exclude filter for filenames    |
 
-Everything else (scene selection, tags, scales and units, ...) is a setting: it can be
+Everything else (series selection, tags, scales and units, ...) is a setting: it can be
 passed to the command too, and is described under [Configurable Parameters](#configurable-parameters).
 
 #### Examples
@@ -143,7 +143,7 @@ These are stored in the configuration file but can also be supplied directly to 
 | `pixel_reader`       | `str`  | Where the pixels come from: `micro` (default; a file micro-reader does not read falls back to the standard reader, with a warning) or `standard` |
 | `force_bioformats`   | `bool` | Use the Java Bio-Formats reader even for formats read natively; a fallback when a native read fails |
 | `as_mosaic`          | `bool` | Whether to stitch the mosaic tiles |
-| `scene_index`        | `int`, `all` or a list | Scene(s) to convert, e.g. `0`, `all` or `0,2,4`; each becomes its own output |
+| `series_index`       | `int`, `all` or a list | Series to convert (some formats call them scenes), e.g. `0`, `all` or `0,2,4`; each becomes its own output, still named `_scene{N}`. Formerly `scene_index`, which still works, with a warning |
 | `view_index`         | `int`, `all` or a list | View(s) to convert |
 | `illumination_index` | `int`, `all` or a list | Illumination(s) to convert |
 | `phase_index`        | `int`  | Index for phase selection          |
@@ -360,7 +360,7 @@ eubi configure downscale --z_scale_factor 1 --y_scale_factor 2 --x_scale_factor 
 
 ### `eubi configure readers`
 
-Set reader defaults (scene / view / illumination / mosaic selection) using any of the
+Set reader defaults (series / view / illumination / mosaic selection) using any of the
 [reader parameters](#readers-parameters).
 
 ### `eubi configure metadata`

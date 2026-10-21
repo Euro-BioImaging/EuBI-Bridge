@@ -162,7 +162,7 @@ def test_a_mosaic_splits_into_placed_tiles_without_the_standard_stack(zeiss_mosa
     subblock boxes put them on the pixel grid (230 px of 0.1 um)."""
     from eubi_bridge.core.data_manager import czi_mosaic_tile_origins
     out = tmp_path / "out"
-    _convert(tmp_path, zeiss_mosaic, out, as_mosaic=False, scene_index=0,
+    _convert(tmp_path, zeiss_mosaic, out, as_mosaic=False, series_index=0,
              mosaic_tile_index="all")
     stores = sorted(out.glob("*.zarr"))
     assert len(stores) == 4

@@ -740,18 +740,18 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--scene_index</code></summary>
+    <summary><code>--series_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
     <p><strong>Default:</strong>&nbsp; `0`</p>
-    <p>Scene / series index to read. Pass an integer for a single scene, `all` to convert each scene to a separate zarr group, or comma-separated integers (e.g. `0,2,4`) for a subset of scenes.</p>
-    <pre><code># Convert only scene 2 from a multi-scene file
-    eubi to_zarr /data/input /data/output --scene_index 2
+    <p>Series index to read (a series is what some formats call a scene). Pass an integer for a single series, `all` to convert each series to a separate zarr group, or comma-separated integers (e.g. `0,2,4`) for a subset of series. The outputs are still named `_scene{N}`. Formerly `scene_index`, which still works, with a warning.</p>
+    <pre><code># Convert only series 2 from a multi-series file
+    eubi to_zarr /data/input /data/output --series_index 2
     </code></pre>
-    <pre><code># Convert every scene to a separate OME-Zarr group
-    eubi to_zarr /data/input /data/output --scene_index all
+    <pre><code># Convert every series to a separate OME-Zarr group
+    eubi to_zarr /data/input /data/output --series_index all
     </code></pre>
-    <pre><code># Convert scenes 0, 2 and 4 only
-    eubi to_zarr /data/input /data/output --scene_index 0,2,4
+    <pre><code># Convert series 0, 2 and 4 only
+    eubi to_zarr /data/input /data/output --series_index 0,2,4
     </code></pre>
     </details>
 
@@ -769,7 +769,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--mosaic_tile_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. Composes with scene / view / illumination selection (cartesian product).</p>
+    <p>Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. Composes with series / view / illumination selection (cartesian product).</p>
     <pre><code># Write every tile as its own OME-Zarr (default — each tile separate)
     eubi to_zarr /data/input /data/output --mosaic_tile_index all
     </code></pre>
@@ -1300,18 +1300,18 @@ Click any command card below to expand its full parameter reference.
     </details>
 
     <details>
-    <summary><code>--scene_index</code></summary>
+    <summary><code>--series_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
     <p><strong>Default:</strong>&nbsp; `0`</p>
-    <p>Scene / series index to read. Pass an integer for a single scene, `all` to convert each scene to a separate zarr group, or comma-separated integers (e.g. `0,2,4`) for a subset of scenes.</p>
-    <pre><code># Convert only scene 2 from a multi-scene file
-    eubi to_zarr /data/input /data/output --scene_index 2
+    <p>Series index to read (a series is what some formats call a scene). Pass an integer for a single series, `all` to convert each series to a separate zarr group, or comma-separated integers (e.g. `0,2,4`) for a subset of series. The outputs are still named `_scene{N}`. Formerly `scene_index`, which still works, with a warning.</p>
+    <pre><code># Convert only series 2 from a multi-series file
+    eubi to_zarr /data/input /data/output --series_index 2
     </code></pre>
-    <pre><code># Convert every scene to a separate OME-Zarr group
-    eubi to_zarr /data/input /data/output --scene_index all
+    <pre><code># Convert every series to a separate OME-Zarr group
+    eubi to_zarr /data/input /data/output --series_index all
     </code></pre>
-    <pre><code># Convert scenes 0, 2 and 4 only
-    eubi to_zarr /data/input /data/output --scene_index 0,2,4
+    <pre><code># Convert series 0, 2 and 4 only
+    eubi to_zarr /data/input /data/output --series_index 0,2,4
     </code></pre>
     </details>
 
@@ -1329,7 +1329,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--mosaic_tile_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. Composes with scene / view / illumination selection (cartesian product).</p>
+    <p>Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. Composes with series / view / illumination selection (cartesian product).</p>
     <pre><code># Write every tile as its own OME-Zarr (default — each tile separate)
     eubi to_zarr /data/input /data/output --mosaic_tile_index all
     </code></pre>

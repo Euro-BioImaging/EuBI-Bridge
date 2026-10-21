@@ -197,7 +197,7 @@ def test_show_pixel_meta_lists_every_scene_asked_for(tmp_path, monkeypatch):
                  metadata={"axes": "ZYX"})
     shown = read_metadata(str(src), {"series": "all"})
     assert [s["dtype"] for s in shown] == ["uint16", "uint8"]
-    assert [s["input_path"].endswith(f"[scene {k}]") for k, s in enumerate(shown)] == [True] * 2
+    assert [s["input_path"].endswith(f"[series {k}]") for k, s in enumerate(shown)] == [True] * 2
     assert read_metadata(str(src), {"series": 1})["shape"]["z"] == 3
 
 

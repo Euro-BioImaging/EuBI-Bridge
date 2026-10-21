@@ -31,8 +31,12 @@ FORMATS = (".ome.tif", ".ome.tiff",
            ".nd2", ".lif", ".oir",                         # group 2
            ".czi",                                          # groups 3-5
            ".ims")                                          # group 6
+#: micro-reader's name of the series index (micro-reader 0.1.0; it was "scene"). The
+#: older readers (legacy_image) and the aggregative path name their index the same, so
+#: one name serves every file; eubi's own option for it is series_index
+SERIES = "series"
 #: image indices outputs are selected by
-INDICES = {"scene", "tile", "view", "illumination"}
+INDICES = {SERIES, "tile", "view", "illumination"}
 #: eubi-bridge's channel_intensity_limits -> ozp's write_pyramid(windows=...)
 WINDOWS = {"from_dtype": "dtype", "from_array": "data", "auto": "auto"}
 #: the multiscale name eubi-bridge writes
@@ -87,19 +91,20 @@ def _positions(value, count: int, what: str) -> list:
     if len(valid) < len(wanted):
         logger.warning(f"Skipping out-of-range {what} indices: {set(wanted) - set(valid)}")
     if not valid:
+        counted = what if what.endswith("s") else f"{what}(s)"       # "series" stays
         raise ValueError(f"No valid {what} index in {sorted(set(wanted))}: the file has "
-                         f"{count} {what}(s), so valid indices are 0..{count - 1}.")
+                         f"{count} {counted}, so valid indices are 0..{count - 1}.")
     return valid
 
 
 def _tile_positions(value, count: int, scene: int) -> list:
-    """The tiles of one scene that the mosaic_tile_index option selects, counted from 0
-    among THIS scene's tiles (0.1.5 used scene 0's count for every scene, roadmap 'Bug:
+    """The tiles of one series that the mosaic_tile_index option selects, counted from 0
+    among THIS series' tiles (0.1.5 used series 0's count for every series, roadmap 'Bug:
     scenes with different tile counts'); positions it lacks are skipped with a warning."""
     try:
         return _positions(value, count, "mosaic tile")
     except ValueError:
-        logger.warning(f"Scene {scene} has {count} tile(s): none of {value!r} is one of them")
+        logger.warning(f"Series {scene} has {count} tile(s): none of {value!r} is one of them")
         return []
 
 
@@ -127,7 +132,7 @@ def _values(keys, name) -> list:
 
 
 def _key(scene, tile, view, illumination) -> tuple:
-    out = [("scene", scene)]
+    out = [(SERIES, scene)]
     for name, value in (("tile", tile), ("view", view), ("illumination", illumination)):
         if value is not None:
             out.append((name, value))
@@ -152,11 +157,20 @@ def _joined(parts, path):
 
 def _join_labels(pyr, group, parts, images, readers):
     """0.1.5's labels for joined channels: ``View{v}_Illu{i}_<name>`` (only the joined
-    indices), view outermost. <name> is the file's own channel name; an unnamed channel
-    takes the name of the same channel in the view's first image, else ``Ch{i}``."""
+    indices), view outermost. <name> is the file's own channel name (RGB samples of a
+    named channel: ``"<name> R"`` / ..., as ``rgb_sample_channels`` names them); an
+    unnamed channel takes the name of the same channel in the view's first image, else
+    ``Ch{i}``."""
     def own_names(image, count):
         named = [getattr(ch, "name", None) for ch in image.metadata.channels]
-        return named if len(named) == count else [None] * count
+        if len(named) == count:
+            return named
+        rgb = rgb_sample_channels(image)
+        if named and rgb is not None and len(rgb) == count and count % len(named) == 0:
+            samples = count // len(named)
+            return [label if named[k // samples] else None
+                    for k, (label, _) in enumerate(rgb)]
+        return [None] * count
 
     labels, n, first_of_view = {}, 0, {}
     for (view, illumination), part, image in zip(group, parts, images):
@@ -195,13 +209,15 @@ def _open_micro(job) -> _MicroFile:
     """The file opened with micro-reader, or ``NotYet`` when it is not micro-reader's."""
     import micro_reader
 
-    from eubi_bridge.core.micro_source import RENAME, set_read_concurrency
+    from eubi_bridge.core.micro_source import (RENAME, require_micro_reader,
+                                               set_read_concurrency)
     reason = _micro_reason(job)
     if reason:
         raise NotYet(reason)
+    require_micro_reader()      # MicroReaderVersionError: a wrong micro-reader is no fallback
     set_read_concurrency(job.cluster.decode_threads)
     path = str(job.input_path)
-    tiles = "stitched" if job.readers.as_mosaic else "separate"
+    tiles = "mosaic" if job.readers.as_mosaic else "separate"
     try:
         f = micro_reader.open(path, tiles=tiles, rename=RENAME, axes="tczyx",
                               samples="channels")
@@ -211,9 +227,9 @@ def _open_micro(job) -> _MicroFile:
     problem = ""
     if names - INDICES:
         problem = f"image indices {sorted(names - INDICES)}"
-    elif names - {"scene"} and not path.lower().endswith(".czi"):
+    elif names - {SERIES} and not path.lower().endswith(".czi"):
         # 0.1.5 reads tiles / views / illuminations outside a CZI with the standard reader
-        problem = f"{sorted(names - {'scene'})} outside a CZI"
+        problem = f"{sorted(names - {SERIES})} outside a CZI"
     if problem:
         f.close()
         raise NotYet(problem)
@@ -238,9 +254,10 @@ def _open_input(job):
 def _load_input_collection(job):
     """``(file, entries, reader)``: the opened file and one entry per output, each
     ``SimpleNamespace(pyramid, image, scene, tile, series_path, basename, name_scene,
-    name_tile)`` in eubi's terms (scene / tile / view / illumination = positions among the
-    file's own values), named as 0.1.5 names them. The outputs are chosen from the
-    file's index first; only their images are read."""
+    name_tile)`` in eubi's terms (scene = the series; scene / tile / view / illumination
+    = positions among the file's own values), named as 0.1.5 names them (``_scene<N>``,
+    kept: plan 8.32). The outputs are chosen from the file's index first; only their
+    images are read."""
     from ome_zarr_pyramid import PyramidCollection
 
     from eubi_bridge.core.output_store import _ozp_version
@@ -253,8 +270,8 @@ def _load_input_collection(job):
         stem = job.resolved_basename or os.path.basename(path).split(".")[0]
         file = pathlib.Path(path)
 
-        scene_values = _values(keys, "scene")
-        scenes = _positions(readers.scene_index, len(scene_values), "scene")
+        scene_values = _values(keys, SERIES)
+        scenes = _positions(readers.series_index, len(scene_values), "series")
         n_scenes = len(scene_values)
         concat_views, concat_illus = readers.concat_views, readers.concat_illuminations
         view_option = _multi(readers.view_index)
@@ -266,7 +283,7 @@ def _load_input_collection(job):
         if by_view or by_illu:
             view_option = view_option if by_view else 0
             illu_option = illu_option if by_illu else 0
-            first = [k for k in keys if dict(k)["scene"] == scene_values[scenes[0]]]
+            first = [k for k in keys if dict(k)[SERIES] == scene_values[scenes[0]]]
             n_views_file = len([v for v in _values(first, "view") if v is not None]) or 1
             n_illus_file = len([v for v in _values(first, "illumination")
                                 if v is not None]) or 1
@@ -276,7 +293,7 @@ def _load_input_collection(job):
         option = readers.mosaic_tile_index
         plans, tiled = [], False                  # (entry, keys, group or None)
         for scene in scenes:
-            here = [k for k in keys if dict(k)["scene"] == scene_values[scene]]
+            here = [k for k in keys if dict(k)[SERIES] == scene_values[scene]]
             tile_values = _values(here, "tile")
             views, illus = _values(here, "view"), _values(here, "illumination")
             tiled = tiled or len(tile_values) > 1
@@ -399,31 +416,36 @@ def _origin(image, units: dict) -> dict:
     return origin
 
 
-def apply_rgb_channels(pyr, image):
-    """eubi-bridge's names for RGB samples read as channels (sample_channels): one channel
-    of S samples -> S plain channels (``Channel {i}``, white, as eubi always wrote); C > 1
-    channels -> ``"<name> R"`` / ``G`` / ``B`` (``A``), tinted red / green / blue."""
-    from eubi_bridge.core.sample_channels import SAMPLE_COLORS, SAMPLE_LABELS
+def rgb_sample_channels(image) -> Optional[list]:
+    """``[(label, colour), ...]`` for the channels the RGB samples of *image* become
+    (sample_channels, the same rule as the older readers' ``expand_channel_metadata``),
+    or None when its pixels have no samples: each channel of S samples -> ``"<name> R"``
+    / ``G`` / ``B`` (``A``), tinted red / green / blue; one unnamed channel -> no label
+    (``Channel 0/1/2`` where it is written), tinted too. Colours as six hex digits;
+    white where none applies."""
+    from eubi_bridge.core.sample_channels import sample_channel_labels
     source = getattr(image, "source", image)
     axes = str(getattr(source, "axes", ""))
     if "s" not in axes:
-        return pyr
+        return None
     samples = int(source.shape[axes.index("s")])
     channels = int(source.shape[axes.index("c")]) if "c" in axes else 1
-    if channels == 1:
-        overrides = {i: {"label": f"Channel {i}", "color": "FFFFFF"} for i in range(samples)}
-    else:
-        labels = SAMPLE_LABELS.get(samples, tuple(str(i) for i in range(samples)))
-        colors = SAMPLE_COLORS.get(samples)
-        described = list(image.metadata.channels)
-        overrides = {}
-        for c in range(channels):
-            name = described[c].name if len(described) == channels else None
-            for i in range(samples):
-                color = colors[i].lstrip("#").upper() if colors else "FFFFFF"
-                overrides[c * samples + i] = {"label": f"{name or f'Channel {c}'} {labels[i]}",
-                                              "color": color}
-    return pyr.set_channels(overrides)
+    described = list(image.metadata.channels)
+    names = ([getattr(ch, "name", None) for ch in described] if len(described) == channels
+             else [None] * channels)
+    return [(label, color.lstrip("#").upper() if color else "FFFFFF")
+            for label, color in sample_channel_labels(names, samples)]
+
+
+def apply_rgb_channels(pyr, image):
+    """eubi-bridge's names and colours for RGB samples read as channels
+    (``rgb_sample_channels``). The job's channel labels and colours are applied after
+    (``apply_channels``) and win."""
+    channels = rgb_sample_channels(image)
+    if channels is None:
+        return pyr
+    return pyr.set_channels({i: {"label": label or f"Channel {i}", "color": color}
+                             for i, (label, color) in enumerate(channels)})
 
 
 def apply_axis_metadata(pyr, job, scales_too: bool = True):
@@ -523,6 +545,8 @@ def acquisition_metadata(entry, pyr, job, origin: dict) -> Optional[dict]:
     if flag is None and not is_split:
         return extras or None
     meta = dict(extras)
+    # both names, for several releases (plan 8.32): series_index is the name from 0.3.0
+    meta["series_index"] = entry.scene
     meta["scene_index"] = entry.scene
     if entry.tile is not None:
         meta["tile_index"] = entry.tile
@@ -647,12 +671,6 @@ async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore) -
         pyr = apply_channels(pyr, job)
         if not keep:
             pyr = apply_squeeze_and_crop(pyr, job)
-        axes = pyr.meta.axis_order
-        if origin and not any(any(t) for t in _translations(pyr)):
-            # an all-zero position is written too: the tile at (0, 0) belongs to the
-            # same coordinate system as its neighbours (parse_translation)
-            for path in pyr.meta.resolution_paths:
-                pyr.meta.update_translation(path, [origin.get(ax, 0.0) for ax in axes])
         dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
         xml = ome_xml(pyr, dtype) if conv.save_omexml else None
         if not keep:
@@ -664,17 +682,6 @@ async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore) -
         await asyncio.to_thread(_write, pyr, output_path, job,
                                 scene_budget_mb=scene_budget_mb,
                                 region_size_mb=region_size_mb, xml=xml)
-
-
-def _translations(pyr) -> list:
-    meta = pyr.meta
-    out = []
-    for path in meta.resolution_paths:
-        try:
-            out.append(list(meta.get_translation(path) or []))
-        except Exception:                                   # noqa: BLE001 - none set
-            out.append([])
-    return out
 
 
 async def convert(job) -> None:

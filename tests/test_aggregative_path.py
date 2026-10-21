@@ -220,6 +220,36 @@ def test_a_multi_file_ome_tiff_is_not_joined_as_the_whole_set_from_each_file(tmp
     assert not list((tmp_path / "new").glob("*.zarr/0"))
 
 
+def test_companion_members_are_joined_one_file_each(tmp_path):
+    """Members whose BinaryOnly stub points to a .companion.ome (Viventis): micro-reader
+    opens a member as its whole set by default (multifile=True); the aggregative path
+    reads each file alone (multifile=False), so the joined image has one plane per file."""
+    src = tmp_path / "in"
+    src.mkdir()
+    ns = "http://www.openmicroscopy.org/Schemas/OME/2016-06"
+    names = [f"img_T{t}.ome.tif" for t in range(3)]
+    uuids = [f"urn:uuid:{uuid.uuid4()}" for _ in names]
+    this = f"urn:uuid:{uuid.uuid4()}"
+    tiffdata = "".join(
+        f'<TiffData FirstT="{t}" FirstC="0" FirstZ="0" IFD="0" PlaneCount="1">'
+        f'<UUID FileName="{n}">{u}</UUID></TiffData>' for t, (n, u) in enumerate(zip(names, uuids)))
+    (src / "set.companion.ome").write_text(
+        f'<OME xmlns="{ns}" UUID="{this}"><Image ID="Image:0"><Pixels ID="Pixels:0" '
+        f'DimensionOrder="XYZCT" Type="uint16" SizeX="32" SizeY="24" SizeZ="1" SizeC="1" '
+        f'SizeT="3" PhysicalSizeX="0.5" PhysicalSizeY="0.5"><Channel ID="Channel:0:0" '
+        f'SamplesPerPixel="1"/>{tiffdata}</Pixels></Image></OME>', encoding="utf-8")
+    for t, (name, own) in enumerate(zip(names, uuids)):
+        stub = f'<OME xmlns="{ns}" UUID="{own}"><BinaryOnly MetadataFile="set.companion.ome" UUID="{this}"/></OME>'
+        tifffile.imwrite(str(src / name), np.full((24, 32), 100 * (t + 1), "u2"),
+                         description=stub, metadata=None, photometric="minisblack")
+    result = _run(src, tmp_path / "new", ["--time_tag", "T", "--concatenation_axes", "t"])
+    assert result.returncode == 0, (result.stdout + result.stderr)[-3000:]
+    (store,) = list((tmp_path / "new").glob("*.zarr"))
+    arr = np.asarray(zarr.open_group(str(store), mode="r")["0"])
+    assert arr.shape[0] == 3 and arr.size == 3 * 24 * 32          # one plane per file
+    assert [int(arr[t].max()) for t in range(3)] == [100, 200, 300]
+
+
 def test_many_files_never_stay_open_together(tmp_path, monkeypatch):
     """600 files joined along t through micro-reader's bounded file cache (shrunk to 8
     here): it never holds more than that plus the files being read at that moment (one
@@ -284,10 +314,10 @@ def test_a_conversion_table_runs_both_kinds_in_one_pool(tmp_path, caplog):
 
 
 def test_scene_index_all_joins_files_of_one_scene_on_the_new_path(tmp_path):
-    """The GUI's batch default is scene_index='all': with one scene per file the new path
+    """The GUI's batch default is series_index='all': with one scene per file the new path
     joins them (it used to hand every GUI aggregative group to the old path)."""
     src = _channel_time_set(tmp_path / "in")
-    args = CT + ["--scene_index", "all"]
+    args = CT + ["--series_index", "all"]
     log = _convert(src, tmp_path / "new", args)
     assert "6 file(s) joined" in log
     old = _golden.golden("aggregative-scene_index_all")
@@ -298,7 +328,7 @@ def test_scene_index_all_joins_files_of_one_scene_on_the_new_path(tmp_path):
 @pytest.mark.parametrize("scenes", ["all", "0,1"])
 def test_files_of_several_scenes_give_a_clear_error(tmp_path, scenes):
     """Roadmap step 6: an aggregative output joins ONE scene of each file. 0.1.5 folded
-    the scenes of scene_index='all' into the joined axis (positions became time points)
+    the scenes of series_index='all' into the joined axis (positions became time points)
     and crashed on a list."""
     src = tmp_path / "in"
     src.mkdir()
@@ -308,8 +338,8 @@ def test_files_of_several_scenes_give_a_clear_error(tmp_path, scenes):
                 tw.write(np.full((16, 20), 10 * t + scene, "u2"), photometric="minisblack",
                          metadata={"axes": "YX"})
     result = _run(src, tmp_path / "new",
-                  ["--time_tag", "T", "--concatenation_axes", "t", "--scene_index", scenes])
+                  ["--time_tag", "T", "--concatenation_axes", "t", "--series_index", scenes])
     log = " ".join((result.stdout + result.stderr).split())
     assert result.returncode != 0
-    assert "joins one scene of each file" in log and "--scene_index" in log, log[-2000:]
+    assert "joins one series of each file" in log and "--series_index" in log, log[-2000:]
     assert not list((tmp_path / "new").glob("*.zarr/0"))

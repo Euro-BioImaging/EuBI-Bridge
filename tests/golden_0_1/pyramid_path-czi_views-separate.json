@@ -8,6 +8,7 @@
       "y": 492.25
      },
      "scene_index": 0,
+     "series_index": 0,
      "source_path": "<tmp>\\views.czi",
      "view_index": 0
     }
@@ -122,6 +123,7 @@
       "y": 492.25
      },
      "scene_index": 0,
+     "series_index": 0,
      "source_path": "<tmp>\\views.czi",
      "view_index": 1
     }

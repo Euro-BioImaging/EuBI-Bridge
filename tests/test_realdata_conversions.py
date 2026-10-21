@@ -4,7 +4,8 @@ Real-microscopy conversion audit — exercises ALL to_zarr parameter categories
 ND2 / LSM files, not just synthetic TIFFs.
 
 Files are referenced *in place* (never copied — some are GB-scale) from
-``EUBI_TEST_DATA`` (default: ``C:/Users/oezdemir/Desktop/quarantine/temp/ome/input``). Every test
+``MICROSCOPY_DATA`` (or ``EUBI_TEST_DATA``; default: ``C:/Users/oezdemir/Desktop/data/microscopy``,
+see its ``catalogue.csv``). Every test
 skips automatically when its source file is absent, so the suite is safe to run
 anywhere. Marked ``realdata`` so it is opt-in:
 
@@ -14,7 +15,7 @@ Each conversion runs through the real ``eubi`` CLI (matching how users invoke it
 and asserts the *observable effect* of the parameter on the output OME-Zarr.
 
 Reader-dimension coverage tests BOTH modes:
-  * **extraction**  — one OME-Zarr per index (``scene_index all``,
+  * **extraction**  — one OME-Zarr per index (``series_index all``,
     ``mosaic_tile_index all``, ``view_index all``, ``illumination_index all``).
   * **combination** — multiple indices grouped into a single OME-Zarr
     (``as_mosaic``, ``concat_views``, ``concat_illuminations``).
@@ -49,17 +50,19 @@ pytestmark = pytest.mark.realdata
 # File manifest — relative to the real-data root (skip-if-absent).
 # ---------------------------------------------------------------------------
 
-DATA_ROOT = Path(os.environ.get("EUBI_TEST_DATA", r"C:/Users/oezdemir/Desktop/quarantine/temp/ome/input"))
+DATA_ROOT = Path(os.environ.get("MICROSCOPY_DATA") or os.environ.get("EUBI_TEST_DATA")
+                 or r"C:/Users/oezdemir/Desktop/data/microscopy")
 
 FILES = {
-    "czi_workhorse": "czi/7015307/T=3_Z=5_CH=2.czi",          # tczyx (3,2,5,256,256)
-    "czi_scenes":    "czi/7015307/S=2_T=3_Z=5_CH=1.czi",      # 2 scenes, 1 tile
-    "czi_mosaic":    "czi/7015307/S=2_2x2_CH=1.czi",          # 2 scenes x 2x2 tiles
-    "czi_rgb":       "czi/synthetic_rgb.czi",                 # RGB samples
-    "czi_views":     "czi/MouseBrain_41Slices_1Tile_3Channel_2Illuminations_2Angles.czi",
-    "lsm":           "small_dataset/FtsZ2-1_GFP_KO2-1_no10G.lsm",  # tczyx (1,3,12,512,512)
-    "lif":           "medium_dataset/19_07_19_Lennard.lif",
-    "nd2":           "medium_dataset/190821_L1_IRS-Akt_CS2003.nd2",
+    "czi_workhorse": "formats/czi/zenodo-7015307/T=3_Z=5_CH=2.czi",       # tczyx (3,2,5,256,256)
+    "czi_scenes":    "formats/czi/zenodo-7015307/S=2_T=3_Z=5_CH=1.czi",   # 2 scenes, 1 tile
+    "czi_mosaic":    "formats/czi/zenodo-7015307/S=2_2x2_CH=1.czi",       # 2 scenes x 2x2 tiles
+    "czi_rgb":       "synthetic/czi/synthetic_rgb.czi",                   # RGB samples
+    "czi_views":     "formats/czi/mousebrain-lightsheet/"
+                     "MouseBrain_41Slices_1Tile_3Channel_2Illuminations_2Angles.czi",
+    "lsm":           "formats/lsm/assorted/FtsZ2-1_GFP_KO2-1_no10G.lsm",  # tczyx (1,3,12,512,512)
+    "lif":           "formats/lif/assorted/19_07_19_Lennard.lif",
+    "nd2":           "formats/nd2/assorted/190821_L1_IRS-Akt_CS2003.nd2",
 }
 
 # Known full (un-squeezed) base shape for the workhorse, in tczyx order.
@@ -260,9 +263,9 @@ def test_cluster_params_run(tmp_path, opt):
 # ===========================================================================
 
 def test_reader_scene_extraction(tmp_path):
-    """scene_index all -> one OME-Zarr per scene."""
+    """series_index all -> one OME-Zarr per scene."""
     out = tmp_path / "o"
-    _convert(_path("czi_scenes"), out, "--scene_index", "all")
+    _convert(_path("czi_scenes"), out, "--series_index", "all")
     z = _output_zarrs(out)
     assert len(z) >= 2, f"scene extraction expected >=2 outputs, got {len(z)}"
 
@@ -271,7 +274,7 @@ def test_reader_tile_extraction(tmp_path):
     """mosaic_tile_index all (as_mosaic False) -> one OME-Zarr per tile (scene 0)."""
     out = tmp_path / "o"
     _convert(_path("czi_mosaic"), out,
-             "--scene_index", "0", "--as_mosaic", "False",
+             "--series_index", "0", "--as_mosaic", "False",
              "--mosaic_tile_index", "all")
     z = _output_zarrs(out)
     assert len(z) >= 2, f"tile extraction expected >=2 outputs, got {len(z)}"
@@ -304,7 +307,7 @@ def test_reader_illumination_extraction(tmp_path):
 def test_reader_tile_combination(tmp_path):
     """as_mosaic True -> tiles stitched into a single OME-Zarr (scene 0)."""
     out = tmp_path / "o"
-    _convert(_path("czi_mosaic"), out, "--scene_index", "0", "--as_mosaic", "True")
+    _convert(_path("czi_mosaic"), out, "--series_index", "0", "--as_mosaic", "True")
     z = _output_zarrs(out)
     assert len(z) == 1, f"mosaic combination expected 1 output, got {len(z)}"
 

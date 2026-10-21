@@ -10,6 +10,12 @@ chunks and a SHA-256 of the pixels. The tests compare today's outputs with them.
 The goldens cannot be recorded again: the recording versions of these tests are in
 ``legacy_0_1/tests/golden_recording/`` (they ran on eubi-bridge 0.2.0's development tree
 at commit 90ab07f, plus the step 6 test changes, with ``EUBI_RECORD_GOLDEN=1``).
+
+Changes made to them since, by hand or by script, never by recording:
+
+- 2026-10-20 (0.3.0): ``series_index`` added beside ``scene_index`` by
+  ``tools/add_series_index_to_goldens.py``, no re-recording (the eubi_bridge block holds
+  both names from 0.3.0, plan 8.32).
 """
 from __future__ import annotations
 

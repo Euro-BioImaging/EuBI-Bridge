@@ -16,6 +16,7 @@ import asyncio
 from types import SimpleNamespace
 from typing import Optional
 
+from eubi_bridge.conversion.pyramid_path import SERIES
 from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -109,7 +110,7 @@ def _thread_safe(array):
 
 
 class LegacyImage:
-    """One image (scene, CZI tile) of a file the older readers read, micro-reader-like."""
+    """One image (series, CZI tile) of a file the older readers read, micro-reader-like."""
 
     def __init__(self, *, array, axes: str, index: dict, name: str, pixel_sizes: dict,
                  channels: list, position: dict, index_values: dict):
@@ -135,9 +136,9 @@ class LegacyImage:
 
 class LegacyFile:
     """A file opened with eubi-bridge's older readers, presented like a micro-reader
-    ``File``: ``indices`` (scene, and tile for an unstitched CZI mosaic), ``image(index)``
-    (built on demand, one at a time: the readers switch scenes on one object),
-    ``close()``."""
+    ``File``: ``indices`` (series, and tile for an unstitched CZI mosaic, named as
+    micro-reader 0.1.0 names them, so one loop reads both), ``image(index)`` (built on
+    demand, one at a time: the readers switch scenes on one object), ``close()``."""
 
     def __init__(self, job):
         from eubi_bridge.core.data_manager import SceneLoader
@@ -181,9 +182,9 @@ class LegacyFile:
         out = []
         for s in range(self.n_scenes):
             if tiled:
-                out += [{"scene": s, "tile": t} for t in range(self._n_tiles(s))]
+                out += [{SERIES: s, "tile": t} for t in range(self._n_tiles(s))]
             else:
-                out.append({"scene": s})
+                out.append({SERIES: s})
         return out
 
     # -- one image -----------------------------------------------------------
@@ -191,7 +192,7 @@ class LegacyFile:
         """The image at `index` ({name: value}, or its items), read the way
         SceneLoader._snapshot reads it."""
         index = dict(index)
-        scene, tile = int(index["scene"]), index.get("tile")
+        scene, tile = int(index[SERIES]), index.get("tile")
         img = self._img
         _run(img.set_scene_isolated(scene))
         if tile is not None:
@@ -272,7 +273,7 @@ class NgffFile:
         #: the input Pyramid itself, written as it is with keep_existing_resolutions
         self.source_pyramid = self._pyr
         self.n_scenes = self.n_scenes_in_file = 1
-        self.indices = [{"scene": 0}]
+        self.indices = [{SERIES: 0}]
 
     def image(self, index) -> LegacyImage:
         meta = self._pyr.meta

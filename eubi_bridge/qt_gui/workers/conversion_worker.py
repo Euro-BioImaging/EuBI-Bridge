@@ -36,7 +36,7 @@ except ImportError as _qt_error:  # pragma: no cover - headless environment
     def pyqtSignal(*_args, **_kwargs):  # type: ignore[no-redef]
         return None
 
-from eubi_bridge.core.config_models import parse_scale
+from eubi_bridge.core.config_models import parse_scale, series_ui
 from eubi_bridge.qt_gui.workers._conv_subprocess import (
     _conversion_subprocess,
     _kill_process_tree,
@@ -148,7 +148,7 @@ def _build_kwargs(config: dict) -> dict:
     """Build EuBIBridge.to_zarr() kwargs from a camelCase config dict."""
     concat_config    = config.get("concatenation", {})
     cluster_config   = config.get("cluster", {})
-    reader_config    = config.get("reader", {})
+    reader_config    = series_ui(config.get("reader", {}))   # 0.2.x: its scene keys
     conv_config      = config.get("conversion", {})
     downscale_config = config.get("downscaling", {})
     meta_config      = config.get("metadata", {})
@@ -180,7 +180,7 @@ def _build_kwargs(config: dict) -> dict:
     else:
         compressor_params = {"level": compression.get("level", 5)}
 
-    scene_idx  = "all" if reader_config.get("readAllScenes", True)        else _parse_index(reader_config.get("sceneIndices", "0"))
+    series_idx = "all" if reader_config.get("readAllSeries", True)        else _parse_index(reader_config.get("seriesIndices", "0"))
     mosaic_idx = "all" if reader_config.get("readAllTiles", True)          else _parse_index(reader_config.get("mosaicTileIndices", "0"))
     view_idx   = "all" if reader_config.get("readAllViews", True)          else _parse_index(reader_config.get("viewIndices", "0"))
     illu_idx   = "all" if reader_config.get("readAllIlluminations", True)  else _parse_index(reader_config.get("illuminationIndices", "0"))
@@ -204,7 +204,7 @@ def _build_kwargs(config: dict) -> dict:
         "decode_threads":   cluster_config.get("decodeThreads", 4),
         "pixel_reader":             ("micro" if reader_config.get("useMicroReader", True)
                                      else "standard"),
-        "scene_index":              scene_idx,
+        "series_index":             series_idx,
         "mosaic_tile_index":        mosaic_idx,
         "as_mosaic":                reader_config.get("readAsMosaic", False),
         "view_index":               view_idx,

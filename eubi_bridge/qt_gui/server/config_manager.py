@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from eubi_bridge.core.config_models import parse_scale
+from eubi_bridge.core.config_models import parse_scale, series_ui, series_ui_pairs
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +57,8 @@ def _config_to_react(cfg: dict) -> dict:
         blosc_shuffle = "shuffle"
 
     n_layers = down.get("n_layers", None)
+    # a config saved before 0.3.0 says scene_index (the config loader renames it too)
+    series = readers.get("series_index", readers.get("scene_index", 0))
 
     return {
         "cluster": {
@@ -81,8 +83,8 @@ def _config_to_react(cfg: dict) -> dict:
         },
         "reader": {
             "readAsMosaic":         readers.get("as_mosaic", False),
-            "readAllScenes":        True,
-            "sceneIndices":         str(readers.get("scene_index", 0)) if readers.get("scene_index") not in (None, 0, "all") else "",
+            # the series keys and the 0.2.x scene keys, for several releases
+            **series_ui_pairs(True, str(series) if series not in (None, 0, "all") else ""),
             "readAllTiles":         True,
             "mosaicTileIndices":    str(readers.get("mosaic_tile_index", 0)) if readers.get("mosaic_tile_index") not in (None, 0, "all") else "",
             "readAllViews":         True,
@@ -203,7 +205,7 @@ def _react_to_config(data: dict) -> dict:
     cluster_d  = data.get("cluster", {})
     conv_d     = data.get("conversion", {})
     down_d     = data.get("downscaling", {})
-    reader_d   = data.get("reader", {})
+    reader_d   = series_ui(data.get("reader", {}))   # 0.2.x: its scene keys
     meta_d     = data.get("metadata", {})
     concat_d   = data.get("concatenation", {})
     comp_d     = conv_d.get("compression", {})
@@ -257,7 +259,7 @@ def _react_to_config(data: dict) -> dict:
         },
         "readers": {
             "as_mosaic":            reader_d.get("readAsMosaic", False),
-            "scene_index":          "all" if reader_d.get("readAllScenes", True) else _parse_int(reader_d.get("sceneIndices", "0")),
+            "series_index":         "all" if reader_d.get("readAllSeries", True) else _parse_int(reader_d.get("seriesIndices", "0")),
             "mosaic_tile_index":    "all" if reader_d.get("readAllTiles", True) else _parse_int(reader_d.get("mosaicTileIndices", "0")),
             "view_index":           "all" if reader_d.get("readAllViews", True) else _parse_int(reader_d.get("viewIndices", "0")),
             "concat_views":         reader_d.get("concatViews", False),

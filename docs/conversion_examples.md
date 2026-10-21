@@ -355,24 +355,24 @@ eubi to_zarr multidim_dataset %USERPROFILE%\codash_output\multidim_dataset_conca
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr medium_dataset/19_07_19_Lennard.lif $HOME/codash_output/multiseries_dataset --scene_index 2,4,6
+eubi to_zarr medium_dataset/19_07_19_Lennard.lif $HOME/codash_output/multiseries_dataset --series_index 2,4,6
 ```
 
 **Windows:**
 ```cmd
-eubi to_zarr medium_dataset\19_07_19_Lennard.lif %USERPROFILE%\codash_output\multiseries_dataset --scene_index 2,4,6
+eubi to_zarr medium_dataset\19_07_19_Lennard.lif %USERPROFILE%\codash_output\multiseries_dataset --series_index 2,4,6
 ```
 
 ### Convert All Series from CZI Files
 
 **Unix/macOS:**
 ```bash
-eubi to_zarr "medium_dataset/*.czi" $HOME/codash_output/multiseries_dataset --scene_index all
+eubi to_zarr "medium_dataset/*.czi" $HOME/codash_output/multiseries_dataset --series_index all
 ```
 
 **Windows:**
 ```cmd
-eubi to_zarr "medium_dataset\*.czi" %USERPROFILE%\codash_output\multiseries_dataset --scene_index all
+eubi to_zarr "medium_dataset\*.czi" %USERPROFILE%\codash_output\multiseries_dataset --series_index all
 ```
 
 ---

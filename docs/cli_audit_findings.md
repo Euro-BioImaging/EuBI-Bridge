@@ -8,7 +8,7 @@
 > - **Partly fixed:** a channel takes the first window's colour only when its label is blank.
 > - **Still open:** the grouped `a / b / c:` Args lines in `configure conversion`, and the
 >   `'default'` string used as a placeholder for int / bool parameters.
-> - Line numbers below are stale; the test data now lives in `Desktop/quarantine/temp/ome/input`.
+> - Line numbers below are stale; the test data now lives in `Desktop/data/microscopy` (see its `catalogue.csv`).
 
 
 Working document for the `eubi` entrypoint audit (see plan: CLI API audit + documentation).
@@ -116,7 +116,7 @@ _(none)_
 
 ### Real-data audit (`tests/test_realdata_conversions.py`, marker `realdata`)
 Exhaustive per-parameter matrix across **all five categories** against real files
-referenced in place from `EUBI_TEST_DATA` (default `C:/Users/oezdemir/Desktop/ome/input`);
+referenced in place from `MICROSCOPY_DATA` (default `C:/Users/oezdemir/Desktop/data/microscopy`);
 skip-if-absent. 43 cases. Selected files: workhorse CZI `T=3_Z=5_CH=2` (conversion/
 downscale/cluster), `S=2_…` (scenes), `S=2_2x2_…` (tiles/mosaic), `synthetic_rgb`,
 `MouseBrain_…_2Illuminations_2Angles` (views/illuminations), plus LSM/LIF/ND2 format

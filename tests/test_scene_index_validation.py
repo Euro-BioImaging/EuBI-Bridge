@@ -60,33 +60,33 @@ def _convert(path, out, **kwargs):
 
 class TestSceneIndexValidation:
     def test_out_of_range_scene_fails(self, single_scene_tiff, tmp_path):
-        code, output = _convert(single_scene_tiff, tmp_path / "out", scene_index=5)
+        code, output = _convert(single_scene_tiff, tmp_path / "out", series_index=5)
         assert code != 0
-        assert "No valid scene index" in output
+        assert "No valid series index" in output
 
     def test_it_does_not_silently_write_nothing(self, single_scene_tiff, tmp_path):
         """The regression: this used to exit 0 having converted nothing."""
         out = tmp_path / "out"
-        code, _ = _convert(single_scene_tiff, out, scene_index=5)
+        code, _ = _convert(single_scene_tiff, out, series_index=5)
         assert code != 0, "conversion reported success without writing output"
         assert not out.exists() or not list(out.iterdir())
 
     def test_the_message_says_what_is_valid(self, single_scene_tiff, tmp_path):
         """The user needs the real count to correct their input."""
-        _, output = _convert(single_scene_tiff, tmp_path / "out", scene_index=5)
+        _, output = _convert(single_scene_tiff, tmp_path / "out", series_index=5)
         assert "img.tif" in output
-        assert "1 scene(s)" in output
+        assert "1 series," in output
         assert "0..0" in output
 
     def test_negative_scene_index_is_rejected(self, single_scene_tiff, tmp_path):
         """Negative indices would otherwise index from the end of the list."""
-        code, output = _convert(single_scene_tiff, tmp_path / "out", scene_index=-1)
+        code, output = _convert(single_scene_tiff, tmp_path / "out", series_index=-1)
         assert code != 0
-        assert "No valid scene index" in output
+        assert "No valid series index" in output
 
     def test_valid_scene_still_converts(self, single_scene_tiff, tmp_path):
         out = tmp_path / "out"
-        code, output = _convert(single_scene_tiff, out, scene_index=0)
+        code, output = _convert(single_scene_tiff, out, series_index=0)
         assert code == 0, output
         assert list(out.iterdir())
 
@@ -94,12 +94,12 @@ class TestSceneIndexValidation:
 class TestTileIndexValidation:
     def test_out_of_range_tile_fails(self, single_scene_tiff, tmp_path):
         code, output = _convert(single_scene_tiff, tmp_path / "out",
-                                scene_index=0, mosaic_tile_index=9)
+                                series_index=0, mosaic_tile_index=9)
         assert code != 0
         assert "No valid mosaic tile index" in output
 
     def test_the_message_mentions_the_mosaic_condition(self, single_scene_tiff, tmp_path):
         """Tiles exist only for an unstitched mosaic, the usual reason for this."""
         _, output = _convert(single_scene_tiff, tmp_path / "out",
-                             scene_index=0, mosaic_tile_index=9)
+                             series_index=0, mosaic_tile_index=9)
         assert "as_mosaic" in output

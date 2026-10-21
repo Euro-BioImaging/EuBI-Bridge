@@ -32,7 +32,7 @@ def _legacy_images(path, **kwargs):
     (conversion/legacy_image.py: ``LegacyFile``, the reader behind it kept open)."""
     from eubi_bridge.conversion.legacy_image import LegacyFile
     from eubi_bridge.core.config_models import ConversionJob
-    job = ConversionJob.from_kwargs(str(path), "out", {"scene_index": "all", **kwargs})
+    job = ConversionJob.from_kwargs(str(path), "out", {"series_index": "all", **kwargs})
     f = LegacyFile(job)
     return [f.image(index) for index in f.indices]
 
@@ -94,12 +94,12 @@ def test_tiles_follow_as_mosaic(tmp_path):
     arr, _ = micro_array(path, 0, 1)
     np.testing.assert_array_equal(np.asarray(arr)[0, 0, 0], data[1])
     arr, reason = micro_array(path, 0, 0, as_mosaic=True)       # TIFF tiles: no composition
-    assert arr is None and "stitched" in reason
+    assert arr is None and "mosaic" in reason
 
 
 def test_out_of_range_and_unreadable_files_give_reasons(tmp_path):
     path, _, _ = _two_series(tmp_path)
-    assert "2 scenes" in micro_array(path, 5, None)[1]
+    assert "2 series" in micro_array(path, 5, None)[1]
     other = tmp_path / "notes.txt"
     other.write_text("not an image")
     arr, reason = micro_array(str(other), 0, None)

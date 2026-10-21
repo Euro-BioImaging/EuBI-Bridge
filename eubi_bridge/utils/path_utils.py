@@ -546,6 +546,47 @@ def take_filepaths_from_path(
     return sorted(paths)
 
 
+def _blank_cell(value) -> bool:
+    """True for an empty table cell (None, NaN, NA, '')."""
+    if value is None or value is pd.NA or (isinstance(value, str) and not value.strip()):
+        return True
+    return isinstance(value, float) and value != value
+
+
+def _renamed_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """*df* with the old names of renamed settings (a ``scene_index`` column of a
+    0.2.x table) under their new names, warned about as ``rename_settings`` warns,
+    before the global values fill in the columns the table lacks: else the global
+    ``series_index`` would shadow the table's own column. Given both, the new wins;
+    for the index (a table eubi-bridge 0.3.0 wrote both into, plan 8.32) per row:
+    silently where the two agree or the new cell is blank, else with a
+    SeriesIndexConflictWarning naming both (``resolve_index_pair``)."""
+    from eubi_bridge.core.config_models import (
+        RENAMED_INDEX_SETTINGS, rename_settings, resolve_index_pair)
+    for old, new in RENAMED_INDEX_SETTINGS.items():
+        if old not in df.columns or new not in df.columns:
+            continue
+        df = df.copy()
+        df[new] = df[new].astype(object)
+        for i in df.index:
+            scene, series = df.at[i, old], df.at[i, new]
+            if _blank_cell(scene):
+                continue
+            if _blank_cell(series):
+                df.at[i, new] = scene
+            else:
+                name = df.at[i, "input_path"] if "input_path" in df.columns else i
+                resolve_index_pair(scene, series,
+                                   where=f"conversion table row {i} ({name}): ")
+        df = df.drop(columns=[old])
+    kept = rename_settings({c: c for c in df.columns})      # {name now: column}
+    if len(kept) == len(df.columns) and all(k == c for k, c in kept.items()):
+        return df
+    dropped = [c for c in df.columns if c not in kept.values()]
+    return df.drop(columns=dropped).rename(
+        columns={column: name for name, column in kept.items() if name != column})
+
+
 def _apply_table_filters_and_defaults(df: pd.DataFrame,
                                       global_kwargs: dict) -> pd.DataFrame:
     """Apply include/exclude filters and global column defaults to *df*.
@@ -554,6 +595,8 @@ def _apply_table_filters_and_defaults(df: pd.DataFrame,
     identically whether the rows came from a directory, an explicit file list, a
     conversion table on disk, or a table handed over in memory.
     """
+    df = _renamed_columns(df)
+
     def _keep(row) -> bool:
         inp = row["input_path"]
         includes = global_kwargs.get('includes')

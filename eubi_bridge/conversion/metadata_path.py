@@ -125,11 +125,13 @@ def _scenes(series, count: int) -> list:
 
 def read_metadata(input_path: str, kwargs: dict):
     """show_pixel_meta's summary of a file as a conversion would write it: one dict, or
-    a list of dicts (one per scene) when several scenes are asked for."""
+    a list of dicts (one per series) when several series are asked for."""
     from ome_zarr_pyramid import PyramidCollection
 
-    from eubi_bridge.conversion.pyramid_path import NAME, _open_input, apply_rgb_channels
+    from eubi_bridge.conversion.pyramid_path import (NAME, SERIES, _open_input,
+                                                     apply_rgb_channels)
     from eubi_bridge.core.config_models import ConversionJob
+    from eubi_bridge.core.micro_source import MicroReaderVersionError
     from eubi_bridge.core.output_store import _ozp_version
     from eubi_bridge.utils.path_utils import is_zarr_group
 
@@ -141,26 +143,28 @@ def read_metadata(input_path: str, kwargs: dict):
         job = ConversionJob.from_kwargs(input_path=path, output_path="", kwargs=kwargs)
         f, _ = _open_input(job)
         try:
-            values = sorted({k["scene"] for k in f.indices})
+            values = sorted({k[SERIES] for k in f.indices})
             wanted = [s for s in _scenes(series, len(values)) if 0 <= s < len(values)]
             if not wanted:
-                raise ValueError(f"no scene {series!r}: the file has {len(values)} "
+                raise ValueError(f"no series {series!r}: the file has {len(values)} "
                                  f"(0..{len(values) - 1})")
             version = _ozp_version(job.conversion.zarr_format, job.conversion.ome_zarr_version)
             out = []
             for scene in wanted:
-                index = min((k for k in f.indices if k["scene"] == values[scene]),
+                index = min((k for k in f.indices if k[SERIES] == values[scene]),
                             key=lambda k: tuple(k.values()))
                 image = f.image(tuple(index.items()))
                 pyr = PyramidCollection.from_file(
                     SimpleNamespace(images=[image], path=path), version=version, name=NAME,
                     resolutions="base")[tuple(index.items())]
                 pyr = apply_rgb_channels(pyr, image)
-                shown = path if len(wanted) == 1 else f"{path} [scene {scene}]"
+                shown = path if len(wanted) == 1 else f"{path} [series {scene}]"
                 out.append(_summary(pyr, shown, scene))
         finally:
             f.close()
         return out[0] if len(out) == 1 else out
+    except MicroReaderVersionError:                     # the install, not this file: as itself
+        raise
     except Exception as exc:                            # noqa: BLE001 - shown per file
         logger.error(f"[MetadataReader] Error reading {path}: {exc}")
         return {"status": "error", "input_path": path, "error": str(exc)}

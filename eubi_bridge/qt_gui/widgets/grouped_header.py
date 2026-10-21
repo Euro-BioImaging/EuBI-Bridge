@@ -10,9 +10,9 @@ run, leaving the parameter name on the bottom row.
     ┌──────────────────┬──────────┬─────────────────────┐
     │      paths       │  Reader  │     Conversion      │   tab
     ├──────────────────┼──────────┼─────────────────────┤
-    │                  │  Scenes  │      Chunking       │   group
+    │                  │  Series  │      Chunking       │   group
     ├─────────┬────────┼──────────┼──────────┬──────────┤
-    │  input  │ output │  Scene   │   Auto   │ Chunk x  │   parameter
+    │  input  │ output │  Series  │   Auto   │ Chunk x  │   parameter
     │  _path  │ _path  │  index   │  chunk   │          │
     └─────────┴────────┴──────────┴──────────┴──────────┘
 

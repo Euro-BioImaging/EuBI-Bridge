@@ -61,7 +61,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--series</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Series / scene index (default: configured scene_index).</p>
+    <p>Series index (default: configured series_index).</p>
     <pre><code>eubi show_pixel_meta /data/input --series 2
     </code></pre>
     </details>

@@ -4,6 +4,7 @@
    "eubi_bridge": {
     "acquisition": {
      "scene_index": 0,
+     "series_index": 0,
      "source_path": "<tmp>\\two.ome.btf",
      "tile_index": 0
     }
@@ -106,6 +107,7 @@
    "eubi_bridge": {
     "acquisition": {
      "scene_index": 1,
+     "series_index": 1,
      "source_path": "<tmp>\\two.ome.btf",
      "tile_index": 0
     }

@@ -33,7 +33,7 @@ from eubi_bridge.qt_gui.core import batch as B  # noqa: E402
 CONCAT = ("aggregative_group", "concatenation_axes", "time_tag", "channel_tag", "z_tag",
           "y_tag", "x_tag")
 #: values a text editor takes in these tests
-TEXT = {"scene_index": "1", "mosaic_tile_index": "0,2", "view_index": "1",
+TEXT = {"series_index": "1", "mosaic_tile_index": "0,2", "view_index": "1",
         "illumination_index": "1", "phase_index": "1", "rotation_index": "1",
         "sample_index": "1", "channel_colors": "0,00FF00", "time_unit": "millisecond",
         "z_unit": "nanometer", "y_unit": "nanometer", "x_unit": "nanometer"}

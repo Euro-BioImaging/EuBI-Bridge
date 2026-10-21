@@ -51,8 +51,19 @@ logger = get_logger(__name__)
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+def _raise_version_error(results: list) -> None:
+    """Raise the first MicroReaderVersionError among *results* as itself (a wrong
+    micro-reader installed; its message names the fix), not inside the RuntimeError
+    that sums up the failed tasks: a script catches it by its type."""
+    from eubi_bridge.core.micro_source import MicroReaderVersionError
+    for result in results:
+        if isinstance(result, MicroReaderVersionError):
+            raise result
+
+
 def _report_failures(results: list, label: str = "Main") -> None:
-    """Log and raise RuntimeError if any result signals failure."""
+    """Log and raise RuntimeError if any result signals failure (a
+    MicroReaderVersionError as itself, ``_raise_version_error``)."""
     failed = []
     for i, result in enumerate(results):
         if isinstance(result, Exception):
@@ -64,6 +75,7 @@ def _report_failures(results: list, label: str = "Main") -> None:
         else:
             logger.info(f"[{label}] Task {i} succeeded.")
     if failed:
+        _raise_version_error(results)
         summary = "\n".join(f"  Task {i}: {e}" for i, e in failed)
         raise RuntimeError(f"{len(failed)}/{len(results)} tasks failed:\n{summary}")
 
@@ -456,6 +468,7 @@ def dispatch_aggregative_jobs(jobs: list) -> list:
         try:
             results.append(dispatch_aggregative_job(job))
         except Exception as exc:                       # noqa: BLE001
+            _raise_version_error([exc])                # every group would fail alike
             logger.error(f"Aggregative {label} failed: {exc}")
             failures.append((label, exc))
 
@@ -553,6 +566,7 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
             logger.error(f"[Meta] Task {i} failed: {r.get('error')}")
             failed.append((i, r.get('error', 'Unknown error')))
     if failed:
+        _raise_version_error(results)
         summary = "\n".join(f"  Task {i}: {e}" for i, e in failed)
         raise RuntimeError(
             f"Metadata collection failed for {len(failed)}/{len(results)} files:\n{summary}"
@@ -672,7 +686,7 @@ async def run_aggregative_with_slurm(input_path, output_path, **kwargs):
 def _aggregative_groups(
         input_path,
         output_path,
-        scene_index: Union[int, tuple] = None,
+        series_index: Union[int, tuple] = None,
         time_tag: Union[str, tuple] = None,
         channel_tag: Union[str, tuple] = None,
         z_tag: Union[str, tuple] = None,
@@ -707,7 +721,7 @@ def _aggregative_groups(
             )
     else:
         df = take_filepaths(
-            input_path, scene_index=scene_index,
+            input_path, series_index=series_index,
             output_path=output_path, metadata_reader=metadata_reader, **kwargs,
         )
         filepaths          = df.input_path.to_numpy().tolist()
@@ -788,7 +802,7 @@ def _aggregative_groups(
         z_tag=z_tag, y_tag=y_tag, x_tag=x_tag,
         concatenation_axes=concatenation_axes,
         metadata_reader=metadata_reader,
-        scene_index=scene_index,
+        series_index=series_index,
         **kwargs,
     )
 
