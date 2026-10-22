@@ -1,12 +1,20 @@
 # Changelog
 
-## Unreleased: coordinate systems (spatial plan 9.18)
+## 0.3.2 (unreleased): coordinate systems, NGFF 0.6 and RFC 8 output
 
-Needs the ome_zarr_pyramid release with the coordinate-system model (plan 9.9) and the
-micro-reader release that declares systems (plan 9.7); the version floors are set when
-those versions are decided.
+Requires `micro-reader>=0.2.0,<0.3` (was 0.1.x) and `ome_zarr_pyramid[remote]>=0.4.0,<0.5`
+(was 0.3.x), in `pyproject.toml` (full and lite) and `requirements.txt`: the releases that
+declare and write coordinate systems, NGFF 0.6 and RFC 8. A micro-reader outside that
+range stops a conversion with `MicroReaderVersionError`, naming why (0.1.x declares no
+coordinate systems) and the fix.
 
 ### New
+
+- `ome_zarr_version` takes `"0.6"` (NGFF 0.6: the image's coordinate systems in its
+  multiscale, one transformation per level) and `"rfc8"` (NGFF RFC 8, a draft: a
+  collection holding the image as an NGFF 0.5 multiscale; ozp warns that RFC 8 is
+  experimental), beside `"0.4"` and `"0.5"`. Spellings such as `v0.6` or `RFC8` are
+  accepted.
 
 - Each output keeps the coordinate system its position is in: the custom metadata
   `eubi:coordinate_system` (the system's id, e.g. `stage`) and `eubi:coordinate_systems`
@@ -21,6 +29,11 @@ those versions are decided.
 - A group inside an OME-Zarr store that is itself an image (a well's field, one series of
   a layout) can be given as the input; before, only a path ending in `.zarr` was read as
   one OME-Zarr input, and a group inside a store was taken as a folder of files.
+
+### Changed
+
+- An `ome_zarr_version` eubi does not write is an error naming the versions it writes.
+  Before, it fell back to `zarr_format` (OME-Zarr 0.4) with only a log line.
 
 ## 0.3.1 (2026-10-22)
 

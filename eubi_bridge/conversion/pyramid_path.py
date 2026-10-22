@@ -653,7 +653,17 @@ def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dty
 
     from eubi_bridge.conversion.conversion_worker import _threads_per_scene
     pyr = _system_for_output(pyr)
-    IO().write_pyramid(
+    write = IO().write_pyramid
+    if conv.ome_zarr_version == "rfc8":
+        # NGFF RFC 8: a collection holding the image (an NGFF 0.5 multiscale) under the
+        # output's root; ozp writes the collection document and the image with the same
+        # settings (experimental: ozp warns that RFC 8 is a draft)
+        from ome_zarr_pyramid import PyramidCollection
+
+        def write(pyr, target, **kwargs):
+            PyramidCollection({(("series", 0),): pyr}, name=pyr.meta.tag).write_collection(
+                target, **kwargs)
+    write(
         pyr, target, storage_options=storage_options, overwrite=conv.overwrite,
         max_threads=_threads_per_scene(clus), region_size_mb=float(region_size_mb),
         memory_budget_mb=budget, io_backend=conv.io_backend,

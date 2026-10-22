@@ -1128,12 +1128,14 @@ class ConfigureGroup:
         """Update Zarr conversion parameters. Omitted arguments keep their current values.
 
         Args:
-            ome_zarr_version: OME-Zarr (NGFF) version to write, e.g. ``'0.4'`` or
-                ``'0.5'``.  This is the preferred control and supersedes
-                ``zarr_format`` (the zarr container format is derived from it).
+            ome_zarr_version: OME-Zarr (NGFF) version to write: ``'0.4'``, ``'0.5'``,
+                ``'0.6'`` or ``'rfc8'`` (NGFF RFC 8, a draft: a collection holding
+                the image). This is the preferred control and supersedes
+                ``zarr_format`` (the zarr container format is derived from it); any
+                other value is an error.
             zarr_format: DEPRECATED zarr container version — ``2`` (default) or
-                ``3``.  Used only when ``ome_zarr_version`` is unset/unrecognised;
-                prefer ``ome_zarr_version``.
+                ``3``.  Used only when ``ome_zarr_version`` is unset; prefer
+                ``ome_zarr_version``.
             skip_dask: DEPRECATED and ignored: micro-reader reads without dask.
                 Accepted for now so existing scripts keep working.
             auto_chunk: Auto-compute chunk shape from array size (default True).

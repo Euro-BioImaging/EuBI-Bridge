@@ -42,10 +42,11 @@ STANDARD = "tczyx"
 #: tile of it (dyna write_levels: slabs of e.g. 96 planes); at 32, every file was
 #: opened again for every tile (2347 files x 4 tiles: 6.7 min instead of ~1.3).
 MAX_OPEN_FILES = 128
-#: the micro-reader releases this eubi-bridge reads: 0.1.x names the series index
-#: SERIES; older ones call it "scene" (pyproject: micro-reader>=0.1.0,<0.2)
-MICRO_READER_RANGE = ((0, 1), (0, 2))
-MICRO_READER_FIX = 'pip install -U "micro-reader>=0.1,<0.2"'
+#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.2.0,<0.3):
+#: 0.2.x declares the coordinate systems each output is written with (9.18); 0.1.x
+#: declares none, and older releases call the series index "scene"
+MICRO_READER_RANGE = ((0, 2), (0, 3))
+MICRO_READER_FIX = 'pip install -U "micro-reader>=0.2,<0.3"'
 
 
 class MicroReaderVersionError(ImportError):
@@ -79,13 +80,17 @@ def require_micro_reader() -> None:
             got = None
         low, high = MICRO_READER_RANGE
         if got is not None and not (low <= got < high):
-            older = got < low
+            if got < (0, 1):
+                why = (" (it names the series index 'scene'; micro-reader 0.1.0 renamed "
+                       f"it '{SERIES}', the name this eubi-bridge reads)")
+            elif got < low:
+                why = (" (it declares no coordinate systems; micro-reader 0.2.0 does, "
+                       "and this eubi-bridge writes each output's system)")
+            else:
+                why = ""
             raise MicroReaderVersionError(
-                f"eubi-bridge needs micro-reader >=0.1.0,<0.2, but micro-reader "
-                f"{version} is installed"
-                + (" (it names the series index 'scene'; micro-reader 0.1.0 renamed it "
-                   f"'{SERIES}', the name this eubi-bridge reads)" if older else "")
-                + f". Fix: {MICRO_READER_FIX}")
+                f"eubi-bridge needs micro-reader >={low[0]}.{low[1]}.0,<{high[0]}.{high[1]}, "
+                f"but micro-reader {version} is installed{why}. Fix: {MICRO_READER_FIX}")
     _micro_reader_checked = True
 
 

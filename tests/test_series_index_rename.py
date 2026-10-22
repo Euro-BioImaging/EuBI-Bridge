@@ -11,8 +11,8 @@ reads it, and its own option follows: scene_index -> series_index (plan 7.7, 8.3
   releases), and outputs keep their _scene<N> names.
 - so do the files eubi saves (the config, a batch's batch.csv and batch_config.json):
   equal pairs load silently, pairs that differ (eubi 0.2.x changed its own) warn.
-- a micro-reader outside >=0.1,<0.2 stops a conversion with MicroReaderVersionError,
-  not a silent fallback to the older readers.
+- a micro-reader outside >=0.2,<0.3 (since eubi-bridge 0.3.2; >=0.1,<0.2 before) stops
+  a conversion with MicroReaderVersionError, not a silent fallback to the older readers.
 """
 from __future__ import annotations
 
@@ -74,8 +74,13 @@ def _czi(path, tiles=1):
 # -- the reader choice -------------------------------------------------------------
 
 def test_micro_reader_names_the_index_series():
+    """The installed micro-reader is one this eubi-bridge reads (MICRO_READER_RANGE)."""
     import micro_reader
-    assert micro_reader.__version__.startswith("0.1.")
+
+    from eubi_bridge.core.micro_source import MICRO_READER_RANGE
+    got = tuple(int(p) for p in micro_reader.__version__.split(".")[:2])
+    low, high = MICRO_READER_RANGE
+    assert low <= got < high
 
 
 @pytest.mark.parametrize("kind", ["ome_tiff", "czi", "czi_tiles"])
@@ -111,9 +116,11 @@ def test_micro_array_finds_the_series(tmp_path):
     assert why == "" and int(np.asarray(arr).max()) == 9
 
 
-@pytest.mark.parametrize("version, older", [("0.0.4", True), ("0.2.0", False)])
-def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, older):
-    """A micro-reader outside >=0.1,<0.2 forced in (pip check reports it): every route
+@pytest.mark.parametrize("version, why", [("0.0.4", "names the series index 'scene'"),
+                                          ("0.1.0", "declares no coordinate systems"),
+                                          ("0.3.0", None)])
+def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, why):
+    """A micro-reader outside >=0.2,<0.3 forced in (pip check reports it): every route
     that reads with micro-reader raises MicroReaderVersionError naming the fix, none
     goes to the older readers with only a log line."""
     import micro_reader
@@ -123,19 +130,20 @@ def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, old
     path = str(_czi(tmp_path / "one.czi"))
     monkeypatch.setattr(micro_reader, "__version__", version)
     monkeypatch.setattr(micro_source, "_micro_reader_checked", False)
-    fix = r'pip install -U "micro-reader>=0\.1,<0\.2"'
+    fix = r'pip install -U "micro-reader>=0\.2,<0\.3"'
     for call in (lambda: _open_input(ConversionJob.from_kwargs(path, "out", {})),
                  lambda: micro_source.MicroReader.open(path),
                  lambda: micro_source.micro_array(path, 0, None)):
         with pytest.raises(micro_source.MicroReaderVersionError,
                            match=f"micro-reader {version} is installed.*{fix}") as err:
             call()
-        assert ("names the series index 'scene'" in str(err.value)) == older
-    monkeypatch.setattr(micro_reader, "__version__", "0.1.0")     # the right one: taken
+        for reason in ("names the series index 'scene'", "declares no coordinate systems"):
+            assert (reason in str(err.value)) == (reason == why)
+    monkeypatch.setattr(micro_reader, "__version__", "0.2.0")     # the right one: taken
     assert micro_source.MicroReader.open(path) is not None
 
 
-FIX = r'pip install -U "micro-reader>=0\.1,<0\.2"'
+FIX = r'pip install -U "micro-reader>=0\.2,<0\.3"'
 
 
 def test_a_wrong_micro_reader_reaches_a_script_as_itself(tmp_path, monkeypatch):
@@ -190,13 +198,13 @@ def test_a_wrong_micro_reader_reaches_a_script_from_a_worker_process(tmp_path):
                          text=True, timeout=300)
     last = [line for line in run.stdout.splitlines() if line.startswith(("TYPED", "OTHER"))]
     assert last and last[-1].startswith("TYPED"), (run.stdout[-2000:], run.stderr[-2000:])
-    assert 'pip install -U "micro-reader>=0.1,<0.2"' in last[-1]
+    assert 'pip install -U "micro-reader>=0.2,<0.3"' in last[-1]
     assert not out.exists()
 
 
 def _raise_version_error():
     from eubi_bridge.core.micro_source import MicroReaderVersionError
-    raise MicroReaderVersionError("eubi-bridge needs micro-reader >=0.1.0,<0.2. Fix: x")
+    raise MicroReaderVersionError("eubi-bridge needs micro-reader >=0.2.0,<0.3. Fix: x")
 
 
 def test_the_worker_wrapper_and_the_dispatcher_keep_the_version_error():
