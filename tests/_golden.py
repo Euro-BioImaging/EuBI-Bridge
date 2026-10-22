@@ -16,6 +16,10 @@ Changes made to them since, by hand or by script, never by recording:
 - 2026-10-20 (0.3.0): ``series_index`` added beside ``scene_index`` by
   ``tools/add_series_index_to_goldens.py``, no re-recording (the eubi_bridge block holds
   both names from 0.3.0, plan 8.32).
+- 2026-10-21 (0.3.1): the multiscale ``type`` added to the 25 goldens whose outputs carry
+  it since ozp 0.3.1 (the downscale method, ``"simple"``, or ``"unknown"`` for one level),
+  by a script that checked each new file equals the old one plus that key; no
+  re-recording.
 """
 from __future__ import annotations
 

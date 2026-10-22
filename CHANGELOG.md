@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.1 (2026-10-22)
+
+### Fixes
+
+- Outputs written with their OME-XML (`save_omexml`, the default) still hold it at
+  `OME/METADATA.ome.xml`. What changes: the `OME` folder is no longer a zarr group (no
+  `OME/zarr.json`), just a folder with the XML file. ozp 0.3.0 made it a group with
+  `series: ["0"]`, which NGFF allows only in a bioformats2raw layout and which validators
+  that walk the whole hierarchy reject. Pixels and the image metadata were never
+  affected. Requires `ome_zarr_pyramid>=0.3.1` (was 0.3.0), which makes this fix, and
+  writes each multiscale's downscaling `type`.
+- Repair outputs of 0.3.0 in place, without rewriting pixels:
+  `ome_zarr_pyramid.io.update_metadata(path)` removes only `OME/zarr.json` and keeps the
+  XML.
+
+## 0.3.0 (2026-10-21)
 
 eubi-bridge and eubi-bridge-lite 0.3.0 are the first releases that read micro-reader 0.1.0, which names the image index `series` (it was `scene`). They require `micro-reader>=0.1.0,<0.2`.
 
