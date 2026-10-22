@@ -85,7 +85,8 @@
       }
      ],
      "metadata": {},
-     "name": "Series 0"
+     "name": "Series 0",
+     "type": "simple"
     }
    ],
    "omero": {

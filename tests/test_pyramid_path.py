@@ -100,7 +100,9 @@ def test_new_path_writes_the_ome_xml_in_the_same_write(tmp_path):
     store = tmp_path / "new" / "img_scene0.zarr"
     xml = (store / "OME" / "METADATA.ome.xml").read_text(encoding="utf-8")
     assert 'Name="DAPI"' in xml and 'SizeX="48"' in xml
-    assert zarr.open_group(str(store / "OME"), mode="r").attrs["series"] == ["0"]
+    # a plain file: an image root that is no bioformats2raw layout gets no OME group
+    # (ozp 0.3.1; 0.3.0 wrote one with series ["0"], which validators reject)
+    assert not (store / "OME" / "zarr.json").exists()
 
 
 def test_auto_windows_come_from_the_coarsest_level(tmp_path):

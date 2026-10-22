@@ -1,16 +1,21 @@
 name: EuBI-Bridge Test Suite
 
 on:
-  push:
-    branches: [ main, develop, bf_bundled ]
+  # The suite is long (3 OS x several Pythons, full + lite + integration), so it runs
+  # at eubi's two checkpoints only: a pull request (any target branch; opened, new
+  # commits, reopened) and a published GitHub Release. Not on plain pushes, merges or a
+  # schedule.
   pull_request:
-    branches: [ main, develop, bf_bundled ]
-  schedule:
-    # Run daily at 2 AM UTC
-    - cron: '0 2 * * *'
-  # Manual "Run workflow" button (Actions tab) — pick a branch (e.g. dev) from
-  # the ref dropdown to run the suite on demand instead of on every push.
+  release:
+    types: [ published ]
+  # Manual "Run workflow" button (Actions tab): pick a branch from the ref dropdown to
+  # run the suite on demand.
   workflow_dispatch:
+
+# New commits on a PR cancel that PR's run still in progress, so only the latest runs.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
