@@ -605,6 +605,10 @@ class ReaderConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     as_mosaic: bool = False
+    # A file micro-reader reads as a plate (Harmony, CellVoyager, MetaXpress, IN Cell, a
+    # CZI with a plate) becomes ONE NGFF plate store; False: one store per image, with a
+    # warning that the file is a plate.
+    as_plate: bool = True
     # Accept int, 'all', or comma-separated ints (e.g. '0,1,2')
     view_index: Union[int, str] = 0
     phase_index: int = Field(default=0, ge=0)

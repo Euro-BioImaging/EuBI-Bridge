@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.2 (unreleased): coordinate systems, NGFF 0.6 and RFC 8 output
+## 0.3.2 (unreleased): plates, coordinate systems, NGFF 0.6 and RFC 8 output
 
 Requires `micro-reader>=0.2.0,<0.3` (was 0.1.x) and `ome_zarr_pyramid[remote]>=0.4.0,<0.5`
 (was 0.3.x), in `pyproject.toml` (full and lite) and `requirements.txt`: the releases that
@@ -10,6 +10,23 @@ coordinate systems) and the fix.
 
 ### New
 
+- **Plates.** A file micro-reader reads as a plate (Harmony, CellVoyager, MetaXpress,
+  IN Cell, a CZI holding a plate) is written as one NGFF plate store: plate, wells and
+  fields, in the OME-Zarr version asked for (0.4, 0.5, 0.6 or RFC 8). Every field gets the
+  job's settings (channels, scales, squeeze, crop, dtype, downscaling, chunks and codecs)
+  and keeps its coordinate system. The store is named after the file
+  (`<file>_plate<n>.zarr` for a file holding several plates); a plate opened from an
+  index file with a fixed name (`Index.idx.xml`, `MeasurementData.mlf`) is named after its
+  folder. Before, eubi-bridge-lite refused these files and the full eubi-bridge wrote each
+  image through Bio-Formats.
+  - A plate whose fields hold several tiles needs `as_mosaic=True` for NGFF 0.4 / 0.5 /
+    0.6 (a plate holds one image per field); the conversion stops with an error naming
+    the ways out. RFC 8 keeps the tiles of a field as a sub-collection.
+  - Images of the file that are not part of a plate (a CZI's slide preview) are not
+    written, with a warning.
+  - `as_plate` (reader setting, default True): `False` writes each image as a store of
+    its own, as before, with a warning that the file is a plate. The GUI does not show
+    the setting yet.
 - `ome_zarr_version` takes `"0.6"` (NGFF 0.6: the image's coordinate systems in its
   multiscale, one transformation per level) and `"rfc8"` (NGFF RFC 8, a draft: a
   collection holding the image as an NGFF 0.5 multiscale; ozp warns that RFC 8 is
@@ -32,6 +49,8 @@ coordinate systems) and the fix.
 
 ### Changed
 
+- A CZI holding a plate is written as one NGFF plate store by default (it was one store
+  per scene); `as_plate=False` gives the old outputs.
 - An `ome_zarr_version` eubi does not write is an error naming the versions it writes.
   Before, it fell back to `zarr_format` (OME-Zarr 0.4) with only a log line.
 

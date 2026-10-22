@@ -212,6 +212,7 @@ class ConfigManager:
         ),
         readers=dict(
             as_mosaic=False,
+            as_plate=True,
             view_index=0,
             phase_index=0,
             illumination_index=0,
@@ -525,6 +526,7 @@ class ConfigManager:
 
     def configure_readers(self,
                           as_mosaic: bool = 'default',
+                          as_plate: bool = 'default',
                           view_index: int = 'default',
                           phase_index: int = 'default',
                           illumination_index: int = 'default',
@@ -1047,6 +1049,7 @@ class ConfigureGroup:
 
     def readers(self,
                 as_mosaic: bool = 'default',
+                as_plate: bool = 'default',
                 view_index: int = 'default',
                 phase_index: int = 'default',
                 illumination_index: int = 'default',
@@ -1064,6 +1067,11 @@ class ConfigureGroup:
 
         Args:
             as_mosaic: Treat tiled acquisitions as a stitched mosaic (default False).
+            as_plate: Write a plate file (Harmony, CellVoyager, MetaXpress, IN Cell, a
+                CZI holding a plate) as one NGFF plate store, in the OME-Zarr version
+                asked for (default True). A plate whose fields hold several tiles needs
+                as_mosaic=True in 0.4 / 0.5 / 0.6 (RFC 8 keeps the tiles). False: one
+                store per image, with a warning.
             view_index: View index for multi-view formats (default 0). Pass ``'all'``
                 or a comma-separated list (e.g. ``'0,2'``) to expose multiple views.
             phase_index: Phase index (default 0).

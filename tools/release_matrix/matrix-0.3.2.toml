@@ -1,0 +1,104 @@
+# Version matrix for the 2026-10-22 train: micro-reader 0.2.0 (coordinate systems),
+# ome-zarr-pyramid 0.4.0 (graph, NGFF 0.6, RFC 8, validation) and eubi-bridge /
+# eubi-bridge-lite 0.3.2 (plates, 0.6 / RFC 8 output, coordinate systems; requires
+# micro-reader>=0.2,<0.3 and ome_zarr_pyramid>=0.4,<0.5).
+#     python matrix.py build   --config matrix-0.3.2.toml
+#     python matrix.py run     --config matrix-0.3.2.toml
+#     python matrix.py resolve --config matrix-0.3.2.toml
+# The released eubi 0.3.1 must keep its stack (its pins exclude micro-reader 0.2 and ozp
+# 0.4); 0.3.2 must refuse the old ones and pass with the new ones.
+# micro-reader-codecs 0.0.2 and dyna-zarr 0.1.0 come from PyPI.
+
+stack = ["micro-reader-codecs", "micro-reader", "dyna-zarr", "ome-zarr-pyramid",
+         "eubi-bridge", "eubi-bridge-lite"]
+
+smoke_timeout_s = 900
+
+fallback_patterns = ['older readers \(', 'standard reader \(', 'Bio-Formats metadata']
+
+[paths]
+workdir = "C:/Users/oezdemir/.eubi-matrix/m32"
+
+[pythons]
+eubi = "C:/Users/oezdemir/miniforge3/envs/pythonenv/python.exe"
+build = "C:/Users/oezdemir/.eubi-matrix/v031/bvenv/Scripts/python.exe"
+
+[samples]
+czi = "C:/Users/oezdemir/Desktop/data/microscopy/formats/czi/assorted/xyz__multiple_images.czi"
+lif = "C:/Users/oezdemir/Desktop/data/microscopy/formats/lif/ome-samples/20191025 Test FRET 585. 423, 426.lif"
+
+# The candidates, from the committed release branches.
+[candidates.micro-reader]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-OmeZarrPyramid/spatial-model/run2/trees/_integ/python"
+
+[candidates.ome-zarr-pyramid]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-OmeZarrPyramid/spatial-model/ozp-t2"
+
+[candidates.eubi-bridge]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-OmeZarrPyramid/spatial-model/eubi-bridge"
+
+[candidates.eubi-bridge-lite]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-OmeZarrPyramid/spatial-model/eubi-bridge"
+command = ["{python}", "tools/build_lite.py"]
+dist = "dist"
+
+[axes]
+micro-reader = ["0.1.0", "candidate"]
+ome-zarr-pyramid = ["0.3.1", "candidate"]
+
+[[consumers]]
+name = "eubi-bridge"
+versions = ["0.3.1", "candidate"]
+python = "eubi"
+samples = ["czi", "lif"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+[[consumers]]
+name = "eubi-bridge-lite"
+versions = ["0.3.1", "candidate"]
+python = "eubi"
+samples = ["czi", "lif"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+# Expectations, first match wins; default "pass".
+# eubi 0.3.1 bounds micro-reader <0.2 and ozp <0.4.
+[[expect]]
+when = { eubi-bridge = "==0.3.1", micro-reader = ">=0.2.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge = "==0.3.1", ome-zarr-pyramid = ">=0.4.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = "==0.3.1", micro-reader = ">=0.2.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = "==0.3.1", ome-zarr-pyramid = ">=0.4.0" }
+outcome = "unresolvable"
+# eubi 0.3.2 requires micro-reader >=0.2 and ozp >=0.4.
+[[expect]]
+when = { eubi-bridge = ">=0.3.2", micro-reader = "<0.2.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge = ">=0.3.2", ome-zarr-pyramid = "<0.4.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = ">=0.3.2", micro-reader = "<0.2.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = ">=0.3.2", ome-zarr-pyramid = "<0.4.0" }
+outcome = "unresolvable"
+
+[[resolve]]
+name = "fresh eubi-bridge (with the candidates)"
+python = "eubi"
+requirements = ["eubi-bridge"]
+
+[[resolve]]
+name = "fresh eubi-bridge-lite (with the candidates)"
+python = "eubi"
+requirements = ["eubi-bridge-lite"]
+
+[[resolve]]
+name = "eubi-bridge-lite<0.3.2 (stay on 0.3.1)"
+python = "eubi"
+requirements = ["eubi-bridge-lite<0.3.2"]

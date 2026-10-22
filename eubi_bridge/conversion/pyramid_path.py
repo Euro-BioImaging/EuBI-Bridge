@@ -30,13 +30,21 @@ FORMATS = (".ome.tif", ".ome.tiff",
            ".tif", ".tiff", ".lsm", ".btf",                # step 1c, group 1
            ".nd2", ".lif", ".oir",                         # group 2
            ".czi",                                          # groups 3-5
-           ".ims")                                          # group 6
+           ".ims",                                          # group 6
+           # plate index files (0.3.2): Harmony Index(.idx).xml, CellVoyager .wpi / .mlf,
+           # MetaXpress .HTD, IN Cell .xdce; a file micro-reader does not read goes to
+           # the older readers as before
+           ".xml", ".wpi", ".mlf", ".htd", ".xdce")
 #: micro-reader's name of the series index (micro-reader 0.1.0; it was "scene"). The
 #: older readers (legacy_image) and the aggregative path name their index the same, so
 #: one name serves every file; eubi's own option for it is series_index
 SERIES = "series"
 #: image indices outputs are selected by
 INDICES = {SERIES, "tile", "view", "illumination"}
+#: the image indices of a plate file (micro-reader's plates=True)
+PLATE_INDICES = {"plate", "acquisition", "well", "field"}
+#: plate index files whose name says nothing about the plate: outputs take the folder's
+GENERIC_INDEX_NAMES = {"index", "measurementdata"}
 #: eubi-bridge's channel_intensity_limits -> ozp's write_pyramid(windows=...)
 WINDOWS = {"from_dtype": "dtype", "from_array": "data", "auto": "auto"}
 #: the multiscale name eubi-bridge writes
@@ -187,12 +195,21 @@ def _join_labels(pyr, group, parts, images, readers):
     return pyr.set_channels(labels)
 
 
+class PlateFieldTilesError(ValueError):
+    """A plate file whose fields hold several images (tiles), asked to be written as an
+    NGFF plate, which holds one image per field."""
+
+
 class _MicroFile:
     """A micro-reader File behind the loader's interface: ``indices``, ``image(key)``,
-    ``close()``."""
+    ``close()``; for a plate file also ``plates`` and ``coordinate_systems``."""
 
-    def __init__(self, f):
+    def __init__(self, f, plate: bool = False):
         self._f, self.path = f, f.path
+        #: written as one NGFF plate (_convert_plate)
+        self.is_plate = plate
+        self.plates = getattr(f, "plates", None) or []
+        self.coordinate_systems = getattr(f, "coordinate_systems", None)
         self._images = {tuple((k, v) for k, v in dict(img.index).items() if k != "resolution"):
                         img for img in f.images
                         if int(dict(img.index).get("resolution", 0)) == 0}
@@ -219,11 +236,21 @@ def _open_micro(job) -> _MicroFile:
     path = str(job.input_path)
     tiles = "mosaic" if job.readers.as_mosaic else "separate"
     try:
+        # plates=True: a plate file is read as one (File.plates); other files are not
+        # changed by it
         f = micro_reader.open(path, tiles=tiles, rename=RENAME, axes="tczyx",
-                              samples="channels")
+                              samples="channels", plates=True)
     except micro_reader.UnsupportedFormatError as exc:
         raise NotYet(f"micro-reader does not read it ({exc})") from exc
     names = set().union(*(set(k) for k in f.indices)) - {"resolution"}
+    if getattr(f, "plates", None):
+        plate = _plate_or_not(f, job, names)
+        if plate is not None:
+            return plate
+        f.close()                                  # as_plate=False: read without plates
+        f = micro_reader.open(path, tiles=tiles, rename=RENAME, axes="tczyx",
+                              samples="channels")
+        names = set().union(*(set(k) for k in f.indices)) - {"resolution"}
     problem = ""
     if names - INDICES:
         problem = f"image indices {sorted(names - INDICES)}"
@@ -234,6 +261,42 @@ def _open_micro(job) -> _MicroFile:
         f.close()
         raise NotYet(problem)
     return _MicroFile(f)
+
+
+def _plate_or_not(f, job, names: set):
+    """For a file micro-reader read as a plate: the plate file to write as one NGFF plate,
+    or None to read it without plates (as_plate=False, with a warning). A plate whose
+    fields hold several images (tiles, views) raises PlateFieldTilesError unless
+    as_mosaic stitched them: an NGFF 0.4 / 0.5 / 0.6 plate holds one image per field (RFC 8
+    keeps the tiles of a field as a sub-collection)."""
+    path = os.path.basename(str(job.input_path))
+    n_wells = sum(len(p.wells) for p in f.plates)
+    if not job.readers.as_plate:
+        logger.warning(
+            f"{path} is a plate ({len(f.plates)} plate(s), {n_wells} wells) and is "
+            f"converted with as_plate=False: each image becomes a store of its own, with "
+            f"no plate, wells or fields. Leave as_plate at True to write one NGFF plate.")
+        return None
+    field = sorted(PLATE_INDICES & names)
+    per_field = {}
+    for index in f.indices:
+        if int(index.get("resolution", 0)) != 0:
+            continue
+        place = tuple(index.get(k) for k in field)
+        per_field[place] = per_field.get(place, 0) + 1
+    most = max(per_field.values(), default=1)
+    # RFC 8 holds a field of several images (a sub-collection per field); NGFF 0.4 / 0.5
+    # / 0.6 plates hold one image per field
+    if most > 1 and job.conversion.ome_zarr_version != "rfc8":
+        f.close()
+        extra = sorted(names - PLATE_INDICES - {SERIES})
+        raise PlateFieldTilesError(
+            f"{path} is a plate whose fields hold up to {most} images each (they differ in "
+            f"{extra or ['series']}); an NGFF {job.conversion.ome_zarr_version} plate holds "
+            f"one image per field. Convert it with as_mosaic=True to stitch each field's "
+            f"tiles into one image, with ome_zarr_version='rfc8' to keep the tiles (RFC 8 is "
+            f"a draft), or with as_plate=False to write each image as a store of its own.")
+    return _MicroFile(f, plate=True)
 
 
 def _open_input(job):
@@ -263,6 +326,9 @@ def _load_input_collection(job):
     from eubi_bridge.core.output_store import _ozp_version
 
     f, reader = _open_input(job)
+    if getattr(f, "is_plate", False):
+        # one NGFF plate for the whole file (_convert_plate)
+        return f, [SimpleNamespace(plate=True)], reader + ", as a plate"
     try:
         path = str(job.input_path)
         readers = job.readers
@@ -393,6 +459,91 @@ def _load_input_collection(job):
     except BaseException:
         f.close()
         raise
+
+
+# -- plates ------------------------------------------------------------------------------
+
+def _plate_outputs(f, job) -> list:
+    """``[(plate number, output path)]``: ``<file>.zarr``, or ``<file>_plate<n>.zarr`` for
+    each plate of a file holding several."""
+    from eubi_bridge.conversion.conversion_worker import _generate_output_path
+    path = str(job.input_path)
+    stem = job.resolved_basename or os.path.basename(path).split(".")[0]
+    if stem.lower() in GENERIC_INDEX_NAMES:
+        # an index file with a fixed name (Harmony Index.idx.xml, CellVoyager
+        # MeasurementData.mlf): the plate is named after its folder
+        stem = os.path.basename(os.path.dirname(os.path.abspath(path))) or stem
+    many = len(f.plates) > 1
+    return [(n, _generate_output_path(job.output_path, path,
+                                      resolved_basename=f"{stem}_plate{n}" if many else stem))
+            for n in range(len(f.plates))]
+
+
+async def _convert_plate(f, job, plate: int, output_path: str) -> None:
+    """Plate `plate` of the file as ONE NGFF plate store, in the OME-Zarr version asked
+    for (0.4, 0.5, 0.6 or RFC 8): every field gets the job's settings (``_prepared``),
+    then ozp writes the plate with eubi's own writer for each field (chunks, shards,
+    codecs, memory budget, OME-XML). The fields keep their coordinate systems: the
+    systems' axes are filled from the fields as written (spatial plan 3.12)."""
+    import dataclasses
+
+    from ome_zarr_pyramid import PyramidCollection
+    from ome_zarr_pyramid.core.plates import file_stem, tree_from_file
+
+    from eubi_bridge.conversion.conversion_worker import (_memory_plan_for,
+                                                          _warn_unused_writer_settings)
+    from eubi_bridge.core.output_store import _ozp_target_args, _ozp_version, store_exists
+    conv = job.conversion
+    if not conv.overwrite and store_exists(output_path):
+        raise FileExistsError(
+            f"Output already exists: '{output_path}'. Refusing to convert with "
+            f"overwrite=False — the existing dataset was left untouched. Enable overwrite "
+            f"to replace it, or choose a different output.")
+    keys = [tuple(index.items()) for index in f.indices]
+    outside = [k for k in keys if "plate" not in dict(k)]
+    if outside and plate == 0:
+        # a CZI's slide preview, a label picture: in the file, not in any plate
+        logger.warning(
+            f"{os.path.basename(str(job.input_path))}: {len(outside)} image(s) of the file "
+            f"are not part of a plate and are not written (e.g. {dict(outside[0])}). "
+            f"Convert with as_plate=False to write every image as a store of its own.")
+    images = {k: f.image(k) for k in keys}
+    source = SimpleNamespace(images=[images[k] for k in keys], path=f.path,
+                             plates=f.plates, coordinate_systems=f.coordinate_systems)
+    version = _ozp_version(conv.zarr_format, conv.ome_zarr_version)
+    coll = PyramidCollection.from_file(
+        source, version=version, name=NAME,
+        resolutions="all" if job.downscale.keep_existing_resolutions else "base")
+    # the job's settings on every field, before the plate is built: squeeze or crop can
+    # change a field's axes, and the plate's systems and scenes follow the fields as
+    # written
+    processed = {}
+    for key in coll:
+        # a field has no series or tile index of eubi's: its place is plate, well, field
+        entry = SimpleNamespace(pyramid=coll.pyramid(key), image=images[key],
+                                series_path=str(f.path), scene=None, tile=None)
+        processed[key], _ = _prepared(entry, job, output_path)
+    systems = [dataclasses.replace(cs, axes=None)
+               for cs in coll.coordinate_systems.values()]
+    written = PyramidCollection(processed, name=f.path,
+                                tree=tree_from_file(source, processed,
+                                                    name=file_stem(f.path)),
+                                coordinate_systems=systems, system_of=coll.system_of)
+    _warn_unused_writer_settings(job.cluster)
+
+    def write_field(pyr, target, **_):
+        # one field, written as eubi writes an image (the plate's own version: ozp hands
+        # each field over in it; RFC 8: the collection document is ozp's)
+        budget, region = _memory_plan_for(pyr.base_array, job)
+        dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
+        xml = ome_xml(pyr, dtype) if conv.save_omexml else None
+        _write(pyr, str(target), job, scene_budget_mb=budget, region_size_mb=region,
+               xml=xml, image_only=True)
+
+    target, storage_options = _ozp_target_args(output_path)
+    await asyncio.to_thread(written.write_plate, target, plate=plate,
+                            version=conv.ome_zarr_version, overwrite=conv.overwrite,
+                            storage_options=storage_options, writer=write_field)
 
 
 # -- the job's settings, one step each (Pyramid in, Pyramid out) -------------------------
@@ -593,7 +744,7 @@ def ome_xml(pyr, dtype) -> str:
 # -- one output -----------------------------------------------------------------------
 
 def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb: float,
-           xml: Optional[str]) -> None:
+           xml: Optional[str], image_only: bool = False) -> None:
     """ONE write_pyramid call with the job's storage settings (eubi-bridge decides the
     chunk shape and shards; ozp writes)."""
     from eubi_bridge.conversion.conversion_worker import parse_chunks, parse_shard_coefs
@@ -624,7 +775,7 @@ def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb
                if clus.bioformats_threads is not None else {})
     with dask_config(**dask_kw):
         _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dtype, arr,
-                       region_size_mb, budget, job, xml)
+                       region_size_mb, budget, job, xml, image_only=image_only)
 
 
 def _system_for_output(pyr):
@@ -648,13 +799,13 @@ def _system_for_output(pyr):
 
 
 def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dtype, arr,
-                   region_size_mb, budget, job, xml):
+                   region_size_mb, budget, job, xml, image_only=False):
     from ome_zarr_pyramid import IO
 
     from eubi_bridge.conversion.conversion_worker import _threads_per_scene
     pyr = _system_for_output(pyr)
     write = IO().write_pyramid
-    if conv.ome_zarr_version == "rfc8":
+    if conv.ome_zarr_version == "rfc8" and not image_only:
         # NGFF RFC 8: a collection holding the image (an NGFF 0.5 multiscale) under the
         # output's root; ozp writes the collection document and the image with the same
         # settings (experimental: ozp warns that RFC 8 is a draft)
@@ -675,11 +826,43 @@ def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dty
         ome_xml=xml)
 
 
+def _prepared(entry, job, output_path: str):
+    """``(Pyramid, OME-XML or None)``: the job's settings applied to the entry's Pyramid
+    (channels, scales and units, squeeze and crop, downscaling, eubi's own block), ready
+    to be written. One image; a plate applies it to every field."""
+    from eubi_bridge.core.output_store import _eubi_attrs
+    conv = job.conversion
+    pyr = entry.pyramid
+    meta = pyr.meta
+    entry.units = {ax: u for ax, u in zip(meta.axis_order, meta.unit_list) if u}
+    origin = _origin(entry.image, entry.units)
+    # keep_existing_resolutions with stored levels: written as they are, as the old
+    # path's store_existing_pyramid did: no squeeze / crop, no scale overrides, no
+    # downscaling, no acquisition split info, chunks computed per level
+    keep = job.downscale.keep_existing_resolutions and len(meta.resolution_paths) > 1
+    if job.downscale.keep_existing_resolutions and not keep:
+        logger.info(f"keep_existing_resolutions is set but no existing multiscale "
+                    f"pyramid was found for {output_path}; rebuilding pyramid normally")
+    acquisition = None if keep else acquisition_metadata(entry, pyr, job, origin)
+
+    if not getattr(entry, "rgb_named", False):     # joined parts are named already
+        pyr = apply_rgb_channels(pyr, entry.image)
+    pyr = apply_axis_metadata(pyr, job, scales_too=not keep)
+    pyr = apply_channels(pyr, job)
+    if not keep:
+        pyr = apply_squeeze_and_crop(pyr, job)
+    dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
+    xml = ome_xml(pyr, dtype) if conv.save_omexml else None
+    if not keep:
+        pyr = apply_downscale(pyr, job)
+    pyr.meta.set_custom("eubi_bridge", _eubi_attrs(acquisition))
+    return pyr, xml
+
+
 async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore) -> None:
     """One output: the job's settings applied to the entry's Pyramid, then written."""
     from eubi_bridge.conversion.conversion_worker import (_memory_plan_for,
                                                           _warn_unused_writer_settings)
-    from eubi_bridge.core.output_store import _eubi_attrs
     from eubi_bridge.core.output_store import store_exists
     async with sem:
         conv = job.conversion
@@ -688,31 +871,7 @@ async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore) -
                 f"Output already exists: '{output_path}'. Refusing to convert "
                 f"with overwrite=False — the existing dataset was left untouched. "
                 f"Enable overwrite to replace it, or choose a different output.")
-        pyr = entry.pyramid
-        meta = pyr.meta
-        entry.units = {ax: u for ax, u in zip(meta.axis_order, meta.unit_list) if u}
-        origin = _origin(entry.image, entry.units)
-        # keep_existing_resolutions with stored levels: written as they are, as the old
-        # path's store_existing_pyramid did: no squeeze / crop, no scale overrides, no
-        # downscaling, no acquisition split info, chunks computed per level
-        keep = job.downscale.keep_existing_resolutions and len(meta.resolution_paths) > 1
-        if job.downscale.keep_existing_resolutions and not keep:
-            logger.info(f"keep_existing_resolutions is set but no existing multiscale "
-                        f"pyramid was found for {output_path}; rebuilding pyramid normally")
-        acquisition = None if keep else acquisition_metadata(entry, pyr, job, origin)
-
-        if not getattr(entry, "rgb_named", False):     # joined parts are named already
-            pyr = apply_rgb_channels(pyr, entry.image)
-        pyr = apply_axis_metadata(pyr, job, scales_too=not keep)
-        pyr = apply_channels(pyr, job)
-        if not keep:
-            pyr = apply_squeeze_and_crop(pyr, job)
-        dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
-        xml = ome_xml(pyr, dtype) if conv.save_omexml else None
-        if not keep:
-            pyr = apply_downscale(pyr, job)
-        pyr.meta.set_custom("eubi_bridge", _eubi_attrs(acquisition))
-
+        pyr, xml = _prepared(entry, job, output_path)
         scene_budget_mb, region_size_mb = _memory_plan_for(pyr.base_array, job)
         _warn_unused_writer_settings(job.cluster)
         await asyncio.to_thread(_write, pyr, output_path, job,
@@ -728,6 +887,16 @@ async def convert(job) -> None:
     f, entries, reader = await asyncio.to_thread(_load_input_collection, job)
     logger.info(f"{job.input_path}: {len(entries)} output(s), read by {reader}")
     _retired_settings(job)
+    if entries and getattr(entries[0], "plate", False):
+        try:
+            outputs = _plate_outputs(f, job)
+            results = await asyncio.gather(
+                *[_convert_safely(_convert_plate(f, job, plate, out), out)
+                  for plate, out in outputs], return_exceptions=True)
+        finally:
+            f.close()
+        _report_failures(results, job)
+        return
     try:
         sem = asyncio.Semaphore(job.cluster.max_concurrent_scenes)
         tasks = []
