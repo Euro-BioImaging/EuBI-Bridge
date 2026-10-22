@@ -113,7 +113,8 @@ class LegacyImage:
     """One image (series, CZI tile) of a file the older readers read, micro-reader-like."""
 
     def __init__(self, *, array, axes: str, index: dict, name: str, pixel_sizes: dict,
-                 channels: list, position: dict, index_values: dict):
+                 channels: list, position: dict, index_values: dict,
+                 coordinate_system: Optional[str] = None):
         array = _thread_safe(array)
         self.array = array
         self.axes = str(axes).lower()
@@ -125,8 +126,12 @@ class LegacyImage:
         #: samples are already channels here (the readers fold them, and name them
         #: with eubi-bridge's RGB rule): no "s" for pyramid_path's RGB naming
         self.source = self
+        #: coordinate_system: the id of the system `position` is in (spatial plan 3.26),
+        #: None when the reader does not say (the image is then unplaced: its position is
+        #: written as its translation, without a system)
         self.metadata = SimpleNamespace(pixel_sizes=pixel_sizes, channels=channels,
-                                        position=position, index_values=index_values)
+                                        position=position, index_values=index_values,
+                                        coordinate_system=coordinate_system)
 
     def __getitem__(self, key):
         import numpy as np
@@ -261,7 +266,10 @@ class NgffFile:
     """An OME-Zarr input, read by ome_zarr_pyramid itself (roadmap step 2, part 3) and
     presented like a micro-reader ``File``: one image, its level 0 (the array as it is),
     pixel sizes, units, channel names and colours, and its translation as the stage
-    position, so the output keeps it (0.1.5 dropped it)."""
+    position, so the output keeps it (0.1.5 dropped it). The coordinate system the input
+    names (``eubi:coordinate_system``, with its definition) goes with the image, and an
+    NGFF 0.6 image placed by a scene is read with its position (``apply_scene=True``,
+    spatial plan 5.5, 9.18)."""
 
     def __init__(self, job):
         from ome_zarr_pyramid import IO
@@ -269,7 +277,12 @@ class NgffFile:
         from eubi_bridge.core.output_store import _ozp_target_args
         self.path = str(job.input_path)
         target, storage_options = _ozp_target_args(self.path)
-        self._pyr = IO().read_pyramid(target, storage_options=storage_options)
+        from ome_zarr_pyramid.core.spatial import pyramid_system
+        self._pyr = IO().read_pyramid(target, storage_options=storage_options,
+                                      apply_scene=True)
+        self._system, definition = pyramid_system(self._pyr)
+        #: the input's system, for PyramidCollection.from_file (None: it names none)
+        self.coordinate_systems = [definition] if definition is not None else None
         #: the input Pyramid itself, written as it is with keep_existing_resolutions
         self.source_pyramid = self._pyr
         self.n_scenes = self.n_scenes_in_file = 1
@@ -294,7 +307,8 @@ class NgffFile:
         return LegacyImage(array=self._pyr.layers[base], axes=axes, index=dict(index),
                            name=meta.multiscales.get("name"), pixel_sizes=pixel_sizes,
                            channels=channels,
-                           position=position, index_values={})
+                           position=position, index_values={},
+                           coordinate_system=self._system)
 
     def close(self) -> None:
         self._pyr = None

@@ -204,8 +204,13 @@ class _Inputs:
             image = f.image(tuple(index.items()))
             meta = image.metadata
             source = getattr(image, "source", image)
+            # the system the image's position is in, with its definition (9.18)
+            sid = getattr(meta, "coordinate_system", None)
+            systems = [cs for cs in getattr(f, "coordinate_systems", None) or ()
+                       if sid is not None and str(getattr(cs, "id", "")) == str(sid)]
             return SimpleNamespace(
                 name=getattr(image, "name", None),
+                coordinate_systems=systems or None,
                 axes=str(getattr(source, "axes", "")),
                 # the unfolded axes and shape: its RGB samples (rgb_sample_channels)
                 source=SimpleNamespace(axes=str(getattr(source, "axes", "")),
@@ -214,7 +219,8 @@ class _Inputs:
                     pixel_sizes=dict(meta.pixel_sizes or {}),
                     channels=list(meta.channels or []),
                     position=dict(meta.position or {}),
-                    index_values=dict(getattr(meta, "index_values", None) or {})))
+                    index_values=dict(getattr(meta, "index_values", None) or {}),
+                    coordinate_system=sid))
         finally:
             f.close()
 
@@ -406,15 +412,20 @@ def _build_entry(paths: list, job, job_kwargs: dict):
         # coloured red / green / blue as 0.1.5 did (_channels)
         images = {p: inputs.image(p) for p in dict.fromkeys([paths[0]] + samples)}
         first = images[paths[0]].metadata
+        # the output takes the first file's position and system (spatial plan 3.26, 9.18)
         image = LegacyImage(
             array=array, axes=AXES, index={SERIES: scene}, name=images[paths[0]].name,
             pixel_sizes=first.pixel_sizes,
             channels=_channels(samples, images, sizes, int(array.shape[1]), job_kwargs),
-            position=first.position, index_values=first.index_values)
+            position=first.position, index_values=first.index_values,
+            coordinate_system=getattr(first, "coordinate_system", None))
         version = _ozp_version(job.conversion.zarr_format, job.conversion.ome_zarr_version)
-        coll = PyramidCollection.from_file(SimpleNamespace(images=[image], path=paths[0]),
-                                           version=version, name=NAME, resolutions="base")
-        pyr = _distinct_colors(coll[((SERIES, scene),)])
+        coll = PyramidCollection.from_file(
+            SimpleNamespace(images=[image], path=paths[0],
+                            coordinate_systems=getattr(images[paths[0]], "coordinate_systems",
+                                                       None)),
+            version=version, name=NAME, resolutions="base")
+        pyr = _distinct_colors(coll.pyramid(((SERIES, scene),)))
         entry = SimpleNamespace(pyramid=pyr, image=image, scene=scene, tile=None,
                                 series_path=f"{paths[0]}_{scene}", basename=None,
                                 name_scene=None, name_tile=None)

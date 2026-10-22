@@ -129,6 +129,19 @@ def is_ome_zarr(path: Union[str, Path]) -> bool:
         return False
 
 
+def _is_image_group(path: Union[str, Path]) -> bool:
+    """Whether `path` is a zarr group holding an OME-Zarr image (``multiscales``, under
+    ``ome`` in 0.5 / 0.6)."""
+    import zarr
+
+    try:
+        attrs = zarr.open_group(str(path), mode='r').attrs
+        ngff = attrs.get('ome') if isinstance(attrs.get('ome'), dict) else attrs
+        return 'multiscales' in ngff
+    except Exception:
+        return False
+
+
 def get_ome_zarr_version(path: Union[str, Path]) -> Optional[str]:
     """Get the NGFF version string from an OME-Zarr using zarr-native detection.
     
@@ -510,6 +523,14 @@ def take_filepaths_from_path(
         includes = includes.split(',')
     if isinstance(excludes, str):
         excludes = excludes.split(',')
+
+    # A group inside a store that is itself an OME-Zarr image (a well's field, one series
+    # of a layout; NGFF 0.6 places such images by a scene on the group above): one input,
+    # as named. Its name does not end with .zarr, so it would otherwise be read as a
+    # folder of files.
+    if (os.path.isdir(input_path) and not input_path.rstrip('/\\').endswith('.zarr')
+            and _is_image_group(input_path)):
+        return [input_path]
 
     # Handle file or single zarr path
     if os.path.isfile(input_path) or input_path.endswith('.zarr'):

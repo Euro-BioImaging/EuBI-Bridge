@@ -20,6 +20,12 @@ Changes made to them since, by hand or by script, never by recording:
   it since ozp 0.3.1 (the downscale method, ``"simple"``, or ``"unknown"`` for one level),
   by a script that checked each new file equals the old one plus that key; no
   re-recording.
+- 2026-10-22 (spatial plan 9.18, the release after 0.3.1): ``eubi:coordinate_system``
+  and ``eubi:coordinate_systems`` added to the 16 placed stores of 7 goldens
+  (pyramid_path-ome_tiff-*, -czi_mosaic-*, -czi_views-*) by
+  ``tools/add_coordinate_system_to_goldens.py``, which converts each case again and
+  checks that every store equals the golden plus exactly these keys, levels unchanged; no
+  re-recording. They need the micro-reader that declares coordinate systems.
 """
 from __future__ import annotations
 

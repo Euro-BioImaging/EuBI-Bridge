@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased: coordinate systems (spatial plan 9.18)
+
+Needs the ome_zarr_pyramid release with the coordinate-system model (plan 9.9) and the
+micro-reader release that declares systems (plan 9.7); the version floors are set when
+those versions are decided.
+
+### New
+
+- Each output keeps the coordinate system its position is in: the custom metadata
+  `eubi:coordinate_system` (the system's id, e.g. `stage`) and `eubi:coordinate_systems`
+  (its definition: name, axes, whether it is estimated), beside the image's translation.
+  Outputs converted from one file name the same system, so other tools can place them
+  together. The system's axes are the output's own, after squeeze and crop. An image the
+  reader places in no system (the older readers; a file without positions) is written as
+  before, without these keys.
+- An aggregated output takes the first file's position and system.
+- An OME-Zarr input keeps the system it names. An NGFF 0.6 image placed by a scene is read
+  with its position (`apply_scene=True`).
+- A group inside an OME-Zarr store that is itself an image (a well's field, one series of
+  a layout) can be given as the input; before, only a path ending in `.zarr` was read as
+  one OME-Zarr input, and a group inside a store was taken as a folder of files.
+
 ## 0.3.1 (2026-10-22)
 
 ### Fixes

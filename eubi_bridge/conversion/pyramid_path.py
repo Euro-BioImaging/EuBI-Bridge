@@ -355,8 +355,12 @@ def _load_input_collection(job):
         needed = list(dict.fromkeys(k for _, plan_keys, _ in plans for k in plan_keys))
         images = {k: f.image(k) for k in needed}
         version = _ozp_version(job.conversion.zarr_format, job.conversion.ome_zarr_version)
+        # the file's coordinate systems (micro-reader; an OME-Zarr input's own), so each
+        # output keeps the system its position is in (spatial plan 9.18); readers that
+        # name none leave the images unplaced
         coll = PyramidCollection.from_file(
-            SimpleNamespace(images=[images[k] for k in needed], path=path),
+            SimpleNamespace(images=[images[k] for k in needed], path=path,
+                            coordinate_systems=getattr(f, "coordinate_systems", None)),
             version=version, name=NAME,
             # keep_existing_resolutions: the file's stored levels too (folded into the
             # image's Pyramid by from_file)
@@ -370,11 +374,12 @@ def _load_input_collection(job):
                 # every output
                 entry.pyramid = source.rename(NAME)
             elif group is None:
-                entry.pyramid = coll[plan_keys[0]]
+                # coll.pyramid(key): the image stamped with its system (3.26)
+                entry.pyramid = coll.pyramid(plan_keys[0])
             else:
                 # RGB samples named per part first (plain white channels), then the
                 # joined labels View{v}_Illu{i}_<name> over them, as 0.1.5 wrote them
-                parts = [apply_rgb_channels(coll[k], images[k]) for k in plan_keys]
+                parts = [apply_rgb_channels(coll.pyramid(k), images[k]) for k in plan_keys]
                 entry.pyramid = _join_labels(_joined(parts, path), group, parts,
                                              [images[k] for k in plan_keys], readers)
                 entry.rgb_named = True
@@ -622,11 +627,32 @@ def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb
                        region_size_mb, budget, job, xml)
 
 
+def _system_for_output(pyr):
+    """`pyr` with its coordinate system's axes made the output's own (spatial plan 3.12,
+    9.18). The system was filled from the image as the file gave it; squeeze and crop
+    can leave the output with fewer axes, and the definition a store of one image
+    carries must fit that image. Id, name and estimated stay; an unplaced image is
+    returned as it is."""
+    import dataclasses
+
+    from ome_zarr_pyramid.core.spatial import (SYSTEMS_KEY, minimal_system, pyramid_system,
+                                               system_to_json)
+    sid, cs = pyramid_system(pyr)
+    if cs is None:
+        return pyr
+    own = minimal_system(sid, pyr).axes
+    if cs.axes is not None and [a.name for a in cs.axes] == [a.name for a in own]:
+        return pyr
+    return pyr.set_custom_metadata(SYSTEMS_KEY,
+                                   [system_to_json(dataclasses.replace(cs, axes=own))])
+
+
 def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dtype, arr,
                    region_size_mb, budget, job, xml):
     from ome_zarr_pyramid import IO
 
     from eubi_bridge.conversion.conversion_worker import _threads_per_scene
+    pyr = _system_for_output(pyr)
     IO().write_pyramid(
         pyr, target, storage_options=storage_options, overwrite=conv.overwrite,
         max_threads=_threads_per_scene(clus), region_size_mb=float(region_size_mb),

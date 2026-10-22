@@ -1,6 +1,30 @@
 {
  "views_view_concat.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {

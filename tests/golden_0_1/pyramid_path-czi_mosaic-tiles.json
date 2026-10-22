@@ -1,6 +1,26 @@
 {
  "mosaic_scene0_tile0.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {
@@ -95,6 +115,26 @@
  },
  "mosaic_scene0_tile1.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {
@@ -189,6 +229,26 @@
  },
  "mosaic_scene0_tile2.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {
@@ -283,6 +343,26 @@
  },
  "mosaic_scene0_tile3.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {
@@ -377,6 +457,26 @@
  },
  "mosaic_scene1_tile0.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {
@@ -471,6 +571,26 @@
  },
  "mosaic_scene1_tile1.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {
@@ -565,6 +685,26 @@
  },
  "mosaic_scene1_tile2.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {
@@ -659,6 +799,26 @@
  },
  "mosaic_scene1_tile3.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {
