@@ -191,7 +191,9 @@ def test_a_file_without_samples_is_not_renamed():
     from eubi_bridge.conversion.pyramid_path import apply_rgb_channels, rgb_sample_channels
     image = SimpleNamespace(axes="tczyx", shape=(1, 3, 1, 4, 4), metadata=None)
     assert rgb_sample_channels(image) is None
-    pyr = object()
+    import numpy as np
+    import ome_zarr_pyramid as ozp
+    pyr = ozp.Pyramid().from_array(np.zeros((1, 4, 4), np.uint8), axis_order="cyx")
     assert apply_rgb_channels(pyr, image) is pyr
 
 

@@ -154,6 +154,8 @@ def _ome_pixeltype_from_dtype(dtype) -> PixelType:
         np.dtype(np.int8): PixelType.INT8,
         np.dtype(np.int16): PixelType.INT16,
         np.dtype(np.int32): PixelType.INT32,
+        np.dtype(np.float16): PixelType.FLOAT,   # OME has no half float: the XML says
+                                                 # float; the array stays float16
         np.dtype(np.float32): PixelType.FLOAT,
         np.dtype(np.float64): PixelType.DOUBLE,
         np.dtype(np.bool_): PixelType.BIT,
@@ -429,6 +431,7 @@ def create_ome_xml(
         "uint8": PixelType.UINT8, "uint16": PixelType.UINT16,
         "uint32": PixelType.UINT32, "int8": PixelType.INT8,
         "int16": PixelType.INT16, "int32": PixelType.INT32,
+        "float16": PixelType.FLOAT,   # OME has no half float (the array stays float16)
         "float32": PixelType.FLOAT, "float64": PixelType.DOUBLE,
     }
     if dtype not in dtype_map:

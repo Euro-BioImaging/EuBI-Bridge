@@ -380,21 +380,29 @@ def _report_failures(results: list, job: ConversionJob, total_in_file: int = 0) 
     """Log the outputs that failed; raise when all did."""
     failures = [r for r in results if isinstance(r, BaseException)]
     if failures:
+        from eubi_bridge.conversion.pyramid_path import ReaderCapabilityError
+        gaps = [exc for exc in failures if isinstance(exc, ReaderCapabilityError)]
+        if gaps:
+            # the install cannot decode the file: one error, the outputs after the
+            # first were not tried (nothing to say per scene)
+            raise gaps[0]
         for exc in failures:
-            logger.warning(f"Skipped a scene that could not be read: {exc}")
+            logger.warning(f"Skipped a scene that could not be converted: {exc}")
         if len(failures) == len(results):
             raise failures[0]
         written = len(results) - len(failures)
         total_in_file = total_in_file or len(results)
         unreadable = max(0, total_in_file - written)
+        reasons = "; ".join(sorted({str(exc) for exc in failures}))
         logger.warning(
             "\n" + "=" * 78 + "\n"
-            f"PARTIAL CONVERSION — DAMAGED FILE: {job.input_path}\n"
+            f"PARTIAL CONVERSION: {job.input_path}\n"
             f"Converted {written} of {total_in_file} scene(s) that the file "
-            f"contains. {unreadable} scene(s) exist in the file but could NOT be "
-            f"read (damaged/corrupt data) and are MISSING from the output.\n"
-            f"If you need them, re-export or repair the source file (e.g. "
-            f"'Save As' in Zeiss ZEN).\n" + "=" * 78
+            f"contains. {unreadable} scene(s) could NOT be converted and are "
+            f"MISSING from the output.\n"
+            f"Reason(s): {reasons}\n"
+            f"The file itself may still be fine; if the reason names damaged or "
+            f"corrupt data, re-export or repair the source file.\n" + "=" * 78
         )
 
 

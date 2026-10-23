@@ -450,7 +450,10 @@ class TestDependentParams:
             if parent.kind == "bool":
                 assert isinstance(spec.active_when, bool), spec.key
             elif parent.kind == "choice":
-                assert str(spec.active_when) in parent.choices, spec.key
+                values = (spec.active_when if isinstance(spec.active_when, tuple)
+                          else (spec.active_when,))
+                for value in values:
+                    assert str(value) in parent.choices, spec.key
             elif parent.kind == "auto_int":
                 # Only the 'auto' state is meaningful as a condition; an exact
                 # layer count would be an arbitrary trigger.
@@ -583,12 +586,17 @@ class TestShardDependency:
         model = self._model("0.5")
         assert not model.is_inert(model.rows[0], f"{axis}_shard_coef")
 
+    @pytest.mark.parametrize("version", ["0.6", "rfc8"])
+    def test_shards_live_under_the_other_zarr_v3_versions(self, version):
+        model = self._model(version)
+        assert not model.is_inert(model.rows[0], "z_shard_coef")
+
     def test_parent_is_reported(self):
         assert BatchModel().parent_switch("z_shard_coef") == "ome_zarr_version"
 
     def test_non_bool_active_when_is_supported(self):
         """The dependency is on a choice value, not a boolean switch."""
-        assert spec_for("z_shard_coef").active_when == "0.5"
+        assert spec_for("z_shard_coef").active_when == ("0.5", "0.6", "rfc8")
 
     def test_per_row_shard_inertness(self):
         cfg = _config(omeZarrVersion="0.4")
@@ -698,7 +706,8 @@ class TestInertReason:
     def test_choice_parent_uses_inequality(self):
         model = self._model(conversion={"omeZarrVersion": "0.4"})
         assert model.inert_reason(
-            model.rows[0], "z_shard_coef") == "ome_zarr_version!=0.5"
+            model.rows[0], "z_shard_coef") == (
+                "ome_zarr_version is not one of 0.5, 0.6, rfc8")
 
     def test_chain_reports_the_root_cause(self):
         """min_dimension_size's own parent says 'auto'; the real cause is upstream."""

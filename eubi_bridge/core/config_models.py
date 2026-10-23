@@ -126,7 +126,9 @@ _logger = _logging.getLogger(__name__)
 
 # Supported OME-Zarr (NGFF) versions and the zarr container format each requires.
 # Add new versions here as they are released (e.g. "0.6": 3).
-OME_ZARR_VERSIONS: Dict[str, int] = {"0.4": 2, "0.5": 3}
+#: the OME-Zarr versions eubi writes, and the zarr format each one is stored in. "rfc8":
+#: NGFF RFC 8 (draft), a collection holding the image as an NGFF 0.5 multiscale
+OME_ZARR_VERSIONS: Dict[str, int] = {"0.4": 2, "0.5": 3, "0.6": 3, "rfc8": 3}
 
 _zarr_format_deprecation_warned = False
 _bf_tile_size_deprecation_warned = False
@@ -443,14 +445,15 @@ def resolve_ome_zarr_target(ome_zarr_version, zarr_format=2, warn: bool = False)
     """
     global _zarr_format_deprecation_warned
     if ome_zarr_version is not None:
-        v = str(ome_zarr_version).strip().lstrip("vV")
+        v = str(ome_zarr_version).strip().lstrip("vV").lower()
         if v in OME_ZARR_VERSIONS:
             return v, OME_ZARR_VERSIONS[v]
-        if warn:
-            _logger.warning(
-                "Unrecognised ome_zarr_version %r (supported: %s); falling back "
-                "to zarr_format.", ome_zarr_version, sorted(OME_ZARR_VERSIONS),
-            )
+        # never another version than the one asked for (it fell back to zarr_format,
+        # i.e. 0.4, before eubi-bridge 0.3.2)
+        raise ValueError(
+            f"ome_zarr_version {ome_zarr_version!r}: eubi-bridge writes OME-Zarr "
+            f"{', '.join(repr(k) for k in OME_ZARR_VERSIONS)}. Choose one of them, or "
+            f"leave ome_zarr_version unset for the zarr_format default.")
     try:
         fmt = int(zarr_format)
     except (TypeError, ValueError):
@@ -461,7 +464,8 @@ def resolve_ome_zarr_target(ome_zarr_version, zarr_format=2, warn: bool = False)
     if warn and not _zarr_format_deprecation_warned:
         _logger.warning(
             "DEPRECATION: 'zarr_format' is deprecated; use 'ome_zarr_version' "
-            "instead (e.g. ome_zarr_version='0.4' or '0.5'). This run resolved to "
+            "instead (e.g. ome_zarr_version='0.4', '0.5', '0.6' or 'rfc8'). This run "
+            "resolved to "
             "OME-Zarr %s (zarr v%d).", version, fmt,
         )
         _zarr_format_deprecation_warned = True
@@ -601,6 +605,12 @@ class ReaderConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     as_mosaic: bool = False
+    # A file micro-reader reads as a plate becomes ONE NGFF plate store. None (the
+    # default): when the format is a plate format (Harmony, CellVoyager, MetaXpress,
+    # IN Cell) or the file's images sit in two or more wells; a file whose images all
+    # sit in one well (a CZI acquired on a plate holder) is converted per image. True:
+    # every plate file. False: one store per image, with a warning that it is a plate.
+    as_plate: Optional[bool] = None
     # Accept int, 'all', or comma-separated ints (e.g. '0,1,2')
     view_index: Union[int, str] = 0
     phase_index: int = Field(default=0, ge=0)
@@ -630,6 +640,14 @@ class ReaderConfig(BaseModel):
     @classmethod
     def _renamed(cls, data):
         return rename_settings(data) if isinstance(data, dict) else data
+
+    @field_validator("as_plate", mode="before")
+    @classmethod
+    def _tristate_words(cls, v):
+        """'auto' / 'on' / 'off', as the GUI and a batch cell spell the three states."""
+        if isinstance(v, str):
+            return {"auto": None, "on": True, "off": False}.get(v.strip().lower(), v)
+        return v
 
     @field_validator('series_index', mode='before')
     @classmethod
@@ -831,8 +849,8 @@ class ConversionConfig(BaseModel):
     def _resolve_ome_zarr_version(self) -> "ConversionConfig":
         """Resolve ome_zarr_version / zarr_format into a consistent pair.
 
-        ome_zarr_version supersedes zarr_format; an unset/unrecognised version
-        falls back to zarr_format.  Resolution here is SILENT — the deprecation
+        ome_zarr_version supersedes zarr_format; an unset version falls back to
+        zarr_format, an unknown one raises.  Resolution here is SILENT — the deprecation
         warning is emitted once at the conversion entry point (to_zarr), so it
         reflects the user's actual choice rather than every model build.  Runs
         before the compressor check so it validates against the effective format.

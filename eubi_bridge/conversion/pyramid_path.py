@@ -12,6 +12,8 @@ reference in ``legacy_0_1/``).
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import os
 import pathlib
 import re
@@ -22,21 +24,37 @@ import numpy as np
 import pandas as pd
 
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.path_utils import GENERIC_INDEX_NAMES, named_folder
 
 logger = get_logger(__name__)
+#: colour notices already logged: a plate repeats one per well, so repeats go to debug
+_COLOUR_NOTICES: set = set()
 
 #: files micro-reader reads here (the others go to the older readers, as in 0.1.5)
 FORMATS = (".ome.tif", ".ome.tiff",
            ".tif", ".tiff", ".lsm", ".btf",                # step 1c, group 1
            ".nd2", ".lif", ".oir",                         # group 2
            ".czi",                                          # groups 3-5
-           ".ims")                                          # group 6
+           ".ims",                                          # group 6
+           # plate index files (0.3.2): Harmony Index(.idx).xml, CellVoyager .wpi / .mlf,
+           # MetaXpress .HTD, IN Cell .xdce; a file micro-reader does not read goes to
+           # the older readers as before
+           ".xml", ".wpi", ".mlf", ".htd", ".xdce",
+           # 0.3.2, checked against the older readers on the samples held: Leica XLEF
+           # sets, Olympus OIB / OIF, MetaMorph .nd sets, DeltaVision, Micro-Manager
+           # image-per-file acquisitions (their metadata.txt is the set's main file)
+           ".xlef", ".oib", ".oif", ".nd", ".dv", ".r3d", ".r3d_d3d", "metadata.txt")
 #: micro-reader's name of the series index (micro-reader 0.1.0; it was "scene"). The
 #: older readers (legacy_image) and the aggregative path name their index the same, so
 #: one name serves every file; eubi's own option for it is series_index
 SERIES = "series"
 #: image indices outputs are selected by
 INDICES = {SERIES, "tile", "view", "illumination"}
+#: the image indices of a plate file (micro-reader's plates=True)
+PLATE_INDICES = {"plate", "acquisition", "well", "field"}
+#: micro-reader's plate formats (always plate acquisitions, even a one-well subset): with
+#: as_plate unset they are written as plates; other formats only when 2+ wells hold images
+PLATE_BACKENDS = {"harmony", "cv7000", "metaxpress", "incell"}
 #: eubi-bridge's channel_intensity_limits -> ozp's write_pyramid(windows=...)
 WINDOWS = {"from_dtype": "dtype", "from_array": "data", "auto": "auto"}
 #: the multiscale name eubi-bridge writes
@@ -62,9 +80,11 @@ def _retired_settings(job) -> None:
             "once more with pixel_reader='standard' and compare the two outputs.")
 
 
-def _micro_reason(job) -> str:
-    """Why micro-reader does not read this job's file here (the older readers do), or ''."""
-    if not str(job.input_path).lower().endswith(FORMATS):
+def _micro_reason(job, suffix: bool = True) -> str:
+    """Why micro-reader does not read this job's file here (the older readers do), or '';
+    suffix=False leaves out the file's suffix (a part of a composite whose main file is
+    on the route is read: _open_micro)."""
+    if suffix and not str(job.input_path).lower().endswith(FORMATS):
         return f"format not on micro-reader's route yet ({', '.join(FORMATS)})"
     if job.metadata.metadata_reader != "micro" or job.readers.pixel_reader != "micro":
         return "the standard reader was asked for"
@@ -187,12 +207,40 @@ def _join_labels(pyr, group, parts, images, readers):
     return pyr.set_channels(labels)
 
 
+class ReaderCapabilityError(RuntimeError):
+    """The installed reader cannot decode this file at all (a codec it lacks: JPEG XR
+    without imagecodecs), so every output of the file would fail the same way: raised
+    once, for the first output, and the file's other outputs are not tried."""
+
+
+#: what micro-reader says when a codec is missing from the install
+CAPABILITY_GAPS = ("[codecs] extra", "native module")
+
+
+def _capability_gap(exc: BaseException) -> bool:
+    """Is *exc* micro-reader saying the install lacks a codec (``CAPABILITY_GAPS``)?"""
+    try:
+        from micro_reader import MicroReaderError
+    except Exception:                           # noqa: BLE001 - no micro-reader: no
+        return False
+    return isinstance(exc, MicroReaderError) and any(s in str(exc) for s in CAPABILITY_GAPS)
+
+
+class PlateFieldTilesError(ValueError):
+    """A plate file whose fields hold several images (tiles), asked to be written as an
+    NGFF plate, which holds one image per field."""
+
+
 class _MicroFile:
     """A micro-reader File behind the loader's interface: ``indices``, ``image(key)``,
-    ``close()``."""
+    ``close()``; for a plate file also ``plates`` and ``coordinate_systems``."""
 
-    def __init__(self, f):
+    def __init__(self, f, plate: bool = False):
         self._f, self.path = f, f.path
+        #: written as one NGFF plate (_convert_plate)
+        self.is_plate = plate
+        self.plates = getattr(f, "plates", None) or []
+        self.coordinate_systems = getattr(f, "coordinate_systems", None)
         self._images = {tuple((k, v) for k, v in dict(img.index).items() if k != "resolution"):
                         img for img in f.images
                         if int(dict(img.index).get("resolution", 0)) == 0}
@@ -211,29 +259,99 @@ def _open_micro(job) -> _MicroFile:
 
     from eubi_bridge.core.micro_source import (RENAME, require_micro_reader,
                                                set_read_concurrency)
-    reason = _micro_reason(job)
+    reason = _micro_reason(job, suffix=False)
     if reason:
         raise NotYet(reason)
+    # A file whose suffix is not on the route may still be a part of a composite whose
+    # main file is (a Harmony measurement's side files, e.g. images/image.index.txt, open
+    # images/index.xml): micro-reader opens the main file, and the job reads that.
+    off_route = _micro_reason(job)
     require_micro_reader()      # MicroReaderVersionError: a wrong micro-reader is no fallback
     set_read_concurrency(job.cluster.decode_threads)
     path = str(job.input_path)
     tiles = "mosaic" if job.readers.as_mosaic else "separate"
     try:
+        # plates=True: a plate file is read as one (File.plates); other files are not
+        # changed by it
+        f = micro_reader.open(path, tiles=tiles, rename=RENAME, axes="tczyx",
+                              samples="channels", plates=True)
+    except micro_reader.UnsupportedFormatError as exc:
+        raise NotYet(off_route or f"micro-reader does not read it ({exc})") from exc
+    except micro_reader.MicroReaderError as exc:
+        if off_route:
+            raise NotYet(f"{off_route}; micro-reader: {exc}") from exc
+        raise
+    if off_route:
+        main = str(f.path)
+        if os.path.normcase(os.path.abspath(main)) == os.path.normcase(os.path.abspath(path))                 or not main.lower().endswith(FORMATS):
+            f.close()
+            raise NotYet(off_route)
+        logger.info(f"{path}: a part of {main}; converting {main}")
+        job.input_path = path = main
+    names = set().union(*(set(k) for k in f.indices)) - {"resolution"}
+    if getattr(f, "plates", None):
+        plate = _plate_or_not(f, job, names)
+        if plate is not None:
+            return plate
+        f.close()                                  # as_plate=False: read without plates
         f = micro_reader.open(path, tiles=tiles, rename=RENAME, axes="tczyx",
                               samples="channels")
-    except micro_reader.UnsupportedFormatError as exc:
-        raise NotYet(f"micro-reader does not read it ({exc})") from exc
-    names = set().union(*(set(k) for k in f.indices)) - {"resolution"}
-    problem = ""
+        names = set().union(*(set(k) for k in f.indices)) - {"resolution"}
+    # tiles, views and illuminations of every format are micro-reader's (0.3.2; until
+    # 0.3.1 those outside a CZI went to the older readers, as in 0.1.5)
     if names - INDICES:
-        problem = f"image indices {sorted(names - INDICES)}"
-    elif names - {SERIES} and not path.lower().endswith(".czi"):
-        # 0.1.5 reads tiles / views / illuminations outside a CZI with the standard reader
-        problem = f"{sorted(names - {SERIES})} outside a CZI"
-    if problem:
         f.close()
-        raise NotYet(problem)
+        raise NotYet(f"image indices {sorted(names - INDICES)}")
     return _MicroFile(f)
+
+
+def _plate_or_not(f, job, names: set):
+    """For a file micro-reader read as a plate: the plate file to write as one NGFF plate,
+    or None to read it without plates. as_plate unset: a plate when the format is a plate
+    format (PLATE_BACKENDS) or the images sit in two or more wells, else per image (a CZI
+    acquired on a plate holder; an info line); True: a plate; False: per image, with a
+    warning. A plate whose fields hold several images (tiles, views) raises
+    PlateFieldTilesError unless as_mosaic stitched them: an NGFF 0.4 / 0.5 / 0.6 plate holds one image per field (RFC 8
+    keeps the tiles of a field as a sub-collection)."""
+    path = os.path.basename(str(job.input_path))
+    n_wells = sum(len(p.wells) for p in f.plates)
+    wells_with_images = {(index.get("plate"), index.get("well")) for index in f.indices
+                         if "well" in index}
+    as_plate = job.readers.as_plate
+    if as_plate is None:
+        as_plate = (getattr(f, "backend", None) in PLATE_BACKENDS
+                    or len(wells_with_images) >= 2)
+        if not as_plate:
+            logger.info(f"{path}: its images sit in one well of a plate; converted per "
+                        f"image (as_plate=True writes it as a one-well NGFF plate)")
+            return None
+    elif not as_plate:
+        logger.warning(
+            f"{path} is a plate ({len(f.plates)} plate(s), {n_wells} wells) and is "
+            f"converted with as_plate=False: each image becomes a store of its own, with "
+            f"no plate, wells or fields. Leave as_plate unset, or set it to True, to write "
+            f"one NGFF plate.")
+        return None
+    field = sorted(PLATE_INDICES & names)
+    per_field = {}
+    for index in f.indices:
+        if int(index.get("resolution", 0)) != 0:
+            continue
+        place = tuple(index.get(k) for k in field)
+        per_field[place] = per_field.get(place, 0) + 1
+    most = max(per_field.values(), default=1)
+    # RFC 8 holds a field of several images (a sub-collection per field); NGFF 0.4 / 0.5
+    # / 0.6 plates hold one image per field
+    if most > 1 and job.conversion.ome_zarr_version != "rfc8":
+        f.close()
+        extra = sorted(names - PLATE_INDICES - {SERIES})
+        raise PlateFieldTilesError(
+            f"{path} is a plate whose fields hold up to {most} images each (they differ in "
+            f"{extra or ['series']}); an NGFF {job.conversion.ome_zarr_version} plate holds "
+            f"one image per field. Convert it with as_mosaic=True to stitch each field's "
+            f"tiles into one image, with ome_zarr_version='rfc8' to keep the tiles (RFC 8 is "
+            f"a draft), or with as_plate=False to write each image as a store of its own.")
+    return _MicroFile(f, plate=True)
 
 
 def _open_input(job):
@@ -263,6 +381,9 @@ def _load_input_collection(job):
     from eubi_bridge.core.output_store import _ozp_version
 
     f, reader = _open_input(job)
+    if getattr(f, "is_plate", False):
+        # one NGFF plate for the whole file (_convert_plate)
+        return f, [SimpleNamespace(plate=True)], reader + ", as a plate"
     try:
         path = str(job.input_path)
         readers = job.readers
@@ -355,8 +476,12 @@ def _load_input_collection(job):
         needed = list(dict.fromkeys(k for _, plan_keys, _ in plans for k in plan_keys))
         images = {k: f.image(k) for k in needed}
         version = _ozp_version(job.conversion.zarr_format, job.conversion.ome_zarr_version)
+        # the file's coordinate systems (micro-reader; an OME-Zarr input's own), so each
+        # output keeps the system its position is in (spatial plan 9.18); readers that
+        # name none leave the images unplaced
         coll = PyramidCollection.from_file(
-            SimpleNamespace(images=[images[k] for k in needed], path=path),
+            SimpleNamespace(images=[images[k] for k in needed], path=path,
+                            coordinate_systems=getattr(f, "coordinate_systems", None)),
             version=version, name=NAME,
             # keep_existing_resolutions: the file's stored levels too (folded into the
             # image's Pyramid by from_file)
@@ -370,11 +495,15 @@ def _load_input_collection(job):
                 # every output
                 entry.pyramid = source.rename(NAME)
             elif group is None:
-                entry.pyramid = coll[plan_keys[0]]
+                # coll.pyramid(key): the image stamped with its system (3.26)
+                entry.pyramid = coll.pyramid(plan_keys[0])
+                # an OME-Zarr input's other coordinate systems and transformations
+                # (carry_foreign_transforms); None for every other reader
+                entry.foreign_source = source
             else:
                 # RGB samples named per part first (plain white channels), then the
                 # joined labels View{v}_Illu{i}_<name> over them, as 0.1.5 wrote them
-                parts = [apply_rgb_channels(coll[k], images[k]) for k in plan_keys]
+                parts = [apply_rgb_channels(coll.pyramid(k), images[k]) for k in plan_keys]
                 entry.pyramid = _join_labels(_joined(parts, path), group, parts,
                                              [images[k] for k in plan_keys], readers)
                 entry.rgb_named = True
@@ -388,6 +517,92 @@ def _load_input_collection(job):
     except BaseException:
         f.close()
         raise
+
+
+# -- plates ------------------------------------------------------------------------------
+
+def _plate_outputs(f, job) -> list:
+    """``[(plate number, output path)]``: ``<file>.zarr``, or ``<file>_plate<n>.zarr`` for
+    each plate of a file holding several."""
+    from eubi_bridge.conversion.conversion_worker import _generate_output_path
+    path = str(job.input_path)
+    stem = job.resolved_basename or os.path.basename(path).split(".")[0]
+    folder = named_folder(path)
+    if stem.lower() in GENERIC_INDEX_NAMES and folder is not None:
+        # an index file with a fixed name (Harmony Index.idx.xml, CellVoyager
+        # MeasurementData.mlf): the plate is named after its measurement folder
+        stem = os.path.basename(folder)
+    many = len(f.plates) > 1
+    return [(n, _generate_output_path(job.output_path, path,
+                                      resolved_basename=f"{stem}_plate{n}" if many else stem))
+            for n in range(len(f.plates))]
+
+
+async def _convert_plate(f, job, plate: int, output_path: str) -> None:
+    """Plate `plate` of the file as ONE NGFF plate store, in the OME-Zarr version asked
+    for (0.4, 0.5, 0.6 or RFC 8): every field gets the job's settings (``_prepared``),
+    then ozp writes the plate with eubi's own writer for each field (chunks, shards,
+    codecs, memory budget, OME-XML). The fields keep their coordinate systems: the
+    systems' axes are filled from the fields as written (spatial plan 3.12)."""
+    import dataclasses
+
+    from ome_zarr_pyramid import PyramidCollection
+    from ome_zarr_pyramid.core.plates import file_stem, tree_from_file
+
+    from eubi_bridge.conversion.conversion_worker import (_memory_plan_for,
+                                                          _warn_unused_writer_settings)
+    from eubi_bridge.core.output_store import _ozp_target_args, _ozp_version, store_exists
+    conv = job.conversion
+    if not conv.overwrite and store_exists(output_path):
+        raise FileExistsError(
+            f"Output already exists: '{output_path}'. Refusing to convert with "
+            f"overwrite=False — the existing dataset was left untouched. Enable overwrite "
+            f"to replace it, or choose a different output.")
+    keys = [tuple(index.items()) for index in f.indices]
+    outside = [k for k in keys if "plate" not in dict(k)]
+    if outside and plate == 0:
+        # a CZI's slide preview, a label picture: in the file, not in any plate
+        logger.warning(
+            f"{os.path.basename(str(job.input_path))}: {len(outside)} image(s) of the file "
+            f"are not part of a plate and are not written (e.g. {dict(outside[0])}). "
+            f"Convert with as_plate=False to write every image as a store of its own.")
+    images = {k: f.image(k) for k in keys}
+    source = SimpleNamespace(images=[images[k] for k in keys], path=f.path,
+                             plates=f.plates, coordinate_systems=f.coordinate_systems)
+    version = _ozp_version(conv.zarr_format, conv.ome_zarr_version)
+    coll = PyramidCollection.from_file(
+        source, version=version, name=NAME,
+        resolutions="all" if job.downscale.keep_existing_resolutions else "base")
+    # the job's settings on every field, before the plate is built: squeeze or crop can
+    # change a field's axes, and the plate's systems and scenes follow the fields as
+    # written
+    processed = {}
+    for key in coll:
+        # a field has no series or tile index of eubi's: its place is plate, well, field
+        entry = SimpleNamespace(pyramid=coll.pyramid(key), image=images[key],
+                                series_path=str(f.path), scene=None, tile=None)
+        processed[key], _ = _prepared(entry, job, output_path)
+    systems = [dataclasses.replace(cs, axes=None)
+               for cs in coll.coordinate_systems.values()]
+    written = PyramidCollection(processed, name=f.path,
+                                tree=tree_from_file(source, processed,
+                                                    name=file_stem(f.path)),
+                                coordinate_systems=systems, system_of=coll.system_of)
+    _warn_unused_writer_settings(job.cluster)
+
+    def write_field(pyr, target, **_):
+        # one field, written as eubi writes an image (the plate's own version: ozp hands
+        # each field over in it; RFC 8: the collection document is ozp's)
+        budget, region = _memory_plan_for(pyr.base_array, job)
+        dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
+        xml = ome_xml(pyr, dtype) if conv.save_omexml else None
+        _write(pyr, str(target), job, scene_budget_mb=budget, region_size_mb=region,
+               xml=xml, image_only=True)
+
+    target, storage_options = _ozp_target_args(output_path)
+    await asyncio.to_thread(written.write_plate, target, plate=plate,
+                            version=conv.ome_zarr_version, overwrite=conv.overwrite,
+                            storage_options=storage_options, writer=write_field)
 
 
 # -- the job's settings, one step each (Pyramid in, Pyramid out) -------------------------
@@ -416,6 +631,46 @@ def _origin(image, units: dict) -> dict:
     return origin
 
 
+#: where ome_zarr_pyramid keeps what it has no field for of an NGFF 0.6 multiscale
+#: (ome_zarr_pyramid.core.ngff06.STASH): other coordinate systems and the transformations
+#: between them
+_STASH = "eubi:ngff06"
+
+
+def carry_foreign_transforms(pyr, source, output_path: str = ""):
+    """An OME-Zarr 0.6 input's other coordinate systems and the transformations between
+    them (an affine to a registered frame, a scale to an array system, ...) go on to the
+    output, as written: they were read by ome_zarr_pyramid but the output Pyramid is built
+    from the image's scales alone. They describe the input's axes and pixel grid, so they
+    are carried only while the output still has them (same axes, scale and position);
+    after a squeeze, crop, rescale or axis change they would point at the wrong pixels, and
+    are dropped with a warning that says so. Written as NGFF 0.4 / 0.5 they are kept
+    under ``eubi:ngff06`` with the writer's warning."""
+    if source is None:
+        return pyr
+    stash = (getattr(source.meta, "multiscales", None) or {}).get(_STASH) or {}
+    foreign = {k: v for k, v in stash.items()
+               if k in ("intrinsic", "coordinateSystems", "coordinateTransformations")}
+    if not foreign.get("coordinateSystems") and not foreign.get("coordinateTransformations"):
+        return pyr
+    s_meta, o_meta = source.meta, pyr.meta
+    s_path, o_path = s_meta.resolution_paths[0], o_meta.resolution_paths[0]
+    same = (s_meta.axis_order == o_meta.axis_order
+            and np.allclose(s_meta.get_scale(s_path), o_meta.get_scale(o_path), rtol=1e-6)
+            and np.allclose(s_meta.get_translation(s_path) or 0.0,
+                            o_meta.get_translation(o_path) or 0.0, rtol=1e-6, atol=1e-9))
+    if not same:
+        logger.warning(
+            f"{os.path.basename(str(output_path))}: the input's other NGFF coordinate "
+            f"systems and transformations ({', '.join(c.get('name', '?') for c in foreign.get('coordinateSystems') or [])}) "
+            f"are not written: the output's axes, pixel size or position differ from the "
+            f"input's (squeeze, crop, rescale, ...), so they would point at the wrong pixels.")
+        return pyr
+    pyr.meta.multiscales[_STASH] = {**dict(pyr.meta.multiscales.get(_STASH) or {}),
+                                    **{k: json.loads(json.dumps(v)) for k, v in foreign.items()}}
+    return pyr
+
+
 def rgb_sample_channels(image) -> Optional[list]:
     """``[(label, colour), ...]`` for the channels the RGB samples of *image* become
     (sample_channels, the same rule as the older readers' ``expand_channel_metadata``),
@@ -439,13 +694,197 @@ def rgb_sample_channels(image) -> Optional[list]:
 
 def apply_rgb_channels(pyr, image):
     """eubi-bridge's names and colours for RGB samples read as channels
-    (``rgb_sample_channels``). The job's channel labels and colours are applied after
-    (``apply_channels``) and win."""
+    (``rgb_sample_channels``); other images get colours for the channels the file gives
+    none (``fill_channel_colors``). The job's channel labels and colours are applied
+    after (``apply_channels``) and win."""
     channels = rgb_sample_channels(image)
     if channels is None:
-        return pyr
+        return fill_channel_colors(pyr, image)
     return pyr.set_channels({i: {"label": label or f"Channel {i}", "color": color}
                              for i, (label, color) in enumerate(channels)})
+
+
+def wavelength_color(nanometers: float) -> Optional[str]:
+    """The colour of light of this wavelength, as six hex digits (Dan Bruton's
+    approximation of the visible spectrum, 380-780 nm, at full brightness); beyond it
+    violet / deep red: a far-red dye (Cy5, 670 nm) is shown red. None for a wavelength
+    outside 300-1000 nm (no emission wavelength of a fluorophore)."""
+    w = float(nanometers)
+    if not 300 <= w <= 1000:
+        return None
+    w = min(max(w, 380.0), 700.0)
+    if w < 440:
+        r, g, b = (440 - w) / 60, 0.0, 1.0
+    elif w < 490:
+        r, g, b = 0.0, (w - 440) / 50, 1.0
+    elif w < 510:
+        r, g, b = 0.0, 1.0, (510 - w) / 20
+    elif w < 580:
+        r, g, b = (w - 510) / 70, 1.0, 0.0
+    elif w < 645:
+        r, g, b = 1.0, (645 - w) / 65, 0.0
+    else:
+        r, g, b = 1.0, 0.0, 0.0
+    peak = max(r, g, b)
+    return "".join(f"{round(255 * v / peak):02X}" for v in (r, g, b))
+
+
+#: common dyes and fluorescent proteins by a channel's name (letters and digits only,
+#: lower case; the first key found in the name wins, so longer keys come first) ->
+#: their emission peak in nm, for a file that names its channels but gives no colour
+#: nor wavelength (a DeltaVision file: DAPI / FITC / RD-TR-PE / CY-5)
+DYE_EMISSION_NM = (
+    ("hoechst", 461), ("dapi", 461), ("bfp", 445), ("cfp", 475), ("alexa405", 421),
+    ("fitc", 519), ("egfp", 509), ("gfp", 509), ("alexa488", 519), ("af488", 519),
+    ("a488", 519), ("yfp", 527), ("tritc", 576), ("cy3", 570), ("alexa555", 565),
+    ("alexa568", 603), ("rfp", 584), ("mcherry", 610), ("texasred", 615), ("rdtr", 615),
+    ("alexa594", 617), ("af594", 617), ("a594", 617), ("cy55", 694), ("cy5", 670),
+    ("alexa647", 668), ("af647", 668), ("a647", 668), ("cy7", 776),
+)
+
+
+#: transmitted-light channels by name (letters and digits only, lower case): shown white,
+#: as they are (an OME file's white, Color -1, is also OME's default and reads as none)
+TRANSMITTED_NAMES = {"bf", "dic", "tl", "dpc", "ph", "phase", "pc", "trans"}
+TRANSMITTED_PARTS = ("bright", "transmi", "phasecontrast", "brightfield", "dodt")
+
+
+def _transmitted(channel) -> bool:
+    name = "".join(ch for ch in str(getattr(channel, "name", None) or "").lower()
+                   if ch.isalnum())
+    return bool(name) and (name in TRANSMITTED_NAMES
+                           or any(part in name for part in TRANSMITTED_PARTS))
+
+
+def _emission_nm(channel) -> Optional[float]:
+    """The channel's emission wavelength in nm: the file's, else its dye's
+    (``DYE_EMISSION_NM``, by the channel's name), else None."""
+    q = getattr(channel, "emission_wavelength", None)
+    if q is not None:
+        try:
+            return float(q.to("nanometer").value)
+        except Exception:                               # noqa: BLE001 - no usable unit
+            value = getattr(q, "value", q)
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    name = "".join(ch for ch in str(getattr(channel, "name", None) or "").lower()
+                   if ch.isalnum())
+    return next((nm for key, nm in DYE_EMISSION_NM if key in name), None) if name else None
+
+
+def _close(a: str, b: str) -> bool:
+    """Two RRGGBB colours a viewer shows nearly alike (each of R, G, B within 0x60)."""
+    return all(abs(int(a[i:i + 2], 16) - int(b[i:i + 2], 16)) < 0x60 for i in (0, 2, 4))
+
+
+#: how many of eubi's defaults ``_distinct_default`` tries for one channel
+DEFAULT_TRIES = 64
+
+
+def _distinct_default(used: set, start: int) -> tuple:
+    """``(colour, next start)``: the first of eubi's defaults from *start* on that is not
+    close to a colour in *used*; when none of the next ``DEFAULT_TRIES`` is (many
+    channels, the spectrum taken), the one of them farthest from the used colours, so
+    the search always ends."""
+    from ome_zarr_pyramid.core.pyramid import auto_channel_color
+
+    def distance(color):
+        return min((max(abs(int(color[i:i + 2], 16) - int(u[i:i + 2], 16)) for i in (0, 2, 4))
+                    for u in used), default=255)
+
+    candidates = [auto_channel_color(k) for k in range(start, start + DEFAULT_TRIES)]
+    for offset, color in enumerate(candidates):
+        if not any(_close(color, u) for u in used):
+            return color, start + offset + 1
+    best = max(range(len(candidates)), key=lambda j: (distance(candidates[j]), -j))
+    return candidates[best], start + best + 1
+
+
+def fill_channel_colors(pyr, image):
+    """Colours for the channels the file gives none (ozp would write them white, so a
+    multichannel image showed all grey): the colour of the channel's emission
+    wavelength (``_emission_nm``: the file's, else its dye's by name;
+    ``wavelength_color``), else eubi's distinct defaults (red, green, blue, magenta,
+    cyan, yellow, white, then generated: ozp's ``auto_channel_color``), skipping
+    colours close to one another channel already has; a transmitted-light channel
+    (``_transmitted``: Brightfield, DIC, phase, ...) white. A colour two or more channels share is a
+    reader's default (the older readers give every channel white), not the file's
+    choice: those channels count as having none. One channel stays as it is. Colours
+    the file gives are kept; the job's channel colours are applied after and win."""
+    axes = pyr.meta.axis_order
+    count = pyr.base_array.shape[axes.index("c")] if "c" in axes else 1
+    if count < 2:
+        return pyr
+    described = list(getattr(image.metadata, "channels", None) or [])
+    if len(described) != count:
+        described = [None] * count
+    given = [str(getattr(ch, "color", None) or "").lstrip("#").upper()[:6] or None
+             for ch in described]
+    shared = {c for c in given if c and given.count(c) > 1}
+    given = [None if c in shared else c for c in given]
+    missing = [i for i, color in enumerate(given) if not color]
+    if not missing:
+        return pyr
+    used = {c for c in given if c}
+    colors, k = {}, 0
+    for i in missing:
+        if described[i] is not None and _transmitted(described[i]):
+            colors[i] = {"color": "FFFFFF"}
+            continue
+        nm = _emission_nm(described[i]) if described[i] is not None else None
+        color = wavelength_color(nm) if nm is not None else None
+        if color is None or color in used:
+            color, k = _distinct_default(used, k)
+        used.add(color)
+        colors[i] = {"color": color}
+    message = (f"channels {missing} have no colour in the file: given "
+               f"{[colors[i]['color'] for i in missing]}")
+    logger.log(logging.DEBUG if message in _COLOUR_NOTICES else logging.INFO, message)
+    _COLOUR_NOTICES.add(message)
+    return pyr.set_channels(colors)
+
+
+def harmonise_length_units(pyr):
+    """One length unit for z, y and x, and seconds for t: a file that states its z step
+    in nanometres and its pixel size in micrometres (an Olympus OIB) is written with
+    every length in x's unit (else the first one found); a time step in milliseconds
+    (Micro-Manager's Interval_ms) in seconds, as eubi always wrote it. Scales and
+    translations of every level are converted. Unchanged when nothing differs."""
+    from micro_reader import Quantity
+    meta = pyr.meta
+    axes = meta.axis_order
+    units = dict(zip(axes, meta.unit_list))
+    lengths = {ax: units[ax] for ax in "zyx" if ax in units and units[ax]}
+    factors = {}
+    if len(set(lengths.values())) > 1:
+        target = lengths.get("x") or next(iter(lengths.values()))
+        factors = {ax: Quantity(1.0, unit).to(target).value
+                   for ax, unit in lengths.items() if unit != target}
+    else:
+        target = next(iter(lengths.values()), None)
+    seconds = {}
+    if units.get("t") and units["t"] != "second":
+        try:
+            factors["t"] = Quantity(1.0, units["t"]).to("second").value
+            seconds = {"t": "second"}
+        except (KeyError, ValueError):          # no time unit micro-reader converts
+            pass
+    if not factors:
+        return pyr
+    paths = meta.resolution_paths
+    base = dict(zip(axes, (float(s) for s in meta.get_scale(paths[0]))))
+    pyr.update_scales(**{ax: base[ax] * f for ax, f in factors.items()})
+    for path in paths:
+        translation = meta.get_translation(path)
+        if translation:
+            translation = [float(v) * factors.get(ax, 1.0) for ax, v in zip(axes, translation)]
+            meta.update_translation(path, translation)
+    pyr.update_units(**{ax: target for ax in factors if ax != "t"}, **seconds)
+    logger.info(f"units {sorted({units[ax] for ax in factors})} converted: lengths in "
+                f"{target}, time in seconds")
+    return pyr
 
 
 def apply_axis_metadata(pyr, job, scales_too: bool = True):
@@ -588,7 +1027,7 @@ def ome_xml(pyr, dtype) -> str:
 # -- one output -----------------------------------------------------------------------
 
 def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb: float,
-           xml: Optional[str]) -> None:
+           xml: Optional[str], image_only: bool = False) -> None:
     """ONE write_pyramid call with the job's storage settings (eubi-bridge decides the
     chunk shape and shards; ozp writes)."""
     from eubi_bridge.conversion.conversion_worker import parse_chunks, parse_shard_coefs
@@ -619,15 +1058,46 @@ def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb
                if clus.bioformats_threads is not None else {})
     with dask_config(**dask_kw):
         _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dtype, arr,
-                       region_size_mb, budget, job, xml)
+                       region_size_mb, budget, job, xml, image_only=image_only)
+
+
+def _system_for_output(pyr):
+    """`pyr` with its coordinate system's axes made the output's own (spatial plan 3.12,
+    9.18). The system was filled from the image as the file gave it; squeeze and crop
+    can leave the output with fewer axes, and the definition a store of one image
+    carries must fit that image. Id, name and estimated stay; an unplaced image is
+    returned as it is."""
+    import dataclasses
+
+    from ome_zarr_pyramid.core.spatial import (SYSTEMS_KEY, minimal_system, pyramid_system,
+                                               system_to_json)
+    sid, cs = pyramid_system(pyr)
+    if cs is None:
+        return pyr
+    own = minimal_system(sid, pyr).axes
+    if cs.axes is not None and [a.name for a in cs.axes] == [a.name for a in own]:
+        return pyr
+    return pyr.set_custom_metadata(SYSTEMS_KEY,
+                                   [system_to_json(dataclasses.replace(cs, axes=own))])
 
 
 def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dtype, arr,
-                   region_size_mb, budget, job, xml):
+                   region_size_mb, budget, job, xml, image_only=False):
     from ome_zarr_pyramid import IO
 
     from eubi_bridge.conversion.conversion_worker import _threads_per_scene
-    IO().write_pyramid(
+    pyr = _system_for_output(pyr)
+    write = IO().write_pyramid
+    if conv.ome_zarr_version == "rfc8" and not image_only:
+        # NGFF RFC 8: a collection holding the image (an NGFF 0.5 multiscale) under the
+        # output's root; ozp writes the collection document and the image with the same
+        # settings (experimental: ozp warns that RFC 8 is a draft)
+        from ome_zarr_pyramid import PyramidCollection
+
+        def write(pyr, target, **kwargs):
+            PyramidCollection({(("series", 0),): pyr}, name=pyr.meta.tag).write_collection(
+                target, **kwargs)
+    write(
         pyr, target, storage_options=storage_options, overwrite=conv.overwrite,
         max_threads=_threads_per_scene(clus), region_size_mb=float(region_size_mb),
         memory_budget_mb=budget, io_backend=conv.io_backend,
@@ -639,44 +1109,69 @@ def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dty
         ome_xml=xml)
 
 
-async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore) -> None:
-    """One output: the job's settings applied to the entry's Pyramid, then written."""
+def _prepared(entry, job, output_path: str):
+    """``(Pyramid, OME-XML or None)``: the job's settings applied to the entry's Pyramid
+    (channels, scales and units, squeeze and crop, downscaling, eubi's own block), ready
+    to be written. One image; a plate applies it to every field."""
+    from eubi_bridge.core.output_store import _eubi_attrs
+    conv = job.conversion
+    pyr = harmonise_length_units(entry.pyramid)
+    meta = pyr.meta
+    entry.units = {ax: u for ax, u in zip(meta.axis_order, meta.unit_list) if u}
+    origin = _origin(entry.image, entry.units)
+    # keep_existing_resolutions with stored levels: written as they are, as the old
+    # path's store_existing_pyramid did: no squeeze / crop, no scale overrides, no
+    # downscaling, no acquisition split info, chunks computed per level
+    keep = job.downscale.keep_existing_resolutions and len(meta.resolution_paths) > 1
+    if job.downscale.keep_existing_resolutions and not keep:
+        logger.info(f"keep_existing_resolutions is set but no existing multiscale "
+                    f"pyramid was found for {output_path}; rebuilding pyramid normally")
+    acquisition = None if keep else acquisition_metadata(entry, pyr, job, origin)
+
+    if not getattr(entry, "rgb_named", False):     # joined parts are named already
+        pyr = apply_rgb_channels(pyr, entry.image)
+    pyr = apply_axis_metadata(pyr, job, scales_too=not keep)
+    pyr = apply_channels(pyr, job)
+    if not keep:
+        pyr = apply_squeeze_and_crop(pyr, job)
+    dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
+    xml = ome_xml(pyr, dtype) if conv.save_omexml else None
+    if not keep:
+        pyr = apply_downscale(pyr, job)
+        pyr = carry_foreign_transforms(pyr, getattr(entry, "foreign_source", None), output_path)
+    pyr.meta.set_custom("eubi_bridge", _eubi_attrs(acquisition))
+    return pyr, xml
+
+
+async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore,
+                         stop: Optional[list] = None) -> None:
+    """One output: the job's settings applied to the entry's Pyramid, then written.
+    *stop*: the file's first ``ReaderCapabilityError``, when one output hit a codec the
+    install lacks: the outputs after it are not tried (they would fail the same way)."""
+    try:
+        await _convert_one(entry, output_path, job, sem, stop)
+    except Exception as exc:
+        if stop is not None and _capability_gap(exc):
+            gap = ReaderCapabilityError(f"{job.input_path}: {exc}")
+            stop.append(gap)
+            raise gap from exc
+        raise
+
+
+async def _convert_one(entry, output_path: str, job, sem: asyncio.Semaphore, stop) -> None:
     from eubi_bridge.conversion.conversion_worker import (_memory_plan_for,
                                                           _warn_unused_writer_settings)
-    from eubi_bridge.core.output_store import _eubi_attrs
     from eubi_bridge.core.output_store import store_exists
     async with sem:
+        if stop:
+            raise stop[0]
         conv = job.conversion
         if not conv.overwrite and store_exists(output_path):
             raise FileExistsError(
                 f"Output already exists: '{output_path}'. Refusing to convert "
                 f"with overwrite=False — the existing dataset was left untouched. "
                 f"Enable overwrite to replace it, or choose a different output.")
-        pyr = entry.pyramid
-        meta = pyr.meta
-        entry.units = {ax: u for ax, u in zip(meta.axis_order, meta.unit_list) if u}
-        origin = _origin(entry.image, entry.units)
-        # keep_existing_resolutions with stored levels: written as they are, as the old
-        # path's store_existing_pyramid did: no squeeze / crop, no scale overrides, no
-        # downscaling, no acquisition split info, chunks computed per level
-        keep = job.downscale.keep_existing_resolutions and len(meta.resolution_paths) > 1
-        if job.downscale.keep_existing_resolutions and not keep:
-            logger.info(f"keep_existing_resolutions is set but no existing multiscale "
-                        f"pyramid was found for {output_path}; rebuilding pyramid normally")
-        acquisition = None if keep else acquisition_metadata(entry, pyr, job, origin)
-
-        if not getattr(entry, "rgb_named", False):     # joined parts are named already
-            pyr = apply_rgb_channels(pyr, entry.image)
-        pyr = apply_axis_metadata(pyr, job, scales_too=not keep)
-        pyr = apply_channels(pyr, job)
-        if not keep:
-            pyr = apply_squeeze_and_crop(pyr, job)
-        dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
-        xml = ome_xml(pyr, dtype) if conv.save_omexml else None
-        if not keep:
-            pyr = apply_downscale(pyr, job)
-        pyr.meta.set_custom("eubi_bridge", _eubi_attrs(acquisition))
-
+        pyr, xml = _prepared(entry, job, output_path)
         scene_budget_mb, region_size_mb = _memory_plan_for(pyr.base_array, job)
         _warn_unused_writer_settings(job.cluster)
         await asyncio.to_thread(_write, pyr, output_path, job,
@@ -692,15 +1187,26 @@ async def convert(job) -> None:
     f, entries, reader = await asyncio.to_thread(_load_input_collection, job)
     logger.info(f"{job.input_path}: {len(entries)} output(s), read by {reader}")
     _retired_settings(job)
+    if entries and getattr(entries[0], "plate", False):
+        try:
+            outputs = _plate_outputs(f, job)
+            results = await asyncio.gather(
+                *[_convert_safely(_convert_plate(f, job, plate, out), out)
+                  for plate, out in outputs], return_exceptions=True)
+        finally:
+            f.close()
+        _report_failures(results, job)
+        return
     try:
         sem = asyncio.Semaphore(job.cluster.max_concurrent_scenes)
+        stop: list = []                          # a capability the install lacks: see _convert_entry
         tasks = []
         for entry in entries:
             out = _generate_output_path(job.output_path, entry.series_path,
                                         entry.name_scene, entry.name_tile,
                                         resolved_basename=entry.basename)
             tasks.append(asyncio.create_task(
-                _convert_safely(_convert_entry(entry, out, job, sem), out)))
+                _convert_safely(_convert_entry(entry, out, job, sem, stop), out)))
         results = await asyncio.gather(*tasks, return_exceptions=True)
     finally:
         f.close()

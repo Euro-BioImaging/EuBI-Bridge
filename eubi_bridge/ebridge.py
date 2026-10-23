@@ -22,6 +22,7 @@ from rich.console import Console
 from rich.table import Table
 
 from eubi_bridge.utils.logging_config import get_logger
+from eubi_bridge.utils.path_utils import is_table_path
 from eubi_bridge.core.config_models import (
     AggregativeConversionJob,
     AggregativePlan,
@@ -83,7 +84,7 @@ def _row_metadata_readers(input_path, default: str, force_default: bool) -> tupl
     df = None
     if isinstance(input_path, pd.DataFrame):
         df = input_path
-    elif isinstance(input_path, str) and input_path.endswith(tuple(TABLE_FORMATS)):
+    elif isinstance(input_path, str) and is_table_path(input_path):
         try:
             df = (pd.read_excel(input_path) if input_path.endswith((".xls", ".xlsx"))
                   else pd.read_csv(input_path))
@@ -212,6 +213,7 @@ class ConfigManager:
         ),
         readers=dict(
             as_mosaic=False,
+            as_plate=None,
             view_index=0,
             phase_index=0,
             illumination_index=0,
@@ -525,6 +527,7 @@ class ConfigManager:
 
     def configure_readers(self,
                           as_mosaic: bool = 'default',
+                          as_plate: bool = 'default',
                           view_index: int = 'default',
                           phase_index: int = 'default',
                           illumination_index: int = 'default',
@@ -1047,6 +1050,7 @@ class ConfigureGroup:
 
     def readers(self,
                 as_mosaic: bool = 'default',
+                as_plate: bool = 'default',
                 view_index: int = 'default',
                 phase_index: int = 'default',
                 illumination_index: int = 'default',
@@ -1064,6 +1068,13 @@ class ConfigureGroup:
 
         Args:
             as_mosaic: Treat tiled acquisitions as a stitched mosaic (default False).
+            as_plate: Write a plate file as one NGFF plate store, in the OME-Zarr
+                version asked for. Unset (the default): plate formats (Harmony,
+                CellVoyager, MetaXpress, IN Cell) and files whose images sit in two or
+                more wells (a CZI of several wells); a file whose images all sit in one
+                well is converted per image. True: every file read as a plate. False:
+                one store per image, with a warning. A plate whose fields hold several
+                tiles needs as_mosaic=True in 0.4 / 0.5 / 0.6 (RFC 8 keeps the tiles).
             view_index: View index for multi-view formats (default 0). Pass ``'all'``
                 or a comma-separated list (e.g. ``'0,2'``) to expose multiple views.
             phase_index: Phase index (default 0).
@@ -1128,12 +1139,14 @@ class ConfigureGroup:
         """Update Zarr conversion parameters. Omitted arguments keep their current values.
 
         Args:
-            ome_zarr_version: OME-Zarr (NGFF) version to write, e.g. ``'0.4'`` or
-                ``'0.5'``.  This is the preferred control and supersedes
-                ``zarr_format`` (the zarr container format is derived from it).
+            ome_zarr_version: OME-Zarr (NGFF) version to write: ``'0.4'``, ``'0.5'``,
+                ``'0.6'`` or ``'rfc8'`` (NGFF RFC 8, a draft: a collection holding
+                the image). This is the preferred control and supersedes
+                ``zarr_format`` (the zarr container format is derived from it); any
+                other value is an error.
             zarr_format: DEPRECATED zarr container version — ``2`` (default) or
-                ``3``.  Used only when ``ome_zarr_version`` is unset/unrecognised;
-                prefer ``ome_zarr_version``.
+                ``3``.  Used only when ``ome_zarr_version`` is unset; prefer
+                ``ome_zarr_version``.
             skip_dask: DEPRECATED and ignored: micro-reader reads without dask.
                 Accepted for now so existing scripts keep working.
             auto_chunk: Auto-compute chunk shape from array size (default True).
@@ -1341,7 +1354,7 @@ class ConversionManager:
             import pandas as pd
             if not (isinstance(input_path, pd.DataFrame)
                     or (isinstance(input_path, str)
-                        and input_path.endswith(tuple(TABLE_FORMATS)))):
+                        and is_table_path(input_path))):
                 raise ValueError(
                     "output_path is required unless input_path is a conversion "
                     "table (.csv/.tsv/.txt/.xlsx) whose rows carry their own "
@@ -1444,7 +1457,7 @@ class ConversionManager:
         import pandas as _pd
 
         _is_table = isinstance(_input, _pd.DataFrame) or (
-            isinstance(_input, str) and _input.endswith(tuple(TABLE_FORMATS)))
+            isinstance(_input, str) and is_table_path(_input))
         _mixed_table = False
         if _is_table:
             _table = take_filepaths(
@@ -1496,6 +1509,10 @@ class ConversionManager:
                 includes=includes, excludes=excludes,
                 **merged, **extra,
             )
+            # The file(s) of a plate or other image set become its main file, once
+            # (group_input_rows): any file of a plate may be chosen.
+            from eubi_bridge.utils.path_utils import group_input_rows
+            df = group_input_rows(df)
             # Two inputs sharing a basename would target one output — the
             # second either refused (overwrite=False) or destroying the first
             # (overwrite=True).  Give the colliding ones a parent-directory
@@ -1561,6 +1578,8 @@ class ConversionManager:
         # ── one-to-one rows ──────────────────────────────────────────────────
         unary_jobs = []
         if len(unary_rows):
+            from eubi_bridge.utils.path_utils import group_input_rows
+            unary_rows = group_input_rows(unary_rows)
             unique_names = disambiguate_output_names(
                 [str(path) for path in unary_rows["input_path"].tolist()])
             for _, row in unary_rows.iterrows():

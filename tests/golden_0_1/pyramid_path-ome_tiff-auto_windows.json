@@ -1,6 +1,35 @@
 {
  "img_scene0.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "z",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "channel_wavelengths": [

@@ -128,8 +128,11 @@ def _ozp_target_args(output_path):
 
 
 def _ozp_version(zarr_format: int, ome_zarr_version: Optional[str]) -> str:
-    """The OME-Zarr version: as given, else 0.5 for zarr v3 and 0.4 for zarr v2."""
-    return ome_zarr_version or ('0.5' if zarr_format == 3 else '0.4')
+    """The NGFF version of the images ozp builds: the OME-Zarr version as given, else
+    0.5 for zarr v3 and 0.4 for zarr v2. RFC 8 writes its images as NGFF 0.5
+    multiscales inside the collection (``_write_pyramid``)."""
+    version = ome_zarr_version or ('0.5' if zarr_format == 3 else '0.4')
+    return '0.5' if version == 'rfc8' else version
 
 
 def _chunks(arr, axes, auto_chunk, output_chunks, dtype, target_chunk_mb):

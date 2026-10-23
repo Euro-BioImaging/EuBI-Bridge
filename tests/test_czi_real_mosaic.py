@@ -85,7 +85,7 @@ def test_conversion_writes_one_output_per_tile(zeiss_mosaic, tmp_path):
     from eubi_bridge.ebridge import EuBIBridge
 
     out = tmp_path / "tiles"
-    EuBIBridge().to_zarr(zeiss_mosaic, str(out), as_mosaic=False,
+    EuBIBridge().to_zarr(zeiss_mosaic, str(out), as_mosaic=False, as_plate=False,
                          series_index=0, mosaic_tile_index="all", verbose=False)
     assert len(list(out.glob("*.zarr"))) == 4
 
@@ -96,7 +96,7 @@ def test_conversion_stitches_the_mosaic(zeiss_mosaic, tmp_path):
     from eubi_bridge.ebridge import EuBIBridge
 
     out = tmp_path / "stitched"
-    EuBIBridge().to_zarr(zeiss_mosaic, str(out), as_mosaic=True,
+    EuBIBridge().to_zarr(zeiss_mosaic, str(out), as_mosaic=True, as_plate=False,
                          series_index=0, verbose=False)
     stores = list(out.glob("*.zarr"))
     assert len(stores) == 1
@@ -129,7 +129,7 @@ def test_each_scene_places_its_own_tiles(zeiss_mosaic, tmp_path):
                        ("standard", {"pixel_reader": "standard", "metadata_reader": "bfio"})):
         out = tmp_path / reader
         EuBIBridge(configpath=str(tmp_path / f"cfg_{reader}")).to_zarr(
-            zeiss_mosaic, str(out), as_mosaic=False, series_index="all",
+            zeiss_mosaic, str(out), as_mosaic=False, as_plate=False, series_index="all",
             mosaic_tile_index="all", verbose=False, **kw)
         for store in out.glob("*.zarr"):
             scene, tile = map(int, re.search(r"_scene(\d+)_tile(\d+)", store.name).groups())

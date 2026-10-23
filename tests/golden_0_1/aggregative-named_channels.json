@@ -58,7 +58,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FF0000",
+      "color": "006BFF",
       "family": "linear",
       "inverted": false,
       "label": "DAPI",
@@ -72,7 +72,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "00FF00",
+      "color": "00FF0D",
       "family": "linear",
       "inverted": false,
       "label": "GFP",

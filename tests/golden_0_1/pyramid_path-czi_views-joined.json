@@ -1,6 +1,30 @@
 {
  "views_view_concat.zarr": {
   "attrs": {
+   "eubi:coordinate_system": "stage",
+   "eubi:coordinate_systems": [
+    {
+     "axes": [
+      {
+       "name": "c",
+       "type": "channel"
+      },
+      {
+       "name": "y",
+       "type": "space",
+       "unit": "micrometer"
+      },
+      {
+       "name": "x",
+       "type": "space",
+       "unit": "micrometer"
+      }
+     ],
+     "eubi:estimated": false,
+     "eubi:name": "stage",
+     "name": "stage"
+    }
+   ],
    "eubi_bridge": {
     "acquisition": {
      "origin_um": {
@@ -64,7 +88,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FFFFFF",
+      "color": "FF0000",
       "family": "linear",
       "inverted": false,
       "label": "View0_Ch0",
@@ -78,7 +102,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FFFFFF",
+      "color": "00FF00",
       "family": "linear",
       "inverted": false,
       "label": "View0_Ch1",
@@ -92,7 +116,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FFFFFF",
+      "color": "FF0000",
       "family": "linear",
       "inverted": false,
       "label": "View1_Ch0",
@@ -106,7 +130,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FFFFFF",
+      "color": "00FF00",
       "family": "linear",
       "inverted": false,
       "label": "View1_Ch1",
