@@ -88,7 +88,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FFFFFF",
+      "color": "FF0000",
       "family": "linear",
       "inverted": false,
       "label": "View0_Ch0",
@@ -102,7 +102,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FFFFFF",
+      "color": "00FF00",
       "family": "linear",
       "inverted": false,
       "label": "View0_Ch1",
@@ -116,7 +116,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FFFFFF",
+      "color": "FF0000",
       "family": "linear",
       "inverted": false,
       "label": "View1_Ch0",
@@ -130,7 +130,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FFFFFF",
+      "color": "00FF00",
       "family": "linear",
       "inverted": false,
       "label": "View1_Ch1",

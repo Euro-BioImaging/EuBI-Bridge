@@ -159,7 +159,8 @@ def _build_kwargs(config: dict) -> dict:
     # to the legacy zarrFormat field for old saved configs.
     ome_zarr_version = conv_config.get("omeZarrVersion")
     if ome_zarr_version:
-        zarr_format = 3 if str(ome_zarr_version) == "0.5" else 2
+        from eubi_bridge.core.config_models import OME_ZARR_VERSIONS
+        zarr_format = OME_ZARR_VERSIONS.get(str(ome_zarr_version), 2)
     else:
         zarr_format = conv_config.get("zarrFormat", 2)
     compressor  = compression.get("codec", "blosc")
@@ -207,6 +208,7 @@ def _build_kwargs(config: dict) -> dict:
         "series_index":             series_idx,
         "mosaic_tile_index":        mosaic_idx,
         "as_mosaic":                reader_config.get("readAsMosaic", False),
+        "as_plate":                 reader_config.get("asPlate"),
         "view_index":               view_idx,
         "phase_index":              _parse_index(reader_config.get("phaseIndex", "0")),
         "illumination_index":       illu_idx,

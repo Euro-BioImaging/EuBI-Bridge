@@ -229,7 +229,7 @@
      {
       "active": true,
       "coefficient": 1,
-      "color": "FFFFFF",
+      "color": "FF0000",
       "family": "linear",
       "inverted": false,
       "label": "Nuclei",

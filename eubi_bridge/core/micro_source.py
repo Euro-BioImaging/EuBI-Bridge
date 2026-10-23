@@ -42,11 +42,13 @@ STANDARD = "tczyx"
 #: tile of it (dyna write_levels: slabs of e.g. 96 planes); at 32, every file was
 #: opened again for every tile (2347 files x 4 tiles: 6.7 min instead of ~1.3).
 MAX_OPEN_FILES = 128
-#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.2.0,<0.3):
-#: 0.2.x declares the coordinate systems each output is written with (9.18); 0.1.x
-#: declares none, and older releases call the series index "scene"
-MICRO_READER_RANGE = ((0, 2), (0, 3))
-MICRO_READER_FIX = 'pip install -U "micro-reader>=0.2,<0.3"'
+#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.2.1,<0.3):
+#: 0.2.x declares the coordinate systems each output is written with (9.18), 0.2.1 reads
+#: the plates and composites 0.3.2 routes to it (MetaMorph, Micro-Manager 2.0, CV7000
+#: timelines, MetaXpress z-series, ...); 0.1.x declares no coordinate systems, and older
+#: releases call the series index "scene". Three components: (major, minor, patch).
+MICRO_READER_RANGE = ((0, 2, 1), (0, 3, 0))
+MICRO_READER_FIX = 'pip install -U "micro-reader>=0.2.1,<0.3"'
 
 
 class MicroReaderVersionError(ImportError):
@@ -75,21 +77,26 @@ def require_micro_reader() -> None:
             version = None
     if version is not None:
         try:
-            got = tuple(int(part) for part in str(version).split(".")[:2])
+            parts = [int(part) for part in str(version).split(".")[:3]]
+            got = tuple(parts + [0] * (3 - len(parts)))
         except ValueError:
             got = None
         low, high = MICRO_READER_RANGE
         if got is not None and not (low <= got < high):
-            if got < (0, 1):
+            if got < (0, 1, 0):
                 why = (" (it names the series index 'scene'; micro-reader 0.1.0 renamed "
                        f"it '{SERIES}', the name this eubi-bridge reads)")
-            elif got < low:
+            elif got < (0, 2, 0):
                 why = (" (it declares no coordinate systems; micro-reader 0.2.0 does, "
                        "and this eubi-bridge writes each output's system)")
+            elif got < low:
+                why = (" (it lacks the plate and composite fixes of micro-reader 0.2.1 that "
+                       "this eubi-bridge relies on)")
             else:
                 why = ""
+            dots = ".".join
             raise MicroReaderVersionError(
-                f"eubi-bridge needs micro-reader >={low[0]}.{low[1]}.0,<{high[0]}.{high[1]}, "
+                f"eubi-bridge needs micro-reader >={dots(map(str, low))},<{high[0]}.{high[1]}, "
                 f"but micro-reader {version} is installed{why}. Fix: {MICRO_READER_FIX}")
     _micro_reader_checked = True
 

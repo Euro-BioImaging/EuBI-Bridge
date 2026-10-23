@@ -263,9 +263,10 @@ def test_cluster_params_run(tmp_path, opt):
 # ===========================================================================
 
 def test_reader_scene_extraction(tmp_path):
-    """series_index all -> one OME-Zarr per scene."""
+    """series_index all -> one OME-Zarr per scene (as_plate False: the file's two scenes
+    are wells B2 + B3 of a plate, written as one NGFF plate by default since 0.3.2)."""
     out = tmp_path / "o"
-    _convert(_path("czi_scenes"), out, "--series_index", "all")
+    _convert(_path("czi_scenes"), out, "--series_index", "all", "--as_plate", "False")
     z = _output_zarrs(out)
     assert len(z) >= 2, f"scene extraction expected >=2 outputs, got {len(z)}"
 
@@ -275,7 +276,7 @@ def test_reader_tile_extraction(tmp_path):
     out = tmp_path / "o"
     _convert(_path("czi_mosaic"), out,
              "--series_index", "0", "--as_mosaic", "False",
-             "--mosaic_tile_index", "all")
+             "--mosaic_tile_index", "all", "--as_plate", "False")
     z = _output_zarrs(out)
     assert len(z) >= 2, f"tile extraction expected >=2 outputs, got {len(z)}"
 

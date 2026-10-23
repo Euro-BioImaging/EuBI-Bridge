@@ -83,6 +83,7 @@ def _config_to_react(cfg: dict) -> dict:
         },
         "reader": {
             "readAsMosaic":         readers.get("as_mosaic", False),
+            "asPlate":              readers.get("as_plate"),
             # the series keys and the 0.2.x scene keys, for several releases
             **series_ui_pairs(True, str(series) if series not in (None, 0, "all") else ""),
             "readAllTiles":         True,
@@ -259,6 +260,7 @@ def _react_to_config(data: dict) -> dict:
         },
         "readers": {
             "as_mosaic":            reader_d.get("readAsMosaic", False),
+            "as_plate":             reader_d.get("asPlate"),
             "series_index":         "all" if reader_d.get("readAllSeries", True) else _parse_int(reader_d.get("seriesIndices", "0")),
             "mosaic_tile_index":    "all" if reader_d.get("readAllTiles", True) else _parse_int(reader_d.get("mosaicTileIndices", "0")),
             "view_index":           "all" if reader_d.get("readAllViews", True) else _parse_int(reader_d.get("viewIndices", "0")),
@@ -492,6 +494,7 @@ _KEPT_WHEN_ABSENT = (
     ("conversion", "ioBackend", "io_backend"),
     ("conversion", "exportAcquisitionMetadata", "export_acquisition_metadata"),
     ("readers", "microCheckPixels", "micro_check_pixels"),
+    ("readers", "asPlate", "as_plate"),
     ("cluster", "maxConcurrentDownscaleLayers", "max_concurrent_downscale_layers"),
     ("cluster", "slurmTime", "slurm_time"),
     ("cluster", "slurmAccount", "slurm_account"),

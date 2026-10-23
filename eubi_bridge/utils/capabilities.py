@@ -71,5 +71,8 @@ def micro_reader_declined(path: str) -> NeedsFullEubiBridge:
     (Bio-Formats) is not installed: worded for the lite user, who has one
     reader and need not know its name."""
     return NeedsFullEubiBridge(
-        f"{path}: eubi-bridge-lite cannot read this file. The full eubi-bridge "
-        f"can: pip uninstall eubi-bridge-lite, then pip install eubi-bridge.")
+        f"{path}: eubi-bridge-lite cannot read this file: it is not an image it "
+        f"reads, nor a part of one (for a plate, choose its index file, e.g. "
+        f"Index.idx.xml or index.xml). If it is an image in another format, the full "
+        f"eubi-bridge may read it: pip uninstall eubi-bridge-lite, then pip install "
+        f"eubi-bridge.")

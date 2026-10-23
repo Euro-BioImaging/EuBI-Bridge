@@ -106,6 +106,54 @@ class TestDisambiguation:
         assert result[a] != result[b]
 
 
+class TestSameFolder:
+    """Files of one folder sharing a name but not a suffix: their parents cannot tell
+    them apart, so the suffix does (an Airyscan .czi and its .ims). Before, the
+    parents were walked up to the drive: 'C:_name', no valid folder name."""
+
+    def test_suffix_tells_them_apart(self):
+        a, b = r"C:\data\run\x_Airyscan.czi", r"C:\data\run\x_Airyscan.ims"
+        assert disambiguate_output_names([a, b]) == {a: "x_Airyscan_czi",
+                                                     b: "x_Airyscan_ims"}
+
+    def test_the_other_files_keep_their_names(self):
+        paths = [r"C:\d\r\a.czi", r"C:\d\r\a.ims", r"C:\d\r\a_proc.czi", r"C:\d\r\b.czi"]
+        result = disambiguate_output_names(paths)
+        assert result == {paths[0]: "a_czi", paths[1]: "a_ims", paths[2]: "a_proc",
+                          paths[3]: "b"}
+
+    def test_a_drive_is_never_a_prefix(self):
+        a, b = r"C:\img.tif", r"D:\img.tif"
+        result = disambiguate_output_names([a, b])
+        assert all(":" not in name for name in result.values())
+        assert len(set(result.values())) == 2
+
+
+class TestPlateIndexNames:
+    """A plate index file with a fixed name (Harmony Index.idx.xml / index.xml,
+    CellVoyager MeasurementData.mlf) is named after its measurement folder, above
+    Images/; two such plates in one batch stay apart by that folder's parents."""
+
+    def test_harmony_index_takes_the_measurement_folder(self):
+        path = "/data/Plate 1-Measurement1/Images/Index.idx.xml"
+        assert disambiguate_output_names([path]) == {path: "Plate 1-Measurement1"}
+
+    def test_hs_archive_index_takes_the_measurement_folder(self):
+        path = "/data/hs/3a1d3fc3/images/index.xml"
+        assert disambiguate_output_names([path]) == {path: "3a1d3fc3"}
+
+    def test_cellvoyager_index_takes_its_folder(self):
+        path = "/data/run7/MeasurementData.mlf"
+        assert disambiguate_output_names([path]) == {path: "run7"}
+
+    def test_two_plates_of_one_name_take_the_parent_above(self):
+        a, b = "/x/M1/Images/Index.idx.xml", "/y/M1/Images/Index.idx.xml"
+        assert disambiguate_output_names([a, b]) == {a: "x_M1", b: "y_M1"}
+
+    def test_an_image_called_index_keeps_its_name(self):
+        assert disambiguate_output_names(["/a/index.tif"]) == {"/a/index.tif": "index"}
+
+
 class TestGeneratedPath:
     def test_default_naming_unchanged(self):
         assert _generate_output_path("/out", "/a/img.ome.tiff") == "/out/img.zarr"

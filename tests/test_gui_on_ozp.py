@@ -265,8 +265,13 @@ def test_a_gui_batch_runs_every_row_with_its_own_settings(tmp_path, monkeypatch)
     stores = sorted(p.name for p in out.glob("*.zarr"))
     expected = ["G_series_T_tset.zarr", "stack.zarr", "two_channels.zarr"]
     if czi.exists():
-        expected += ["S=2_2x2_T=3_Z=4_CH=1_scene0.zarr", "S=2_2x2_T=3_Z=4_CH=1_scene1.zarr"]
+        # wells B2 + B3 of a plate, fields stitched (as_mosaic): one NGFF plate store
+        # (eubi-bridge 0.3.2; it was one store per scene)
+        expected += ["S=2_2x2_T=3_Z=4_CH=1.zarr"]
     assert stores == sorted(expected)
+    if czi.exists():
+        plate = dict(zarr.open_group(str(out / "S=2_2x2_T=3_Z=4_CH=1.zarr"), mode="r").attrs)
+        assert [w["path"] for w in plate.get("ome", plate)["plate"]["wells"]] == ["B/2", "B/3"]
 
     def ngff(name):
         attrs = dict(zarr.open_group(str(out / name), mode="r").attrs)

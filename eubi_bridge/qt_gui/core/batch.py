@@ -127,8 +127,9 @@ class ParamSpec(NamedTuple):
     # the manual per-axis sizes are inert; the editor greys them out and drops
     # any override, rather than leaving a value that looks applied but is not.
     # ``active_when`` is compared against the parent's value after canonicalising
-    # both, so it works for booleans and for choices alike (sharding needs
-    # ome_zarr_version == '0.5').
+    # both, so it works for booleans and for choices alike; a tuple lists several
+    # values that each make it active (sharding needs a zarr v3 version: '0.5', '0.6',
+    # 'rfc8').
     depends_on: str = ""
     active_when: Any = True
 
@@ -198,6 +199,11 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
               tooltip=_INDEX_TIP, tab="Reader", group="Tiles"),
     ParamSpec("as_mosaic", "Read as mosaic", "bool",
               tab="Reader", group="Tiles"),
+    # tri-state like export_acquisition_metadata: auto (None) / on / off
+    ParamSpec("as_plate", "Write as NGFF plate", "choice", ("auto", "on", "off"),
+              tab="Reader", group="Plates",
+              tooltip="auto: plate formats and files of two or more wells; "
+                      "off: one store per image."),
     ParamSpec("view_index", "View index", "text", tooltip=_INDEX_TIP,
               tab="Reader", group="Views"),
     ParamSpec("concat_views", "Concatenate views", "bool",
@@ -239,14 +245,14 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
                 tab="Conversion", group="Chunking",
                 depends_on="auto_chunk", active_when=False)
       for ax in ("time", "channel", "z", "y", "x")),
-    ParamSpec("ome_zarr_version", "OME-Zarr version", "choice", ("0.4", "0.5"),
+    ParamSpec("ome_zarr_version", "OME-Zarr version", "choice", ("0.4", "0.5", "0.6", "rfc8"),
               tab="Conversion", group="OME-Zarr Version and Sharding"),
-    # Sharding exists only in zarr v3, which OME-Zarr 0.5 selects; under 0.4 the
-    # writer has no shard concept at all, so the coefficients do nothing.
+    # Sharding exists only in zarr v3, which OME-Zarr 0.5, 0.6 and RFC 8 select; under
+    # 0.4 the writer has no shard concept at all, so the coefficients do nothing.
     *(ParamSpec(f"{ax}_shard_coef", f"Shard coef {ax}", "int", minimum=1,
                 maximum=1_000,
                 tab="Conversion", group="OME-Zarr Version and Sharding",
-                depends_on="ome_zarr_version", active_when="0.5")
+                depends_on="ome_zarr_version", active_when=("0.5", "0.6", "rfc8"))
       for ax in ("time", "channel", "z", "y", "x")),
     # Loose on the Conversion tab, with no group box on the form either.
     ParamSpec("dtype", "Data type", "choice",
@@ -614,7 +620,8 @@ _AUTO_SENTINEL_KEYS = frozenset({"n_layers"})
 
 
 #: tri-state settings a cell spells as words: None / True / False
-_TRISTATE = {"export_acquisition_metadata": {None: "auto", True: "on", False: "off"}}
+_TRISTATE = {"export_acquisition_metadata": {None: "auto", True: "on", False: "off"},
+             "as_plate": {None: "auto", True: "on", False: "off"}}
 
 
 def _to_sentinel(key: str, value: Any) -> Any:
@@ -1051,6 +1058,8 @@ class BatchModel:
             return str(parent).strip() == "" or parent != parent
         if isinstance(spec.active_when, bool):
             return bool(parent) != spec.active_when
+        if isinstance(spec.active_when, tuple):
+            return not any(values_equal(parent, v) for v in spec.active_when)
         return not values_equal(parent, spec.active_when)
 
     def config_value(self, key: str) -> Any:
@@ -1090,6 +1099,8 @@ class BatchModel:
             return f"{parent} is empty"
         if isinstance(spec.active_when, bool):
             return f"{parent}={not spec.active_when}"
+        if isinstance(spec.active_when, tuple):
+            return f"{parent} is not one of {', '.join(map(str, spec.active_when))}"
         return f"{parent}!={spec.active_when}"
 
     def columns(self, for_csv: bool = False) -> list[str]:

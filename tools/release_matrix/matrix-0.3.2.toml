@@ -1,7 +1,7 @@
-# Version matrix for the 2026-10-22 train: micro-reader 0.2.0 (coordinate systems),
-# ome-zarr-pyramid 0.4.0 (graph, NGFF 0.6, RFC 8, validation) and eubi-bridge /
-# eubi-bridge-lite 0.3.2 (plates, 0.6 / RFC 8 output, coordinate systems; requires
-# micro-reader>=0.2,<0.3 and ome_zarr_pyramid>=0.4,<0.5).
+# Version matrix for the 2026-10-22/23 train: micro-reader 0.2.1 (plates and composites
+# from more real files; 0.2.0 released 2026-10-22), ome-zarr-pyramid 0.4.0 (released
+# 2026-10-22) and eubi-bridge / eubi-bridge-lite 0.3.2 (plates, 0.6 / RFC 8 output,
+# coordinate systems; requires micro-reader>=0.2.1,<0.3 and ome_zarr_pyramid>=0.4,<0.5).
 #     python matrix.py build   --config matrix-0.3.2.toml
 #     python matrix.py run     --config matrix-0.3.2.toml
 #     python matrix.py resolve --config matrix-0.3.2.toml
@@ -43,7 +43,7 @@ command = ["{python}", "tools/build_lite.py"]
 dist = "dist"
 
 [axes]
-micro-reader = ["0.1.0", "candidate"]
+micro-reader = ["0.1.0", "0.2.0", "candidate"]
 ome-zarr-pyramid = ["0.3.1", "candidate"]
 
 [[consumers]]
@@ -74,15 +74,15 @@ outcome = "unresolvable"
 [[expect]]
 when = { eubi-bridge-lite = "==0.3.1", ome-zarr-pyramid = ">=0.4.0" }
 outcome = "unresolvable"
-# eubi 0.3.2 requires micro-reader >=0.2 and ozp >=0.4.
+# eubi 0.3.2 requires micro-reader >=0.2.1 and ozp >=0.4.
 [[expect]]
-when = { eubi-bridge = ">=0.3.2", micro-reader = "<0.2.0" }
+when = { eubi-bridge = ">=0.3.2", micro-reader = "<0.2.1" }
 outcome = "unresolvable"
 [[expect]]
 when = { eubi-bridge = ">=0.3.2", ome-zarr-pyramid = "<0.4.0" }
 outcome = "unresolvable"
 [[expect]]
-when = { eubi-bridge-lite = ">=0.3.2", micro-reader = "<0.2.0" }
+when = { eubi-bridge-lite = ">=0.3.2", micro-reader = "<0.2.1" }
 outcome = "unresolvable"
 [[expect]]
 when = { eubi-bridge-lite = ">=0.3.2", ome-zarr-pyramid = "<0.4.0" }

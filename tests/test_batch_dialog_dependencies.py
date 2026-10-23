@@ -138,6 +138,11 @@ def test_choice_parent_toggles_dependants(qapp, model):
     assert dlg._fields["z_shard_coef"].inactive
     dlg._fields["ome_zarr_version"].editor.setCurrentText("0.5")
     assert not dlg._fields["z_shard_coef"].inactive
+    for version in ("0.6", "rfc8"):
+        dlg._fields["ome_zarr_version"].editor.setCurrentText(version)
+        assert not dlg._fields["z_shard_coef"].inactive, version
+    dlg._fields["ome_zarr_version"].editor.setCurrentText("0.4")
+    assert dlg._fields["z_shard_coef"].inactive
 
 
 def test_unshown_parameters_can_be_added(qapp, model):

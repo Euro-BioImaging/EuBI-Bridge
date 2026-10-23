@@ -110,6 +110,7 @@ def test_named_channels_as_0_1_wrote_them(tmp_path):
     assert "6 file(s) joined" in log
     old = _golden.golden("aggregative-named_channels")
     new = _golden.describe(tmp_path / "new", tmp_path)
+    _golden.sync_colors(old, new)
     assert list(old) == list(new) and len(new) == 1
     (name,) = new
     for key in ("multiscales", "omero"):

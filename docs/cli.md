@@ -143,7 +143,7 @@ These are stored in the configuration file but can also be supplied directly to 
 | `pixel_reader`       | `str`  | Where the pixels come from: `micro` (default; a file micro-reader does not read falls back to the standard reader, with a warning) or `standard` |
 | `force_bioformats`   | `bool` | Use the Java Bio-Formats reader even for formats read natively; a fallback when a native read fails |
 | `as_mosaic`          | `bool` | Whether to stitch the mosaic tiles |
-| `as_plate`           | `bool` | Write a plate file as one NGFF plate store (default True); a plate of tiled fields needs `as_mosaic` in 0.4 / 0.5 / 0.6 (RFC 8 keeps the tiles) |
+| `as_plate`           | `bool` | Write a plate file as one NGFF plate store. Unset (default): plate formats (Harmony, CellVoyager, MetaXpress, IN Cell) and files of two or more wells; `True`: every plate file; `False`: one store per image. A plate of tiled fields needs `as_mosaic` in 0.4 / 0.5 / 0.6 (RFC 8 keeps the tiles) |
 | `series_index`       | `int`, `all` or a list | Series to convert (some formats call them scenes), e.g. `0`, `all` or `0,2,4`; each becomes its own output, still named `_scene{N}`. Formerly `scene_index`, which still works, with a warning |
 | `view_index`         | `int`, `all` or a list | View(s) to convert |
 | `illumination_index` | `int`, `all` or a list | Illumination(s) to convert |

@@ -605,10 +605,12 @@ class ReaderConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     as_mosaic: bool = False
-    # A file micro-reader reads as a plate (Harmony, CellVoyager, MetaXpress, IN Cell, a
-    # CZI with a plate) becomes ONE NGFF plate store; False: one store per image, with a
-    # warning that the file is a plate.
-    as_plate: bool = True
+    # A file micro-reader reads as a plate becomes ONE NGFF plate store. None (the
+    # default): when the format is a plate format (Harmony, CellVoyager, MetaXpress,
+    # IN Cell) or the file's images sit in two or more wells; a file whose images all
+    # sit in one well (a CZI acquired on a plate holder) is converted per image. True:
+    # every plate file. False: one store per image, with a warning that it is a plate.
+    as_plate: Optional[bool] = None
     # Accept int, 'all', or comma-separated ints (e.g. '0,1,2')
     view_index: Union[int, str] = 0
     phase_index: int = Field(default=0, ge=0)
@@ -638,6 +640,14 @@ class ReaderConfig(BaseModel):
     @classmethod
     def _renamed(cls, data):
         return rename_settings(data) if isinstance(data, dict) else data
+
+    @field_validator("as_plate", mode="before")
+    @classmethod
+    def _tristate_words(cls, v):
+        """'auto' / 'on' / 'off', as the GUI and a batch cell spell the three states."""
+        if isinstance(v, str):
+            return {"auto": None, "on": True, "off": False}.get(v.strip().lower(), v)
+        return v
 
     @field_validator('series_index', mode='before')
     @classmethod

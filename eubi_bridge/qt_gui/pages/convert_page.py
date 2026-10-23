@@ -623,6 +623,23 @@ class ConvertPage(QWidget):
         tile_lay.addWidget(self._read_as_mosaic)
         lay.addWidget(tile_group)
 
+        # ── Plates ────────────────────────────────────────────────────────────
+        plate_group = QGroupBox("Plates")
+        plate_lay = QVBoxLayout(plate_group)
+        self._as_plate = QComboBox()
+        for label, value in (("auto", None), ("on", True), ("off", False)):
+            self._as_plate.addItem(label, value)
+        self._as_plate.setToolTip(
+            "Plate files (Harmony, CellVoyager, MetaXpress, IN Cell, a CZI of several wells)\n"
+            "as one NGFF plate store.\n"
+            "auto: plate formats, and files whose images sit in two or more wells;\n"
+            "a CZI of one well is converted per image.\n"
+            "on: every file read as a plate, a single well too.\n"
+            "off: one store per image, as before plates were read (with a warning)."
+        )
+        plate_lay.addLayout(_form_row("Write as NGFF plate:", self._as_plate))
+        lay.addWidget(plate_group)
+
         # ── Views ─────────────────────────────────────────────────────────────
         view_group = QGroupBox("Views")
         view_lay = QVBoxLayout(view_group)
@@ -944,10 +961,14 @@ class ConvertPage(QWidget):
         self._ome_zarr_version = QComboBox()
         self._ome_zarr_version.addItem("0.4", 2)
         self._ome_zarr_version.addItem("0.5", 3)
+        self._ome_zarr_version.addItem("0.6", 3)
+        self._ome_zarr_version.addItem("rfc8", 3)
         self._ome_zarr_version.setToolTip(
             "OME-Zarr (NGFF) specification version for the output.\n"
             "v0.4 uses Zarr format 2 and is compatible with most viewers.\n"
-            "v0.5 uses Zarr format 3 with optional sharding support."
+            "v0.5 uses Zarr format 3 with optional sharding support.\n"
+            "v0.6 (Zarr format 3) adds coordinate systems; fewer viewers read it yet.\n"
+            "rfc8: NGFF RFC 8 collections, a draft (Zarr format 3); experimental."
         )
         fmt_layout.addLayout(_form_row("OME-Zarr Version:", self._ome_zarr_version))
 
@@ -2340,6 +2361,8 @@ class ConvertPage(QWidget):
         self._read_all_tiles.setChecked(r.get("readAllTiles", True))
         self._mosaic_tile_indices.setText(r.get("mosaicTileIndices", ""))
         self._read_as_mosaic.setChecked(r.get("readAsMosaic", False))
+        idx = self._as_plate.findData(r.get("asPlate"))
+        self._as_plate.setCurrentIndex(max(0, idx))
         self._read_all_views.setChecked(r.get("readAllViews", True))
         self._view_indices.setText(r.get("viewIndices", ""))
         self._concat_views.setChecked(r.get("concatViews", False))
@@ -2514,6 +2537,7 @@ class ConvertPage(QWidget):
                 "readAllTiles":      self._read_all_tiles.isChecked(),
                 "mosaicTileIndices": self._mosaic_tile_indices.text().strip(),
                 "readAsMosaic":         self._read_as_mosaic.isChecked(),
+                "asPlate":              self._as_plate.currentData(),
                 "readAllViews":         self._read_all_views.isChecked(),
                 "viewIndices":          self._view_indices.text().strip(),
                 "concatViews":          self._concat_views.isChecked(),

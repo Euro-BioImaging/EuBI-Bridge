@@ -15,6 +15,27 @@ from eubi_bridge.utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 TABLE_FORMATS = (".csv", ".tsv", ".txt", ".xls", ".xlsx")
+#: a .txt that is an image set's own file, never a conversion table: Micro-Manager's
+#: metadata.txt (its JSON starts with "{")
+IMAGE_TEXT_NAMES = {"metadata.txt"}
+
+
+def is_table_path(path) -> bool:
+    """Is *path* a conversion table (``TABLE_FORMATS``)? A Micro-Manager
+    ``metadata.txt`` is not, nor any .txt whose first byte is ``{`` (JSON)."""
+    path = str(path)
+    if not path.lower().endswith(TABLE_FORMATS):
+        return False
+    import os
+    if os.path.basename(path).lower() in IMAGE_TEXT_NAMES:
+        return False
+    if path.lower().endswith(".txt") and os.path.isfile(path):
+        try:
+            with open(path, "rb") as fh:
+                return not fh.read(1).startswith(b"{")
+        except OSError:
+            return True
+    return True
 
 
 def parse_as_list(path_or_paths: Union[list, str, int, float]) -> list:
@@ -430,6 +451,220 @@ def partition_by_group(df: pd.DataFrame):
     return unary, groups
 
 
+#: plate index files with a fixed name (Harmony Index.idx.xml / index.xml, CellVoyager
+#: MeasurementData.mlf): their output is named after the measurement folder
+GENERIC_INDEX_NAMES = {"index", "measurementdata"}
+GENERIC_INDEX_SUFFIXES = (".xml", ".mlf")
+#: the folder a Harmony measurement keeps its index in (images/ in an hs archive)
+INDEX_IMAGES_FOLDERS = {"images"}
+#: plane files: never parts of a composite, and too many to ask about one by one
+PLANE_SUFFIXES = (".tif", ".tiff")
+#: micro-reader's plate formats, whose folder holds one plate: a file in it belongs to
+#: the plate (input_mains)
+PLATE_FORMATS = {"harmony", "cv7000", "metaxpress", "incell"}
+
+
+def named_folder(path: str) -> Optional[str]:
+    """For an index file with a fixed name: the folder its output is named after -- a
+    plate's measurement folder (above ``Images/``), a Micro-Manager image-per-file
+    acquisition's folder (``<acquisition>/<position>/metadata.txt``); else None."""
+    name = os.path.basename(path)
+    if name.lower() in IMAGE_TEXT_NAMES:
+        position = os.path.dirname(os.path.abspath(path))
+        acquisition = os.path.dirname(position)
+        return acquisition if os.path.basename(acquisition) else position
+    if name.split(".")[0].lower() not in GENERIC_INDEX_NAMES or             not name.lower().endswith(GENERIC_INDEX_SUFFIXES):
+        return None
+    folder = os.path.dirname(os.path.abspath(path))
+    if os.path.basename(folder).lower() in INDEX_IMAGES_FOLDERS:
+        folder = os.path.dirname(folder)
+    return folder if os.path.basename(folder) else None
+
+
+#: files that are never images: given among the inputs they are skipped, or -- given on
+#: their own in a folder -- stand for the plate in that folder (group_inputs)
+TEXT_SUFFIXES = (".txt", ".md", ".log", ".json", ".csv", ".tsv", ".ini", ".cfg",
+                 ".yaml", ".yml", ".html", ".htm", ".pdf")
+
+
+#: side files of instruments and analysis programs, never an image on their own: of
+#: several inputs, the full eubi-bridge skips them too when micro-reader reads nothing
+#: in them (``_not_an_image``)
+SIDE_FILE_SUFFIXES = TEXT_SUFFIXES + (".xml", ".aas", ".xgapp", ".env", ".mes", ".wpp",
+                                      ".mrf", ".mlf", ".db", ".mdb", ".tmp", ".bak")
+
+
+def _not_an_image(path: str) -> bool:
+    """True for a file no reader of this install recognises: micro-reader's formats
+    find nothing in its first bytes, and -- with Bio-Formats installed (the full
+    eubi-bridge), which reads more -- its suffix is a side file's
+    (``SIDE_FILE_SUFFIXES``). Unsure (micro-reader's check fails): False."""
+    try:
+        from micro_reader import _parts, _registry
+        head = _parts.read_head(path)
+        if any(module.sniff(head, path) for module in _registry.BACKENDS):
+            return False
+    except Exception:                           # noqa: BLE001 - unsure: keep it
+        return False
+    from eubi_bridge.utils.capabilities import has_bioformats
+    return not has_bioformats() or path.lower().endswith(SIDE_FILE_SUFFIXES)
+
+
+def _is_text(path: str) -> bool:
+    name = os.path.basename(path).lower()
+    return name.endswith(TEXT_SUFFIXES) or "." not in name.lstrip(".")
+
+
+def group_inputs(input_paths: List[str]) -> List[str]:
+    """The inputs as the files to convert, each once (``input_mains``)."""
+    return list(dict.fromkeys(m for m in input_mains(input_paths) if m is not None))
+
+
+def group_input_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """A conversion table (one row per input) with each row's ``input_path`` as the file
+    to convert (``input_mains``): rows standing for no image are dropped, and a plate
+    named by several rows is converted once, with the first of them."""
+    paths = [str(p) for p in df['input_path'].tolist()]
+    mains = input_mains(paths)
+    if mains == paths:
+        return df
+    df = df.assign(input_path=mains)
+    df = df[df['input_path'].notna()]
+    twice = df.duplicated(subset='input_path')
+    for path in df.loc[twice, 'input_path']:
+        logger.info(f"{path}: chosen more than once; converted once (with the first "
+                    f"row's settings)")
+    df = df[~twice].reset_index(drop=True)
+    if not len(df):
+        raise ValueError(
+            f"None of the {len(paths)} input(s) is an image or a file of one (a plate's "
+            f"index or side files): {paths[:5]}")
+    return df
+
+
+def input_mains(input_paths: List[str]) -> List[Optional[str]]:
+    """For each input, the file to convert (None: none), found with micro-reader's
+    ``group_files`` so that a user need not know which file of a plate (or other image
+    set) to choose:
+
+    - every given file of a plate -- its index, its side files (a Harmony measurement's
+      ``image.index.txt``, ``.kw.txt``, ``Assaylayout`` files), its planes listed beside
+      the index -- stands for the plate's index file;
+    - a text file that belongs to no image, given with no other input from its folder
+      (a Harmony "hs" archive's ``_objmeta.txt``): the one plate in its folder, when the
+      folder holds exactly one; else None, with a warning naming what is there;
+    - a text file among other inputs from its folder (a readme): None;
+    - everything else stays as given (images, OME-Zarr stores).
+
+    Every group stands for its main file, also one eubi reads with the older readers
+    (an OME companion, a Leica XLEF, an Olympus OIF folder): one conversion per set.
+
+    Of several inputs (a folder, a file list), a file no reader recognises -- an
+    instrument's or analysis program's side file -- is skipped (None), named in one
+    warning (``_not_an_image``); a file given on its own is converted, and fails loudly
+    if it is not an image."""
+    paths = [str(p) for p in input_paths]
+    try:
+        import micro_reader
+    except Exception:                           # no micro-reader: nothing to group
+        return paths
+
+    def key(path):
+        return os.path.normcase(os.path.abspath(path))
+
+    def usable(group):
+        return group.main is not None
+
+    def owners(paths_):
+        """({file: main file}, [(plate folder, main file)]): the plate folder of a plate
+        group is the folder its files share, when that is the index's folder or the one
+        above it (a Harmony measurement: Images/, Assaylayout/, Evaluation1/, ...)."""
+        try:
+            grouping = micro_reader.group_files(paths_)
+        except Exception as exc:                # the conversion reports a bad file
+            logger.debug(f"group_files: {exc}")
+            return {}, []
+        found, trees = {}, []
+        for group in grouping.groups:
+            if usable(group):
+                files_ = (group.main, *group.parts, *group.members)
+                for path in files_:
+                    found.setdefault(key(path), group.main)
+                if group.format in PLATE_FORMATS:
+                    try:
+                        root = os.path.commonpath([os.path.abspath(f) for f in files_])
+                    except ValueError:          # files on different drives
+                        continue
+                    index_folder = os.path.dirname(os.path.abspath(group.main))
+                    if key(root) in (key(index_folder), key(os.path.dirname(index_folder))):
+                        trees.append((key(root) + os.sep, group.main))
+        return found, trees
+
+    # OME-Zarr stores and image groups are folders of chunks: never walked
+    files = [p for p in paths if os.path.isfile(p)]
+    owner, trees = owners(files) if files else ({}, [])
+    for path in files:
+        # a file in a plate's own folder that micro-reader names no part of it (Harmony's
+        # Evaluation1/ analysis results): the plate's too, not an input of its own
+        if key(path) not in owner:
+            main = next((m for root, m in trees if key(path).startswith(root)), None)
+            if main is not None:
+                owner[key(path)] = main
+    out, told = [], set()
+
+    def add(path, why=""):
+        if why and key(path) not in told:
+            told.add(key(path))
+            logger.info(why)
+        out.append(path)
+
+    many, skipped = len(paths) > 1, []
+    for path in paths:
+        main = owner.get(key(path))
+        if main is not None:
+            add(main, "" if key(main) == key(path) else
+                f"{path}: a file of {main}; converting {main}")
+            continue
+        if many and os.path.isfile(path) and not _is_text(path) and _not_an_image(path):
+            skipped.append(path)
+            out.append(None)
+            continue
+        if not (os.path.isfile(path) and _is_text(path)):
+            add(path)
+            continue
+        folder = os.path.dirname(os.path.abspath(path))
+        others = [p for p in paths if p != path and not _is_text(p)
+                  and key(p).startswith(key(folder) + os.sep)]
+        if others:
+            logger.info(f"{path}: not an image; skipped")
+            out.append(None)
+            continue
+        try:
+            grouping = micro_reader.group_files(folder)
+        except Exception as exc:
+            logger.warning(f"{path}: not an image, and its folder could not be searched "
+                           f"for one ({exc}); skipped")
+            out.append(None)
+            continue
+        mains = sorted({g.main for g in grouping.groups if usable(g)})
+        if len(mains) == 1:
+            add(mains[0], f"{path}: not an image; its folder holds one plate / image "
+                          f"set, {mains[0]}: converting it")
+            continue
+        shown = ", ".join(mains[:5]) + (" ..." if len(mains) > 5 else "")
+        logger.warning(
+            f"{path}: not an image; skipped. Its folder holds "
+            + (f"{len(mains)} plates / image sets ({shown}): choose a file of the one "
+               f"to convert" if mains else "no plate or image set"))
+        out.append(None)
+    if skipped:
+        names = ", ".join(os.path.basename(s) for s in skipped[:8])
+        logger.warning(f"{len(skipped)} of the {len(paths)} input files are not images "
+                       f"eubi-bridge reads and are skipped: {names}"
+                       + (" ..." if len(skipped) > 8 else ""))
+    return out
+
+
 def disambiguate_output_names(input_paths: List[str]) -> dict:
     """Map each input path to a unique output basename.
 
@@ -445,10 +680,17 @@ def disambiguate_output_names(input_paths: List[str]) -> dict:
         A/img.tif  ->  A_img
         B/img.tif  ->  B_img
 
-    Only names that actually collide are changed, so a batch of distinct names
-    keeps exactly the output paths it had before.  Paths that remain identical
-    after exhausting their parents (the same file listed twice) fall back to a
-    numeric suffix, which always terminates.
+    Files of one folder that share a name but not a suffix (an Airyscan
+    ``x.czi`` and its ``x.ims``) take their suffix instead, since their parents
+    cannot tell them apart::
+
+        A/img.czi  ->  img_czi
+        A/img.ims  ->  img_ims
+
+    A drive (``C:``) is never a prefix.  Only names that actually collide are
+    changed, so a batch of distinct names keeps exactly the output paths it had
+    before.  Paths that remain identical after exhausting their parents (the same
+    file listed twice) fall back to a numeric suffix, which always terminates.
     """
     def _segments(path: str) -> List[str]:
         """Split *path* into components, treating both separators as separators.
@@ -464,14 +706,32 @@ def disambiguate_output_names(input_paths: List[str]) -> dict:
 
     def stem(path: str) -> str:
         # Matches _generate_output_path: everything before the first dot, so
-        # 'image.ome.tiff' -> 'image'.
+        # 'image.ome.tiff' -> 'image'; a plate index with a fixed name takes its
+        # measurement folder's name.
+        folder = named_folder(path)
+        if folder is not None:
+            return _segments(folder)[-1]
         segments = _segments(path)
         return segments[-1].split('.')[0] if segments else ''
 
     def parents(path: str) -> List[str]:
-        return _segments(path)[:-1]
+        folder = named_folder(path)
+        found = _segments(folder)[:-1] if folder is not None else _segments(path)[:-1]
+        # a drive ('C:') is not a folder name, and ':' is no file name character
+        return [part for part in found if not part.endswith(':')]
 
-    names = {path: stem(path) for path in input_paths}
+    same_folder = Counter((tuple(parents(p)), stem(p)) for p in set(input_paths))
+
+    def own(path: str) -> str:
+        """The stem, with the suffix when files of the same folder share the stem."""
+        name = stem(path)
+        if same_folder[(tuple(parents(path)), name)] > 1 and named_folder(path) is None:
+            suffix = _segments(path)[-1][len(name):].strip('.').lower().replace('.', '_')
+            if suffix:
+                return f"{name}_{suffix}"
+        return name
+
+    names = {path: own(path) for path in input_paths}
     depth = 0
     while True:
         clashing = {name for name, count in Counter(names.values()).items()
@@ -485,14 +745,15 @@ def disambiguate_output_names(input_paths: List[str]) -> dict:
                 continue
             available = parents(path)
             if depth <= len(available):
-                names[path] = f"{available[-depth]}_{stem(path)}"
+                names[path] = f"{available[-depth]}_{own(path)}"
                 progressed = True
         if not progressed:
             # Parents exhausted — distinct inputs cannot be told apart by path
             # alone (or the same path was listed twice).  Numbering terminates.
-            for index, (path, name) in enumerate(
-                    (p, n) for p, n in names.items() if n in clashing):
-                names[path] = f"{name}_{index + 1}" if index else name
+            for name in clashing:
+                for index, path in enumerate(p for p, n in list(names.items())
+                                             if n == name):
+                    names[path] = f"{name}_{index + 1}" if index else name
             break
     return names
 
@@ -733,7 +994,7 @@ def take_filepaths(
             raise TypeError(f"Unknown type: {type(global_kwargs['excludes'])}")
 
     # Handle different input types
-    if input_path.endswith(TABLE_FORMATS):
+    if is_table_path(input_path):
 
         logger.info(f"Loading conversion table from {input_path}")
         

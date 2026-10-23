@@ -28,6 +28,10 @@ DATA = Path(os.environ.get("MICROSCOPY_DATA", os.path.expanduser("~/Desktop/data
 CV7000 = DATA / "plates" / "cv7000" / "bia-S-BIAD1013-cv7000" / "1093684368.wpi"
 HARMONY = (DATA / "plates" / "harmony" / "bia-S-BIAD1013-operetta" / "HMEC_21Hits_Images"
            / "Index.idx.xml")
+HS_MEASUREMENT = (DATA / "plates" / "harmony" / "zenodo-20799564"
+                  / "Operetta_minimal_dataset_DPC-Brightfield" / "hs"
+                  / "3a1d3fc3-c7bc-4a7f-916b-1e07adf426f4")
+PHENIX_FULL = DATA / "plates" / "harmony" / "zenodo-7351200-full"
 CZI_PLATE = DATA / "formats" / "czi" / "challenge" / "w96_A1+A2.czi"
 CZI_TILED = DATA / "formats" / "czi" / "zenodo-7015307" / "W96_B2+B4_S=2_T=1=Z=1_C=1_Tile=5x9.czi"
 
@@ -84,6 +88,52 @@ def test_a_plate_from_a_fixed_index_name_is_named_after_its_folder(tmp_path):
     code, log = _run(src, tmp_path / "out", [])
     assert code == 0, log[-3000:]
     assert [p.name for p in (tmp_path / "out").glob("*.zarr")] == ["HMEC_21Hits_Images.zarr"]
+
+
+def test_a_side_file_of_a_plate_converts_the_plate_once(tmp_path):
+    """A Harmony measurement's side files (images/image.index.txt, the measurement's
+    .kw.txt) are parts of its index: choosing one, or one beside the index, converts the
+    plate once, named after the measurement folder."""
+    index = _needs(HS_MEASUREMENT / "images" / "index.xml")
+    side = HS_MEASUREMENT / "images" / "image.index.txt"
+    from eubi_bridge.utils.path_utils import group_inputs
+    assert [Path(p) for p in group_inputs([str(side)])] == [index]
+    root = HS_MEASUREMENT.parent                      # the hs archive's own files
+    for name in ("_objmeta.txt", "_hs.txt", "_structure.txt"):
+        assert [Path(p) for p in group_inputs([str(root / name)])] == [index], name
+    every = [str(p) for p in HS_MEASUREMENT.rglob("*") if p.is_file()]
+    assert [Path(p) for p in group_inputs(every)] == [index]
+    from eubi_bridge.ebridge import EuBIBridge
+    out = tmp_path / "out"
+    EuBIBridge().to_zarr([str(side), str(index)], str(out))
+    assert [p.name for p in out.glob("*.zarr")] == [f"{HS_MEASUREMENT.name}.zarr"]
+    _plate(out / f"{HS_MEASUREMENT.name}.zarr")
+
+
+def test_every_file_of_a_plate_folder_stands_for_the_plate():
+    """An Opera Phenix export holds Evaluation1/ (Harmony's analysis: PlateResults.xml,
+    ObjectList_*.xml) beside Images/, Assaylayout/ and FFC_Profile/. micro-reader 0.2.0
+    names no part of it; eubi took each XML as an input of its own (50 failed tasks)."""
+    index = _needs(PHENIX_FULL / "Images" / "Index.xml")
+    from eubi_bridge.utils.path_utils import input_mains
+    files = [str(p) for p in PHENIX_FULL.rglob("*") if p.is_file()]
+    assert any("Evaluation1" in f for f in files)
+    assert {Path(m) for m in input_mains(files)} == {index}
+
+
+def test_a_batch_table_converts_each_plate_once(tmp_path):
+    """The GUI's batch passes a table, one row per chosen file: rows of one plate become
+    one row (the first's settings), rows that stand for nothing are dropped."""
+    import pandas as pd
+    from eubi_bridge.utils.path_utils import group_input_rows
+    index = _needs(HS_MEASUREMENT / "images" / "index.xml")
+    rows = pd.DataFrame({
+        "input_path": [str(HS_MEASUREMENT / "images" / "image.index.txt"), str(index),
+                       str(next(HS_MEASUREMENT.glob("*.kw.txt")))],
+        "ome_zarr_version": ["0.5", "0.4", "0.4"]})
+    grouped = group_input_rows(rows)
+    assert [Path(p) for p in grouped["input_path"]] == [index]
+    assert list(grouped["ome_zarr_version"]) == ["0.5"]
 
 
 def test_a_czi_plate_is_a_plate_and_says_what_it_leaves_out(tmp_path):

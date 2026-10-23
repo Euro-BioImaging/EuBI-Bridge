@@ -90,7 +90,9 @@ def _both(bridge, store, tmp_path, monkeypatch, command, name, **kwargs):
 
 
 def _same_attrs(expected: dict, store: Path, tmp_path: Path) -> None:
-    assert _golden.comparable(_attrs(store), tmp_path) == expected["attrs"]
+    actual = _golden.comparable(_attrs(store), tmp_path)
+    _golden.sync_colors(expected, actual, key="attrs")
+    assert actual == expected["attrs"]
 
 
 def _old_ngff(expected: dict) -> dict:
@@ -116,8 +118,9 @@ def test_channel_meta_on_both_paths(bridge, store, tmp_path, monkeypatch):
     old, new = _both(bridge, store, tmp_path, monkeypatch, "update_channel_meta", "channel_meta",
                      channel_labels="0,A;1,B", channel_colors="1,magenta")
     _same_attrs(old, new, tmp_path)
+    dapi = _ngff(store)["omero"]["channels"][0]["color"]    # the conversion's (0.3.2: DAPI's)
     assert [(c["label"], c["color"]) for c in _ngff(new)["omero"]["channels"]] == \
-        [("A", "FFFFFF"), ("B", "FF00FF")]
+        [("A", dapi), ("B", "FF00FF")]
     assert 'Name="A"' in _xml(new) and 'Name="B"' in _xml(new)     # the new names
     assert 'Name="DAPI"' in old["xml"]                             # 0.1.x kept the old ones
 

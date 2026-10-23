@@ -476,6 +476,8 @@ class BatchCellEditor(QDialog):
                 continue
             if isinstance(spec.active_when, bool):
                 active = bool(parent_value) == spec.active_when
+            elif isinstance(spec.active_when, tuple):
+                active = str(parent_value) in map(str, spec.active_when)
             else:
                 active = str(parent_value) == str(spec.active_when)
             # A parent that is itself inert cannot make this one live.
@@ -487,6 +489,9 @@ class BatchCellEditor(QDialog):
             else:
                 if isinstance(spec.active_when, bool):
                     reason = f"{parent_key}={not spec.active_when}"
+                elif isinstance(spec.active_when, tuple):
+                    reason = (f"{parent_key} is not one of "
+                              f"{', '.join(map(str, spec.active_when))}")
                 else:
                     reason = f"{parent_key}!={spec.active_when}"
                 field.set_inactive(True, reason)
