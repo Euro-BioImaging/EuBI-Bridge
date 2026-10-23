@@ -89,6 +89,9 @@ coordinate systems) and the fix.
   were read but dropped. They are carried while the output has the input's axes, pixel size and
   position; after a squeeze, crop or rescale they would point at the wrong pixels, and are left
   out with a warning. An output written as 0.4 or 0.5 keeps them under `eubi:ngff06`.
+- eubi-bridge-lite no longer skips a damaged image among several inputs: any file micro-reader did not
+  recognise was taken for a side file, a corrupt `.tif` too, so the batch finished without it. A file with an
+  image suffix is kept, and the conversion fails on it, as with the full install.
 - Half-float (float16) images, such as Leica FLIM results, convert: the OME-XML writer had no
   entry for them and skipped every such scene. The XML says float (OME has no half float); the
   array stays float16.

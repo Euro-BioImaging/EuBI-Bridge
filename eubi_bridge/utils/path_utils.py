@@ -494,17 +494,27 @@ SIDE_FILE_SUFFIXES = TEXT_SUFFIXES + (".xml", ".aas", ".xgapp", ".env", ".mes", 
                                       ".mrf", ".mlf", ".db", ".mdb", ".tmp", ".bak")
 
 
+#: suffixes of image files: one that micro-reader cannot read is a damaged image, not a side
+#: file, so it is kept and the conversion fails on it, with either install
+IMAGE_SUFFIXES = (".tif", ".tiff", ".btf", ".lsm", ".nd2", ".lif", ".lof", ".xlef", ".oir",
+                  ".oib", ".oif", ".czi", ".ims", ".dv", ".r3d", ".nd", ".ics", ".ids",
+                  ".png", ".jpg", ".jpeg", ".h5", ".hdf5", ".mrc", ".ndpi", ".svs", ".vsi")
+
+
 def _not_an_image(path: str) -> bool:
     """True for a file no reader of this install recognises: micro-reader's formats
     find nothing in its first bytes, and -- with Bio-Formats installed (the full
     eubi-bridge), which reads more -- its suffix is a side file's
-    (``SIDE_FILE_SUFFIXES``). Unsure (micro-reader's check fails): False."""
+    (``SIDE_FILE_SUFFIXES``). A file with an image suffix is never skipped (a damaged
+    image fails loudly). Unsure (micro-reader's check fails): False."""
     try:
         from micro_reader import _parts, _registry
         head = _parts.read_head(path)
         if any(module.sniff(head, path) for module in _registry.BACKENDS):
             return False
     except Exception:                           # noqa: BLE001 - unsure: keep it
+        return False
+    if path.lower().endswith(IMAGE_SUFFIXES):
         return False
     from eubi_bridge.utils.capabilities import has_bioformats
     return not has_bioformats() or path.lower().endswith(SIDE_FILE_SUFFIXES)
