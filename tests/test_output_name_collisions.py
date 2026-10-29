@@ -75,7 +75,7 @@ class TestDisambiguation:
         assert sorted(result.values()) == ["A_img", "B_img"]
 
     def test_windows_separators_on_a_posix_host(self, monkeypatch):
-        """A batch table written on Windows may be run on Linux.
+        r"""A batch table written on Windows may be run on Linux.
 
         ``os.path`` only treats ``\`` as a separator on Windows, so without
         explicit handling the whole path became the name on Linux.  Simulating

@@ -142,10 +142,14 @@ def test_a_form_change_shows_in_the_queue_without_a_false_warning(page):
                                  if s.key not in B._PATH_COLUMNS and s.key not in CONCAT])
 def test_an_edited_cell_reaches_its_conversion(page, isolated, monkeypatch, key):
     import eubi_bridge.conversion.dispatcher as dispatcher
+    import eubi_bridge.ebridge as ebridge
     from eubi_bridge.ebridge import EuBIBridge
     from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
     captured = {}
     monkeypatch.setattr(dispatcher, "dispatch_unary_jobs", lambda jobs: captured.setdefault("jobs", jobs))
+    # nothing is written here, so an io_backend edit to 'zarrista' must reach the job
+    # whether or not zarrista is installed (CI has none: the run would be refused)
+    monkeypatch.setattr(ebridge, "_zarrista_installed", lambda: True)
     src = isolated / "a.tif"
     src.write_bytes(b"II*\x00")
     base = page._ui_to_config()
