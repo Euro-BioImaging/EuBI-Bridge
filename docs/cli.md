@@ -123,11 +123,11 @@ These are stored in the configuration file but can also be supplied directly to 
 | Argument               | Type     | Description                                  |
 |------------------------|----------|----------------------------------------------|
 | `--max_processes`     | `int`   | Images converted at once, each in its own worker process (formerly `--max_workers`) |
-| `--max_threads`       | `int`    | Threads per conversion, each reading and writing one region at a time; scenes converted at once share them (formerly `--max_concurrency`) |
+| `--max_threads`       | `int` or `auto` | Threads per conversion, each reading and writing one region at a time: `auto` (default) is the cores over the conversions running at once, at most 16 (`0` means the same); scenes converted at once share them (formerly `--max_concurrency`) |
 | `--max_retries`             | `int`    | Number of retries attempted for certain types of errors    |
 | `--memory_budget`  | `str`   | The memory the whole run may use on this machine, e.g. `16GB`, or `auto` (default: half the free RAM) |
 | `--max_concurrent_scenes` | `int` | Scenes of one file converted at once (default 1); they share `max_threads` |
-| `--decode_threads`     | `int`    | micro-reader's decode threads per worker process (formerly `--micro_read_concurrency`) |
+| `--decode_threads`     | `int`    | micro-reader's decode threads per worker process: `auto` (default; the cores over the conversions running at once, at most 16) or a number (formerly `--micro_read_concurrency`) |
 | `--decode_memory`      | `str`    | micro-reader's decoding memory per process, e.g. `1GB`, or `auto` (default) |
 | `--bioformats_threads` | `int`    | Threads for parallel Bio-Formats tile reads (formerly `--bf_read_concurrency`) |
 | `--jvm_memory`         | `str`    | Maximum JVM heap for Bio-Formats, e.g. `8GB` (default `1g`) |

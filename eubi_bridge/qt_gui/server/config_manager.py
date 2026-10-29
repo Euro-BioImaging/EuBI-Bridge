@@ -64,7 +64,7 @@ def _config_to_react(cfg: dict) -> dict:
         "cluster": {
             "maxProcesses":           cluster.get("max_processes", 4),
             "queueSize":            cluster.get("queue_size", 4),
-            "maxThreads":       cluster.get("max_threads", 4),
+            "maxThreads":       _threads_or_zero(cluster.get("max_threads", "auto")),
             "maxConcurrentScenes":  cluster.get("max_concurrent_scenes", 1),
             "regionSizeMb":         _auto_or_float(cluster.get("region_size_mb", "auto")),
             "memoryBudget":         _auto_or_gb(cluster.get("memory_budget", "auto")),
@@ -73,7 +73,7 @@ def _config_to_react(cfg: dict) -> dict:
             "useSlurm":             cluster.get("on_slurm", False),
             "jvmMemory":            _parse_jvm_gb(cluster.get("jvm_memory", "2g"), 2.0),
             "bioformatsThreads":    cluster.get("bioformats_threads", 4),
-            "decodeThreads": cluster.get("decode_threads", 4),
+            "decodeThreads": _threads_or_zero(cluster.get("decode_threads", "auto")),
             "maxConcurrentDownscaleLayers": cluster.get("max_concurrent_downscale_layers", 3),
             "slurmTime":            cluster.get("slurm_time") or "24:00:00",
             "slurmAccount":         cluster.get("slurm_account") or "",
@@ -240,7 +240,7 @@ def _react_to_config(data: dict) -> dict:
             "max_processes":                     cluster_d.get("maxProcesses", 4),
             "queue_size":                      cluster_d.get("queueSize", 4),
             "region_size_mb":                  _float_or_auto(cluster_d.get("regionSizeMb", 0)),
-            "max_threads":                 cluster_d.get("maxThreads", 4),
+            "max_threads":                 _zero_or_threads(cluster_d.get("maxThreads", 0)),
             "max_concurrent_scenes":           cluster_d.get("maxConcurrentScenes", 1),
             "on_slurm":                        cluster_d.get("useSlurm", False),
             "memory_budget":                   _gb_or_auto(cluster_d.get("memoryBudget", 0)),
@@ -250,7 +250,7 @@ def _react_to_config(data: dict) -> dict:
             "max_retries":                     10,
             "jvm_memory":                      _gb_to_jvm_str(cluster_d.get("jvmMemory", 2)),
             "bioformats_threads":             cluster_d.get("bioformatsThreads", 4),
-            "decode_threads":          cluster_d.get("decodeThreads", 4),
+            "decode_threads":          _zero_or_threads(cluster_d.get("decodeThreads", 0)),
             "max_concurrent_downscale_layers": cluster_d.get("maxConcurrentDownscaleLayers", 3),
             "slurm_time":                      cluster_d.get("slurmTime") or "24:00:00",
             "slurm_account":                   cluster_d.get("slurmAccount") or None,
@@ -402,6 +402,23 @@ def _parse_jvm_gb(value, default: float = 2.0) -> float:
         return float(s)
     except ValueError:
         return default
+
+
+def _threads_or_zero(value) -> int:
+    """A config thread count (a number or "auto") as the GUI's spin box value (0 = auto)."""
+    try:
+        return int(value) if value is not None and str(value).strip().lower() != "auto" else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _zero_or_threads(value):
+    """The GUI's thread count (0 = auto) as the config's value: a number or "auto"."""
+    try:
+        n = int(value or 0)
+    except (TypeError, ValueError):
+        return "auto"
+    return n if n > 0 else "auto"
 
 
 def _auto_or_gb(value) -> float:

@@ -1,5 +1,160 @@
 # Changelog
 
+## 0.3.3 (2026-10-28)
+
+Needs ome_zarr_pyramid 0.5 (`>=0.5.0,<0.6`) and reads micro-reader 0.2.1 to 0.3.x
+(`>=0.2.1,<0.4`). The plate formats below need micro-reader 0.3.0; with 0.2.1 they go
+to the older readers as before.
+
+### New
+
+- **Plates from more instruments**, read by micro-reader 0.3.0 and written as one NGFF
+  plate each: PerkinElmer Opera Flex (`.flex`; a folder of several barcodes gives one
+  plate each), Columbus exports (`ImageIndex.ColumbusIDX.xml`), Thermo Fisher Cellomics
+  (`.C01`: any file or the folder opens the plate), Molecular Devices ImageXpress HCS.ai
+  (`.jdce`), Olympus / Evident scanR (`experiment_descriptor.xml`), OME companion files
+  that describe a plate, ND2 files whose points are named after wells, and NIS-Elements
+  well-plate runs (one ND2 per well: the folder or any of its files gives one plate, not
+  one copy of the plate per file; with `as_plate=False` each file is converted on its
+  own). Yokogawa CQ1 (`MeasurementResult.ome.tif`) is a plate when its images sit in two
+  or more wells. Each checked end to end on the samples held, from the command line and
+  from a GUI batch. A plate is named after its folder when its file's name says nothing
+  about it: scanR `experiment_descriptor.xml`, Columbus `ImageIndex.ColumbusIDX.xml`,
+  Cellomics `.C01` files and NIS-Elements run files (as Harmony's `Index.idx.xml`
+  already was), so choosing the folder or any of its files gives the same name; with
+  `as_plate=False` each file keeps its own.
+
+- **OME-Zarr plates as input.** An NGFF 0.4, 0.5 or 0.6 plate, or an RFC 8 collection
+  holding one, is written as one plate again, in the version asked for: the same rows,
+  columns, acquisitions, wells and fields, every field with the job's settings, at its
+  position in its coordinate system. A 0.6 field's other systems and transformations
+  are carried as for a single 0.6 image. Before, a plate store failed with ozp's
+  "No valid metadata found in zarr group". `as_plate=False` is refused for an OME-Zarr
+  plate (convert a field's own group as an image), and so are an RFC 8 collection that
+  holds no plate and a bioformats2raw layout without one (convert a series' own group),
+  each with an error that says so.
+- **Label images of an OME-Zarr input are named in a warning**: eubi-bridge writes the
+  images only, and before it left the labels out without a word (a Fractal plate's
+  `org` segmentation, for one).
+- **Olympus / Evident VSI is read by micro-reader** (with micro-reader 0.3.0 or newer;
+  with 0.2.x the older readers read it, and the log says why). micro-reader gives a
+  slide's stored pyramid levels as levels of one image; Bio-Formats lists each level as a
+  series of its own (28 series for an Evident slide of 5 images). Checked against the
+  older readers on the 9 samples held: the same pixels, except lossy JPEG 2000 tiles,
+  where the two decoders round up to 1 apart; reading is 10-20 times faster.
+- **Slide TIFFs are read by micro-reader**: Aperio SVS, Hamamatsu NDPI, Leica SCN,
+  Akoya / PerkinElmer QPTIFF and Ventana / Roche BIF. Checked against the older readers
+  on the 20 samples held: NDPI, SCN, QPTIFF and SVS give the same pixels on every level
+  (reading is about 14 times faster), except a JPEG 2000 SVS, where Bio-Formats' decoder
+  is up to 12 off (micro-reader equals OpenJPEG and is within 1 of OpenSlide). A
+  NanoZoomer's tissue map, which Bio-Formats cannot read, is converted too. BIF tiles are
+  placed where the scanner's joints say, not spread evenly as Bio-Formats does, so a BIF
+  output's size and seams differ from before; a BIF micro-reader does not read (another
+  scanner, several focal planes) still goes to the older readers. A slide's lengths keep
+  the file's unit (Leica: nanometres). eubi-bridge-lite converts these formats too.
+- **ICS is read by micro-reader** (`.ics` with its `.ids`; an `.ids` given as the input
+  converts its `.ics`, once also when both are in the input folder). Checked against the
+  older readers on the 4 samples both read (libics, a 1.2 GB stitched stack, two Huygens
+  results): the same pixels and pixel sizes; reading is about 10 times faster. Pixels in a
+  Unix-compressed `.ids.Z` are read by neither.
+- **HDF5 is read by micro-reader** (`.h5`, `.hdf5`): ilastik files, BigDataViewer (an
+  `.h5` given converts its `.xml`), Luxendo `.lux.h5`, Fiji / Vibez files and the `.h5`
+  parts of an Imaris multi-file set (they convert the set's `.ims`). Before, eubi-bridge's
+  own H5 reader took every `.h5`: it converted only plain datasets, wrote them in the
+  file's axis order (`tyxc`, `xyc`, which OME-Zarr does not allow) with pixel sizes of
+  0.0, and failed on BigDataViewer, Luxendo, Fiji and Imaris layouts. An ilastik output
+  now has the same values in t, c, z, y, x order with positive pixel sizes. A file of no
+  layout micro-reader knows goes to that reader as before. eubi-bridge-lite converts
+  HDF5 too. Not yet: a BigDataViewer set whose setups have no attributes (micro-reader
+  calls them a "sequence"; decision E-1).
+- **More formats are read by micro-reader**, checked against Bio-Formats on the samples
+  held:
+  - MRC (`.mrc`, `.map`, `.mrcs`, `.st`, `.ali`, `.rec`): the same values. A map whose
+    header stores its axes in another order (`EMD-3001.map`) is now written in z, y, x by
+    that order, with each pixel size on its own axis; Bio-Formats kept the stored order.
+    A 6.8 GB `.mrc` that Bio-Formats cannot read (one plane over 2 GB) converts.
+  - JPEG, PNG and BMP files: identical.
+  - Leica `.lof`: identical. An `.xlif` or `.xlcf` given alone (Bio-Formats reads them
+    only through their `.xlef`) converts the same images as the `.xlef`.
+  - Hamamatsu `.ndpis` sets: identical, except one 8 x 8 block of the macro image, where
+    Bio-Formats' JPEG decoder differs from libjpeg and PIL (micro-reader equals both).
+  - Olympus FluoView tiling sets (`.omp2info`): each tile, as its `.oir` reads; with
+    `as_mosaic` the tiles are placed at their nominal grid positions, so the mosaic's
+    size differs from Bio-Formats' stitching.
+  - OME companion files (`.companion.ome`), including a Bruker set Bio-Formats cannot
+    read.
+
+### Changed
+
+- **`decode_threads` is `"auto"` by default** (was 4): the cores this job may use
+  (`SLURM_CPUS_PER_TASK`, else the process's CPU affinity, else the machine's cores),
+  shared between the conversions that run at once, at most 16, and fewer when the
+  reader's share of the memory budget holds fewer blocks. A number still sets it as
+  given (`--decode_threads 8`); `0` means auto. The Memory line of the log names the
+  thread count. On the GUI's Conversion page the field reads "auto" at 0. A saved
+  configuration that stores a number keeps it: `eubi configure cluster --decode_threads auto`
+  (or 0 on the GUI) switches it to auto.
+- **`max_threads` is `"auto"` by default too** (was 4): the cores over the conversions
+  running at once, at most 16; scenes converted at once still share them. A number sets
+  it as given, `0` means auto, and the GUI's Max Threads field reads "auto" at 0. A saved
+  configuration that stores a number keeps it.
+- **The `Memory:` line is logged once per plan in each process**: a plate logged it again
+  for every field. Repeats go to the debug log.
+- **Loading a batch over edits not saved yet asks first** (GUI, Batch tab): it names what
+  the load replaces, the queue table and, when the batch brings a config snapshot, the
+  parameter tabs. No leaves everything as it was.
+- **An explicit `decode_memory` is capped at half the process's memory budget**, with one
+  warning: before, `decode_memory 1GB` in a 1 GB budget left nothing for the writer. A
+  value within half is used as given; the cap never leaves less than one decode block.
+- **The biggest inputs start first.** A batch submits its jobs from the most bytes on disk
+  to the fewest (a plate or file-set index counts its whole folder; a folder input counts
+  what it holds; remote inputs go last), so one large file no longer runs alone at the
+  end. Results, failures and the job table keep the batch's own order and numbers.
+- **An output keeps the dots in its input's name**: only the suffix is removed, a two-part
+  one (`.ome.tif`, `.ome.zarr`, ...) whole. `Image_V4.1_BF.vsi` gives `Image_V4.1_BF.zarr`;
+  before, everything after the first dot was dropped (`Image_V4.zarr`), so
+  `Image_V4.1_BF.vsi` and `Image_V4.1_FL_3D.vsi` converted one at a time wrote one output
+  (the second was refused, or replaced the first with `overwrite`). Names without a dot
+  before the suffix are unchanged; a file with one gets a new output name.
+
+### Fixed
+
+- **Each saved batch keeps its own settings file** (GUI): Save Batch writes
+  `<batch name>.config.json` beside the CSV (`my_batch.csv` → `my_batch.config.json`).
+  Before, every batch of a folder shared one `batch_config.json` and the last save won:
+  loading an older batch silently applied another batch's settings (a batch of
+  2026-10-20 loaded the zarrista / zarr v2 settings another batch saved on 2026-10-23,
+  and every row failed). A batch saved before 0.3.3 uses the folder's
+  `batch_config.json` only when it was saved together with its CSV; otherwise its rows
+  use the settings the parameter tabs show, and the status line and the log say why.
+  Saving it again gives it its own file.
+- **The Convert log names the OME-Zarr version the outputs get**: `Output format:
+  OME-Zarr 0.5 (zarr v3)`, and for a batch the versions its rows ask for with their
+  count. It said the base settings' `Zarr Format: v2` even when every row wrote
+  OME-Zarr 0.5 (zarr v3).
+- **A folder chosen as a batch row** (the GUI's input browser ticks folders too) is
+  grouped like the files in it: a folder whose files form one image or plate that
+  micro-reader does not open as a folder (an NDTiff dataset with downsampled levels, a
+  NIS-Elements well-plate run) converts that image; a folder whose files belong to the
+  other rows' images ('Select All' ticks the subfolders, e.g. a Leica export's
+  `Metadata`) is skipped. Before, such rows went to Bio-Formats, which cannot open a
+  folder ("Access is denied"). A folder micro-reader opens itself (a Cellomics plate
+  folder, an NDTiff dataset folder, an OIF storage folder) stays the input, as before.
+- **An NDTiff dataset with downsampled levels converts once** (Micro-Manager Magellan
+  explorations, stitched acquisitions): the image in `Full resolution/` is converted, and
+  the `Downsampled_x<N>/` folders beside it, previews Micro-Manager wrote, stand for it.
+  Before, each level was an output of its own (up to 11 for one dataset), named after its
+  folder. Choosing the dataset's folder, `Full resolution/` or a level's folder or file
+  gives the same one output; a level whose `Full resolution/` is missing converts as it
+  is. NDTiff datasets without levels are unchanged. Checked on the 7 multi-level samples
+  of NDTiffStorage: every tile's pixels equal micro-reader's.
+- **`io_backend='zarrista'` without zarrista installed** stops the run once, before any
+  file is read, with `IOBackendUnavailableError` (an `ImportError`) naming the two ways out:
+  `pip install "dyna-zarr[zarrista]"`, or `eubi configure conversion --io_backend tensorstore`
+  (Byte Backend on the GUI's Conversion page). A saved configuration may name it; before,
+  every file failed in its worker with a traceback of its own. A batch table row naming
+  zarrista is checked the same way, before any job starts.
+
 ## 0.3.2 (2026-10-22): plates, coordinate systems, NGFF 0.6 and RFC 8 output
 
 Requires `micro-reader[codecs]>=0.2.1,<0.3` (was 0.1.x; `[codecs]` brings `imagecodecs`, which

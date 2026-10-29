@@ -122,6 +122,58 @@ def _build_executor(cluster, use_threading: bool) -> tuple:
     }
 
 
+#: index-type files: the set they open lies in their folder (its size is the input's)
+_SET_INDEX_SUFFIXES = (".xml", ".htd", ".wpi", ".mlf", ".xdce", ".jdce", ".ome", ".nd",
+                       "metadata.txt")
+#: files looked at when sizing a folder (a huge one is not walked to its end)
+_SIZE_WALK_LIMIT = 50_000
+
+
+def _folder_bytes(folder: str) -> int:
+    total, seen = 0, 0
+    for root, _dirs, files in os.walk(folder):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+            seen += 1
+            if seen >= _SIZE_WALK_LIMIT:
+                return total
+    return total
+
+
+def _input_bytes(path) -> int:
+    """About how much an input holds, to start the biggest first: a file's size; a
+    folder's, or an index file's folder's, files (bounded walk); 0 for a remote store
+    or what cannot be read."""
+    paths = path if isinstance(path, (list, tuple)) else [path]
+    total = 0
+    for p in paths:
+        p = str(p)
+        if "://" in p:
+            continue
+        try:
+            if os.path.isdir(p):
+                total += _folder_bytes(p)
+            elif p.lower().endswith(_SET_INDEX_SUFFIXES):
+                total += _folder_bytes(os.path.dirname(os.path.abspath(p)))
+            else:
+                total += os.path.getsize(p)
+        except OSError:
+            pass
+    return total
+
+
+def _largest_first(paths: list) -> list:
+    """Indices of *paths* (one input each, or a list of files for one output), the
+    biggest first; equal sizes keep their order.  Started in this order, the small
+    files fill the other processes while a big one runs, instead of a slide scan
+    finishing alone at the end of a batch."""
+    sizes = [_input_bytes(p) for p in paths]
+    return sorted(range(len(paths)), key=lambda i: -sizes[i])
+
+
 async def _dispatch(
     jobs: list,
     worker_fn: Callable,
@@ -130,11 +182,14 @@ async def _dispatch(
     use_threading: bool,
     label: str = "Main",
     tsc=None,
+    order: list = None,
 ) -> list:
     """Shared coroutine: submit all jobs to a pool, gather, report failures.
 
     Staggers ProcessPool submissions by 0.2 s to serialise worker init.
     Falls back to a temporary single-worker pool on BrokenProcessPool.
+    *order*: the order to start the jobs in (indices into *jobs*, the biggest first);
+    results come back, and failures are numbered, in *jobs*' own order.
     """
     if tsc is None:
         tsc = jobs[0].cluster.tensorstore_data_copy_concurrency if jobs else 1
@@ -163,14 +218,18 @@ async def _dispatch(
         pool  = executor_cls(**executor_kwargs)
         max_w = executor_kwargs.get("max_workers") or 1
         tasks = []
-        for idx, job in enumerate(jobs):
-            tasks.append(_submit_one(pool, idx, job))
+        sequence = list(order) if order is not None else list(range(len(jobs)))
+        for k, idx in enumerate(sequence):
+            tasks.append(_submit_one(pool, idx, jobs[idx]))
             # Stagger only the first max_workers submissions to serialise worker
             # process init. Staggering every job is O(n_jobs) delay — 288 s for
             # 1 442 files — which makes the GUI appear jammed.
-            if not use_threading and idx < max_w - 1:
+            if not use_threading and k < max_w - 1:
                 await asyncio.sleep(0.2)
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        gathered = await asyncio.gather(*tasks, return_exceptions=True)
+        results = [None] * len(jobs)
+        for idx, result in zip(sequence, gathered):
+            results[idx] = result
     finally:
         if pool is not None:
             try:
@@ -225,7 +284,8 @@ def dispatch_unary_jobs(jobs: list) -> list:
         return asyncio.run(_dispatch_unary_with_slurm(jobs))
     exc_cls, exc_kw = _build_executor(cluster, use_threading)
     return asyncio.run(
-        _dispatch(jobs, unary_worker_sync, exc_cls, exc_kw, use_threading)
+        _dispatch(jobs, unary_worker_sync, exc_cls, exc_kw, use_threading,
+                  order=_largest_first([job.input_path for job in jobs]))
     )
 
 
@@ -399,7 +459,8 @@ def _call(task):
 def dispatch_mixed_jobs(unary_jobs: list, aggregative_jobs: list) -> list:
     """A conversion table's one-to-one jobs and aggregative groups in ONE pool, running
     at the same time (roadmap step 3): every unary job and every aggregative output is
-    one task, up to ``max_processes`` at once, in the table's order. The run's memory
+    one task, up to ``max_processes`` at once, the biggest first (results in the table's
+    order). The run's memory
     budget is split over the tasks running at once, as for unary jobs; an aggregative
     output counts as one task however many files it joins. Failures are reported once,
     at the end, for all of them.
@@ -439,15 +500,18 @@ def dispatch_mixed_jobs(unary_jobs: list, aggregative_jobs: list) -> list:
                                 {**job_kwargs, **memory})
               for paths, out, job_kwargs in planned]
     logger.info(f"Conversion table: {len(unary_jobs)} one-to-one job(s) and "
-                f"{len(planned)} aggregative output(s) in one pool, {running} at once.")
+                f"{len(planned)} aggregative output(s) in one pool, {running} at once, "
+                f"the biggest first.")
 
     if first.jvm_memory:
         os.environ['EUBI_JVM_MEMORY'] = str(first.jvm_memory)
     exc_cls, exc_kw = _build_executor(first.model_copy(update={'max_processes': running}),
                                       use_threading)
+    order = _largest_first([job.input_path for job in unary_jobs]
+                           + [paths for paths, _out, _kw in planned])
     return asyncio.run(_dispatch(tasks, _call, exc_cls, exc_kw, use_threading,
                                  label="Conversion table",
-                                 tsc=first.tensorstore_data_copy_concurrency))
+                                 tsc=first.tensorstore_data_copy_concurrency, order=order))
 
 
 def dispatch_aggregative_jobs(jobs: list) -> list:

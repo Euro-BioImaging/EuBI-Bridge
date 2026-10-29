@@ -246,10 +246,13 @@ def _extract_cropping_slices(kwargs: Dict) -> Dict:
 
 
 def _threads_per_scene(clus) -> int:
-    """A conversion's ``max_threads``, shared by the scenes it converts at once
-    (``max_concurrent_scenes``): raising the scenes never raises the threads."""
+    """A conversion's ``max_threads`` (``"auto"``: core/memory.write_threads), shared
+    by the scenes it converts at once (``max_concurrent_scenes``): raising the scenes
+    never raises the threads."""
+    from eubi_bridge.core import memory
     scenes = max(1, int(clus.max_concurrent_scenes or 1))
-    return max(1, int(clus.max_threads or 1) // scenes)
+    threads = memory.write_threads(clus.max_threads or "auto", _decode_sharers(clus))
+    return max(1, threads // scenes)
 
 
 def _unit_mb(arr) -> Optional[float]:
@@ -274,10 +277,14 @@ def _memory_plan_for(array, job: ConversionJob) -> tuple:
     clus = job.cluster
     process = clus.process_memory_mb or memory.process_mb(clus)
     micro = job.readers.pixel_reader == 'micro' or job.metadata.metadata_reader == 'micro'
+    threads = None
     if micro:
-        decode, cache = memory.reader_share(process, clus.decode_memory, clus.decode_threads,
-                                            _unit_mb(array))
-        from eubi_bridge.core.micro_source import set_read_memory
+        unit = _unit_mb(array)
+        threads = memory.decode_threads(clus.decode_threads, _decode_sharers(clus), process,
+                                        unit)
+        decode, cache = memory.reader_share(process, clus.decode_memory, threads, unit)
+        from eubi_bridge.core.micro_source import set_read_concurrency, set_read_memory
+        set_read_concurrency(threads)
         set_read_memory(decode, cache)
         reader = decode + cache
     else:                                                    # Bio-Formats: the JVM heap
@@ -286,11 +293,26 @@ def _memory_plan_for(array, job: ConversionJob) -> tuple:
     scenes = max(1, int(clus.max_concurrent_scenes or 1))
     scene = memory.scene_mb(process, held, reader, scenes)
     region = memory.region_mb(clus.region_size_mb, scene, _threads_per_scene(clus))
-    logger.info(
-        f"Memory: {process:.0f} MB for this conversion = {held:.0f} MB already held + "
-        f"{reader:.0f} MB reading + {scene:.0f} MB writing per scene ({scenes} at once); "
-        f"regions of {region:.0f} MB")
+    reading = f"{reader:.0f} MB reading" + (f" ({threads} decode threads)" if threads else "")
+    line = (f"Memory: {process:.0f} MB for this conversion = {held:.0f} MB already held + "
+            f"{reading} + {scene:.0f} MB writing per scene ({scenes} at once); "
+            f"regions of {region:.0f} MB")
+    # once per process for each plan: a plate asks for one per field
+    (logger.debug if line in _memory_logged else logger.info)(line)
+    _memory_logged.add(line)
     return scene, region
+
+
+_memory_logged: set = set()
+
+
+def _decode_sharers(clus) -> int:
+    """The conversions whose decoding shares this machine's cores: those running at once
+    in worker processes (each has its own decode pool); 1 when they run as threads of one
+    process (one pool for all of them)."""
+    if getattr(clus, 'use_threading', False):
+        return 1
+    return max(1, int(getattr(clus, 'concurrent_jobs', None) or clus.max_processes or 1))
 
 
 #: settings of eubi-bridge's own writer (retired in 0.2.0) that do nothing now
@@ -359,7 +381,8 @@ def _generate_output_path(base_path: str, series_path: str,
     Returns:
         Complete output path
     """
-    basename = resolved_basename or os.path.basename(series_path).split('.')[0]
+    from eubi_bridge.utils.path_utils import output_stem
+    basename = resolved_basename or output_stem(series_path)
     suffix = ""
 
     if series_idx is not None:

@@ -377,22 +377,54 @@ class TestBatchClusterSettings:
         """The snapshot's other settings are restored; its cluster ones are
         only recorded, since they describe the machine it was saved on."""
         import json
-        from eubi_bridge.qt_gui.core.batch import CONFIG_SNAPSHOT_NAME
+        from eubi_bridge.qt_gui.core.batch import config_snapshot_path
         from eubi_bridge.qt_gui.pages import convert_page
         _queue(page, tmp_path, 2)
         page._max_processes.setValue(3)
         page._read_as_mosaic.setChecked(False)
         written = page._batch_save_to(str(tmp_path / "batch.csv"))
-        snapshot = json.loads(
-            (Path(written).parent / CONFIG_SNAPSHOT_NAME).read_text())
+        snapshot = json.loads(Path(config_snapshot_path(written)).read_text())
         assert snapshot["cluster"]["maxProcesses"] == 3   # recorded for reference
 
         page._max_processes.setValue(12)
         page._read_as_mosaic.setChecked(True)
         monkeypatch.setattr(convert_page.QFileDialog, "getOpenFileName",
                             staticmethod(lambda *a, **k: (written, "")))
+        asked = []
+        monkeypatch.setattr(convert_page.QMessageBox, "question", staticmethod(
+            lambda _parent, _title, text, *a: asked.append(text)
+            or convert_page.QMessageBox.StandardButton.Yes))
         page._on_batch_load()
 
+        # the mosaic box was changed after saving; the Cluster tab is not replaced
+        assert len(asked) == 1 and "the parameter tabs" in asked[0]
+        assert "queue table" not in asked[0]
         assert page._max_processes.value() == 12          # Cluster tab kept
         assert not page._read_as_mosaic.isChecked()     # rest restored
         assert page._batch.base_config["cluster"]["maxProcesses"] == 12
+
+    def test_loading_a_batch_over_unsaved_edits_asks_first(self, page, tmp_path,
+                                                          monkeypatch):
+        from eubi_bridge.qt_gui.pages import convert_page
+        _queue(page, tmp_path, 2)
+        written = page._batch_save_to(str(tmp_path / "batch.csv"))
+        monkeypatch.setattr(convert_page.QFileDialog, "getOpenFileName",
+                            staticmethod(lambda *a, **k: (written, "")))
+        asked = []
+
+        def answer(button):
+            monkeypatch.setattr(convert_page.QMessageBox, "question", staticmethod(
+                lambda _parent, _title, text, *a: asked.append(text) or button))
+
+        answer(convert_page.QMessageBox.StandardButton.No)
+        page._on_batch_load()                    # nothing changed since saving
+        assert asked == []
+
+        _queue(page, tmp_path, 1)                # a third row, not saved
+        page._on_batch_load()
+        assert len(asked) == 1 and "the queue table" in asked[0]
+        assert len(page._batch) == 3             # No: the unsaved queue stays
+
+        answer(convert_page.QMessageBox.StandardButton.Yes)
+        page._on_batch_load()
+        assert len(page._batch) == 2             # Yes: the saved batch replaces it

@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from eubi_bridge.utils.logging_config import get_logger
-from eubi_bridge.utils.path_utils import GENERIC_INDEX_NAMES, named_folder
+from eubi_bridge.utils.path_utils import named_folder, output_stem
 
 logger = get_logger(__name__)
 #: colour notices already logged: a plate repeats one per well, so repeats go to debug
@@ -43,7 +43,50 @@ FORMATS = (".ome.tif", ".ome.tiff",
            # 0.3.2, checked against the older readers on the samples held: Leica XLEF
            # sets, Olympus OIB / OIF, MetaMorph .nd sets, DeltaVision, Micro-Manager
            # image-per-file acquisitions (their metadata.txt is the set's main file)
-           ".xlef", ".oib", ".oif", ".nd", ".dv", ".r3d", ".r3d_d3d", "metadata.txt")
+           ".xlef", ".oib", ".oif", ".nd", ".dv", ".r3d", ".r3d_d3d", "metadata.txt",
+           # 0.3.3: Olympus / Evident VSI (FORMATS_SINCE), checked against the older
+           # readers on the 9 samples held: the same pixels, except lossy JPEG 2000 tiles,
+           # where Bio-Formats' decoder rounds 1 apart from OpenJPEG's (micro-reader's)
+           ".vsi",
+           # 0.3.3: slide TIFFs, checked against the older readers on the 20 samples held:
+           # NDPI, SCN, QPTIFF and SVS give the same pixels on every level, except a JPEG
+           # 2000 SVS (Bio-Formats' decoder off by up to 12; micro-reader equals OpenJPEG,
+           # within 1 of OpenSlide); BIF tiles are placed by the scanner's joints, not
+           # spread evenly as Bio-Formats does (micro-reader's decision, Real-Data Matrix
+           # c010), and a BIF micro-reader refuses goes to the older readers
+           ".svs", ".ndpi", ".scn", ".qptiff", ".bif",
+           # 0.3.3: ICS (an .ids given is a part: its .ics is converted), checked against
+           # the older readers on the 4 samples both read: the same pixels and pixel sizes
+           ".ics",
+           # 0.3.3: HDF5 (ilastik, BigDataViewer, Luxendo, Fiji / Vibez, Imaris parts); a
+           # file of no layout micro-reader knows goes to eubi's own H5 reader as before.
+           # Checked against that reader on the ilastik samples it converts: the same
+           # values, now in t c z y x order with positive pixel sizes (it kept the file's
+           # order, e.g. tyxc, and wrote 0.0); the other layouts it could not read
+           ".h5", ".hdf5",
+           # 0.3.3, checked against Bio-Formats on the samples held: MRC (.mrc, .map;
+           # .mrcs / .st / .ali / .rec are the same format) the same values, rows top
+           # first as Bio-Formats, but in z y x by the header's axis map, which Bio-Formats
+           # ignores (EMD-3001.map); a 6.8 GB .mrc Bio-Formats cannot read equals mrcfile.
+           # JPEG / PNG / BMP and Leica .lof identical; .xlif / .xlcf (which Bio-Formats
+           # reads only through their .xlef) give the .xlef's images. Hamamatsu .ndpis
+           # identical except one JPEG block where Bio-Formats' decoder differs from
+           # libjpeg's (micro-reader equals libjpeg and PIL). Olympus .omp2info tiles are
+           # .oir files (on the route); their mosaic places tiles nominally (micro-reader's
+           # decision, Real-Data Matrix a006). OME companion (.companion.ome): the Bruker
+           # set Bio-Formats cannot read converts
+           ".mrc", ".mrcs", ".map", ".st", ".ali", ".rec",
+           ".png", ".jpg", ".jpeg", ".bmp",
+           ".xlif", ".xlcf", ".lof", ".ndpis", ".omp2info", ".companion.ome",
+           # 0.3.3: plates micro-reader reads from 0.3.0 on (FORMATS_SINCE): Opera Flex,
+           # ImageXpress HCS.ai, Cellomics; Columbus and scanR index files are .xml
+           ".flex", ".jdce", ".c01")
+#: formats on the route only from a micro-reader release on (with an older one, the older
+#: readers read them): VSI from 0.3.0, the first that fills a slide's unscanned tiles with
+#: the ETS background colour, as Bio-Formats does (0.2.x left them black); the plate
+#: formats micro-reader 0.3.0 added
+FORMATS_SINCE = {".vsi": (0, 3, 0), ".flex": (0, 3, 0), ".jdce": (0, 3, 0),
+                 ".c01": (0, 3, 0)}
 #: micro-reader's name of the series index (micro-reader 0.1.0; it was "scene"). The
 #: older readers (legacy_image) and the aggregative path name their index the same, so
 #: one name serves every file; eubi's own option for it is series_index
@@ -54,7 +97,9 @@ INDICES = {SERIES, "tile", "view", "illumination"}
 PLATE_INDICES = {"plate", "acquisition", "well", "field"}
 #: micro-reader's plate formats (always plate acquisitions, even a one-well subset): with
 #: as_plate unset they are written as plates; other formats only when 2+ wells hold images
-PLATE_BACKENDS = {"harmony", "cv7000", "metaxpress", "incell"}
+PLATE_BACKENDS = {"harmony", "cv7000", "metaxpress", "incell",
+                  # micro-reader 0.3.0
+                  "flex", "columbus", "scanr", "cellomics", "jdce"}
 #: eubi-bridge's channel_intensity_limits -> ozp's write_pyramid(windows=...)
 WINDOWS = {"from_dtype": "dtype", "from_array": "data", "auto": "auto"}
 #: the multiscale name eubi-bridge writes
@@ -80,12 +125,31 @@ def _retired_settings(job) -> None:
             "once more with pixel_reader='standard' and compare the two outputs.")
 
 
+def _off_route(path) -> str:
+    """Why a file named *path* is not on micro-reader's route (FORMATS, FORMATS_SINCE),
+    or ''."""
+    name = str(path).lower()
+    if not name.endswith(FORMATS):
+        return f"format not on micro-reader's route yet ({', '.join(FORMATS)})"
+    for ending, since in FORMATS_SINCE.items():
+        if name.endswith(ending):
+            from eubi_bridge.core.micro_source import micro_reader_version
+            got = micro_reader_version()
+            if got is not None and got < since:
+                dots = ".".join
+                return (f"{ending} files need micro-reader >={dots(map(str, since))} on its "
+                        f"route (installed: {dots(map(str, got))})")
+    return ""
+
+
 def _micro_reason(job, suffix: bool = True) -> str:
     """Why micro-reader does not read this job's file here (the older readers do), or '';
     suffix=False leaves out the file's suffix (a part of a composite whose main file is
     on the route is read: _open_micro)."""
-    if suffix and not str(job.input_path).lower().endswith(FORMATS):
-        return f"format not on micro-reader's route yet ({', '.join(FORMATS)})"
+    if suffix:
+        reason = _off_route(job.input_path)
+        if reason:
+            return reason
     if job.metadata.metadata_reader != "micro" or job.readers.pixel_reader != "micro":
         return "the standard reader was asked for"
     if job.readers.force_bioformats:
@@ -267,7 +331,11 @@ def _open_micro(job) -> _MicroFile:
     # images/index.xml): micro-reader opens the main file, and the job reads that.
     off_route = _micro_reason(job)
     require_micro_reader()      # MicroReaderVersionError: a wrong micro-reader is no fallback
-    set_read_concurrency(job.cluster.decode_threads)
+    # "auto": the cores over the conversions running at once until the file is open;
+    # the memory plan narrows it to what the file's blocks leave room for
+    from eubi_bridge.conversion.conversion_worker import _decode_sharers
+    from eubi_bridge.core.memory import decode_threads
+    set_read_concurrency(decode_threads(job.cluster.decode_threads, _decode_sharers(job.cluster)))
     path = str(job.input_path)
     tiles = "mosaic" if job.readers.as_mosaic else "separate"
     try:
@@ -283,7 +351,7 @@ def _open_micro(job) -> _MicroFile:
         raise
     if off_route:
         main = str(f.path)
-        if os.path.normcase(os.path.abspath(main)) == os.path.normcase(os.path.abspath(path))                 or not main.lower().endswith(FORMATS):
+        if os.path.normcase(os.path.abspath(main)) == os.path.normcase(os.path.abspath(path))                 or _off_route(main):
             f.close()
             raise NotYet(off_route)
         logger.info(f"{path}: a part of {main}; converting {main}")
@@ -358,8 +426,17 @@ def _open_input(job):
     """``(file, reader)``: an OME-Zarr input read by ozp itself; else micro-reader's when
     it takes the file, else the older readers' (``LegacyFile``, roadmap step 2), with the
     reason micro-reader did not."""
-    from eubi_bridge.utils.path_utils import is_zarr_group
+    from eubi_bridge.utils.path_utils import is_zarr_group, ome_zarr_kind
     if is_zarr_group(str(job.input_path)):
+        kind = ome_zarr_kind(str(job.input_path))
+        if kind in ("plate", "collection"):
+            return _open_ngff_collection(job, kind), f"ome_zarr_pyramid (an OME-Zarr {kind})"
+        if kind == "series":
+            raise NotImplementedError(
+                f"{os.path.basename(str(job.input_path))} is a bioformats2raw layout (a "
+                f"series of images, no plate): eubi-bridge converts its images one at a "
+                f"time. Convert a series' own group (<store>/0, <store>/1, ...) as an "
+                f"image.")
         from eubi_bridge.conversion.legacy_image import NgffFile
         return NgffFile(job), "ome_zarr_pyramid (an OME-Zarr input)"
     try:
@@ -367,6 +444,32 @@ def _open_input(job):
     except NotYet as exc:
         from eubi_bridge.conversion.legacy_image import LegacyFile
         return LegacyFile(job), f"older readers ({exc})"
+
+
+def _open_ngff_collection(job, kind: str):
+    """An OME-Zarr plate input (NGFF 0.4 / 0.5 / 0.6, or an RFC 8 collection holding a
+    plate), read by ozp, for the plate route: written as one NGFF plate again.
+    as_plate=False is refused: an OME-Zarr plate's fields are not converted as stores
+    of their own."""
+    from ome_zarr_pyramid import PyramidCollection
+
+    from eubi_bridge.conversion.legacy_image import NgffPlate
+    from eubi_bridge.core.output_store import _ozp_target_args
+    target, storage_options = _ozp_target_args(str(job.input_path))
+    coll = PyramidCollection.from_zarr(target, storage_options=storage_options)
+    if not coll.plates:
+        raise NotImplementedError(
+            f"{os.path.basename(str(job.input_path))} is an RFC 8 collection of "
+            f"{len(coll)} image(s) with no plate: eubi-bridge converts an RFC 8 "
+            f"collection as input only when it holds a plate. Convert each image's "
+            f"own group as an image.")
+    if job.readers.as_plate is False:
+        raise ValueError(
+            f"{os.path.basename(str(job.input_path))} is an OME-Zarr plate, converted "
+            f"as one plate: as_plate=False (each field a store of its own) is not "
+            f"supported for an OME-Zarr input. Leave as_plate unset, or convert a "
+            f"field's own group (<plate>/<row>/<column>/<field>) as an image.")
+    return NgffPlate(job, coll)
 
 
 def _load_input_collection(job):
@@ -388,7 +491,7 @@ def _load_input_collection(job):
         path = str(job.input_path)
         readers = job.readers
         keys = [tuple((k, v) for k, v in index.items()) for index in f.indices]
-        stem = job.resolved_basename or os.path.basename(path).split(".")[0]
+        stem = job.resolved_basename or output_stem(path)
         file = pathlib.Path(path)
 
         scene_values = _values(keys, SERIES)
@@ -431,7 +534,7 @@ def _load_input_collection(job):
                     plans.append((SimpleNamespace(
                         scene=scene, tile=tile,
                         series_path=f"{path}_{scene}" + (f"_tile{tile}" if tile else ""),
-                        basename=job.resolved_basename,
+                        basename=stem,
                         name_scene=scene if n_scenes > 1 else None, name_tile=tile),
                         [key], None))
                     continue
@@ -487,6 +590,8 @@ def _load_input_collection(job):
             # image's Pyramid by from_file)
             resolutions="all" if job.downscale.keep_existing_resolutions else "base")
         source = getattr(f, "source_pyramid", None)
+        if source is not None:
+            warn_labels_not_written(path, [source])
         entries = []
         for entry, plan_keys, group in plans:
             if group is None and source is not None and job.downscale.keep_existing_resolutions:
@@ -526,11 +631,13 @@ def _plate_outputs(f, job) -> list:
     each plate of a file holding several."""
     from eubi_bridge.conversion.conversion_worker import _generate_output_path
     path = str(job.input_path)
-    stem = job.resolved_basename or os.path.basename(path).split(".")[0]
+    stem = job.resolved_basename or output_stem(path)
     folder = named_folder(path)
-    if stem.lower() in GENERIC_INDEX_NAMES and folder is not None:
+    if not job.resolved_basename and folder is not None:
         # an index file with a fixed name (Harmony Index.idx.xml, CellVoyager
-        # MeasurementData.mlf): the plate is named after its measurement folder
+        # MeasurementData.mlf, scanR experiment_descriptor.xml) or a plate's data file
+        # (Cellomics .C01, a NIS-Elements run's .nd2): the plate is named after its
+        # folder (a batch names it so already: resolved_basename)
         stem = os.path.basename(folder)
     many = len(f.plates) > 1
     return [(n, _generate_output_path(job.output_path, path,
@@ -570,7 +677,9 @@ async def _convert_plate(f, job, plate: int, output_path: str) -> None:
     source = SimpleNamespace(images=[images[k] for k in keys], path=f.path,
                              plates=f.plates, coordinate_systems=f.coordinate_systems)
     version = _ozp_version(conv.zarr_format, conv.ome_zarr_version)
-    coll = PyramidCollection.from_file(
+    # an OME-Zarr plate input (NgffPlate) is a collection already
+    read = getattr(f, "collection", None)
+    coll = read if read is not None else PyramidCollection.from_file(
         source, version=version, name=NAME,
         resolutions="all" if job.downscale.keep_existing_resolutions else "base")
     # the job's settings on every field, before the plate is built: squeeze or crop can
@@ -579,14 +688,18 @@ async def _convert_plate(f, job, plate: int, output_path: str) -> None:
     processed = {}
     for key in coll:
         # a field has no series or tile index of eubi's: its place is plate, well, field
+        # an OME-Zarr 0.6 plate's fields keep their other systems (carry_foreign_transforms)
         entry = SimpleNamespace(pyramid=coll.pyramid(key), image=images[key],
-                                series_path=str(f.path), scene=None, tile=None)
+                                series_path=str(f.path), scene=None, tile=None,
+                                foreign_source=read[key] if read is not None else None)
         processed[key], _ = _prepared(entry, job, output_path)
+    if read is not None:
+        warn_labels_not_written(str(job.input_path), [read[key] for key in read])
     systems = [dataclasses.replace(cs, axes=None)
                for cs in coll.coordinate_systems.values()]
-    written = PyramidCollection(processed, name=f.path,
-                                tree=tree_from_file(source, processed,
-                                                    name=file_stem(f.path)),
+    tree = (tree_from_file(source, processed, name=file_stem(f.path)) if read is None
+            else _tree_with(read, processed))
+    written = PyramidCollection(processed, name=f.path, tree=tree,
                                 coordinate_systems=systems, system_of=coll.system_of)
     _warn_unused_writer_settings(job.cluster)
 
@@ -603,6 +716,46 @@ async def _convert_plate(f, job, plate: int, output_path: str) -> None:
     await asyncio.to_thread(written.write_plate, target, plate=plate,
                             version=conv.ome_zarr_version, overwrite=conv.overwrite,
                             storage_options=storage_options, writer=write_field)
+
+
+def warn_labels_not_written(path: str, pyramids) -> None:
+    """One warning when OME-Zarr input images hold label images: eubi-bridge writes the
+    images only (label images would have to follow the squeeze, crop and downscaling)."""
+    names, holding = set(), 0
+    for pyr in pyramids:
+        try:
+            found = list(pyr.labels.keys())
+        except Exception:                                  # noqa: BLE001 - none read
+            found = []
+        if found:
+            holding += 1
+            names.update(found)
+    if holding:
+        name = os.path.basename(path.rstrip("/\\"))
+        logger.warning(
+            f"{name}: {holding} image(s) hold label images "
+            f"({', '.join(sorted(names))}); they are not written: eubi-bridge converts "
+            f"the images only.")
+
+
+def _tree_with(read, processed: dict):
+    """A copy of the tree of OME-Zarr plate `read` (``PyramidCollection.from_zarr``) whose
+    fields hold the `processed` pyramids, keyed as `read` is: the plate, its rows,
+    columns, acquisitions and wells as the input has them. The input's tree is not
+    changed. A field's path is the last part of its own: an RFC 8 tree names it from the
+    collection's root (``./B/2/0``), which ozp 0.4 / 0.5.0 wrote inside the well again
+    (``B/2/B/2/0``; a 0.6 plate then lost every field's position)."""
+    import dataclasses
+    key_of = read._key_of_nodes()      # ozp >= 0.4.0: the writers' own node -> key map
+    tree = read.tree.copy()
+    for node, copied in zip(read.tree.walk(), tree.walk()):
+        key = key_of.get(id(node))
+        if key in processed:
+            copied.pyramid = processed[key]
+            if copied.path is not None and "/" in copied.path.path.strip("/"):
+                own = copied.path.path.strip("/").rsplit("/", 1)[-1]
+                copied.path = dataclasses.replace(copied.path, path=own)
+    return tree
 
 
 # -- the job's settings, one step each (Pyramid in, Pyramid out) -------------------------
@@ -685,7 +838,9 @@ def rgb_sample_channels(image) -> Optional[list]:
         return None
     samples = int(source.shape[axes.index("s")])
     channels = int(source.shape[axes.index("c")]) if "c" in axes else 1
-    described = list(image.metadata.channels)
+    # the stored image's channels: micro-reader 0.3.0 already lists one per sample on
+    # the folded image ("<name> R", ...), which would leave a named channel unnamed here
+    described = list((getattr(source, "metadata", None) or image.metadata).channels)
     names = ([getattr(ch, "name", None) for ch in described] if len(described) == channels
              else [None] * channels)
     return [(label, color.lstrip("#").upper() if color else "FFFFFF")

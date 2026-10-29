@@ -404,8 +404,29 @@ def test_micro_reader_names_why_it_does_not_take_a_file():
     from eubi_bridge.core.config_models import ConversionJob
     job = ConversionJob.from_kwargs(input_path="a.ome.tif", output_path="o", kwargs={})
     assert _micro_reason(job) == ""
-    vsi = job.model_copy(update={"input_path": "a.vsi"})
-    assert "format" in _micro_reason(vsi)                 # the older readers take it
+    zvi = job.model_copy(update={"input_path": "a.zvi"})
+    assert "format" in _micro_reason(zvi)                 # the older readers take it
+    for slide in ("a.svs", "a.NDPI", "a.scn", "a.qptiff", "a.bif", "a.ics",   # 0.3.3: route
+                  "a.h5", "a.lux.h5", "a.hdf5", "a.mrc", "a.map", "a.rec", "a.png", "a.JPG",
+                  "a.bmp", "a.xlif", "a.xlcf", "a.lof", "a.ndpis", "matl.omp2info",
+                  "a.companion.ome"):
+        assert _micro_reason(job.model_copy(update={"input_path": slide})) == ""
+
+
+@pytest.mark.parametrize("installed, on_route", [((0, 2, 1), False), ((0, 3, 0), True),
+                                                 ((0, 4, 2), True), (None, True)])
+def test_vsi_is_on_the_route_from_micro_reader_0_3_0(monkeypatch, installed, on_route):
+    """micro-reader 0.2.x fills a slide's unscanned tiles black (Bio-Formats: the ETS
+    background colour), so VSI stays with the older readers until 0.3.0; a micro-reader
+    without a version (a source tree) is taken as it is."""
+    from eubi_bridge.conversion import pyramid_path
+    from eubi_bridge.core import micro_source
+    monkeypatch.setattr(micro_source, "micro_reader_version", lambda: installed)
+    reason = pyramid_path._off_route(r"C:\slides\Image_01.VSI")
+    assert (reason == "") is on_route
+    if not on_route:
+        assert reason == ".vsi files need micro-reader >=0.3.0 on its route (installed: 0.2.1)"
+    assert pyramid_path._off_route("a.ome.tif") == ""     # other formats: no version asked
 
 
 def test_smart_downscaling_makes_the_levels_isotropic(tmp_path):

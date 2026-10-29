@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -44,10 +45,10 @@ from eubi_bridge.core.config_models import series_ui, series_ui_pairs
 from eubi_bridge.utils.metadata_utils import (
     DEFAULT_CHANNEL_COLORS, auto_channel_color)
 from eubi_bridge.qt_gui.core.batch import (
-    CONFIG_SNAPSHOT_NAME,
     DEFAULT_BATCH_NAME,
     BatchModel,
     can_batch,
+    config_snapshot_path,
     make_baseline,
     to_cell,
     column_header,
@@ -91,6 +92,14 @@ _LABEL_W = 256
 # Run or Batch depending on the execution mode, so it always sits at _LAST_TAB.
 _N_PARAM_TABS = 5
 _LAST_TAB = _N_PARAM_TABS
+
+
+def _threads_text(value) -> str:
+    """A thread count as the summary shows it: 0 / "auto" / unset is "auto"."""
+    try:
+        return str(int(value)) if value and int(value) > 0 else "auto"
+    except (TypeError, ValueError):
+        return "auto"
 
 
 def _labeled_spin(label: str, minimum: int, maximum: int, value: int, step: int = 1) -> tuple[QLabel, QSpinBox]:
@@ -141,7 +150,7 @@ def _cluster_summary(c: dict) -> str:
 
     work = [f"{c.get('maxProcesses', 4)} processes",
             f"queue {c.get('queueSize', 4)}",
-            f"{c.get('maxThreads', 4)} threads per process",
+            f"{_threads_text(c.get('maxThreads'))} threads per process",
             f"{c.get('maxConcurrentScenes', 1)} scene(s) at a time",
             f"{c.get('maxConcurrentDownscaleLayers', 3)} downscale layers",
             (f"{float(c.get('regionSizeMb') or 0):g} MB regions"
@@ -153,10 +162,10 @@ def _cluster_summary(c: dict) -> str:
     if not has_bioformats():            # eubi-bridge-lite: one reader, no Java
         return (f"Runs on {where}\n"
                 + " · ".join(work) + "\n"
-                + f"Reading: {c.get('decodeThreads', 4)} decode threads per process")
+                + f"Reading: {_threads_text(c.get('decodeThreads'))} decode threads per process")
     bioformats = (f"{c.get('bioformatsThreads', 4)} threads · "
                   f"{float(c.get('jvmMemory', 2.0)):g} GB JVM")
-    micro = f"\nmicro-reader: {c.get('decodeThreads', 4)} decode threads per process"
+    micro = f"\nmicro-reader: {_threads_text(c.get('decodeThreads'))} decode threads per process"
     return (f"Runs on {where}\n"
             + " · ".join(work) + "\n"
             + f"Bio-Formats: {bioformats}" + micro)
@@ -368,11 +377,13 @@ class ConvertPage(QWidget):
 
         # (no Queue Size / Max Concurrent Downscale Layers: only eubi-bridge's own
         # writer used them, retired in 0.2.0; saved configs still load)
-        _, self._max_threads = _labeled_spin("Max Threads:", 1, 128, 4)
+        _, self._max_threads = _labeled_spin("Max Threads:", 0, 128, 0)
+        self._max_threads.setSpecialValueText("auto")         # 0 = auto
         self._max_threads.setToolTip(
             "Threads per conversion, each reading and writing one region at a\n"
             "time. Scenes converted at once share them. Reduce if you hit memory\n"
-            "or I/O bottlenecks."
+            "or I/O bottlenecks.\n"
+            "auto: the cores over the conversions running at once (at most 16)."
         )
         lay.addLayout(_row(QLabel("Max Threads:"), self._max_threads))
 
@@ -533,11 +544,14 @@ class ConvertPage(QWidget):
         self._micro_note = micro_note               # hidden in eubi-bridge-lite
         micro_lay.addWidget(micro_note)
 
-        _, self._decode_threads = _labeled_spin("Decode Threads:", 1, 64, 4)
+        _, self._decode_threads = _labeled_spin("Decode Threads:", 0, 64, 0)
+        self._decode_threads.setSpecialValueText("auto")      # 0 = auto
         self._decode_threads.setToolTip(
             "Threads micro-reader reads and decodes with in each worker process,\n"
             "shared by all region reads. It caps the CPU spent reading; how many\n"
-            "regions are in flight is still set by the cluster settings above."
+            "regions are in flight is still set by the cluster settings above.\n"
+            "auto: the cores over the conversions running at once (at most 16),\n"
+            "fewer when the reading memory cannot hold a block per thread."
         )
         self._decode_threads_label = QLabel("Decode Threads:")
         micro_lay.addLayout(_row(self._decode_threads_label, self._decode_threads))
@@ -2234,9 +2248,12 @@ class ConvertPage(QWidget):
         except OSError as exc:
             self._batch_status.setText(f"Save failed: {exc}")
             return None
+        self._saved_rows = deepcopy(self._batch.rows)
+        self._saved_params = self._params_state()
         self._batch_status.setText(
             f"Saved {len(self._batch)} row(s) to {os.path.basename(written)} "
-            f"(+ {CONFIG_SNAPSHOT_NAME}) in {os.path.dirname(written)}"
+            f"(+ {os.path.basename(config_snapshot_path(written))}) in "
+            f"{os.path.dirname(written)}"
         )
         return written
 
@@ -2251,6 +2268,32 @@ class ConvertPage(QWidget):
         if path:
             self._batch_save_to(path)
 
+    def _params_state(self) -> dict:
+        """The parameter tabs as a loaded batch's snapshot replaces them: all but the
+        Cluster tab, which a load keeps."""
+        params = self._ui_to_config()
+        params.pop("cluster", None)
+        return params
+
+    def _confirm_replacing_edits(self, loaded: BatchModel, name: str) -> bool:
+        """Ask before a loaded batch replaces edits not saved yet: the queue's rows,
+        and the parameter tabs when the batch brings a config snapshot."""
+        lost = []
+        if len(self._batch) and self._batch.rows != getattr(self, "_saved_rows", []):
+            lost.append("the queue table")
+        if (loaded.base_config is not None
+                and self._params_state() != getattr(self, "_saved_params", None)):
+            lost.append("the parameter tabs")
+        if not lost:
+            return True
+        answer = QMessageBox.question(
+            self, "Load Batch",
+            f"Loading {name} replaces {' and '.join(lost)}, which have edits not "
+            f"saved yet.\n\nLoad it anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        return answer == QMessageBox.StandardButton.Yes
+
     def _on_batch_load(self):
         start_dir = os.path.join(DEFAULT_CONFIG_DIR, "batches")
         path, _ = QFileDialog.getOpenFileName(
@@ -2259,10 +2302,15 @@ class ConvertPage(QWidget):
         if not path:
             return
         try:
-            self._batch = BatchModel.load(path)
+            loaded = BatchModel.load(path)
         except Exception as exc:
             self._batch_status.setText(f"Load failed: {exc}")
             return
+        if not self._confirm_replacing_edits(loaded, os.path.basename(path)):
+            self._batch_status.setText("Load cancelled; nothing changed.")
+            return
+        self._batch = loaded
+        self._saved_rows = deepcopy(loaded.rows)
         self._refresh_batch_table()
         if self._batch.base_config is not None:
             # Everything but the cluster section: those settings belong to the
@@ -2274,13 +2322,20 @@ class ConvertPage(QWidget):
             self._sync_batch_cluster()
             self._batch_status.setText(
                 f"Loaded {len(self._batch)} row(s) from {os.path.basename(path)}; "
-                f"config snapshot applied to the parameter tabs, except the "
-                f"Cluster tab, which keeps its current settings."
+                f"its settings ({os.path.basename(self._batch.snapshot_path or '')}) "
+                f"applied to the parameter tabs, except the Cluster tab, which keeps "
+                f"its current settings."
             )
+        elif self._batch.snapshot_note:
+            self._batch_status.setText(
+                f"Loaded {len(self._batch)} row(s) from {os.path.basename(path)}. "
+                f"{self._batch.snapshot_note}")
+            self._batch_log.append_line(f"NOTE: {self._batch.snapshot_note}")
         else:
             self._batch_status.setText(
                 f"Loaded {len(self._batch)} row(s) from {os.path.basename(path)}. "
-                f"No {CONFIG_SNAPSHOT_NAME} found, so rows will use the current UI settings."
+                f"No settings file found ({os.path.basename(config_snapshot_path(path))}), "
+                f"so rows will use the current UI settings."
             )
 
     def _on_batch_run(self):
@@ -2339,7 +2394,7 @@ class ConvertPage(QWidget):
         """Populate all UI controls from a camelCase config dict."""
         c = cfg.get("cluster", {})
         self._max_processes.setValue(c.get("maxProcesses", 4))
-        self._max_threads.setValue(c.get("maxThreads", 4))
+        self._max_threads.setValue(int(c.get("maxThreads") or 0))           # 0 = auto
         self._max_concurrent_scenes.setValue(c.get("maxConcurrentScenes", 1))
         self._region_size_mb.setValue(float(c.get("regionSizeMb") or 0.0))
         self._memory_budget.setValue(float(c.get("memoryBudget") or 0.0))
@@ -2353,7 +2408,7 @@ class ConvertPage(QWidget):
         self._slurm_worker_timeout.setValue(int(c.get("slurmWorkerTimeout", 300) or 300))
         self._bioformats_threads.setValue(c.get("bioformatsThreads", 4))
         self._jvm_memory.setValue(float(c.get("jvmMemory", 2.0)))
-        self._decode_threads.setValue(c.get("decodeThreads", 4))
+        self._decode_threads.setValue(int(c.get("decodeThreads") or 0))     # 0 = auto
 
         r = series_ui(cfg.get("reader", {}))     # a 0.2.x config: its scene keys
         self._read_all_series.setChecked(r.get("readAllSeries", True))
@@ -2475,6 +2530,7 @@ class ConvertPage(QWidget):
 
         # a config may ask for what this installation cannot do
         self._apply_capabilities()
+        self._saved_params = self._params_state()
 
     def _apply_capabilities(self) -> None:
         """Fit the page to what this installation can do.
@@ -2668,6 +2724,7 @@ class ConvertPage(QWidget):
             else:
                 self._config_path = path
             self._config_path_label.setText(os.path.basename(self._config_path))
+            self._saved_params = self._params_state()
             self._sync_batch_comparison()
             self._refresh_batch_table()
             self._log.append_line(f"Config saved to {os.path.basename(self._config_path)}")

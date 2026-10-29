@@ -1,18 +1,18 @@
-# EuBI-Bridge 0.1.2 - CLI + GUI container
+# EuBI-Bridge - CLI + GUI container
 #
 # GUI runs via a built-in VNC server - no X server needed on the host.
 # Access the GUI by opening http://localhost:6080/vnc.html in any browser.
 #
-# Build:
-#   docker build -t eubi-bridge:0.1.2 .
+# Build (the tag follows EUBI_VERSION below):
+#   docker build -t eubi-bridge:0.3.3 .
 #
 # Run GUI (Windows / macOS / Linux):
-#   docker run --rm -p 6080:6080 -v /path/to/data:/data eubi-bridge:0.1.2 eubi-gui
+#   docker run --rm -p 6080:6080 -v /path/to/data:/data eubi-bridge:0.3.3 eubi-gui
 #   -> open http://localhost:6080/vnc.html
 #   -> your files are accessible at /data inside the GUI
 #
 # Run CLI:
-#   docker run --rm -v /path/to/data:/data eubi-bridge:0.1.2 eubi to_zarr /data/input.tif /data/output.zarr
+#   docker run --rm -v /path/to/data:/data eubi-bridge:0.3.3 eubi to_zarr /data/input.tif /data/output
 #
 # HPC (Apptainer) with native display:
 #   apptainer exec --env DISPLAY=$DISPLAY -B /path/to/data:/data eubi-bridge.sif eubi-gui
@@ -24,7 +24,9 @@
 FROM python:3.12-slim-bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG EUBI_VERSION=0.1.4
+# Image label only; keep it equal to `version` in pyproject.toml
+# (tests/test_dockerfile_version.py checks this).
+ARG EUBI_VERSION=0.3.3
 
 LABEL org.opencontainers.image.title="EuBI-Bridge" \
       org.opencontainers.image.version="${EUBI_VERSION}" \
@@ -77,8 +79,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -- Python packages -----------------------------------------------------------
-# Install from local source to pick up unreleased changes.
-# Switch back to PyPI once 0.1.2 is published:
+# Install from the local source, so the image holds exactly the checkout it was
+# built from. The build downloads the Linux JDK (see _build_backend.py).
+# To build the released version from PyPI instead, replace the two lines below with:
 #   RUN pip install --no-cache-dir "eubi-bridge==${EUBI_VERSION}"
 COPY . /src
 RUN pip install --no-cache-dir /src

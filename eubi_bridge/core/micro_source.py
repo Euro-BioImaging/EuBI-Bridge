@@ -42,13 +42,15 @@ STANDARD = "tczyx"
 #: tile of it (dyna write_levels: slabs of e.g. 96 planes); at 32, every file was
 #: opened again for every tile (2347 files x 4 tiles: 6.7 min instead of ~1.3).
 MAX_OPEN_FILES = 128
-#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.2.1,<0.3):
+#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.2.1,<0.4):
 #: 0.2.x declares the coordinate systems each output is written with (9.18), 0.2.1 reads
 #: the plates and composites 0.3.2 routes to it (MetaMorph, Micro-Manager 2.0, CV7000
-#: timelines, MetaXpress z-series, ...); 0.1.x declares no coordinate systems, and older
-#: releases call the series index "scene". Three components: (major, minor, patch).
-MICRO_READER_RANGE = ((0, 2, 1), (0, 3, 0))
-MICRO_READER_FIX = 'pip install -U "micro-reader>=0.2.1,<0.3"'
+#: timelines, MetaXpress z-series, ...); 0.3.0 adds the plate formats of FORMATS_SINCE
+#: and folds RGB samples by default (eubi asks for what it needs either way); 0.1.x
+#: declares no coordinate systems, and older releases call the series index "scene".
+#: Three components: (major, minor, patch).
+MICRO_READER_RANGE = ((0, 2, 1), (0, 4, 0))
+MICRO_READER_FIX = 'pip install -U "micro-reader>=0.2.1,<0.4"'
 
 
 class MicroReaderVersionError(ImportError):
@@ -60,13 +62,9 @@ class MicroReaderVersionError(ImportError):
 _micro_reader_checked = False
 
 
-def require_micro_reader() -> None:
-    """Raise MicroReaderVersionError, naming the fix, when the installed micro-reader
-    is outside MICRO_READER_RANGE; checked once per process. A micro-reader without a
-    version (a source tree on the path) is taken as it is."""
-    global _micro_reader_checked
-    if _micro_reader_checked:
-        return
+def _installed_version():
+    """``(text, (major, minor, patch))`` of the installed micro-reader; the tuple is None
+    when the text is not three numbers, both are None when it has no version."""
     import micro_reader
     version = getattr(micro_reader, "__version__", None)
     if version is None:
@@ -74,13 +72,29 @@ def require_micro_reader() -> None:
             from importlib.metadata import version as dist_version
             version = dist_version("micro-reader")
         except Exception:                           # noqa: BLE001 - no version known
-            version = None
+            return None, None
+    try:
+        parts = [int(part) for part in str(version).split(".")[:3]]
+    except ValueError:
+        return version, None
+    return version, tuple(parts + [0] * (3 - len(parts)))
+
+
+def micro_reader_version():
+    """The installed micro-reader's ``(major, minor, patch)``, or None when unknown (a
+    source tree on the path)."""
+    return _installed_version()[1]
+
+
+def require_micro_reader() -> None:
+    """Raise MicroReaderVersionError, naming the fix, when the installed micro-reader
+    is outside MICRO_READER_RANGE; checked once per process. A micro-reader without a
+    version (a source tree on the path) is taken as it is."""
+    global _micro_reader_checked
+    if _micro_reader_checked:
+        return
+    version, got = _installed_version()
     if version is not None:
-        try:
-            parts = [int(part) for part in str(version).split(".")[:3]]
-            got = tuple(parts + [0] * (3 - len(parts)))
-        except ValueError:
-            got = None
         low, high = MICRO_READER_RANGE
         if got is not None and not (low <= got < high):
             if got < (0, 1, 0):
@@ -142,7 +156,10 @@ def _using(path: str, tiles: str, multifile: bool = True):
         # opened outside the lock, so several files open at once (an aggregative
         # input's files are opened on a thread pool); a file two threads opened at
         # once is kept once
-        opened = micro_reader.open(path, tiles=tiles, rename=RENAME, multifile=bool(multifile))
+        # samples="keep": RGB samples stay an 's' axis, folded into channels here
+        # (micro-reader 0.3.0 folds them by default)
+        opened = micro_reader.open(path, tiles=tiles, rename=RENAME, multifile=bool(multifile),
+                                   samples="keep")
         with _files_lock:
             entry = _files.get(key)
             if entry is None:

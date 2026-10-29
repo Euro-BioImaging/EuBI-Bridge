@@ -264,32 +264,21 @@ def get_chunksize_from_array(arr) -> str:
 
 
 def parse_memory(gb_string: Union[str, int, float]) -> float:
-    """Convert memory size string to megabytes.
-    
+    """Convert a memory size to megabytes.
+
     Args:
-        gb_string: String like '5GB', '1.2GB', or numeric value
-    
+        gb_string: a number (MB), or a string such as '512', '512MB', '4GB', '4 GiB',
+            '1.5g', '2TB' (binary units, case-insensitive; no unit means MB)
+
     Returns:
         Size in megabytes
     """
-    if isinstance(gb_string, (int, float)):
-        # Assume already in MB
+    if not isinstance(gb_string, str):
+        # a number: already in MB
         return float(gb_string)
-    
-    if isinstance(gb_string, str):
-        gb_string = gb_string.strip().upper()
-        if gb_string.isnumeric():
-            # Already in MB
-            return float(gb_string)
-        if not gb_string.endswith('GB'):
-            # Assume MB
-            return float(gb_string)
-        
-        # Extract numeric part and convert from GB to MB
-        number_part = gb_string[:-2]  # remove 'GB'
-        return float(number_part) * 1024
-    
-    return float(gb_string)
+    # the same parser as the run's memory settings (imported here: core imports utils)
+    from eubi_bridge.core.memory import parse_mb
+    return parse_mb(gb_string)
 
 
 def autocompute_chunk_shape(

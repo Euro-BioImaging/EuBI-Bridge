@@ -1,11 +1,19 @@
 name: Publish to PyPI
 
-# Manual "Run workflow" button (Actions tab). Publishes eubi-bridge and
+# Runs when you publish a GitHub Release. Publishes eubi-bridge and
 # eubi-bridge-lite to PyPI via Trusted Publishing (OIDC) -- no token is stored
-# in the repo. Both come from the same commit and the same version (the one in
-# pyproject.toml): bump it before running, and make sure that version isn't
-# already on PyPI (PyPI rejects re-uploads of an existing version). If one of
-# the two uploads fails, re-run with only that package selected.
+# in the repo. Both come from the release's commit and the same version:
+#
+#   1. the release tag must equal the version in pyproject.toml (vX.Y.Z);
+#   2. the full test suite runs on that commit (test.yml); nothing is built or
+#      published unless it passes;
+#   3. both packages are built and uploaded.
+#
+# If one upload failed, "Re-run failed jobs" on the run retries only that one.
+# If the tests failed: fix, delete the release and its tag, and release again.
+#
+# Keep this file's name: the PyPI trusted publishers of both projects are
+# registered for publish-pypi.yml.
 #
 # eubi-bridge: only the sdist is published (not a wheel). The custom build
 # backend (_build_backend.py) bundles a platform-specific JDK at build time,
@@ -18,18 +26,32 @@ name: Publish to PyPI
 # an sdist.
 
 on:
-  workflow_dispatch:
-    inputs:
-      packages:
-        description: Which packages to publish
-        type: choice
-        options: [both, eubi-bridge, eubi-bridge-lite]
-        default: both
+  release:
+    types: [published]
+
+permissions:
+  contents: read
 
 jobs:
+  checks:
+    name: Tag matches the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release tag equals pyproject.toml's version
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          test "v$version" = "${{ github.event.release.tag_name }}" \
+            || { echo "::error::release tag ${{ github.event.release.tag_name }} != v$version (pyproject.toml)"; exit 1; }
+
+  tests:
+    needs: checks
+    uses: ./.github/workflows/test.yml
+
   build:
     name: Build eubi-bridge (sdist)
-    if: inputs.packages != 'eubi-bridge-lite'
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +73,7 @@ jobs:
 
   build-lite:
     name: Build eubi-bridge-lite (wheel + sdist)
-    if: inputs.packages != 'eubi-bridge'
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

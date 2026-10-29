@@ -76,6 +76,45 @@ metadata can also be saved back into the OME-Zarr.
   <a href="https://github.com/Euro-BioImaging/EuBI-Bridge/releases/download/v0.1.2-media/inspection.mp4">Download it instead.</a>
 </video>
 
+## Batch mode: where each row's settings come from
+
+In batch mode, every row uses the batch's base settings plus the cells you set
+for that row.
+
+* The base settings are fixed when the batch starts. If you build a new batch,
+  they come from your saved configuration file when you add the first row. If
+  you load a batch, they come from the batch's settings file.
+* Changing the parameter tabs later does not change the rows already in the
+  batch. To change a row, edit its cells.
+* The Cluster tab is the exception: a batch always runs with what the Cluster
+  tab shows when you press Run.
+
+When you save a batch, you get two files side by side: the table (for example
+`my_batch.csv`) and its base settings (`my_batch.config.json`). When you load a
+batch, its settings file is read and shown in the parameter tabs. Several
+batches can be saved in one folder; each keeps its own settings.
+
+### Batches saved before eubi-bridge 0.3.3
+
+These batches have no settings file of their own: all batches of a folder shared
+one `batch_config.json`, which the last save in that folder wrote. When you load
+such a batch, `batch_config.json` is used only if it was saved together with the
+batch's CSV. Otherwise it holds another batch's settings: the rows then use the
+settings the parameter tabs show, and the status line says so. Save the batch
+again to give it its own settings file.
+
+### Batches saved with older versions
+
+A batch keeps the settings of the version that saved it. For example, a batch
+saved before micro-reader became the default still reads metadata with
+Bio-Formats (`bfio`), and the log shows `Extracting metadata via bfio`. To use
+micro-reader, do one of these:
+
+* set the Metadata reader to `micro` for the rows (Edit Cells), or
+* change `"metadataReader"` to `"micro"` in the batch's settings file
+  (`<batch name>.config.json`, or `batch_config.json` for a batch saved before
+  eubi-bridge 0.3.3).
+
 ---
 
 The recordings are attached to the
