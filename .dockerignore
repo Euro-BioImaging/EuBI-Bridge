@@ -1,6 +1,11 @@
 *.sif
-venv/
+# Local virtual environments (venv/, venv_030/, venv_032/, ...), several GB each
+venv*/
+lite_venv/
 testvenv/
+.venv/
+.pytest_cache/
+hs_err_pid*.log
 quarantine/
 .git/
 __pycache__/
@@ -45,3 +50,6 @@ mkdocs.yml
 properdocs.yml
 environment.yml
 extras/
+# retired 0.1 code and developer tools, not part of the package
+legacy_0_1/
+tools/

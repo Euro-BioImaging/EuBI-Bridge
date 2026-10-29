@@ -179,3 +179,85 @@ def test_rfc8_keeps_the_tiles_of_a_field(tmp_path):
     (store,) = (tmp_path / "out").glob("*.zarr")
     coll, plate = _plate(store)
     assert len(coll) == 90 and len(plate.wells) == 2         # 2 fields of 45 tiles
+
+
+# -- OME-Zarr plates as input (0.3.3, E2) ------------------------------------------------
+
+FRACTAL = (DATA / "plates" / "ome-zarr" / "zenodo-13982701" / "220605_151046_mip.zarr")
+
+
+def _fields(store: Path) -> dict:
+    """Each field of a plate store: its level-0 shape, scale, translation and system."""
+    coll = ozp.PyramidCollection.from_zarr(str(store))
+    out = {}
+    for key in coll:
+        meta = coll[key].meta
+        base = meta.resolution_paths[0]
+        out[key] = (tuple(coll[key].layers[base].shape), tuple(meta.get_scale(base)),
+                    tuple(meta.get_translation(base) or ()), coll.system_of.get(key))
+    return out
+
+
+@pytest.mark.parametrize("first,then", [("0.5", "0.6"), ("0.6", "0.4"), ("rfc8", "0.5"),
+                                        ("rfc8", "0.6"),
+                                        ("0.4", "rfc8")])
+def test_an_ome_zarr_plate_converts_to_every_version_keeping_its_fields(tmp_path, first,
+                                                                        then):
+    """An OME-Zarr plate as input is written as one plate again: the same wells and
+    fields, each at its stage position in its well's coordinate system. Before 0.3.3 it
+    failed with ozp's 'No valid metadata found in zarr group'."""
+    src = _needs(CV7000)
+    code, log = _run(src, tmp_path / "a", ["--ome_zarr_version", first])
+    assert code == 0, log[-3000:]
+    (made,) = (tmp_path / "a").glob("*.zarr")
+    code, log = _run(made, tmp_path / "b", ["--ome_zarr_version", then])
+    assert code == 0, log[-3000:]
+    assert "an OME-Zarr" in log and "as a plate" in log
+    (again,) = (tmp_path / "b").glob("*.zarr")
+    before, after = _fields(made), _fields(again)
+    assert after == before
+    assert {system for *_, system in after.values()} == {"well-B2"}
+    assert any(any(t) for _, _, t, _ in after.values())          # placed, not at 0
+    _, plate = _plate(again)
+    assert [w.name for w in plate.wells] == ["B2"]
+
+
+def test_a_fractal_plate_keeps_its_acquisitions_and_says_its_labels_are_not_written(tmp_path):
+    if not FRACTAL.exists():
+        pytest.skip(f"sample not here: {FRACTAL}")
+    code, log = _run(FRACTAL, tmp_path / "out", ["--ome_zarr_version", "0.5"])
+    assert code == 0, log[-3000:]
+    assert "hold label images (org); they are not written" in log
+    (store,) = (tmp_path / "out").glob("*.zarr")
+    coll, plate = _plate(store)
+    assert sorted(dict(k)["acquisition"] for k in coll) == [0, 1]
+    assert [w.name for w in plate.wells] == ["C02"]
+
+
+def test_an_ome_zarr_plate_with_as_plate_false_is_refused(tmp_path):
+    if not FRACTAL.exists():
+        pytest.skip(f"sample not here: {FRACTAL}")
+    code, log = _run(FRACTAL, tmp_path / "out", ["--as_plate", "False"])
+    assert "as_plate=False" in log and "is not supported for an OME-Zarr input" in log
+    assert not list((tmp_path / "out").glob("*.zarr"))
+
+
+def test_an_ome_zarr_store_says_what_it_holds(tmp_path):
+    import zarr
+    from eubi_bridge.utils.path_utils import ome_zarr_kind
+    stores = {"plate4": ({"plate": {"wells": []}}, 2),
+              "plate5": ({"ome": {"version": "0.5", "plate": {"wells": []}}}, 3),
+              "rfc8": ({"ome": {"version": "0.x", "type": "collection", "nodes": []}}, 3),
+              "series": ({"ome": {"version": "0.5", "bioformats2raw.layout": 3}}, 3),
+              "image": ({"ome": {"version": "0.5", "multiscales": [{}]}}, 3),
+              "other": ({}, 3)}
+    for name, (attrs, zarr_format) in stores.items():
+        zarr.open_group(str(tmp_path / name), mode="w", zarr_format=zarr_format).attrs.update(attrs)
+    kinds = {name: ome_zarr_kind(str(tmp_path / name)) for name in stores}
+    assert kinds == {"plate4": "plate", "plate5": "plate", "rfc8": "collection",
+                     "series": "series", "image": "image", "other": None}
+    assert ome_zarr_kind(str(tmp_path / "missing")) is None
+    from types import SimpleNamespace
+    from eubi_bridge.conversion.pyramid_path import _open_input
+    with pytest.raises(NotImplementedError, match=r"bioformats2raw layout.*<store>/0"):
+        _open_input(SimpleNamespace(input_path=str(tmp_path / "series")))

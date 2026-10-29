@@ -1,10 +1,12 @@
 """
 Batch model: a queue of one-to-one conversions persisted as a CSV table.
 
-A batch is a folder holding two files:
+A batch is two files side by side:
 
     batch.csv           one row per input file; sparse per-row overrides
-    batch_config.json   snapshot of the global GUI config the rows diff against
+    batch.config.json   snapshot of the global GUI config the rows diff against
+                        (``<csv name>.config.json``; until 0.3.2 one shared
+                        ``batch_config.json`` per folder, see BatchModel.load)
 
 ``eubi to_zarr <batch.csv>`` already understands this format: ``take_filepaths``
 reads the table, resolves ``input_path`` / ``output_path`` relative to the CSV's
@@ -487,7 +489,19 @@ def make_baseline(persisted: dict, ui_config: dict) -> dict:
     return base
 
 DEFAULT_BATCH_NAME = "batch.csv"
+#: the config snapshot every batch of a folder shared until eubi-bridge 0.3.2: the last
+#: save in the folder wrote it, whichever batch saved (decision E-4)
 CONFIG_SNAPSHOT_NAME = "batch_config.json"
+#: a shared snapshot written this close to a batch's CSV was saved with it (save writes
+#: the CSV, then the snapshot)
+SAVED_TOGETHER_S = 120
+
+
+def config_snapshot_path(csv_path: str) -> str:
+    """The batch's own config snapshot: ``<csv name>.config.json`` beside the CSV
+    (eubi-bridge 0.3.3; batch.csv -> batch.config.json)."""
+    root, _ = os.path.splitext(os.path.abspath(csv_path))
+    return root + ".config.json"
 
 #: Cluster settings renamed in 2026-10 (config_models.RENAMED_SETTINGS), as the
 #: GUI's config snapshot spells them: a batch saved before keeps its values.
@@ -701,6 +715,9 @@ class BatchModel:
         self.shown_tabs: set[str] = set()
         self._rows: list[dict[str, Any]] = []
         self._base_config: dict | None = None
+        # load(): the config snapshot file applied, or why none was (decision E-4)
+        self.snapshot_path: str | None = None
+        self.snapshot_note: str | None = None
         # Config that highlighting compares against, and its cached flat form.
         self._compare_config: dict | None = None
         self._compare_kwargs: dict[str, Any] | None = None
@@ -1312,15 +1329,19 @@ class BatchModel:
                                  for col in header])
 
         if self._base_config is not None:
-            with open(os.path.join(base_dir, CONFIG_SNAPSHOT_NAME),
-                      "w", encoding="utf-8") as fh:
+            with open(config_snapshot_path(csv_path), "w", encoding="utf-8") as fh:
                 json.dump(self._base_config, fh, indent=2)
 
         return csv_path
 
     @classmethod
     def load(cls, csv_path: str) -> "BatchModel":
-        """Read a batch back, resolving paths and its config snapshot."""
+        """Read a batch back, resolving paths and its config snapshot: its own
+        ``<csv name>.config.json``; for a batch saved before eubi-bridge 0.3.3 the
+        folder's shared ``batch_config.json``, but only when it was written with this
+        CSV (decision E-4): else it belongs to a batch saved later in the folder, and
+        the rows use the current settings. ``snapshot_path`` names the file applied,
+        ``snapshot_note`` why one was not."""
         csv_path = os.path.abspath(csv_path)
         base_dir = os.path.dirname(csv_path)
 
@@ -1338,10 +1359,31 @@ class BatchModel:
                 row[_EXPLICIT] = {k for k in row if k not in _PATH_COLUMNS}
                 model._rows.append(row)
 
-        snapshot = os.path.join(base_dir, CONFIG_SNAPSHOT_NAME)
-        if os.path.exists(snapshot):
+        own = config_snapshot_path(csv_path)
+        shared = os.path.join(base_dir, CONFIG_SNAPSHOT_NAME)
+        snapshot = None
+        if os.path.exists(own):
+            snapshot = own
+        elif os.path.exists(shared):
+            gap = os.path.getmtime(shared) - os.path.getmtime(csv_path)
+            if abs(gap) <= SAVED_TOGETHER_S:
+                snapshot = shared
+            else:
+                from datetime import datetime
+
+                def when(path):
+                    return datetime.fromtimestamp(os.path.getmtime(path)).strftime(
+                        "%Y-%m-%d %H:%M")
+                model.snapshot_note = (
+                    f"{CONFIG_SNAPSHOT_NAME} in this folder was written {when(shared)}, "
+                    f"not with {os.path.basename(csv_path)} ({when(csv_path)}): it holds "
+                    f"the settings of another batch saved in this folder, so the rows use "
+                    f"the current settings. Save the batch again to keep its settings "
+                    f"with it ({os.path.basename(own)}).")
+        if snapshot is not None:
             with open(snapshot, encoding="utf-8") as fh:
                 model._base_config = _renamed_snapshot(json.load(fh))
+            model.snapshot_path = snapshot
 
         return model
 

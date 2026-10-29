@@ -16,7 +16,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from eubi_bridge.utils.path_utils import disambiguate_output_names
+from eubi_bridge.utils.path_utils import disambiguate_output_names, output_stem
 from eubi_bridge.conversion.conversion_worker import _generate_output_path
 
 
@@ -48,10 +48,16 @@ class TestDisambiguation:
         assert sorted(result.values()) == ["a_img", "b_img", "c_img"]
 
     def test_multi_dot_extension_stem(self):
-        """Matches _generate_output_path: everything before the first dot."""
+        """Matches _generate_output_path: a two-part suffix is removed whole."""
         result = disambiguate_output_names(
             ["/a/image.ome.tiff", "/b/image.ome.tiff"])
         assert sorted(result.values()) == ["a_image", "b_image"]
+
+    def test_dots_in_the_name_tell_files_apart(self):
+        """Until 0.3.2 both were 'Image_V4' (everything before the first dot) and the
+        second took its suffix: 'Image_V4_1_b_vsi'."""
+        a, b = r"C:\s\Image_V4.1_BF.vsi", r"C:\s\Image_V4.1_FL_3D.vsi"
+        assert disambiguate_output_names([a, b]) == {a: "Image_V4.1_BF", b: "Image_V4.1_FL_3D"}
 
     def test_results_are_unique(self):
         paths = ["/a/x/img.tif", "/b/x/img.tif", "/c/y/img.tif", "/d/other.tif"]
@@ -69,7 +75,7 @@ class TestDisambiguation:
         assert sorted(result.values()) == ["A_img", "B_img"]
 
     def test_windows_separators_on_a_posix_host(self, monkeypatch):
-        """A batch table written on Windows may be run on Linux.
+        r"""A batch table written on Windows may be run on Linux.
 
         ``os.path`` only treats ``\`` as a separator on Windows, so without
         explicit handling the whole path became the name on Linux.  Simulating
@@ -153,10 +159,52 @@ class TestPlateIndexNames:
     def test_an_image_called_index_keeps_its_name(self):
         assert disambiguate_output_names(["/a/index.tif"]) == {"/a/index.tif": "index"}
 
+    @pytest.mark.parametrize("path, name", [
+        ("/data/plate_001/experiment_descriptor.xml", "plate_001"),               # scanR
+        ("/data/export/tif/ImageIndex.ColumbusIDX.xml", "tif"),                    # Columbus
+        ("/data/MFG_2205/MFG_2205_A01f00d0.C01", "MFG_2205"),                      # Cellomics
+        ("/data/run_171942/WellB05_ChannelDIA_Seq0000.nd2", "run_171942"),         # NIS run
+        ("/data/run/WellA01_PointA01_0003_ChannelFITC BP_Seq0003.nd2", "run"),
+    ])
+    def test_a_plate_whose_file_names_nothing_takes_its_folder(self, path, name):
+        assert disambiguate_output_names([path]) == {path: name}
+
+    def test_plate_files_written_per_image_keep_their_names(self):
+        """as_plate off: each file of a run is an output of its own."""
+        files = ["/data/run/WellB05_ChannelDIA_Seq0000.nd2", "/data/run/WellB06_ChannelDIA_Seq0001.nd2"]
+        assert disambiguate_output_names(files, per_image=files) == {
+            files[0]: "WellB05_ChannelDIA_Seq0000", files[1]: "WellB06_ChannelDIA_Seq0001"}
+
+    def test_other_nd2_files_keep_their_names(self):
+        assert disambiguate_output_names(["/data/x/Well plate 3.nd2"]) == {
+            "/data/x/Well plate 3.nd2": "Well plate 3"}
+
+
+class TestOutputStem:
+    @pytest.mark.parametrize("path, stem", [
+        ("/a/img.tif", "img"),
+        ("/a/img.ome.tiff", "img"),
+        ("/a/IMG.OME.TIF", "IMG"),
+        (r"C:\a\Image_V4.1_BF.vsi", "Image_V4.1_BF"),
+        ("/a/run 2.5x.czi", "run 2.5x"),
+        ("/a/two  spaces.ome.tif", "two  spaces"),
+        ("/a/plate.ome.zarr", "plate"),
+        ("/a/plate.ome.zarr/", "plate"),
+        ("/a/IN_02.r3d_d3d", "IN_02"),
+        ("/a/no_suffix", "no_suffix"),
+        ("/a/.ome.tif", ".ome"),
+    ])
+    def test_the_suffix_only_is_removed(self, path, stem):
+        assert output_stem(path) == stem
+
 
 class TestGeneratedPath:
     def test_default_naming_unchanged(self):
         assert _generate_output_path("/out", "/a/img.ome.tiff") == "/out/img.zarr"
+
+    def test_a_dot_in_the_name_stays(self):
+        assert _generate_output_path("/out", "/a/Image_V4.1_BF.vsi", 2) == \
+            "/out/Image_V4.1_BF_scene2.zarr"
 
     def test_resolved_basename_replaces_derived_name(self):
         assert _generate_output_path(

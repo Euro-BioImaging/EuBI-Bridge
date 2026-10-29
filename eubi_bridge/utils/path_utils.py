@@ -3,6 +3,7 @@
 import glob
 import fnmatch
 import os
+import re
 from collections import Counter
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -121,6 +122,29 @@ def is_zarr_group(path: Union[str, Path]) -> bool:
         return True
     except Exception:
         return False
+
+
+def ome_zarr_kind(path: Union[str, Path]) -> Optional[str]:
+    """What an OME-Zarr group holds, from its root attributes alone (local or remote):
+    ``"plate"`` (NGFF 0.4: ``plate`` in the attributes; 0.5 / 0.6: under ``ome``),
+    ``"collection"`` (an RFC 8 collection: a plate or a set of images, which only its
+    node tree tells), ``"series"`` (a bioformats2raw layout), ``"image"``
+    (``multiscales``), or None (not a group, or none of these)."""
+    try:
+        import zarr
+        attrs = zarr.open_group(path, mode='r').attrs.asdict()
+    except Exception:
+        return None
+    ngff = attrs.get("ome") if isinstance(attrs.get("ome"), dict) else attrs
+    if isinstance(ngff.get("plate"), dict):
+        return "plate"
+    if ngff.get("type") == "collection":
+        return "collection"
+    if "multiscales" in ngff:
+        return "image"
+    if "bioformats2raw.layout" in ngff:
+        return "series"
+    return None
 
 
 def is_ome_zarr(path: Union[str, Path]) -> bool:
@@ -452,27 +476,83 @@ def partition_by_group(df: pd.DataFrame):
 
 
 #: plate index files with a fixed name (Harmony Index.idx.xml / index.xml, CellVoyager
-#: MeasurementData.mlf): their output is named after the measurement folder
-GENERIC_INDEX_NAMES = {"index", "measurementdata"}
+#: MeasurementData.mlf, scanR experiment_descriptor.xml, Columbus ImageIndex /
+#: MeasurementIndex.ColumbusIDX.xml): their output is named after the measurement folder
+GENERIC_INDEX_NAMES = {"index", "measurementdata", "experiment_descriptor", "imageindex",
+                       "measurementindex"}
 GENERIC_INDEX_SUFFIXES = (".xml", ".mlf")
+#: data files of a plate that has no index file, any one of which opens the plate:
+#: Cellomics fields (<plate>_A01f00d0.C01), a NIS-Elements well-plate run's files
+#: (WellB05_ChannelDIA_Seq0000.nd2, micro-reader's _nd2_run.RUN_FILE). The plate's
+#: output is named after their folder (written per image, each keeps its own name)
+PLATE_DATA_FILES = re.compile(
+    r"(?:.*\.c01|well[a-z]{1,2}\d{1,3}(?:_point[^_]+_\d+)?_channel.+_seq\d+\.nd2)$",
+    re.IGNORECASE)
 #: the folder a Harmony measurement keeps its index in (images/ in an hs archive)
 INDEX_IMAGES_FOLDERS = {"images"}
 #: plane files: never parts of a composite, and too many to ask about one by one
 PLANE_SUFFIXES = (".tif", ".tiff")
 #: micro-reader's plate formats, whose folder holds one plate: a file in it belongs to
 #: the plate (input_mains)
-PLATE_FORMATS = {"harmony", "cv7000", "metaxpress", "incell"}
+PLATE_FORMATS = {"harmony", "cv7000", "metaxpress", "incell",
+                 # micro-reader 0.3.0
+                 "flex", "columbus", "scanr", "cellomics", "jdce"}
+#: an NDTiff dataset with downsampled levels (Micro-Manager Magellan explorations,
+#: stitched acquisitions): the image in "Full resolution/", each level a dataset of its
+#: own in "Downsampled_x<N>/" beside it
+NDTIFF_FULL_RESOLUTION = "Full resolution"
+NDTIFF_LEVEL = re.compile(r"downsampled_x\d+", re.IGNORECASE)
 
 
-def named_folder(path: str) -> Optional[str]:
+def ndtiff_full_resolution(path: str) -> Optional[str]:
+    """For a file of an NDTiff dataset's downsampled level (``<dataset>/Downsampled_x4/``):
+    the main file of the dataset's full resolution, whose preview the level is -- not an
+    image of its own. None for any other file, and when the full resolution is missing
+    (the level is then converted as it is)."""
+    folder = os.path.dirname(os.path.abspath(path))
+    if not NDTIFF_LEVEL.fullmatch(os.path.basename(folder)):
+        return None
+    full = os.path.join(os.path.dirname(folder), NDTIFF_FULL_RESOLUTION)
+    if not os.path.isfile(os.path.join(full, "NDTiff.index")):
+        return None
+    import micro_reader
+    mains = [g.main for g in micro_reader.group_files(full).groups if g.main is not None]
+    return mains[0] if len(mains) == 1 else None
+
+
+#: suffixes of two parts, removed whole from an output's name (``a.ome.tif`` -> ``a``)
+COMPOUND_SUFFIXES = (".ome.tif", ".ome.tiff", ".ome.btf", ".ome.tf2", ".ome.tf8", ".ome.zarr",
+                     ".ome.xml", ".companion.ome", ".idx.xml")
+
+
+def output_stem(path) -> str:
+    """The name an output takes from its input: the file name without its suffix, a
+    two-part one (COMPOUND_SUFFIXES) whole. ``Image_V4.1_BF.vsi`` -> ``Image_V4.1_BF``;
+    until 0.3.2 everything before the first dot (``Image_V4``), so files differing after
+    a dot in their names wrote one output."""
+    name = str(path).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    low = name.lower()
+    for suffix in COMPOUND_SUFFIXES:
+        if low.endswith(suffix) and len(name) > len(suffix):
+            return name[:-len(suffix)]
+    stem = os.path.splitext(name)[0]
+    return stem or name
+
+
+def named_folder(path: str, plate: bool = True) -> Optional[str]:
     """For an index file with a fixed name: the folder its output is named after -- a
     plate's measurement folder (above ``Images/``), a Micro-Manager image-per-file
-    acquisition's folder (``<acquisition>/<position>/metadata.txt``); else None."""
+    acquisition's folder (``<acquisition>/<position>/metadata.txt``), the folder of a
+    plate's data files (PLATE_DATA_FILES) when the plate is written as one (`plate`);
+    else None."""
     name = os.path.basename(path)
     if name.lower() in IMAGE_TEXT_NAMES:
         position = os.path.dirname(os.path.abspath(path))
         acquisition = os.path.dirname(position)
         return acquisition if os.path.basename(acquisition) else position
+    if plate and PLATE_DATA_FILES.fullmatch(name):
+        folder = os.path.dirname(os.path.abspath(path))
+        return folder if os.path.basename(folder) else None
     if name.split(".")[0].lower() not in GENERIC_INDEX_NAMES or             not name.lower().endswith(GENERIC_INDEX_SUFFIXES):
         return None
     folder = os.path.dirname(os.path.abspath(path))
@@ -525,23 +605,77 @@ def _is_text(path: str) -> bool:
     return name.endswith(TEXT_SUFFIXES) or "." not in name.lstrip(".")
 
 
+def _walkable_folder(path: str) -> bool:
+    """A folder whose files are inputs (grouped by input_mains), not a zarr store or
+    group, whose chunks are no inputs."""
+    if not os.path.isdir(path) or path.rstrip("/\\").lower().endswith(".zarr"):
+        return False
+    return not any(os.path.exists(os.path.join(path, name))
+                   for name in (".zattrs", ".zgroup", "zarr.json"))
+
+
+def _files_below(folder: str) -> List[str]:
+    """Every file under `folder`, sorted."""
+    return sorted(os.path.join(root, name) for root, _, names in os.walk(folder)
+                  for name in names)
+
+
+def _opens_as_one(folder: str, micro_reader) -> bool:
+    """Whether micro-reader opens `folder` itself (a Cellomics or NDTiff dataset
+    folder, an OIF storage folder): such a folder stays the input, named as before."""
+    try:
+        with micro_reader.open(folder, plates=True):
+            return True
+    except Exception:                           # noqa: BLE001 - no: its files decide
+        return False
+
+
 def group_inputs(input_paths: List[str]) -> List[str]:
     """The inputs as the files to convert, each once (``input_mains``)."""
     return list(dict.fromkeys(m for m in input_mains(input_paths) if m is not None))
 
 
+def per_image_inputs(df: pd.DataFrame) -> List[str]:
+    """The inputs of a conversion table whose ``as_plate`` is off (written per image)."""
+    if 'as_plate' not in df.columns:
+        return []
+    return [str(p) for p, v in zip(df['input_path'], df['as_plate']) if _plate_off(v)]
+
+
+def _plate_off(value) -> bool:
+    """Whether a table cell of ``as_plate`` turns plates off (False / "off" / "false"
+    / 0); blank, None, "auto" and on keep them."""
+    if _blank_cell(value):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in ("off", "false", "0", "no")
+    return value is False or value == 0
+
+
 def group_input_rows(df: pd.DataFrame) -> pd.DataFrame:
     """A conversion table (one row per input) with each row's ``input_path`` as the file
     to convert (``input_mains``): rows standing for no image are dropped, and a plate
-    named by several rows is converted once, with the first of them."""
+    named by several rows is converted once, with the first of them. Rows with
+    ``as_plate`` off are grouped without plates: the files of a set that is a plate
+    only as a plate (a NIS-Elements well-plate run, one ND2 per well) stay inputs of
+    their own, each written per image."""
     paths = [str(p) for p in df['input_path'].tolist()]
-    mains = input_mains(paths)
+    off = ([_plate_off(v) for v in df['as_plate'].tolist()] if 'as_plate' in df.columns
+           else [False] * len(paths))
+    if not any(off):
+        mains = input_mains(paths)
+    else:
+        on_paths = [p for p, o in zip(paths, off) if not o]
+        off_paths = [p for p, o in zip(paths, off) if o]
+        found = {False: iter(input_mains(on_paths) if on_paths else []),
+                 True: iter(input_mains(off_paths, plates=False))}
+        mains = [next(found[o]) for o in off]
     if mains == paths:
         return df
     df = df.assign(input_path=mains)
     df = df[df['input_path'].notna()]
     twice = df.duplicated(subset='input_path')
-    for path in df.loc[twice, 'input_path']:
+    for path in dict.fromkeys(df.loc[twice, 'input_path']):
         logger.info(f"{path}: chosen more than once; converted once (with the first "
                     f"row's settings)")
     df = df[~twice].reset_index(drop=True)
@@ -552,7 +686,7 @@ def group_input_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def input_mains(input_paths: List[str]) -> List[Optional[str]]:
+def input_mains(input_paths: List[str], plates: bool = True) -> List[Optional[str]]:
     """For each input, the file to convert (None: none), found with micro-reader's
     ``group_files`` so that a user need not know which file of a plate (or other image
     set) to choose:
@@ -560,6 +694,8 @@ def input_mains(input_paths: List[str]) -> List[Optional[str]]:
     - every given file of a plate -- its index, its side files (a Harmony measurement's
       ``image.index.txt``, ``.kw.txt``, ``Assaylayout`` files), its planes listed beside
       the index -- stands for the plate's index file;
+    - a file of an NDTiff dataset's downsampled level stands for the dataset's full
+      resolution (``ndtiff_full_resolution``): one conversion per dataset, not per level;
     - a text file that belongs to no image, given with no other input from its folder
       (a Harmony "hs" archive's ``_objmeta.txt``): the one plate in its folder, when the
       folder holds exactly one; else None, with a warning naming what is there;
@@ -585,21 +721,37 @@ def input_mains(input_paths: List[str]) -> List[Optional[str]]:
     def usable(group):
         return group.main is not None
 
+    def group_files(paths_):
+        """micro-reader's groups as eubi reads the files (*plates*, True unless the
+        job's as_plate is off): sets that are plates only then -- a NIS-Elements
+        well-plate run, one ND2 per well -- are one group, so the plate is converted
+        once, not once per file. micro-reader before 0.3.0 takes no plates= (and
+        knows no such sets)."""
+        try:
+            return micro_reader.group_files(paths_, plates=plates)
+        except TypeError:
+            return micro_reader.group_files(paths_)
+
     def owners(paths_):
         """({file: main file}, [(plate folder, main file)]): the plate folder of a plate
         group is the folder its files share, when that is the index's folder or the one
         above it (a Harmony measurement: Images/, Assaylayout/, Evaluation1/, ...)."""
         try:
-            grouping = micro_reader.group_files(paths_)
+            grouping = group_files(paths_)
         except Exception as exc:                # the conversion reports a bad file
             logger.debug(f"group_files: {exc}")
             return {}, []
         found, trees = {}, []
         for group in grouping.groups:
             if usable(group):
+                try:
+                    main = ndtiff_full_resolution(group.main) or group.main
+                except Exception as exc:        # the level is converted as it is
+                    logger.debug(f"NDTiff full resolution of {group.main}: {exc}")
+                    main = group.main
                 files_ = (group.main, *group.parts, *group.members)
                 for path in files_:
-                    found.setdefault(key(path), group.main)
+                    found.setdefault(key(path), main)
                 if group.format in PLATE_FORMATS:
                     try:
                         root = os.path.commonpath([os.path.abspath(f) for f in files_])
@@ -610,9 +762,14 @@ def input_mains(input_paths: List[str]) -> List[Optional[str]]:
                         trees.append((key(root) + os.sep, group.main))
         return found, trees
 
-    # OME-Zarr stores and image groups are folders of chunks: never walked
+    # OME-Zarr stores and image groups are folders of chunks: never walked. Other folders
+    # (a GUI batch row is any ticked entry: a plate folder, its subfolders) are grouped
+    # with their files
     files = [p for p in paths if os.path.isfile(p)]
-    owner, trees = owners(files) if files else ({}, [])
+    folders = {p: _files_below(p) for p in paths if _walkable_folder(p)}
+    below = [f for listed in folders.values() for f in listed]
+    together = list(dict.fromkeys(files + below))
+    owner, trees = owners(together) if together else ({}, [])
     for path in files:
         # a file in a plate's own folder that micro-reader names no part of it (Harmony's
         # Evaluation1/ analysis results): the plate's too, not an input of its own
@@ -629,11 +786,23 @@ def input_mains(input_paths: List[str]) -> List[Optional[str]]:
         out.append(path)
 
     many, skipped = len(paths) > 1, []
+    chosen = {owner.get(key(p)) for p in files} - {None}      # the file inputs' images
     for path in paths:
         main = owner.get(key(path))
         if main is not None:
             add(main, "" if key(main) == key(path) else
                 f"{path}: a file of {main}; converting {main}")
+            continue
+        if path in folders:
+            held = {owner.get(key(f)) for f in folders[path]} - {None}
+            if many and held and held <= chosen:
+                logger.info(f"{path}: a folder of images chosen already; skipped")
+                out.append(None)
+            elif len(held) == 1 and not _opens_as_one(path, micro_reader):
+                (only,) = held
+                add(only, f"{path}: a folder of {only}; converting {only}")
+            else:                               # one image as micro-reader opens it, or
+                add(path)                       # several: the conversion says which
             continue
         if many and os.path.isfile(path) and not _is_text(path) and _not_an_image(path):
             skipped.append(path)
@@ -650,7 +819,7 @@ def input_mains(input_paths: List[str]) -> List[Optional[str]]:
             out.append(None)
             continue
         try:
-            grouping = micro_reader.group_files(folder)
+            grouping = group_files(folder)
         except Exception as exc:
             logger.warning(f"{path}: not an image, and its folder could not be searched "
                            f"for one ({exc}); skipped")
@@ -675,8 +844,12 @@ def input_mains(input_paths: List[str]) -> List[Optional[str]]:
     return out
 
 
-def disambiguate_output_names(input_paths: List[str]) -> dict:
+def disambiguate_output_names(input_paths: List[str], per_image=()) -> dict:
     """Map each input path to a unique output basename.
+
+    A plate's data file (a Cellomics ``.C01``, a NIS-Elements run's ``.nd2``) is named
+    after its folder, the plate's name, unless it is in `per_image` (its job has
+    ``as_plate`` off: each of its images is written on its own, under its own name).
 
     Outputs are named after the input's basename, so two inputs from different
     folders that share a name would target one output — the first written, the
@@ -714,18 +887,22 @@ def disambiguate_output_names(input_paths: List[str]) -> dict:
         return [part for part in unified.split('/')
                 if part not in ('', '.', '..')]
 
+    per_image = {str(p) for p in per_image}
+
+    def named(path: str) -> Optional[str]:
+        return named_folder(path, plate=path not in per_image)
+
     def stem(path: str) -> str:
-        # Matches _generate_output_path: everything before the first dot, so
-        # 'image.ome.tiff' -> 'image'; a plate index with a fixed name takes its
-        # measurement folder's name.
-        folder = named_folder(path)
+        # Matches _generate_output_path (output_stem): 'image.ome.tiff' -> 'image',
+        # 'img.v2.tif' -> 'img.v2'; a plate index with a fixed name, or a plate's data
+        # file, takes its folder's name.
+        folder = named(path)
         if folder is not None:
             return _segments(folder)[-1]
-        segments = _segments(path)
-        return segments[-1].split('.')[0] if segments else ''
+        return output_stem(path) if _segments(path) else ''
 
     def parents(path: str) -> List[str]:
-        folder = named_folder(path)
+        folder = named(path)
         found = _segments(folder)[:-1] if folder is not None else _segments(path)[:-1]
         # a drive ('C:') is not a folder name, and ':' is no file name character
         return [part for part in found if not part.endswith(':')]
@@ -735,7 +912,7 @@ def disambiguate_output_names(input_paths: List[str]) -> dict:
     def own(path: str) -> str:
         """The stem, with the suffix when files of the same folder share the stem."""
         name = stem(path)
-        if same_folder[(tuple(parents(path)), name)] > 1 and named_folder(path) is None:
+        if same_folder[(tuple(parents(path)), name)] > 1 and named(path) is None:
             suffix = _segments(path)[-1][len(name):].strip('.').lower().replace('.', '_')
             if suffix:
                 return f"{name}_{suffix}"

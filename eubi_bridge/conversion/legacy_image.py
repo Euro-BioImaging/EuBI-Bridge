@@ -289,26 +289,60 @@ class NgffFile:
         self.indices = [{SERIES: 0}]
 
     def image(self, index) -> LegacyImage:
-        meta = self._pyr.meta
-        base = meta.resolution_paths[0]
-        axes = meta.axis_order
-        units = dict(zip(axes, meta.unit_list))
-        scales = dict(zip(axes, meta.get_scale(base)))
-        pixel_sizes = {ax: Quantity(scales[ax], units.get(ax) or
-                                    ("second" if ax == "t" else "micrometer"))
-                       for ax in axes if ax != "c"}
-        translation = dict(zip(axes, meta.get_translation(base) or [0.0] * len(axes)))
-        position = {ax: Quantity(translation[ax], units.get(ax) or "micrometer")
-                    for ax in "zyx" if ax in axes and translation.get(ax)}
-        omero = (meta.metadata or {}).get("omero") or {}
-        channels = [SimpleNamespace(name=ch.get("label") or None, color=_color(ch.get("color")),
-                                    emission_wavelength=None, excitation_wavelength=None)
-                    for ch in omero.get("channels") or []]
-        return LegacyImage(array=self._pyr.layers[base], axes=axes, index=dict(index),
-                           name=meta.multiscales.get("name"), pixel_sizes=pixel_sizes,
-                           channels=channels,
-                           position=position, index_values={},
-                           coordinate_system=self._system)
+        return _ngff_image(self._pyr, index, self._system)
 
     def close(self) -> None:
         self._pyr = None
+
+
+class NgffPlate:
+    """An OME-Zarr plate input (NGFF 0.4, 0.5 or 0.6, read by ome_zarr_pyramid's
+    ``PyramidCollection.from_zarr``) presented like a micro-reader plate file: its
+    ``plates``, one index per field keyed ``plate`` / ``acquisition`` / ``well`` /
+    ``field``, and each field as an image. The plate route writes it as one NGFF plate
+    again, every field with the job's settings, keeping each field's coordinate system
+    and position."""
+
+    is_plate = True
+
+    def __init__(self, job, collection):
+        self.path = str(job.input_path)
+        #: the plate as read; the plate route writes from its tree
+        self.collection = collection
+        self.plates = collection.plates
+        self.indices = [dict(key) for key in collection]
+        self.coordinate_systems = list(collection.coordinate_systems.values()) or None
+
+    def image(self, index) -> LegacyImage:
+        from ome_zarr_pyramid.core.spatial import pyramid_system
+        pyr = self.collection.pyramid(tuple(dict(index).items()))
+        return _ngff_image(pyr, index, pyramid_system(pyr)[0])
+
+    def close(self) -> None:
+        self.collection = None
+
+
+def _ngff_image(pyr, index, system) -> LegacyImage:
+    """One OME-Zarr image as an image of eubi's: its level 0 (the array as it is), pixel
+    sizes, units, channel names and colours, and its translation as the stage position,
+    so the output keeps it (0.1.5 dropped it)."""
+    meta = pyr.meta
+    base = meta.resolution_paths[0]
+    axes = meta.axis_order
+    units = dict(zip(axes, meta.unit_list))
+    scales = dict(zip(axes, meta.get_scale(base)))
+    pixel_sizes = {ax: Quantity(scales[ax], units.get(ax) or
+                                ("second" if ax == "t" else "micrometer"))
+                   for ax in axes if ax != "c"}
+    translation = dict(zip(axes, meta.get_translation(base) or [0.0] * len(axes)))
+    position = {ax: Quantity(translation[ax], units.get(ax) or "micrometer")
+                for ax in "zyx" if ax in axes and translation.get(ax)}
+    omero = (meta.metadata or {}).get("omero") or {}
+    channels = [SimpleNamespace(name=ch.get("label") or None, color=_color(ch.get("color")),
+                                emission_wavelength=None, excitation_wavelength=None)
+                for ch in omero.get("channels") or []]
+    return LegacyImage(array=pyr.layers[base], axes=axes, index=dict(index),
+                       name=meta.multiscales.get("name"), pixel_sizes=pixel_sizes,
+                       channels=channels,
+                       position=position, index_values={},
+                       coordinate_system=system)

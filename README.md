@@ -63,6 +63,54 @@ pip install eubi-bridge-lite
 eubi reset_config
 ```
 
+### Docker
+
+The Docker image has the full tool (Java and Bio-Formats included), the CLI and the
+GUI. You need nothing else on your machine: no Python, no Java, no Qt.
+
+Build the image from this repository:
+
+```bash
+git clone https://github.com/Euro-BioImaging/EuBI-Bridge.git
+cd EuBI-Bridge
+docker build -t eubi-bridge .
+```
+
+The container sees only the folders you give it with `-v`. Mount your data folder at
+`/data`, and use `/data/...` paths in commands and in the GUI.
+
+Convert from the command line:
+
+```bash
+docker run --rm -v /path/to/data:/data eubi-bridge eubi to_zarr /data/input /data/output
+```
+
+Every `eubi` command works this way: put `docker run --rm -v /path/to/data:/data eubi-bridge`
+in front of it.
+
+Use the GUI in your browser:
+
+```bash
+docker run --rm -p 6080:6080 -v /path/to/data:/data eubi-bridge eubi-gui
+```
+
+Then open http://localhost:6080/vnc.html. Your files are under `/data`.
+
+On Windows, give the data folder as a Windows path, for example
+`-v C:\Users\me\data:/data`.
+
+On Linux, files the container writes belong to root. To own them yourself, add your user
+and a writable home:
+
+```bash
+docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp \
+  -v /path/to/data:/data eubi-bridge eubi to_zarr /data/input /data/output
+```
+
+Each `docker run --rm` starts from the default configuration, so you do not need
+`eubi reset_config` in the container. Settings you change with `eubi configure` are lost
+when the container stops; pass them as options to `to_zarr` instead.
+
 ### After installing or upgrading
 
 To upgrade an existing installation to the latest release:
@@ -440,7 +488,8 @@ stays within the memory you give it, however large the images are.
 You set three things:
 
 - `--max_processes`: how many images are converted at once, each in its own process.
-- `--max_threads`: how many parts of an image each conversion works on at once.
+- `--max_threads`: how many parts of an image each conversion works on at once. The
+  default, `auto`, shares this machine's cores between the conversions running at once.
 - `--memory_budget`: how much memory the whole run may use, for example `16GB`. The
   default, `auto`, is half of the memory that is free when the run starts.
 

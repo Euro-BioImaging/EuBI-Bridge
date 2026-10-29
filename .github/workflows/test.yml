@@ -2,15 +2,15 @@ name: EuBI-Bridge Test Suite
 
 on:
   # The suite is long (3 OS x several Pythons, full + lite + integration), so it runs
-  # at eubi's two checkpoints only: a pull request (any target branch; opened, new
-  # commits, reopened) and a published GitHub Release. Not on plain pushes, merges or a
-  # schedule.
+  # in two places only: a pull request (any target branch; opened, new commits,
+  # reopened) and before every release (publish-pypi.yml calls this workflow; nothing
+  # is published unless it passes). Not on plain pushes, merges or a schedule.
   pull_request:
-  release:
-    types: [ published ]
+    types: [opened, synchronize, reopened]
   # Manual "Run workflow" button (Actions tab): pick a branch from the ref dropdown to
   # run the suite on demand.
   workflow_dispatch:
+  workflow_call:
 
 # New commits on a PR cancel that PR's run still in progress, so only the latest runs.
 concurrency:
@@ -89,19 +89,15 @@ jobs:
         # they would be reported as passing while never running anywhere.
         python -c "from PyQt6.QtWidgets import QApplication; QApplication([]); print('[SUCCESS] Qt initialised')"
 
-    - name: Run tests with pytest
+    - name: Run tests with coverage
+      # One run: it decides the job's result and also writes the coverage report.
       run: |
-        pytest tests/ -v --tb=short --color=yes
+        pytest tests/ -v --tb=short --color=yes --cov=eubi_bridge --cov-report=xml --cov-report=term-missing
       env:
         # Disable JVM network access in offline-friendly mode
         MAVEN_OFFLINE: 'true'
         JGO_CACHE_DIR: '/dev/null'
-    
-    - name: Run tests with coverage
-      run: |
-        pytest tests/ --cov=eubi_bridge --cov-report=xml --cov-report=term-missing -v
-      continue-on-error: true
-    
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:

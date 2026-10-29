@@ -11,7 +11,8 @@ reads it, and its own option follows: scene_index -> series_index (plan 7.7, 8.3
   releases), and outputs keep their _scene<N> names.
 - so do the files eubi saves (the config, a batch's batch.csv and batch_config.json):
   equal pairs load silently, pairs that differ (eubi 0.2.x changed its own) warn.
-- a micro-reader outside >=0.2.1,<0.3 (since eubi-bridge 0.3.2; >=0.1,<0.2 before) stops
+- a micro-reader outside >=0.2.1,<0.4 (since eubi-bridge 0.3.3; <0.3 in 0.3.2, >=0.1,<0.2
+  before) stops
   a conversion with MicroReaderVersionError, not a silent fallback to the older readers.
 """
 from __future__ import annotations
@@ -119,9 +120,9 @@ def test_micro_array_finds_the_series(tmp_path):
 
 @pytest.mark.parametrize("version, why", [("0.0.4", "names the series index 'scene'"),
                                           ("0.1.0", "declares no coordinate systems"),
-                                          ("0.3.0", None)])
+                                          ("0.4.0", None)])
 def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, why):
-    """A micro-reader outside >=0.2.1,<0.3 forced in (pip check reports it): every route
+    """A micro-reader outside >=0.2.1,<0.4 forced in (pip check reports it): every route
     that reads with micro-reader raises MicroReaderVersionError naming the fix, none
     goes to the older readers with only a log line."""
     import micro_reader
@@ -131,7 +132,7 @@ def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, why
     path = str(_czi(tmp_path / "one.czi"))
     monkeypatch.setattr(micro_reader, "__version__", version)
     monkeypatch.setattr(micro_source, "_micro_reader_checked", False)
-    fix = r'pip install -U "micro-reader>=0\.2\.1,<0\.3"'
+    fix = r'pip install -U "micro-reader>=0\.2\.1,<0\.4"'
     for call in (lambda: _open_input(ConversionJob.from_kwargs(path, "out", {})),
                  lambda: micro_source.MicroReader.open(path),
                  lambda: micro_source.micro_array(path, 0, None)):
@@ -144,7 +145,7 @@ def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, why
     assert micro_source.MicroReader.open(path) is not None
 
 
-FIX = r'pip install -U "micro-reader>=0\.2\.1,<0\.3"'
+FIX = r'pip install -U "micro-reader>=0\.2\.1,<0\.4"'
 
 
 def test_a_wrong_micro_reader_reaches_a_script_as_itself(tmp_path, monkeypatch):
@@ -199,13 +200,13 @@ def test_a_wrong_micro_reader_reaches_a_script_from_a_worker_process(tmp_path):
                          text=True, timeout=300)
     last = [line for line in run.stdout.splitlines() if line.startswith(("TYPED", "OTHER"))]
     assert last and last[-1].startswith("TYPED"), (run.stdout[-2000:], run.stderr[-2000:])
-    assert 'pip install -U "micro-reader>=0.2.1,<0.3"' in last[-1]
+    assert 'pip install -U "micro-reader>=0.2.1,<0.4"' in last[-1]
     assert not out.exists()
 
 
 def _raise_version_error():
     from eubi_bridge.core.micro_source import MicroReaderVersionError
-    raise MicroReaderVersionError("eubi-bridge needs micro-reader >=0.2.1,<0.3. Fix: x")
+    raise MicroReaderVersionError("eubi-bridge needs micro-reader >=0.2.1,<0.4. Fix: x")
 
 
 def test_the_worker_wrapper_and_the_dispatcher_keep_the_version_error():
@@ -507,7 +508,8 @@ def test_gui_kwargs_from_a_0_2_snapshot():
 def test_a_0_2_batch_loads_with_one_warning_each(tmp_path):
     """batch.csv with a scene_index column and batch_config.json with sceneIndices /
     readAllScenes, as eubi-bridge 0.2.x saved them."""
-    from eubi_bridge.qt_gui.core.batch import CONFIG_SNAPSHOT_NAME, BatchModel
+    from eubi_bridge.qt_gui.core.batch import (CONFIG_SNAPSHOT_NAME, BatchModel,
+                                               config_snapshot_path)
     folder = tmp_path / "batch"
     folder.mkdir()
     (folder / "batch.csv").write_text("input_path,output_path,scene_index\n"
@@ -529,7 +531,8 @@ def test_a_0_2_batch_loads_with_one_warning_each(tmp_path):
         rows = list(csv.DictReader(fh))
     assert [(r["series_index"], r["scene_index"]) for r in rows] == [("1", "1"),
                                                                     ("all", "all")]
-    reader = json.loads((folder / CONFIG_SNAPSHOT_NAME).read_text())["reader"]
+    # saved as the batch's own settings file (eubi-bridge 0.3.3)
+    reader = json.loads(open(config_snapshot_path(str(folder / "batch.csv"))).read())["reader"]
     assert (reader["seriesIndices"], reader["sceneIndices"]) == ("0", "0")
     assert (reader["readAllSeries"], reader["readAllScenes"]) == (False, False)
 
@@ -575,7 +578,8 @@ def test_a_saved_batch_holds_both_columns(tmp_path):
 def test_a_batch_config_whose_pairs_differ_is_saved_as_it_is(tmp_path):
     """batch_config.json is written back as loaded: pairs that differ stay so, and the
     warning says that (not that a save settles them)."""
-    from eubi_bridge.qt_gui.core.batch import CONFIG_SNAPSHOT_NAME, BatchModel
+    from eubi_bridge.qt_gui.core.batch import (CONFIG_SNAPSHOT_NAME, BatchModel,
+                                               config_snapshot_path)
     folder = tmp_path / "batch"
     folder.mkdir()
     (folder / "batch.csv").write_text("input_path,output_path,series_index,scene_index\n"
@@ -593,7 +597,8 @@ def test_a_batch_config_whose_pairs_differ_is_saved_as_it_is(tmp_path):
         # which warns once more, without the save sentence
         warnings.simplefilter("ignore", SeriesIndexConflictWarning)
         model.save(str(folder / "batch.csv"))
-    assert json.loads((folder / CONFIG_SNAPSHOT_NAME).read_text())["reader"] == reader
+    assert json.loads(open(config_snapshot_path(str(folder / "batch.csv"))).read())[
+        "reader"] == reader
 
 
 def test_series_ui_pairs_that_differ_warn():

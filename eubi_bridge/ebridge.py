@@ -105,6 +105,32 @@ def _row_metadata_readers(input_path, default: str, force_default: bool) -> tupl
     return readers, force
 
 
+class IOBackendUnavailableError(ImportError):
+    """``io_backend='zarrista'`` while the zarrista backend is not installed: the run is
+    refused once, before any file is converted, naming the two ways out."""
+
+
+def _zarrista_installed() -> bool:
+    try:
+        from dyna_zarr.backends.zarrista_backend import ZARRISTA_AVAILABLE
+    except ImportError:
+        return False
+    return bool(ZARRISTA_AVAILABLE)
+
+
+def _check_io_backend(*backends) -> None:
+    """Refuse a run when one of *backends* (the run's ``io_backend``, each job's) is
+    'zarrista' and zarrista is not installed: one clear error up front instead of a
+    traceback from every worker (a saved configuration may name it)."""
+    if "zarrista" in backends and not _zarrista_installed():
+        raise IOBackendUnavailableError(
+            "io_backend='zarrista' is set (in the saved configuration or for this run), "
+            "but the zarrista backend is not installed. Either install it: "
+            "pip install \"dyna-zarr[zarrista]\", or write with TensorStore: "
+            "eubi configure conversion --io_backend tensorstore (or --io_backend "
+            "tensorstore for this run; in the GUI, Byte Backend on the Conversion page).")
+
+
 # Heavy imports are deferred — config commands don't need zarr/dask/JVM.
 def _ensure_heavy_imports():
     """Lazy-load heavy modules only when needed for actual conversions."""
@@ -194,7 +220,7 @@ class ConfigManager:
             max_processes=4,
             queue_size=4,
             region_size_mb='auto',
-            max_threads=4,
+            max_threads="auto",
             max_concurrent_scenes=1,
             max_concurrent_downscale_layers=3,
             memory_budget='auto',
@@ -203,7 +229,7 @@ class ConfigManager:
             tensorstore_data_copy_concurrency=4,
             max_retries=10,
             bioformats_threads=4,
-            decode_threads=4,
+            decode_threads="auto",
             jvm_memory='1g',
             slurm_time='24:00:00',
             slurm_account=None,
@@ -1003,7 +1029,9 @@ class ConfigureGroup:
                 each between what the process already holds, reading
                 (``decode_memory``) and the scenes converted at once.
             max_threads: Threads per conversion, each reading and writing one
-                region at a time (default 4). Scenes converted at once share them.
+                region at a time: a number, or "auto" (default: the cores over
+                the conversions running at once, at most 16; 0 means the same).
+                Scenes converted at once share them.
                 Formerly ``max_concurrency``.
             max_concurrent_scenes: Parallel scenes within one file (default 1);
                 they share ``max_threads``. Increase only when writing a
@@ -1022,8 +1050,10 @@ class ConfigureGroup:
                 (default 4).  ``None`` lets dask choose (cpu_count). Formerly
                 ``bf_read_concurrency``.
             decode_threads: micro-reader's decode threads per worker process,
-                used with ``readers(pixel_reader='micro')`` (default 4). Formerly
-                ``micro_read_concurrency``.
+                used with ``readers(pixel_reader='micro')``: ``'auto'`` (default) gives
+                each process the cores over the conversions running at once (at most
+                16), fewer when its reading memory cannot hold a block per thread; or a
+                number. Formerly ``micro_read_concurrency``.
             decode_memory: micro-reader's decoding memory per process, e.g. ``'1GB'``,
                 or ``'auto'`` (default): what the file's decode unit needs, at least
                 64 MB and normally at most a quarter of the process's memory.
@@ -1398,6 +1428,8 @@ class ConversionManager:
         ConversionConfig(**conversion_p)
         DownscaleConfig(**downscale_p)
         MetadataConfig(**metadata_p)
+        # a backend that is not installed fails the run here, before any file is read
+        _check_io_backend(conversion_p.get('io_backend'))
         # The metadata readers every conversion will use: a conversion table
         # (a batch) states its own per row
         row_readers, any_forced = _row_metadata_readers(
@@ -1497,6 +1529,7 @@ class ConversionManager:
                 excludes=excludes,
                 extra=extra,
             )
+            _check_io_backend(job.conversion.io_backend)
             dispatch_aggregative_job(job, plan=plan)
         else:
             # Unary path — build one validated ConversionJob per file here in
@@ -1517,9 +1550,10 @@ class ConversionManager:
             # second either refused (overwrite=False) or destroying the first
             # (overwrite=True).  Give the colliding ones a parent-directory
             # prefix so every job writes somewhere distinct.
-            from eubi_bridge.utils.path_utils import disambiguate_output_names
+            from eubi_bridge.utils.path_utils import (disambiguate_output_names,
+                                                      per_image_inputs)
             unique_names = disambiguate_output_names(
-                [str(p) for p in df['input_path'].tolist()])
+                [str(p) for p in df['input_path'].tolist()], per_image=per_image_inputs(df))
 
             jobs = []
             for _, row in df.iterrows():
@@ -1536,6 +1570,8 @@ class ConversionManager:
                     resolved_basename=unique_names.get(str(ip))))
 
             from eubi_bridge.conversion.dispatcher import dispatch_unary_jobs
+            # a table row may name its own backend
+            _check_io_backend(*(j.conversion.io_backend for j in jobs))
             dispatch_unary_jobs(jobs)
 
         logger.info("Conversion complete for all datasets.")
@@ -1578,10 +1614,11 @@ class ConversionManager:
         # ── one-to-one rows ──────────────────────────────────────────────────
         unary_jobs = []
         if len(unary_rows):
-            from eubi_bridge.utils.path_utils import group_input_rows
+            from eubi_bridge.utils.path_utils import group_input_rows, per_image_inputs
             unary_rows = group_input_rows(unary_rows)
             unique_names = disambiguate_output_names(
-                [str(path) for path in unary_rows["input_path"].tolist()])
+                [str(path) for path in unary_rows["input_path"].tolist()],
+                per_image=per_image_inputs(unary_rows))
             for _, row in unary_rows.iterrows():
                 row_dict = row.to_dict()
                 inp = row_dict.pop("input_path")
@@ -1633,6 +1670,7 @@ class ConversionManager:
 
         # one pool for both kinds, running at the same time (roadmap step 3; on SLURM
         # and on the old path they still run one after the other)
+        _check_io_backend(*(j.conversion.io_backend for j in unary_jobs + aggregative_jobs))
         dispatch_mixed_jobs(unary_jobs, aggregative_jobs)
 
 

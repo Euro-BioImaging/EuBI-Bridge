@@ -499,7 +499,9 @@ class ClusterConfig(BaseModel):
     region_size_mb: Union[float, str] = "auto"
     # Threads per conversion, each reading and writing one region at a time;
     # scenes converted at once share them. Was max_concurrency.
-    max_threads: int = Field(default=4, ge=1)
+    # 'auto' (default): the cores over the conversions running at once, at most 16
+    # (core/memory.write_threads; 0 means the same) or a number.
+    max_threads: Union[int, Literal["auto"]] = "auto"
     max_concurrent_scenes: int = Field(default=1, ge=1)
     # The memory the whole run may use on this machine: "16GB", or "auto" = half the
     # RAM free when it starts. Shared out by core/memory.py (processes, what each
@@ -519,9 +521,11 @@ class ClusterConfig(BaseModel):
     # bf_read_concurrency.
     bioformats_threads: Optional[int] = Field(default=4, ge=1)
     # micro-reader's decode threads per worker process when
-    # readers.pixel_reader='micro' (its region reads share one pool). Was
+    # readers.pixel_reader='micro' (its region reads share one pool): "auto" (the
+    # cores over the conversions running at once, fewer when the reader's memory is
+    # small: core/memory.decode_threads; 0 means the same) or a number. Was
     # micro_read_concurrency.
-    decode_threads: int = Field(default=4, ge=1)
+    decode_threads: Union[int, Literal["auto"]] = "auto"
     # DEPRECATED, ignored.  Bio-Formats images are now read one writer region
     # at a time, so region_size_mb sets the read size and the JVM-heap limit is
     # applied automatically.  Still accepted so existing configs, saved batches
@@ -545,6 +549,21 @@ class ClusterConfig(BaseModel):
             v = f"{v}MB"
         parse_mb(v)                                   # a clear error for a bad size
         return str(v).strip()
+
+    @field_validator('decode_threads', 'max_threads', mode='before')
+    @classmethod
+    def _decode_threads(cls, v, info):
+        from eubi_bridge.core.memory import is_auto
+        if v is None or v == 0 or (isinstance(v, str) and (not v.strip() or is_auto(v))):
+            return "auto"
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"{info.field_name} must be a number of threads or 'auto', "
+                             f"got {v!r}") from None
+        if n < 1:
+            raise ValueError(f"{info.field_name} must be >= 1 or 'auto', got {v!r}")
+        return n
 
     @field_validator('region_size_mb', mode='before')
     @classmethod

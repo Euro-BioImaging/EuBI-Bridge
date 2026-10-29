@@ -62,7 +62,7 @@ def test_slurm_uses_the_worker_memory():
 def test_unary_jobs_get_their_share_resolved_once(free_16gb, monkeypatch):
     seen = []
 
-    async def record(jobs, *args):
+    async def record(jobs, *args, **kwargs):
         seen.extend(jobs)
         return []
 

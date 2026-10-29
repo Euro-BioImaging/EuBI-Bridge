@@ -70,6 +70,15 @@ def _gb_or_auto(val) -> str:
         return "auto"
 
 
+def _threads_or_auto(val):
+    """The GUI's thread count (0 = auto) as a config number or "auto"."""
+    try:
+        n = int(val or 0)
+    except (TypeError, ValueError):
+        return "auto"
+    return n if n > 0 else "auto"
+
+
 def _float_or_auto(val):
     """The GUI's value (0 = auto) as a config number or "auto"."""
     try:
@@ -144,6 +153,37 @@ def scale_override_problems(config: dict) -> list[str]:
     return problems
 
 
+def _ome_zarr_targets(to_zarr_kwargs: dict, table=None) -> str:
+    """The log line naming the OME-Zarr version the outputs get: the base settings'
+    for a run, each row's for a batch table (a row's ome_zarr_version / zarr_format
+    over the base, resolved as the job resolves them: ome_zarr_version wins). Until
+    0.3.2 the line said the base's zarr_format, 'Zarr Format: v2', though rows of
+    OME-Zarr 0.5 wrote zarr v3 (Workplan E21)."""
+    from collections import Counter
+
+    from eubi_bridge.core.config_models import resolve_ome_zarr_target
+    from eubi_bridge.utils.path_utils import _blank_cell
+
+    def target(version, fmt) -> str:
+        try:
+            version, fmt = resolve_ome_zarr_target(version, fmt if fmt is not None else 2)
+        except ValueError:
+            return f"OME-Zarr {version} (not one eubi-bridge writes)"
+        return f"OME-Zarr {version} (zarr v{fmt})"
+
+    base = (to_zarr_kwargs.get("ome_zarr_version"), to_zarr_kwargs.get("zarr_format", 2))
+    if table is None or not hasattr(table, "to_dict"):
+        return f"Output format: {target(*base)}"
+    counts = Counter()
+    for row in table.to_dict("records"):
+        version, fmt = (row.get(k) for k in ("ome_zarr_version", "zarr_format"))
+        counts[target(base[0] if _blank_cell(version) else version,
+                      base[1] if _blank_cell(fmt) else fmt)] += 1
+    if not counts:
+        return f"Output format: {target(*base)}"
+    return "Output format: " + "; ".join(f"{name}: {n} row(s)" for name, n in counts.items())
+
+
 def _build_kwargs(config: dict) -> dict:
     """Build EuBIBridge.to_zarr() kwargs from a camelCase config dict."""
     concat_config    = config.get("concatenation", {})
@@ -189,7 +229,7 @@ def _build_kwargs(config: dict) -> dict:
     kwargs: dict = {
         "max_processes":              cluster_config.get("maxProcesses", 4),
         "region_size_mb":           _float_or_auto(cluster_config.get("regionSizeMb", 0)),
-        "max_threads":          cluster_config.get("maxThreads", 4),
+        "max_threads":          _threads_or_auto(cluster_config.get("maxThreads", 0)),
         "max_concurrent_scenes":    cluster_config.get("maxConcurrentScenes", 1),
         "memory_budget":            _gb_or_auto(cluster_config.get("memoryBudget", 0)),
         "slurm_worker_memory":      _gb_to_memory_str(cluster_config.get("slurmWorkerMemory", 3)),
@@ -202,7 +242,7 @@ def _build_kwargs(config: dict) -> dict:
         "slurm_worker_timeout":     cluster_config.get("slurmWorkerTimeout", 300),
         "jvm_memory":               _gb_to_jvm_str(cluster_config.get("jvmMemory", 2)),
         "bioformats_threads":      cluster_config.get("bioformatsThreads", 4),
-        "decode_threads":   cluster_config.get("decodeThreads", 4),
+        "decode_threads":   _threads_or_auto(cluster_config.get("decodeThreads", 0)),
         "pixel_reader":             ("micro" if reader_config.get("useMicroReader", True)
                                      else "standard"),
         "series_index":             series_idx,
@@ -361,12 +401,14 @@ class ConversionWorker(QThread):
         }
 
         # Emit startup info before spawning
-        if isinstance(input_path, list):
+        if hasattr(input_path, "to_dict"):             # a batch's table, not its repr
+            self.log_line.emit(f"Input: a batch of {len(input_path)} row(s)")
+        elif isinstance(input_path, list):
             self.log_line.emit(f"Input: {len(input_path)} file(s) selected")
         else:
             self.log_line.emit(f"Input: {input_path}")
         self.log_line.emit(f"Output: {output_path}")
-        self.log_line.emit(f"Zarr Format: v{call_args['to_zarr_kwargs'].get('zarr_format', 2)}")
+        self.log_line.emit(_ome_zarr_targets(to_zarr_kwargs, input_table))
         self.log_line.emit(f"Max processes: {call_args['to_zarr_kwargs'].get('max_processes', 4)}")
         self.log_line.emit("Starting conversion...")
 
