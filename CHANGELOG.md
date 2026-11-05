@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.4b1 (2026-11-05, pre-release)
+
+eubi-bridge 0.3.3 with one fix, for testing before 0.3.4; the same requirements as 0.3.3
+(ome_zarr_pyramid `>=0.5.0,<0.6`, micro-reader `>=0.2.1,<0.4`).
+
+### Fixed
+
+- **A long join of many one-plane files no longer grows past its memory plan** until the
+  machine runs out of memory (reported on a 10,288-file Viventis well). A join kept only
+  128 files open, fewer than one region reads, so files were closed and opened again all
+  the time; each closed TIFF left its objects in reference cycles that Python collects
+  rarely, and glibc kept the memory they had held. A join now keeps up to 1024 files
+  open, as many as an eighth of the process's memory plan holds at what one of its files
+  holds (measured on its own files, any format) and as its file handles allow; files are
+  collected after every 256 closes; and conversion workers on Linux use 2 malloc arenas
+  (`MALLOC_ARENA_MAX`, when set, stands). On a long well of 4 x 2572 planes of 4096²
+  (512² zstd tiles, 2.5 GB plan): 591 s, peak 2.7 GB, flat, where 0.3.3 took 1141 s and
+  climbed to 7.2 GB.
+
 ## 0.3.3 (2026-10-28)
 
 Needs ome_zarr_pyramid 0.5 (`>=0.5.0,<0.6`) and reads micro-reader 0.2.1 to 0.3.x

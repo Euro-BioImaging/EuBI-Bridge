@@ -259,6 +259,7 @@ def test_many_files_never_stay_open_together(tmp_path, monkeypatch):
     from eubi_bridge.conversion import aggregative_path
     from eubi_bridge.core import micro_source
     monkeypatch.setattr(micro_source, "MAX_OPEN_FILES", 8)
+    monkeypatch.setattr(micro_source, "JOIN_OPEN_FILES", 8)     # a join keeps no more
     src = tmp_path / "in"
     src.mkdir()
     n = 600

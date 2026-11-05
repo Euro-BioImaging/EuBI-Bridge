@@ -4,15 +4,15 @@
 # Access the GUI by opening http://localhost:6080/vnc.html in any browser.
 #
 # Build (the tag follows EUBI_VERSION below):
-#   docker build -t eubi-bridge:0.3.3 .
+#   docker build -t eubi-bridge:0.3.4b1 .
 #
 # Run GUI (Windows / macOS / Linux):
-#   docker run --rm -p 6080:6080 -v /path/to/data:/data eubi-bridge:0.3.3 eubi-gui
+#   docker run --rm -p 6080:6080 -v /path/to/data:/data eubi-bridge:0.3.4b1 eubi-gui
 #   -> open http://localhost:6080/vnc.html
 #   -> your files are accessible at /data inside the GUI
 #
 # Run CLI:
-#   docker run --rm -v /path/to/data:/data eubi-bridge:0.3.3 eubi to_zarr /data/input.tif /data/output
+#   docker run --rm -v /path/to/data:/data eubi-bridge:0.3.4b1 eubi to_zarr /data/input.tif /data/output
 #
 # HPC (Apptainer) with native display:
 #   apptainer exec --env DISPLAY=$DISPLAY -B /path/to/data:/data eubi-bridge.sif eubi-gui
@@ -26,7 +26,7 @@ FROM python:3.12-slim-bookworm
 ARG DEBIAN_FRONTEND=noninteractive
 # Image label only; keep it equal to `version` in pyproject.toml
 # (tests/test_dockerfile_version.py checks this).
-ARG EUBI_VERSION=0.3.3
+ARG EUBI_VERSION=0.3.4b1
 
 LABEL org.opencontainers.image.title="EuBI-Bridge" \
       org.opencontainers.image.version="${EUBI_VERSION}" \

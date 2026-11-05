@@ -452,11 +452,22 @@ async def convert_group(file_paths: list, output_path: str, job_kwargs: dict) ->
     out = output_path if str(output_path).endswith(".zarr") else f"{output_path}.zarr"
     paths = [str(p) for p in file_paths]
     job = ConversionJob.from_kwargs(input_path=paths[0], output_path=out, kwargs=job_kwargs)
-    entry, inputs = await asyncio.to_thread(_build_entry, paths, job, job_kwargs)
-    logger.info(f"{out}: {len(paths)} file(s) joined along "
-                f"{job_kwargs.get('concatenation_axes')}")
-    _retired_settings(job)
-    try:
-        await _convert_safely(_convert_entry(entry, out, job, asyncio.Semaphore(1)), out)
-    finally:
-        inputs.close()
+    from eubi_bridge.core import memory
+    from eubi_bridge.core.micro_source import (MAX_OPEN_FILES, open_file_cost_mb,
+                                               open_files_for_join)
+    # a join keeps more files open than one input (JOIN_OPEN_FILES), as many as an eighth of
+    # this process's memory plan holds at what one of its files holds: with the 128 of one
+    # input every region reopened the files of the last (Workplan E25, BARD report)
+    cost = (await asyncio.to_thread(open_file_cost_mb, paths)
+            if len(paths) > MAX_OPEN_FILES and job_kwargs.get("pixel_reader") == "micro"
+            else None)
+    plan = job.cluster.process_memory_mb or memory.process_mb(job.cluster)
+    with open_files_for_join(len(paths), cost, plan):
+        entry, inputs = await asyncio.to_thread(_build_entry, paths, job, job_kwargs)
+        logger.info(f"{out}: {len(paths)} file(s) joined along "
+                    f"{job_kwargs.get('concatenation_axes')}")
+        _retired_settings(job)
+        try:
+            await _convert_safely(_convert_entry(entry, out, job, asyncio.Semaphore(1)), out)
+        finally:
+            inputs.close()
