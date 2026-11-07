@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.4 (unreleased)
+## 0.3.4 (2026-11-07)
 
 Requires micro-reader 0.4 (`>=0.4.0,<0.5`) and ome_zarr_pyramid 0.6 (`>=0.6.0,<0.7`): with
 the older ones (an upgrade that kept them) units were invented again, with no `NOT
