@@ -1,5 +1,356 @@
 # Changelog
 
+## 0.3.4 (unreleased)
+
+Requires micro-reader 0.4 (`>=0.4.0,<0.5`) and ome_zarr_pyramid 0.6 (`>=0.6.0,<0.7`): with
+the older ones (an upgrade that kept them) units were invented again, with no `NOT
+CALIBRATED` line. With another one forced in (`--no-deps`), a conversion stops with
+`MicroReaderVersionError` or `OzpVersionError` naming the fix, on every route; upgrade all
+three: `pip install --upgrade eubi-bridge micro-reader ome-zarr-pyramid`. micro-reader 0.4.0
+names images by one rule (the OME `Image Name` eubi
+writes), opens in `t c z y x` by default and reads plates as plates by default;
+eubi-bridge asks for the axes and plates it reads itself, and its output paths do not
+depend on image names. ome_zarr_pyramid 0.6.0's `select` refuses
+a name no plate has; eubi-bridge selects by position only.
+
+### Changed
+- Memory and cores that finished conversions held go to the ones still running. A run's
+  budget was split once over `max_processes`, and each conversion kept its part to the end: of
+  five wells on 8 GB, the two large ones wrote on with 2 GB each after the three small ones had
+  ended. Now, once fewer conversions are left than run at once, each busy one may take the run's
+  memory over the conversions left (never past what the others hold), with its auto threads.
+  A conversion that starts late plans with it; one that is writing takes it before each
+  pass and, every few seconds, during one. One line says so (`<output>: conversions of this run
+  have ended; this one now has ... MB`). Needs dyna-zarr 0.1.2; with an older one, a line
+  says that freed memory is not handed on.
+- Tiles are stitched by default (`as_mosaic=True`, CLI and GUI alike): a tiled slide gives one
+  image, not hundreds of stores. Tiles sit at their stored positions, nothing is registered or
+  blended, and where tiles overlap one tile gives the pixel: use `--as_mosaic False` to keep the
+  tiles for stitching elsewhere. A chosen `mosaic_tile_index` keeps tiles too. A file whose tiles
+  cannot be placed keeps them separate, with a warning. Joined files are stitched as well: each
+  file's canvas is joined (they were read as their first tile, in silence). `--force_bioformats`
+  leaves tiles as Bio-Formats gives them. A saved `as_mosaic: false` is adopted once, with a line
+  saying so.
+- A joined output holds one image of each file, and now the one asked for: `--view_index`,
+  `--illumination_index`, `--rotation_index`, `--phase_index` and `--mosaic_tile_index` were
+  ignored. A file with several views or illuminations and no choice is refused, as a file of
+  several series is; before, the first was written and the others left out in silence.
+- `--overwrite` replaces a local store only when the new one is complete: it is written beside the
+  old one (`<name>.writing-<id>.zarr`), which needs room for both; a line says so when the drive
+  has less room than the old store takes. The old store goes aside by a rename and is deleted
+  last, so a store in use stays whole, with an error saying so. A scene that failed left an
+  all-zero store that looked finished, where a good one had been.
+- Tags have one reader. What joined runs do with them changed, on purpose:
+  - Files join in the order of the tag's number, whatever else varies in their names: `b_T1`,
+    `a_T2`, `c_T3` were joined as 2, 1, 3 (by their paths). A line says so when numbers ahead of
+    the tag (a date, a run) would order them otherwise: a tag that starts again each day joins the
+    days out of order. Named tags (`Blue,Red`) join in the order given. The output takes the
+    first file's metadata and name by the same order: its name with only the tag replaced
+    (`aaa_Red`, `zzz_Blue` with `--channel_tag Blue,Red`: `zzz_BlueRed_cset`), where 0.3.3 glued
+    every file's varying parts into one long name.
+  - A numbered tag's value is the digits right after the tag, and nothing else of the name: in
+    `s_C001Z001`, `C` is 1 and `Z` is 1, each given as its own tag. Numbers spread over several
+    fields (`T00h15m30s`, `z0.5`) are not supported: `T` reads 0, `z` reads 0. A dimension
+    without a tag is not read either: in `T0001F001`, two fields of one time point are two
+    files at one place, refused (0.3.3 could join them as time points, in silence). Of named
+    tags, one holding another is searched first (`GM2_GD2` before `GD2`), and its files are not
+    searched for the names it holds; the join keeps the order given, and the output is named as
+    for any named tags (`x_GD2GM2_GD2_cset`). A file's extension holds no tag.
+  - A tag is read as a word of its own first: `ch` in `batch3_ch1` is `ch1`, not `ch3`, which
+    turned channels into time points or wrote planes twice. A file with the tag only inside a word
+    (`Test1.tif`) is left out when others have it as a word. A single tag needs its number:
+    `Thumbnail.tif` no longer joins as a time point of `--time_tag T`.
+  - The tags are checked against `--concatenation_axes` before any file is grouped: an axis
+    joined without its tag, an axis named twice, a letter that is no axis, and one tag given
+    for two axes (`frames/` and `frames` are one tag; `--z_tag ch` is read in `--channel_tag
+    ch1,ch2`), a name given twice, and one name only for a joined axis (`--channel_tag Blue, Red`
+    unquoted) are refused in one line (a raw error, or one output in silence, before). A tag
+    of an axis that is not joined splits the outputs, one per value, and a line says so. Joining
+    along several axes joins each in its own lines: along t, the files of one channel.
+  - A file needs every tag given; those without are named in a warning and not converted.
+  - Two files at one place of the joined tags (`a_T1.tif`, `a_T1_copy.tif`, or `pos1_T1`, `pos2_T1`
+    with no tag for the position) are refused: they became extra planes in silence. A grid with a
+    place empty is refused in a line. Files of one channel beyond the first, with named channels,
+    became stores of their own; they are refused the same way.
+  - Tags are read in the same place by the plan and by the worker, which sees one output's files:
+    `gfp_mcherry/{gfp,mcherry}/a_T1..3` gave 9 time points for 3 (36 in 0.3.3).
+- An output carries its image's name in `multiscales` and in its OME-XML (`Series 0` and
+  `Default Image` before); file names are unchanged. Joined sets keep `Series 0`.
+- KLB files are read by micro-reader 0.4.0, with and without Java, in eubi-bridge-lite too:
+  every time point (Bio-Formats gave the first of `test.klb`'s 10, in silence). A 1 in the
+  header is its default, no measurement.
+- A partial conversion, where some of a file's outputs fail, ends with an error and exit code 1,
+  so a batch script does not read it as a success; the outputs written stay.
+- Every image of a file is converted by default, on the command line as in the GUI:
+  `series_index`, `mosaic_tile_index`, `view_index` and `illumination_index` default to
+  `all`. Before, the CLI wrote the first only and said nothing: a VSI gave its label
+  photo, a CQ1 plate its title thumbnail. A config saved by an earlier version holds the
+  old 0, saved on the first run and not chosen: it becomes `all` once, with a line saying
+  so. Set them to 0 to convert the first only. Every installation default now agrees
+  between CLI and GUI, and a test holds them together (`jvm_memory` too).
+- Unknown calibration is no longer invented (with ome_zarr_pyramid 0.6.0): an axis the
+  file gives no size for has scale 1 and no unit, instead of 1 micrometer or 1 second, and
+  z is never copied from x. A loud `NOT CALIBRATED` line per file names the axes and the
+  options that give the sizes. NGFF does not require a unit, and Neuroglancer reads it. The
+  OME-XML beside an output leaves such an axis out (it gave 1 µm and 1 s), and an OME-Zarr input
+  with no unit on an axis keeps it that way (it gained `micrometer`), its scale and translation
+  with it. A scale given with no unit is a relative size, left out of the OME-XML too.
+- A conversion table whose aggregative groups are partly refused (rows disagreeing on a
+  concatenation setting, an unusable tag, two files at one place) converts the rest: each
+  refused group is set aside, and the run ends with exit code 1 and a list of what was not
+  converted, each table row with its index (0 = the first row under the header), its input
+  path and the cells the table gives it. Before, one such group stopped the whole table.
+- Outputs of same-named files in different folders are named after the folders below the
+  inputs' common folder, every folder climbed kept: `coll/a/img.tif`, `coll/b/img.tif` and
+  `coll/c/a/img.tif` give `a_img`, `b_img`, `c_a_img` (before `coll_img`, ... and `c_img`);
+  `r1/s/img.tif` and `r2/s/img.tif` give `r1_s_img` and `r2_s_img` (before `r1_img`).
+- A slide's associated images carry their role in the output's name when a file gives
+  several images: `Image_V4.1_BF_scene0_label`, `_scene1_overview`, `_scene4_macro`; the
+  scans keep their names.
+- An index option on a file read as a plate (a well-plate CZI) is refused in one line naming
+  `--as_plate False`: `--series_index`, `--view_index`, `--illumination_index`,
+  `--mosaic_tile_index`, `--phase_index`, `--rotation_index`. Before, they were ignored and
+  the whole plate written (a tile index gave a wrong hint about `as_mosaic`). The defaults
+  convert the plate.
+- An index option the file cannot meet is refused in one line, the same way for every index:
+  `--view_index 3` or `--illumination_index 1` on a file without views or illuminations
+  (ignored before, exit 0), a tile index past a series' tiles ("series 0 has 4 tiles
+  (0..3)"; before, a wrong reason about unstitched mosaics), a series index past the file's,
+  a tile index on a file without tiles ("has no tiles"), `--phase_index` or
+  `--rotation_index` on a file without phases or rotations (ignored before).
+- A gap in the numbers of a joined tag (`T1`, `T2`, `T4`) is said in a warning: the values
+  found are joined one after the other. A tag is read below the folder the files share, and
+  from that folder's own name only when no file has it below (`frames/000/a.tif`); before,
+  it was looked for in every folder up to the drive (`t11` from a folder named `hunt11`). When
+  no file carries it, the line names a tag that differs only in case
+  ("did you mean --time_tag T?").
+- Float images get a display window from their data (through ome-zarr-pyramid 0.6.0): the
+  window of the type's whole range showed them as flat grey.
+
+### New
+
+- Each run's log is also written to a file, line by line, so it survives a crash that ends
+  the terminal or the remote desktop (a BARD report): `<config folder>/logs/eubi-<start
+  time>-<process id>.log` (the config folder: `EUBI_CONFIG_DIR`, else `~/.eubi_bridge`), the
+  worker processes' lines and the error that stopped a run included; the newest 20 are kept.
+  The run's first line names the file. `--log_file <path>` writes there instead,
+  `--log_file False` writes none. The GUI's Convert page has an "Open Log Folder" button.
+- Every image index converts (decision E-1): a file with `block`, `excitation`, `lifetime`
+  or a BigDataViewer file's `sequence` gives one output per value, its name ending in the
+  index (`scan_block1.zarr`). Before, such a file went to the older readers, and
+  BigDataViewer `sequence` files did not convert at all. `phase_index` and `rotation_index`
+  still pick one value, for one output named as before; a value the file does not have is
+  an error.
+
+### Fixed
+- `memory_budget='auto'` inside a SLURM job or a container is half of what the job's memory
+  limit leaves, not half of the node's free RAM (a BARD report: on a large node the plan was
+  far bigger than the job's limit, and the kernel ended the whole job, remote desktop
+  included). The limit is read from the process's cgroup (v2 `memory.max`, v1
+  `memory.limit_in_bytes`, file pages the kernel can drop not counted as used) and from
+  `SLURM_MEM_PER_NODE` / `SLURM_MEM_PER_CPU`; the least of these and the free RAM counts. One
+  line names the budget and where it came from (`memory_budget='auto': 8.0 GB, half of the
+  16.0 GB the SLURM job may still use (its limit: 32.0 GB)`), and an explicit budget above it
+  warns. Windows and macOS are unchanged.
+- eubi runs started side by side share one memory budget instead of each planning with all
+  of it (a BARD report: four batches of `memory_budget=120GB` on a 128 GB job planned 480 GB,
+  and the job was killed). The runs on one machine, or in one SLURM job, keep a small ledger
+  in the temp folder: they share the smallest of their budgets (a run with `auto` that
+  starts beside others takes the budget already in use), and each conversion claims its
+  memory when it starts and gives it back when it ends. A conversion gets its run's fair
+  part (its planned memory over the runs going on), never more than the other conversions
+  leave; one that would get less than half its part waits, with a line, until others end.
+  Lines say how many other runs share and what each conversion got (`f0.tif: 479 MB of the
+  shared 3.0 GB (2 other eubi run(s) here)`). Runs of other users, of other SLURM jobs and
+  SLURM-submitted conversions (`on_slurm`) are not counted.
+- A long join of many one-plane files no longer grows past its memory plan (a BARD report: a
+  join of 10288 OME-TIFFs per well wrote 500 GB over a night, then took the machine down;
+  reproduced on Linux, where a worker planned at 2.5 GB held 5.4 GB). The cause was not the
+  data: a join kept 128 files open, while a region spans 64 planes and several regions are
+  read at once, so every region reopened the files of the last; each closed file left
+  tifffile's objects in reference cycles that Python frees only in a rare full collection,
+  and glibc kept the memory they took. Now, for every format, a join keeps up to 1024 of its
+  files open: no more than an eighth of the process's memory plan holds at what one of its
+  files holds (measured on the join's own files when it starts: 0.01-0.1 MB for CZI, ND2
+  and LSM samples, 0.8 MB for a LIF, 0.03 MB for a stub OME-TIFF, about 6 MB for an
+  OME-TIFF carrying a 3000-plane set's XML), and as many as the process's file handles
+  allow (the soft limit is raised towards the hard one); never fewer than 128, what a join
+  kept before. The garbage closed files leave (TIFF, LSM and CZI files leave some) is
+  collected after 256 closes, at most every 10 s; and conversion workers on Linux limit
+  glibc to 2 malloc arenas (a `MALLOC_ARENA_MAX` you set stands). On the reported shape
+  (4 x 2572 planes): 125 s instead of 235 s, peak 2.6 GB instead of 3.9 GB for a 2.5 GB
+  plan. One line names the files kept open and what bounded them (`Joining 10288 files: up
+  to 1024 kept open`). Tests follow the memory over a whole join
+  (`tests/test_join_memory_flat.py`). Tested on the BARD cluster as 0.3.4b1 / 0.3.4b2
+  (2026-11-06): level 0 stayed flat in all four workers.
+- Writing the coarser levels of a large image no longer climbs until the machine runs out of
+  memory: tensorstore `>=0.1.86` and dyna-zarr `>=0.1.1` are required. tensorstore 0.1.85
+  keeps memory while the levels below full resolution are built from the stored
+  full-resolution level: one Viventis well (959 planes of 14040 x 24551) went from 2.4 GB to
+  115 GB in 13 minutes. At that plane size the climb measured 2.5 -> 7.9 GB in 50 s with
+  0.1.85 and stayed at 1.1-1.9 GB with 0.1.86, every other package the same. pip kept 0.1.85
+  in an environment that had it, since 0.3.3 accepted any tensorstore.
+- Two identical rows of a table or input list are one conversion, with a line (they raced and
+  could leave no store); a blank cell and `all` are one choice; rows that differ in output, series,
+  tile, view, `as_plate` or `as_mosaic` stay. The files of one plate (a folder's, or listed)
+  stand for its index without that line: it was given for every plate folder.
+- An image of its own beside a plate's planes (a CV7000 folder's
+  `unreferenced_auxiliary_image.tif`, a TIFF dropped into a Harmony `Images/` folder) is
+  converted as itself, whatever the order of the inputs and with a folder as input, where it
+  was lost in silence (also in 0.3.3). Other files there (Harmony's `Evaluation1/` results)
+  still belong to the plate, and an ImageXpress `.mxprotocol` is no image (the run exited 1).
+- `--override_channel_names` names each channel by its own file's tag: when the channels are
+  split into stores (joined along t only), every store was named by the first tag (the
+  documented "Concatenate Along Time Only" example: all `moving`). A file of several channels
+  gets `name_0`, `name_1`, ...; before, the tags were given out by position, past the files.
+- An output path with `..` in it is taken as the folder it names (every task failed with
+  TensorStore's "Invalid file path"). A run whose conversions partly fail ends with the count
+  and each failure in full, exit code 1, not a `RuntimeError` traceback (`TasksFailedError`,
+  a `RuntimeError`, for scripts); a table row with axes but no `aggregative_group`, and
+  `--concat_views` on views that cannot share one image, are refused in one line.
+- The GUI keeps its recent folders in the config folder (`EUBI_CONFIG_DIR`), not always in
+  `~/.eubi_bridge`.
+- `--view_index`, `--illumination_index` and `--mosaic_tile_index` on a joined run through the older
+  readers, which join each file's first, are refused; an out-of-range tile is refused.
+- With `--metadata_reader bfio`, a file of several views or illuminations, or a mosaic that is
+  not a CZI, is refused in one line naming the default reader as the way out, or `--view_index
+  0` (and the like) for the first only: the older readers read the first of each, and "every
+  image converts by default" gave a light-sheet CZI's view 0 / illumination 0 and a LIF
+  mosaic's tile 0, with exit code 0 (also in 0.3.3). Bio-Formats itself sees them (views as
+  its series, illuminations folded into its channels); reading them on this route is planned
+  for the next minor release.
+- An output folder inside the input folder, also with a pattern as input, a store beside its
+  source when both folders are one, and a store left by a killed overwrite, are no inputs.
+- An OME-Zarr input's units come out by their NGFF names (`um`, `µm`, `micron`: `micrometer`), on
+  images, plates and kept levels alike, and every NGFF unit is known to the OME-XML (`inch`, `day`,
+  ...). Where a time origin on such an input is not kept, a warning says so.
+- A joined run planned with `validate_aggregative` no longer gives a store named `..zarr`, says
+  which files it leaves out, and refuses to run with other settings than it was planned with:
+  another output, input, tags, axes or filters, or no axes (it was used for them in silence).
+- Joining OME-Zarr inputs works (an AttributeError in every case), as does joining CZIs through
+  the older readers. A file named twice in a joined run joins once, also spelled two ways
+  (`a/b.tif`, `a\b.tif`), and names given as a list lose their spaces (`(' Blue', 'Red')`).
+- A joined run's warnings name the file its metadata comes from, the first by its tags. Folders
+  named by a tag (`Blue/`, `Red/`) no longer give the "do not belong together" warning, the
+  line on a tag not joined is printed once, and the full file list of each output is logged at
+  DEBUG only (15 MB of log for 20 000 files).
+- The `--force_bioformats` lines appear only where they apply: for files of several series, and
+  KLB's says what may happen.
+- A store holds its source's file name, not its full path with the user's folders.
+- Files no tag takes are named in a warning on every joined run (the warning never fired), and
+  a joined output whose files come from several folders says so.
+- `--dtype` narrower than a plate's data warns that values are clipped, as for images; so do
+  joined runs and OME-Zarr plates.
+- `--force_bioformats` on a tiled file works again: it mixed micro-reader's stitched size with
+  Bio-Formats' pixels (LIF: an error; CZI: one scene of two).
+- Filters on a plate say what happens: `--includes` picking scanR planes converts the plate once
+  (it wrote the whole plate once per file), part of a NIS-Elements run warns that the whole plate
+  is converted, and `--excludes` warns about files of a set that is converted whole.
+- Tags are read below the folder the files share, in choosing the files and in grouping them: a
+  folder named like its tags (`C1_T5run`, `gfp_mcherry`, `Tdata`) scrambled a joined image, wrote
+  a channel twice or joined a stray file, with exit 0. A tag that is a folder itself
+  (`frames/000/`) still counts. A numbered tag's groups survive a named tag's (joining z with `T`
+  and `gfp,rfp` lost the time points' grouping). One file matching two named tags is refused.
+- Joining a plate file (naming `--as_plate False`), updating an RFC 8 store, and what a joined run
+  refuses are one line (a `KeyError` and a traceback before).
+- Each table or batch row is what it writes: one input to two outputs stays two rows; the same
+  input to the same output twice is converted once, with a warning.
+- A unit spelled `um` or `microns` becomes `micrometer`; one OME has no name for leaves that axis
+  out of the OME-XML with a warning (a raw validation error stopped the conversion).
+- The OME-XML passes the OME schema (`MetadataOnly`).
+- A joined run matching one file writes a store of its name, not a hidden `..zarr`.
+- The false "missing planes are written as zeros" on mixed-type CZIs and lambda scans is gone.
+- `--includes` matching files of a plate says that the whole set is converted.
+- Parts of a set that are missing go to the log as a warning. An Imaris set with an `.h5` copy
+  beside its `.ims` converts once.
+- `update_pixel_meta` and `update_channel_meta` work on plates, every field.
+- A missing input, a text file that is no table and an unknown option give one line, no
+  traceback. `.bin`, `.mat`, `.npz`, `.npy` and pickles among the inputs are skipped.
+
+- Converting one file also converted every file in its folder whose name ended in that
+  name (`rois.nd2` took `with_rois.nd2`).
+- `--as_plate False` crashed with `KeyError: 'series'` on plate formats; it writes one
+  store per image, named by what varies (`_well2_field0`).
+- The documented time-only concatenation failed with an `AssertionError`.
+- `show_config` crashed when its output was redirected on Windows.
+- The `zarr_format` deprecation warning printed on every run, for a setting nobody chose.
+- A failed input prints one line, and the traceback only at debug level (a folder of
+  unreadable files gave 3000 lines); a full disk says so. macOS stub files (`._name.tif`)
+  are no inputs.
+- A ragged image (a channel with fewer planes than the others) says that its missing planes
+  are written as zeros, plates too.
+- `NOT CALIBRATED` covers plates and joined sets as well, and Bio-Formats' default size is no
+  longer taken for a recorded one.
+- `--includes` matching plane files converts the plate once, not once per file.
+- An option eubi-bridge does not know is an error naming the nearest one (`--z_scal` gave a
+  wrong result with exit code 0).
+- `show_pixel_meta` reads plates, the input and the store written, and lists an image set once.
+- What micro-reader says about a file it refuses stays in the error when the older readers then
+  fail too. A zip input says so. Imaris 3 `.ims` files (TIFF) go to Bio-Formats.
+- `--dtype` narrower than the data warns that values are clipped; a file no tag takes is named
+  in a warning, instead of being left out in silence; a joined name of many tags fits a path.
+- The labels warning no longer fires for plates, whose labels are written.
+- Two channels of one name with RGB samples keep separate labels, as micro-reader names them.
+- A lambda scan converts whole. With micro-reader 0.4.0 it is one image with its bands as
+  channels, each with its emission wavelength. Before, a Leica lambda scan went to the older
+  readers and wrote one plane of its 29 bands, with no error.
+- A folder given as an input (a GUI batch row) stays the input only when micro-reader
+  opens it as its own dataset: the file it reads is the folder, in it or beside it (a
+  Cellomics, NDTiff, Luxendo or NIS-Elements run folder, an OIF storage folder).
+  micro-reader 0.4.0 also opens a folder whose one dataset lies in a sub-folder (a
+  sample folder over its export); such a folder converts that dataset's main file,
+  named after the dataset as before, not after the folder above it. Without this,
+  eubi-bridge 0.3.3 with micro-reader 0.4.0 would name those outputs after the folder.
+- Channel wavelengths reach the OME-XML (`EmissionWavelength`, `ExcitationWavelength`, with
+  their units) for images and plates; they were only in the channel names.
+- A file listing (a GUI batch, a CSV) drops macOS `._` stub files as a folder walk does: a
+  joined group failed with "2 files are at one place: x.tiff, ._x.tiff". The GUI browser does
+  not tick them.
+- `folder/**/*.tif` takes the folder's own files and every depth below (it skipped the
+  folder's own), without the chunks of `.zarr` stores in it.
+- A table row's `output_path` with `..` (`sub/../out`) is the folder it names; every such
+  row failed.
+- A TIFF named like a Harmony plane that the plate's index does not list converts as an image
+  of its own (it was folded into the plate and lost); plane files given without their index
+  still stand for their plate.
+- A Yokogawa CQ1 measurement folder converts with exit code 0: its calibration images and its
+  projection companions, which the measurement does not list, are skipped with a line among
+  several inputs (they counted as failed tasks); a file given alone still fails.
+- A size given without its unit beside an axis that has one (`--y_scale 0.1 --x_scale 0.1
+  --x_unit micrometer`) is said in a warning naming the option to add; before, y was written
+  as a relative size in silence.
+- `--force_bioformats` on a tiled LIF writes each tile at its stage position, as the default
+  reader does; the tiles had no positions.
+- Version guards read a pre-release's release (`0.5.0rc1`): it was let through.
+- One line, no traceback, for: a folder with no image, `--io_backend zarrista` without
+  zarrista installed, what eubi-bridge-lite does not include, and the refusals of a joined set
+  (two formats, pixel types, sizes or series in one output).
+- One `.nd2` of a NIS-Elements well-plate run converts the whole run (it is the plate); the
+  line saying so names `--as_plate False`, which converts just that file.
+- The command reference (`docs/cli_reference`) gives each option's real default (`Default:
+  default` 92 times before; `None` for `mosaic_tile_index` and `queue_size`) and its whole
+  description (wrapped lines were cut).
+- A wrong option value (`--compressor lzma`, `--downscale_method gaussian`, `--x_scale -1`,
+  `--ome_zarr_version 0.7`) and a forgotten output folder give one line, `ERROR: --option:
+  message (given: value)`, instead of a 25-line traceback.
+- The Python API takes `includes=` / `excludes=` for a list of files too (every listed file
+  was converted). A file you name that is not an image is said in a warning (an info line,
+  hidden by default, before).
+- eubi-bridge-lite converts a Yokogawa CQ1 measurement folder with exit code 0, as the full
+  package does: the calibration images its measurement does not list go to no other reader
+  (lite failed the run; the full package started Java to skip them).
+- The GUI's batch log shows a run's report (refused groups, failed files) as text, not a
+  Python traceback; a refused table row is named as "row 7 (table index 6)", the row the
+  GUI numbers 7.
+- `NOT CALIBRATED` for a file of several images where only some lack sizes (a slide's macro
+  photo) names those images and no longer suggests the size options, which would set every
+  image of the file. The line names the input by its whole path.
+- A joined run with an empty place in its grid names it: "no file for T4 Channel2".
+- `update_pixel_meta --x_scale ...` keeps the coarser levels on level 0 (through
+  ome-zarr-pyramid 0.6.0's `update_metadata`).
+- A plate folder holding a stray plane-named TIFF no longer warns that its files convert
+  the whole plate (the stray converts as an image of its own, as it should).
+
 ## 0.3.3 (2026-10-28)
 
 Needs ome_zarr_pyramid 0.5 (`>=0.5.0,<0.6`) and reads micro-reader 0.2.1 to 0.3.x

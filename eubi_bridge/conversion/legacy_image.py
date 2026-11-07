@@ -13,6 +13,7 @@ with the same steps as micro-reader files; nothing goes through ``ArrayManager``
 from __future__ import annotations
 
 import asyncio
+import os
 from types import SimpleNamespace
 from typing import Optional
 
@@ -80,6 +81,43 @@ def _wave(entry) -> Optional[Quantity]:
     return Quantity(entry["value"], entry["unit"]) if entry else None
 
 
+#: the OME field each axis's size comes from
+_OME_SIZES = {"x": "physical_size_x", "y": "physical_size_y", "z": "physical_size_z",
+              "t": "time_increment"}
+
+
+def _plane_position(image) -> dict:
+    """{axis: Quantity} of an OME image's first Plane (PositionX / Y / Z, in their units),
+    {} without one."""
+    from eubi_bridge.conversion.pyramid_path import unit_spelled
+    planes = getattr(getattr(image, "pixels", None), "planes", None) or []
+    if not planes:
+        return {}
+    out = {}
+    for axis in "xyz":
+        value = getattr(planes[0], f"position_{axis}", None)
+        unit = getattr(planes[0], f"position_{axis}_unit", None)
+        if value is not None:
+            unit = getattr(unit, "value", unit) or "micrometer"
+            out[axis] = Quantity(float(value), unit_spelled(str(unit)))
+    return out
+
+
+def _recorded(scales: dict, img, scene: int, path: str = "") -> dict:
+    """*scales* without the axes the file records no size for: a reader's scale 1 there is
+    its default, no measurement.  Readers without OME metadata keep theirs.  A KLB header has
+    no unit, and 1 on every axis is what it holds when nobody set a size."""
+    images = getattr(getattr(img, "omemeta", None), "images", None) or []
+    pixels = getattr(images[scene], "pixels", None) if scene < len(images) else None
+    if pixels is None:
+        return scales
+    recorded = {ax: v for ax, v in scales.items()
+                if ax not in _OME_SIZES or getattr(pixels, _OME_SIZES[ax], None) is not None}
+    if str(path).lower().endswith(".klb") and all(v == 1 for v in recorded.values()):
+        return {}
+    return recorded
+
+
 class _SerialisedReads:
     """A resource-backed dask array read one region at a time. bioio-nd2's array and
     Bio-Formats-backed dask arrays read through one shared handle that is not
@@ -139,6 +177,40 @@ class LegacyImage:
         return np.asarray(part.compute() if hasattr(part, "compute") else part)
 
 
+def _refuse_what_is_dropped(path: str, readers) -> None:
+    """The older readers read a file's first view and illumination, and the first tile of a
+    mosaic that is not a CZI (bioio's CZI and LIF readers get only the phase and rotation):
+    a file with more, converted as the default 'all', would give one image of several in
+    silence (tenth review N-06). Refused in one line, counted by micro-reader; a file it
+    cannot open is not refused. A choice of 0 takes the first, as asked. With
+    force_bioformats, Bio-Formats reads the pixels: views are its series, illuminations
+    its channels, nothing is dropped."""
+    from eubi_bridge.utils.errors import InputError
+    if readers.force_bioformats:
+        return
+    try:
+        import micro_reader
+        with micro_reader.open(path) as f:
+            counts = dict(f.index_range)
+    except Exception:                               # noqa: BLE001 - nothing to count with
+        return
+    dropped = [(index, counts[index]) for index in ("view", "illumination")
+               if counts.get(index, 1) > 1]
+    if counts.get("tile", 1) > 1 and not path.lower().endswith(".czi"):
+        dropped.append(("tile", counts["tile"]))
+    option = {"view": "view_index", "illumination": "illumination_index",
+              "tile": "mosaic_tile_index"}
+    dropped = [(index, n) for index, n in dropped
+               if getattr(readers, option[index], "all") not in (0, "0")]
+    if dropped:
+        what = " and ".join(f"{n} {index}s" for index, n in dropped)
+        raise InputError(
+            f"{os.path.basename(path)} has {what}; the older readers (--metadata_reader "
+            f"bfio) read only the first of each. Convert it with the default reader "
+            f"(without --metadata_reader bfio), or choose "
+            f"{' '.join(f'--{option[index]} 0' for index, _ in dropped)} to convert the first.")
+
+
 class LegacyFile:
     """A file opened with eubi-bridge's older readers, presented like a micro-reader
     ``File``: ``indices`` (series, and tile for an unstitched CZI mosaic, named as
@@ -149,20 +221,33 @@ class LegacyFile:
         from eubi_bridge.core.data_manager import SceneLoader
         readers, meta = job.readers, job.metadata
         self.path = str(job.input_path)
+        _refuse_what_is_dropped(self.path, readers)
         # a CZI's phase and rotation (0.1.x never passed them on in a unary conversion:
         # always 0); the other readers take no such option
         czi_kwargs = ({"phase_index": int(readers.phase_index or 0),
                        "rotation_index": int(readers.rotation_index or 0)}
                       if self.path.lower().endswith(".czi") else {})
+        # force_bioformats: Bio-Formats' metadata for Bio-Formats' pixels, and no stitching,
+        # which only micro-reader does: a stitched size over one tile's pixels fails
+        forced = readers.force_bioformats
+        self._forced = bool(forced)
         self._loader = SceneLoader(
-            self.path, meta.metadata_reader, False, reader_kwargs=czi_kwargs,
-            force_bioformats=readers.force_bioformats, as_mosaic=readers.as_mosaic,
+            self.path, "bfio" if forced else meta.metadata_reader, False,
+            reader_kwargs=czi_kwargs, force_bioformats=forced,
+            as_mosaic=readers.as_mosaic and not forced,
             keep_existing_resolutions=job.downscale.keep_existing_resolutions,
             pixel_reader=readers.pixel_reader)
         _run(self._loader._open())
         self._img = self._loader._img
         self.n_scenes = int(self._loader.n_scenes)
         self.n_scenes_in_file = int(self._loader.n_scenes_in_file)
+        if forced and readers.as_mosaic and self.n_scenes_in_file > 1:
+            logger.info(f"{os.path.basename(self.path)}: force_bioformats: eubi-bridge does not "
+                        f"stitch; each of the {self.n_scenes_in_file} series stays as Bio-Formats "
+                        f"gives it.")
+        if self.path.lower().endswith(".klb"):
+            logger.warning(f"{os.path.basename(self.path)}: Bio-Formats may keep only the first "
+                           f"time point of a KLB file; micro-reader 0.4 reads them all.")
         #: tiles only when they were asked for (as SceneLoader.load): positions too
         self._tiles_asked = readers.mosaic_tile_index is not None
         self._keep_levels = bool(job.downscale.keep_existing_resolutions)
@@ -206,6 +291,7 @@ class LegacyFile:
         axes = img.get_axes()
         scales = {ax: v for ax, v in img.get_scaledict().items() if ax in axes and ax != "c"}
         units = {ax: u for ax, u in img.get_unitdict().items() if ax in axes and ax != "c"}
+        scales = _recorded(scales, img, scene, self.path)
         pixel_sizes = {ax: Quantity(v, units.get(ax) or ("second" if ax == "t" else "micrometer"))
                        for ax, v in scales.items() if v is not None}
         origin, acquisition = self._micro_extras(units)
@@ -214,7 +300,12 @@ class LegacyFile:
             position = self._czi_tile_position(scene, int(tile), scales, units)
         omemeta = getattr(img, "omemeta", None)
         images = getattr(omemeta, "images", None) or []
-        name = images[scene].name if scene < len(images) and images[scene].name else None
+        if not position and self._forced and scene < len(images):
+            # Bio-Formats gives a tiled file's tiles as series, each placed by its first
+            # Plane: kept, as micro-reader keeps them (review cycle 1, N-10: the tiles of a
+            # LIF lost their places, so they could not be stitched elsewhere)
+            position = _plane_position(images[scene])
+        name = images[scene].name if scene < len(images) and images[scene].name else "Series 0"
         index_values = {k: Quantity(v["value"], v["unit"])
                         for k, v in (acquisition.get("index_values") or {}).items()}
         image = LegacyImage(array=array, axes=axes, index=index, name=name,
@@ -325,17 +416,18 @@ class NgffPlate:
 def _ngff_image(pyr, index, system) -> LegacyImage:
     """One OME-Zarr image as an image of eubi's: its level 0 (the array as it is), pixel
     sizes, units, channel names and colours, and its translation as the stage position,
-    so the output keeps it (0.1.5 dropped it)."""
+    so the output keeps it (0.1.5 dropped it). An axis without a unit stays without one:
+    its scale is a relative size (unit "pixel", as BigDataViewer's), no micrometers."""
     meta = pyr.meta
     base = meta.resolution_paths[0]
     axes = meta.axis_order
-    units = dict(zip(axes, meta.unit_list))
+    from eubi_bridge.conversion.pyramid_path import unit_spelled
+    units = {ax: unit and unit_spelled(unit) for ax, unit in zip(axes, meta.unit_list)}
     scales = dict(zip(axes, meta.get_scale(base)))
-    pixel_sizes = {ax: Quantity(scales[ax], units.get(ax) or
-                                ("second" if ax == "t" else "micrometer"))
+    pixel_sizes = {ax: Quantity(scales[ax], units.get(ax) or "pixel")
                    for ax in axes if ax != "c"}
     translation = dict(zip(axes, meta.get_translation(base) or [0.0] * len(axes)))
-    position = {ax: Quantity(translation[ax], units.get(ax) or "micrometer")
+    position = {ax: Quantity(translation[ax], units.get(ax) or "pixel")
                 for ax in "zyx" if ax in axes and translation.get(ax)}
     omero = (meta.metadata or {}).get("omero") or {}
     channels = [SimpleNamespace(name=ch.get("label") or None, color=_color(ch.get("color")),

@@ -125,7 +125,8 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--max_processes`     | `int`   | Images converted at once, each in its own worker process (formerly `--max_workers`) |
 | `--max_threads`       | `int` or `auto` | Threads per conversion, each reading and writing one region at a time: `auto` (default) is the cores over the conversions running at once, at most 16 (`0` means the same); scenes converted at once share them (formerly `--max_concurrency`) |
 | `--max_retries`             | `int`    | Number of retries attempted for certain types of errors    |
-| `--memory_budget`  | `str`   | The memory the whole run may use on this machine, e.g. `16GB`, or `auto` (default: half the free RAM) |
+| `--memory_budget`  | `str`   | The memory the whole run may use on this machine, e.g. `16GB`, or `auto` (default: half the free memory; in a SLURM job or container, of what its limit leaves) |
+| `--log_file`       | `bool`/`str` | Where the run's log is also written, line by line: `True` (default) a new file in `<config folder>/logs` (the newest 20 kept), a path, or `False` for none |
 | `--max_concurrent_scenes` | `int` | Scenes of one file converted at once (default 1); they share `max_threads` |
 | `--decode_threads`     | `int`    | micro-reader's decode threads per worker process: `auto` (default; the cores over the conversions running at once, at most 16) or a number (formerly `--micro_read_concurrency`) |
 | `--decode_memory`      | `str`    | micro-reader's decoding memory per process, e.g. `1GB`, or `auto` (default) |
@@ -142,11 +143,11 @@ These are stored in the configuration file but can also be supplied directly to 
 |----------------------|--------|------------------------------------|
 | `pixel_reader`       | `str`  | Where the pixels come from: `micro` (default; a file micro-reader does not read falls back to the standard reader, with a warning) or `standard` |
 | `force_bioformats`   | `bool` | Use the Java Bio-Formats reader even for formats read natively; a fallback when a native read fails |
-| `as_mosaic`          | `bool` | Whether to stitch the mosaic tiles |
-| `as_plate`           | `bool` | Write a plate file as one NGFF plate store. Unset (default): plate formats (Harmony, CellVoyager, MetaXpress, IN Cell) and files of two or more wells; `True`: every plate file; `False`: one store per image. A plate of tiled fields needs `as_mosaic` in 0.4 / 0.5 / 0.6 (RFC 8 keeps the tiles) |
-| `series_index`       | `int`, `all` or a list | Series to convert (some formats call them scenes), e.g. `0`, `all` or `0,2,4`; each becomes its own output, still named `_scene{N}`. Formerly `scene_index`, which still works, with a warning |
-| `view_index`         | `int`, `all` or a list | View(s) to convert |
-| `illumination_index` | `int`, `all` or a list | Illumination(s) to convert |
+| `as_mosaic`          | `bool` | Stitch a file's tiles into one image at their stored positions (default `True`); nothing is registered or blended, where tiles overlap one tile gives the pixel. `False`, or a chosen `mosaic_tile_index`: one store per tile. A file whose tiles cannot be placed keeps them separate, with a warning |
+| `as_plate`           | `bool` | Write a plate file as one NGFF plate store. Unset (default): plate formats (Harmony, Columbus, CellVoyager, MetaXpress, IN Cell, Opera Flex, scanR, Cellomics, ImageXpress) and files of two or more wells; `True`: every plate file; `False`: one store per image. Each tiled field of a plate is stitched; with `as_mosaic=False` only RFC 8 can keep its tiles |
+| `series_index`       | `int`, `all` or a list | Series to convert (some formats call them scenes), e.g. `0`, `all` (default) or `0,2,4`; each becomes its own output, still named `_scene{N}`. Formerly `scene_index`, which still works, with a warning |
+| `view_index`         | `int`, `all` or a list | View(s) to convert; `all` by default |
+| `illumination_index` | `int`, `all` or a list | Illumination(s) to convert; `all` by default |
 | `phase_index`        | `int`  | Index for phase selection          |
 | `rotation_index`     | `int`  | Index for rotation selection       |
 | `mosaic_tile_index`  | `int`, `all` or a list | Mosaic tile(s) to convert when not stitching; each becomes its own output |
@@ -181,7 +182,7 @@ These are stored in the configuration file but can also be supplied directly to 
 | `--y_range`            | `int`  | Range of pixels to crop in the y dimension               |
 | `--x_range`            | `int`  | Range of pixels to crop in the x dimension               |
 | `--squeeze`            | `bool` | Drop the singlet dimensions from the output array        |
-| `--overwrite`          | `bool` | Overwrite existing Zarr data                             |
+| `--overwrite`          | `bool` | Overwrite existing Zarr data. A local store stays until the new one is complete, so the drive needs room for both |
 | `--dtype`              | `str`  | `auto` keeps the source dtype; pass a NumPy dtype (e.g. `uint8`) to cast on write |
 | `--save_omexml`        | `bool` | Save a companion OME-XML sidecar file                    |
 | `--export_acquisition_metadata` | `bool` | Write acquisition metadata NGFF has no field for (view / illumination indices, objective NA, wavelengths) into the `eubi_bridge` attributes; unset = on when one acquisition is split into several outputs |
@@ -418,3 +419,14 @@ Named configuration profiles (`save_as`, `with_config`, `list_configs`, ...),
     </tr>
   </tbody>
 </table>
+## From Python
+
+```python
+from eubi_bridge import EuBIBridge
+
+if __name__ == "__main__":
+    EuBIBridge().to_zarr("input.czi", "output_folder", ome_zarr_version="0.5")
+```
+
+Every option of `eubi to_zarr` is a keyword argument. The `if __name__ == "__main__":` line is needed on
+Windows and macOS, because conversions run in worker processes that import your script.

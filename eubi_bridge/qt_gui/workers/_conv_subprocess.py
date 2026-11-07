@@ -130,7 +130,14 @@ def _conversion_subprocess(call_args: dict, log_queue, result_queue) -> None:
             **call_args["to_zarr_kwargs"],
         )
         result_queue.put(("ok", None))
-    except Exception:
-        result_queue.put(("err", _tb.format_exc()))
+    except Exception as exc:
+        # what the user asked for, a run's failures listed, what lite does not include, a
+        # backend not installed: the message is the report, as on the command line; a
+        # traceback only for a program error (review cycle 2, R2-11)
+        from eubi_bridge.ebridge import IOBackendUnavailableError
+        from eubi_bridge.utils.capabilities import NeedsFullEubiBridge
+        from eubi_bridge.utils.errors import InputError, TasksFailedError
+        said = (InputError, TasksFailedError, NeedsFullEubiBridge, IOBackendUnavailableError)
+        result_queue.put(("err", str(exc) if isinstance(exc, said) else _tb.format_exc()))
     finally:
         _conv_module.ProcessPoolExecutor = _orig_ppe

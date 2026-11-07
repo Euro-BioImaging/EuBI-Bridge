@@ -205,7 +205,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--max_processes</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Default:</strong>&nbsp; `4`</p>
     <p>Number of files to process in parallel. Formerly `max_workers`, which still works.</p>
     <pre><code># Update 8 OME-Zarr stores in parallel
     eubi update_pixel_meta /data/output --max_processes 8
@@ -271,7 +271,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--channel_intensity_limits</code></summary>
     <p><strong>Type:</strong>&nbsp; `Literal['from_dtype', 'from_array', 'auto']` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Default:</strong>&nbsp; `from_dtype`</p>
     <p>The display windows stay as they are unless this is given. `'from_dtype'` sets the data type's full range, `'from_array'` each channel's lowest and highest value, `'auto'` the 0.1 and 99.9 percentiles of the smallest level, as conversions do.</p>
     <pre><code># Compute per-channel min/max from the pixel data
     eubi update_channel_meta /data/output --channel_intensity_limits from_array
@@ -304,7 +304,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--max_processes</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Default:</strong>&nbsp; `4`</p>
     <p>Number of files to process at once. Formerly `max_workers`, which still works.</p>
     <pre><code># Update 8 OME-Zarr stores in parallel
     eubi update_channel_meta /data/output --max_processes 8

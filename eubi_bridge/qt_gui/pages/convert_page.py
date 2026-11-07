@@ -401,10 +401,13 @@ class ConvertPage(QWidget):
         self._memory_budget.setSingleStep(1.0)
         self._memory_budget.setDecimals(1)
         self._memory_budget.setToolTip(
-            "The memory the whole run may use on this machine, in GB.\n"
-            "auto: half the RAM that is free when the run starts.\n"
+            "The memory eubi may use on this machine, in GB.\n"
+            "auto: half the memory that is free when the run starts (inside a\n"
+            "SLURM job, such as a BARD desktop: what the job's limit leaves).\n"
             "It is shared out between the conversions running at once, and in each\n"
-            "between reading and the scenes converted at once."
+            "between reading and the scenes converted at once.\n"
+            "Runs started side by side (several batches, the GUI and the command\n"
+            "line) share one budget, the smallest of theirs."
         )
         lay.addLayout(_form_row("Memory Budget (GB):", self._memory_budget))
 
@@ -627,7 +630,8 @@ class ConvertPage(QWidget):
         self._mosaic_tile_indices.setEnabled(False)
         self._read_as_mosaic = QCheckBox("Read as Mosaic (stitch tiles)")
         self._read_as_mosaic.setToolTip(
-            "Stitch all tiles into a single continuous mosaic image at read time.\n"
+            "Stitch all tiles into a single continuous mosaic image at read time\n"
+            "(the default). Tiles sit at their stored positions; nothing is blended.\n"
             "When unchecked, each tile is saved as a separate OME-Zarr output.\n"
             "CZI: stitched reading streams each region straight from the file, so\n"
             "memory stays bounded for files of any size. Separate tiles need a\n"
@@ -1489,6 +1493,16 @@ class ConvertPage(QWidget):
         refresh_params_btn.setToolTip("Refresh the parameter tree below with the current UI settings")
         refresh_params_btn.clicked.connect(self._on_refresh_params)
         btn_row.addWidget(refresh_params_btn)
+
+        # each run's log is also on disk, so a crash that takes the desktop leaves it
+        # (Workplan E26)
+        log_folder_btn = QPushButton("Open Log Folder")
+        log_folder_btn.setFixedHeight(30)
+        log_folder_btn.setToolTip(
+            "Each run's log is also written to a file here, line by line, so it\n"
+            "survives a crash (the newest 20 runs are kept).")
+        log_folder_btn.clicked.connect(self._on_open_log_folder)
+        btn_row.addWidget(log_folder_btn)
         run_layout.addLayout(btn_row)
 
         # Batching is unavailable for aggregative conversions, because table input is
@@ -2415,7 +2429,7 @@ class ConvertPage(QWidget):
         self._series_indices.setText(r.get("seriesIndices", ""))
         self._read_all_tiles.setChecked(r.get("readAllTiles", True))
         self._mosaic_tile_indices.setText(r.get("mosaicTileIndices", ""))
-        self._read_as_mosaic.setChecked(r.get("readAsMosaic", False))
+        self._read_as_mosaic.setChecked(r.get("readAsMosaic", True))
         idx = self._as_plate.findData(r.get("asPlate"))
         self._as_plate.setCurrentIndex(max(0, idx))
         self._read_all_views.setChecked(r.get("readAllViews", True))
@@ -2838,6 +2852,15 @@ class ConvertPage(QWidget):
         """Refresh the parameter tree whenever the final tab becomes active."""
         if index == _LAST_TAB:
             self._on_refresh_params()
+
+    def _on_open_log_folder(self):
+        """Show the folder of the run logs in the file manager (created if new)."""
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        from eubi_bridge.utils.run_log import log_folder
+        folder = log_folder()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _on_refresh_params(self):
         """Update the parameter tree with current UI state plus current I/O selections."""

@@ -13,7 +13,11 @@ reference in ``legacy_0_1/``).
 """
 from __future__ import annotations
 
+import gc
+import os
+import sys
 import threading
+import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -42,21 +46,51 @@ STANDARD = "tczyx"
 #: tile of it (dyna write_levels: slabs of e.g. 96 planes); at 32, every file was
 #: opened again for every tile (2347 files x 4 tiles: 6.7 min instead of ~1.3).
 MAX_OPEN_FILES = 128
-#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.2.1,<0.4):
-#: 0.2.x declares the coordinate systems each output is written with (9.18), 0.2.1 reads
-#: the plates and composites 0.3.2 routes to it (MetaMorph, Micro-Manager 2.0, CV7000
-#: timelines, MetaXpress z-series, ...); 0.3.0 adds the plate formats of FORMATS_SINCE
-#: and folds RGB samples by default (eubi asks for what it needs either way); 0.1.x
-#: declares no coordinate systems, and older releases call the series index "scene".
-#: Three components: (major, minor, patch).
-MICRO_READER_RANGE = ((0, 2, 1), (0, 4, 0))
-MICRO_READER_FIX = 'pip install -U "micro-reader>=0.2.1,<0.4"'
+#: the most files one join keeps open (``open_files_for_join``). A join's region spans
+#: many planes (64 z planes of chunks (1, 64, 64, 128)) and several regions are read at
+#: once, so 128 made every region reopen the files of the last: the BARD report
+#: (2026-11-05, 10288 files, Workplan E25) reopened files all the time, each reopen's
+#: objects piled up as garbage and the worker grew past its plan. 1024: 28 % faster, and
+#: with the collection below the worker stayed within its plan (WSL, 4 x 2572 planes).
+JOIN_OPEN_FILES = 1024
+#: file handles kept free for everything else the process opens (stores, logs, libraries)
+SPARE_HANDLES = 256
+#: the part of a conversion process's memory plan the open files of its join may hold.
+#: What one open file holds is its format's metadata (measured 2026-11-05: 0.01-0.2 MB for
+#: CZI, ND2, OIR, DV, MRC, LSM and TIFF samples, 0.9 MB for a LIF, 0.25 MB for a stub
+#: OME-TIFF, 28 MB for an OME-TIFF carrying a 10288-plane set's XML), so the join measures
+#: it on its own files (``open_file_cost_mb``) and keeps no more open than this part holds
+OPEN_FILES_SHARE = 1 / 8
+#: a closed file leaves tifffile's objects (file, pages, tags, handle) in reference
+#: cycles, which Python frees only in a full collection; in a long join that runs rarely,
+#: so they piled up (about 730,000 objects every 30 s in the BARD reproduction) and the
+#: memory they took was not given back. After this many closes the closer collects ...
+COLLECT_AFTER_CLOSES = 256
+#: ... at most this often: a full collection takes up to half a second in a large join
+COLLECT_EVERY_S = 10.0
+#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.4.0,<0.5):
+#: 0.4.0 gives no invented calibration (an axis the file does not size has none), names
+#: images and reads KLB, VSI and the plate formats this release converts; 0.2.x and 0.3.x
+#: invented units in silence. 0.1.x declares no coordinate systems, and older releases call
+#: the series index "scene". Three components: (major, minor, patch).
+MICRO_READER_RANGE = ((0, 4, 0), (0, 5, 0))
+MICRO_READER_FIX = 'pip install -U "micro-reader>=0.4.0,<0.5"'
+#: the ome_zarr_pyramid releases this eubi-bridge writes with (pyproject): 0.6.0 writes no
+#: invented unit (scale 1, no unit) on an axis the file does not size; 0.5 wrote micrometer
+OZP_RANGE = ((0, 6, 0), (0, 7, 0))
+OZP_FIX = 'pip install -U "ome_zarr_pyramid>=0.6.0,<0.7"'
 
 
 class MicroReaderVersionError(ImportError):
     """The installed micro-reader is outside the releases this eubi-bridge reads
     (MICRO_READER_RANGE). Without this, its files would go to the older readers
     without a word (a forced or ``--no-deps`` install that ``pip check`` reports)."""
+
+
+class OzpVersionError(MicroReaderVersionError):
+    """The installed ome_zarr_pyramid is outside OZP_RANGE: its outputs would invent
+    calibration in silence. A MicroReaderVersionError, so it travels from a worker
+    process as that one does (an install error, raised as itself)."""
 
 
 _micro_reader_checked = False
@@ -73,11 +107,18 @@ def _installed_version():
             version = dist_version("micro-reader")
         except Exception:                           # noqa: BLE001 - no version known
             return None, None
-    try:
-        parts = [int(part) for part in str(version).split(".")[:3]]
-    except ValueError:
-        return version, None
-    return version, tuple(parts + [0] * (3 - len(parts)))
+    return version, release_tuple(version)
+
+
+def release_tuple(version) -> Optional[tuple]:
+    """``(major, minor, patch)`` of a version text, a pre-release by its release
+    (``0.5.0rc1``: ``(0, 5, 0)``, so it is outside ``<0.5`` as pip counts it; review
+    cycle 1, N-09: such a text was "unknown" and let through); None without numbers."""
+    import re
+    match = re.match(r"\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(version))
+    if match is None:
+        return None
+    return tuple(int(part or 0) for part in match.groups())
 
 
 def micro_reader_version():
@@ -104,15 +145,45 @@ def require_micro_reader() -> None:
                 why = (" (it declares no coordinate systems; micro-reader 0.2.0 does, "
                        "and this eubi-bridge writes each output's system)")
             elif got < low:
-                why = (" (it lacks the plate and composite fixes of micro-reader 0.2.1 that "
-                       "this eubi-bridge relies on)")
+                why = (" (it invents calibration, an axis the file does not size gets "
+                       "micrometer or second; micro-reader 0.4.0 gives none)")
             else:
                 why = ""
             dots = ".".join
             raise MicroReaderVersionError(
                 f"eubi-bridge needs micro-reader >={dots(map(str, low))},<{high[0]}.{high[1]}, "
                 f"but micro-reader {version} is installed{why}. Fix: {MICRO_READER_FIX}")
+    require_ozp()
     _micro_reader_checked = True
+
+
+_ozp_checked = False
+
+
+def require_ozp() -> None:
+    """Raise OzpVersionError, naming the fix, when the installed ome_zarr_pyramid is
+    outside OZP_RANGE; checked once per process, on every route (the older readers' too).
+    One without a version (a source tree on the path) is taken as it is."""
+    global _ozp_checked
+    if _ozp_checked:
+        return
+    import ome_zarr_pyramid
+    version = getattr(ome_zarr_pyramid, "__version__", None)
+    if version is None:
+        try:
+            from importlib.metadata import version as dist_version
+            version = dist_version("ome_zarr_pyramid")
+        except Exception:                           # noqa: BLE001 - no version known
+            version = None
+    got = None if version is None else release_tuple(version)
+    low, high = OZP_RANGE
+    if version is not None and got is not None and not (low <= got < high):
+        why = (" (it writes micrometer and second on axes the file does not size; 0.6.0 "
+               "writes no unit there)" if got < low else "")
+        raise OzpVersionError(
+            f"eubi-bridge needs ome_zarr_pyramid >={'.'.join(map(str, low))},<{high[0]}.{high[1]}, "
+            f"but ome_zarr_pyramid {version} is installed{why}. Fix: {OZP_FIX}")
+    _ozp_checked = True
 
 
 class _Open:
@@ -125,16 +196,181 @@ class _Open:
 #: (path, tiles, multifile) -> _Open, oldest first
 _files: "OrderedDict[tuple, _Open]" = OrderedDict()
 _files_lock = threading.Lock()
+#: the open-file limits of the joins running in this process (``open_files_for_join``)
+_join_limits: list = []
+#: files closed since the last collection (``_collect_if_due``)
+_closed = 0
+_last_collect = 0.0
+_collect_lock = threading.Lock()
+
+
+def open_files_limit() -> int:
+    """How many files this process keeps open now: MAX_OPEN_FILES, or the largest limit
+    of the joins running in it."""
+    return max([MAX_OPEN_FILES] + _join_limits)
 
 
 def _evict() -> None:
-    """Close the least recently used files beyond MAX_OPEN_FILES that no read
-    is using (a file in use is never closed under a reader)."""
-    while len(_files) > MAX_OPEN_FILES:
+    """Close the least recently used files beyond the open-file limit that no read
+    is using (a file in use is never closed under a reader). Called under _files_lock."""
+    global _closed
+    limit = open_files_limit()
+    while len(_files) > limit:
         idle = next((k for k, e in _files.items() if e.users == 0), None)
         if idle is None:
             return
         _files.pop(idle).file.close()
+        _closed += 1
+
+
+def _collect_if_due() -> None:
+    """Collect the garbage closed files leave (COLLECT_AFTER_CLOSES), outside _files_lock
+    so other reads go on; one thread at a time, at most every COLLECT_EVERY_S."""
+    global _closed, _last_collect
+    if _closed < COLLECT_AFTER_CLOSES or time.monotonic() - _last_collect < COLLECT_EVERY_S:
+        return
+    if not _collect_lock.acquire(blocking=False):
+        return
+    try:
+        with _files_lock:
+            _closed = 0
+        _last_collect = time.monotonic()
+        gc.collect()
+    finally:
+        _collect_lock.release()
+
+
+def _open_for_join(path: str):
+    """*path* opened as a join opens it (``_using``: alone, RGB samples kept, canonical axes)."""
+    return open_renamed(path, tiles="separate", multifile=False, samples="keep",
+                        axes="canonical", plates=False)
+
+
+def open_file_cost_mb(paths) -> Optional[float]:
+    """What one open file of the join of *paths* holds, in MB: Python's allocations while
+    the second file and the last are opened (the most of the two), after the first has
+    warmed what files of a set share (a companion's one parse, the codecs, the caches).
+    Any format: what a file holds is its metadata. None when it cannot be measured (fewer
+    than two files, not micro-reader's)."""
+    import tracemalloc
+    paths = list(dict.fromkeys(str(p) for p in paths))
+    if len(paths) < 2:
+        return None
+    started = not tracemalloc.is_tracing()
+    first = None
+    try:
+        first = _open_for_join(paths[0])
+        if started:
+            tracemalloc.start()
+        cost = 0
+        for path in dict.fromkeys((paths[1], paths[-1])):
+            before = tracemalloc.get_traced_memory()[0]
+            f = _open_for_join(path)
+            try:
+                cost = max(cost, tracemalloc.get_traced_memory()[0] - before)
+            finally:
+                f.close()
+        return cost / 2**20
+    except Exception:                                     # noqa: BLE001 - not measurable
+        return None
+    finally:
+        if started and tracemalloc.is_tracing():
+            tracemalloc.stop()
+        if first is not None:
+            first.close()
+
+
+def _handle_room(wanted: int) -> Optional[int]:
+    """The file handles this process may hold, raised towards *wanted* where the system
+    lets it (the soft limit up to the hard one, RLIMIT_NOFILE); None when unknown.
+    Windows: the C runtime's 8192."""
+    if sys.platform == "win32":
+        return 8192
+    try:
+        import resource
+    except ImportError:
+        return None
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (OSError, ValueError):
+        return None
+    if soft != resource.RLIM_INFINITY and soft < wanted:
+        top = wanted if hard == resource.RLIM_INFINITY else min(wanted, hard)
+        for new in (top, min(top, 10240)):          # macOS refuses more than OPEN_MAX
+            try:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (new, hard))
+                soft = new
+                break
+            except (OSError, ValueError):
+                continue
+    return None if soft == resource.RLIM_INFINITY else int(soft)
+
+
+_join_line_said: set = set()
+
+
+def join_open_files(n_files: int, cost_mb: Optional[float] = None,
+                    memory_mb: Optional[float] = None) -> int:
+    """How many files a join of *n_files* keeps open: all of them up to JOIN_OPEN_FILES,
+    no more than OPEN_FILES_SHARE of the process's memory plan *memory_mb* holds at
+    *cost_mb* each (``open_file_cost_mb``), as many as the process's file handles allow
+    (each open file holds about one per decode thread, plus its own); never fewer than
+    MAX_OPEN_FILES, what a join kept before."""
+    want = min(int(n_files), JOIN_OPEN_FILES)
+    if want <= MAX_OPEN_FILES:
+        return MAX_OPEN_FILES
+    limit, why = want, ""
+    if cost_mb and memory_mb:
+        fit = int(memory_mb * OPEN_FILES_SHARE / max(cost_mb, 1e-3))
+        if fit < limit:
+            limit, why = fit, (f" (each holds about {cost_mb:.1f} MB; "
+                               f"{memory_mb * OPEN_FILES_SHARE:.0f} MB of this process's "
+                               f"{memory_mb:.0f} MB go to open files)")
+    try:
+        import micro_reader
+        per_file = 2 + int(micro_reader.decode_threads())
+    except Exception:                                     # noqa: BLE001 - assume many
+        per_file = 18
+    room = _handle_room(limit * per_file + SPARE_HANDLES)
+    if room is not None and (room - SPARE_HANDLES) // per_file < limit:
+        limit = max(0, room - SPARE_HANDLES) // per_file
+        why = f" (the {room} file handles this process may hold allow no more)"
+    limit = max(MAX_OPEN_FILES, limit)
+    key = (limit, want, why)
+    if key not in _join_line_said:
+        _join_line_said.add(key)
+        logger.info(f"Joining {n_files} files: up to {limit} kept open{why}")
+    return limit
+
+
+@contextmanager
+def open_files_for_join(n_files: int, cost_mb: Optional[float] = None,
+                        memory_mb: Optional[float] = None):
+    """Keep up to ``join_open_files`` files open while the block runs (a join's build and
+    its write); back to the earlier limit afterwards."""
+    limit = join_open_files(n_files, cost_mb, memory_mb)
+    with _files_lock:
+        _join_limits.append(limit)
+    try:
+        yield limit
+    finally:
+        with _files_lock:
+            _join_limits.remove(limit)
+            _evict()
+        _collect_if_due()
+
+
+def open_renamed(path, **options):
+    """``micro_reader.open`` with ``RENAME``.  A file whose backend cannot make
+    ``sequence`` an axis (a BigDataViewer file's setups are no z stack) keeps it as an
+    index: one output per setup (decision E-1)."""
+    import micro_reader
+    try:
+        return micro_reader.open(path, rename=RENAME, **options)
+    except micro_reader.UnsupportedFormatError as exc:
+        if not str(exc).startswith("rename:"):
+            raise
+    return micro_reader.open(path, **options)
 
 
 @contextmanager
@@ -157,9 +393,11 @@ def _using(path: str, tiles: str, multifile: bool = True):
         # input's files are opened on a thread pool); a file two threads opened at
         # once is kept once
         # samples="keep": RGB samples stay an 's' axis, folded into channels here
-        # (micro-reader 0.3.0 folds them by default)
-        opened = micro_reader.open(path, tiles=tiles, rename=RENAME, multifile=bool(multifile),
-                                   samples="keep")
+        # (micro-reader 0.3.0 folds them by default); axes="canonical": t c z y x, a
+        # lambda scan's bands along c (axes="native" would add an axis l, micro-reader
+        # 0.4.0); plates=False: by series, this reader's selection (0.4.0's default is True)
+        opened = open_renamed(path, tiles=tiles, multifile=bool(multifile), samples="keep",
+                              axes="canonical", plates=False)
         with _files_lock:
             entry = _files.get(key)
             if entry is None:
@@ -177,6 +415,7 @@ def _using(path: str, tiles: str, multifile: bool = True):
         with _files_lock:
             entry.users -= 1
             _evict()
+        _collect_if_due()
 
 
 def set_read_concurrency(n: int) -> None:
@@ -211,9 +450,11 @@ def set_read_memory(decode_mb: float, cache_mb: float) -> None:
 
 def close_all() -> None:
     """Close every micro-reader file this process opened."""
+    global _closed
     with _files_lock:
         entries = list(_files.values())
         _files.clear()
+        _closed += len(entries)
     for entry in entries:
         entry.file.close()
 

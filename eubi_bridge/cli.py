@@ -103,6 +103,29 @@ def patch_fire_no_literal_eval_for(*arg_names):
 
 
 # --- Main ---
+def _validation_error():
+    """pydantic's ValidationError (the settings models'), or an error never raised when
+    pydantic is not importable."""
+    try:
+        from pydantic import ValidationError
+        return ValidationError
+    except ImportError:                                         # pragma: no cover
+        return type("NoValidationError", (Exception,), {})
+
+
+def _option_errors(exc) -> list:
+    """'--option: message' per refused value of a pydantic ValidationError."""
+    lines = []
+    for error in exc.errors():
+        option = ".".join(str(part) for part in error.get("loc", ()) if part != "__root__")
+        message = str(error.get("msg", "")).removeprefix("Value error, ")
+        message = message.removeprefix(f"{option}: ")          # said once
+        given = error.get("input")
+        shown = f" (given: {given!r})" if given is not None and not isinstance(given, dict) else ""
+        lines.append(f"--{option}: {message}{shown}" if option else f"{message}{shown}")
+    return lines or [str(exc)]
+
+
 def main():
     import fire
     import sys
@@ -123,9 +146,35 @@ def main():
         "decode_memory",
     )
 
+    # output redirected on Windows is cp1252, without the tables' box characters
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
     # JVM is now lazily initialized only when needed (in to_zarr, show_pixel_meta, etc.)
     # Don't set spawn here - already set at module level
-    result = fire.Fire(EuBIBridge)
+    from eubi_bridge.utils.capabilities import NeedsFullEubiBridge
+    from eubi_bridge.utils.errors import InputError, TasksFailedError
+    from eubi_bridge.ebridge import IOBackendUnavailableError
+    try:
+        result = fire.Fire(EuBIBridge)
+    except (InputError, NeedsFullEubiBridge, IOBackendUnavailableError) as exc:
+        # what the user asked for, or what lite does not include, or a backend that is
+        # not installed (review cycle 1, N-27): the message is the help
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except _validation_error() as exc:
+        # an option's value refused by the settings models (--compressor lzma,
+        # --downscale_method gaussian, --x_scale -1): one line per option, the traceback
+        # buried the message (review cycle 2, R2-18)
+        for line in _option_errors(exc):
+            print(f"ERROR: {line}", file=sys.stderr)
+        sys.exit(1)
+    except TasksFailedError as exc:
+        # the count and each failure in full (the log lines above are cut at 300
+        # characters), no traceback
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
     # If result is an exception, exit with code 1
     if isinstance(result, Exception):
         sys.exit(1)

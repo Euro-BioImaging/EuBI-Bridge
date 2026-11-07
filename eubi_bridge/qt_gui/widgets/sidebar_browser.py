@@ -68,12 +68,18 @@ _LIST_STYLE_DROP_ACTIVE = "QListWidget { border: 2px dashed #4a9eff; }"
 _OPEN_STORE_BG = QColor(74, 158, 255, 70)
 
 _RECENTS_MAX = 3
-_RECENTS_FILE = Path.home() / ".eubi_bridge" / "gui_recents_cache" / "recent_dirs.json"
+
+
+def _recents_file() -> Path:
+    """In the config folder, as EuBIBridge finds it: EUBI_CONFIG_DIR, else ~/.eubi_bridge
+    (read when used, so a run with its own config folder keeps its recents there too)."""
+    folder = os.environ.get("EUBI_CONFIG_DIR") or str(Path.home() / ".eubi_bridge")
+    return Path(folder) / "gui_recents_cache" / "recent_dirs.json"
 
 
 def _load_recents() -> list[str]:
     try:
-        return json.loads(_RECENTS_FILE.read_text())
+        return json.loads(_recents_file().read_text())
     except Exception:
         return []
 
@@ -84,8 +90,9 @@ def _push_recent(path: str) -> None:
         recents.remove(path)
     recents.insert(0, path)
     try:
-        _RECENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _RECENTS_FILE.write_text(json.dumps(recents[:_RECENTS_MAX], indent=2))
+        recents_file = _recents_file()
+        recents_file.parent.mkdir(parents=True, exist_ok=True)
+        recents_file.write_text(json.dumps(recents[:_RECENTS_MAX], indent=2))
     except Exception:
         pass
 
@@ -107,8 +114,12 @@ def _is_selectable(entry: FileEntry) -> bool:
 
     A ticked folder used to reach the reader as if it were an image and fail
     with an unsupported-format error.  Picking a folder's files is what
-    Select All is for, and it shows exactly which files that means.
+    Select All is for, and it shows exactly which files that means. A macOS ._ stub
+    (``._name.tiff``) holds no image: Select All left it among a joined group's files,
+    which then failed the whole batch (review cycle 1, N-06).
     """
+    if entry["name"].startswith("._"):
+        return False
     return entry["isOmeZarr"] or not entry["isDirectory"]
 
 

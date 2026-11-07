@@ -253,12 +253,14 @@ def test_companion_members_are_joined_one_file_each(tmp_path):
 
 def test_many_files_never_stay_open_together(tmp_path, monkeypatch):
     """600 files joined along t through micro-reader's bounded file cache (shrunk to 8
-    here): it never holds more than that plus the files being read at that moment (one
-    per opening thread; a file in use is not closed under its reader), and every plane
+    here, for one input and for a join: a join keeps up to JOIN_OPEN_FILES open, 0.3.4):
+    it never holds more than that plus the files being read at that moment (one per
+    opening thread; a file in use is not closed under its reader), and every plane
     lands in its place."""
     from eubi_bridge.conversion import aggregative_path
     from eubi_bridge.core import micro_source
     monkeypatch.setattr(micro_source, "MAX_OPEN_FILES", 8)
+    monkeypatch.setattr(micro_source, "JOIN_OPEN_FILES", 8)
     src = tmp_path / "in"
     src.mkdir()
     n = 600

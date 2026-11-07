@@ -621,7 +621,7 @@ def read_czi(
 
     if as_mosaic or n_tiles <= 1:
         if as_mosaic and n_tiles <= 1:
-            logger.warning(
+            logger.debug(
                 f"'{input_path}': as_mosaic=True has no effect — the image has a "
                 f"single tile (nothing to stitch)."
             )

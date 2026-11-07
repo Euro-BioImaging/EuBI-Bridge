@@ -334,11 +334,19 @@ def abbreviate_units(measure: str) -> str:
         "millimeter": "mm", "centimeter": "cm", "decimeter": "dm",
         "meter": "m", "decameter": "dam", "hectometer": "hm",
         "kilometer": "km", "micrometer": "µm", "nanometer": "nm",
-        "picometer": "pm",
+        "picometer": "pm", "femtometer": "fm", "attometer": "am", "zeptometer": "zm",
+        "yoctometer": "ym", "megameter": "Mm", "gigameter": "Gm", "terameter": "Tm",
+        "petameter": "Pm", "exameter": "Em", "zettameter": "Zm", "yottameter": "Ym",
+        "inch": "in", "foot": "ft", "yard": "yd", "mile": "mi", "parsec": "pc",
         # angstrom: official symbol Å; Bio-Formats / older OME also use plain "A"
         "angstrom": "Å", "angström": "Å",
         "second": "s", "millisecond": "ms",
-        "microsecond": "µs", "nanosecond": "ns", "minute": "min", "hour": "h",
+        "microsecond": "µs", "nanosecond": "ns", "minute": "min", "hour": "h", "day": "d",
+        "picosecond": "ps", "femtosecond": "fs", "attosecond": "as", "zeptosecond": "zs",
+        "yoctosecond": "ys", "centisecond": "cs", "decisecond": "ds", "decasecond": "das",
+        "hectosecond": "hs", "kilosecond": "ks", "megasecond": "Ms", "gigasecond": "Gs",
+        "terasecond": "Ts", "petasecond": "Ps", "exasecond": "Es", "zettasecond": "Zs",
+        "yottasecond": "Ys",
     }
     if measure in abbreviations.values():
         return measure
@@ -389,6 +397,7 @@ def create_ome_xml(
         dtype: str = "uint8",
         image_name: str = "Default Image",
         channel_names: list = None,
+        channel_wavelengths: list = None,
 ) -> OME:
     """Build an OME metadata object from image shape and physical metadata."""
     fullaxes = 'xyczt'
@@ -402,14 +411,12 @@ def create_ome_xml(
         'physical_size_y': pixel_size_y,
         'physical_size_x': pixel_size_x,
     }
+    # an axis without a size has none in the XML: no 1 µm or 1 s nobody measured
     pixel_size_map = {}
     for ax in 'tzyx':
-        if ax == 't':
-            if ax in axis_order.lower():
-                pixel_size_map['time_increment'] = pixel_size_t or 1
-        else:
-            if ax in axis_order.lower():
-                pixel_size_map[f'physical_size_{ax}'] = pixel_size_basemap[f'physical_size_{ax}'] or 1
+        name = 'time_increment' if ax == 't' else f'physical_size_{ax}'
+        if ax in axis_order.lower() and pixel_size_basemap[name]:
+            pixel_size_map[name] = pixel_size_basemap[name]
 
     unit_basemap = {
         'time_increment_unit': unit_t,
@@ -420,10 +427,10 @@ def create_ome_xml(
     unit_map_ = {}
     for ax in 'tzyx':
         if ax == 't':
-            if ax in axis_order.lower():
+            if 'time_increment' in pixel_size_map:
                 unit_map_['time_increment_unit'] = unit_t or 'second'
         else:
-            if ax in axis_order.lower():
+            if f'physical_size_{ax}' in pixel_size_map:
                 unit_map_[f'physical_size_{ax}_unit'] = unit_basemap[f'physical_size_{ax}_unit'] or 'MICROMETER'
     unit_map_ = {k: abbreviate_units(v) for k, v in unit_map_.items() if v is not None}
 
@@ -440,17 +447,24 @@ def create_ome_xml(
     size_map_ = dict(zip(axis_order.lower(), image_shape))
     size_map = {f'size_{ax}': size_map_.get(ax, 1) for ax in fullaxes}
 
-    if channel_names is None or len(channel_names) != size_map['size_c']:
-        channels = [Channel(id=f"Channel:{i}", samples_per_pixel=1)
-                    for i in range(size_map['size_c'])]
-    else:
-        channels = [Channel(id=f"Channel:{i}", samples_per_pixel=1, name=channel_names[i])
-                    for i in range(size_map['size_c'])]
+    named = channel_names is not None and len(channel_names) == size_map['size_c']
+    waves = (list(channel_wavelengths) if channel_wavelengths is not None
+             and len(channel_wavelengths) == size_map['size_c'] else [None] * size_map['size_c'])
+    channels = []
+    for i in range(size_map['size_c']):
+        fields = {"name": channel_names[i]} if named else {}
+        for key in ("emission_wavelength", "excitation_wavelength"):
+            q = (waves[i] or {}).get(key) if isinstance(waves[i], dict) else None
+            unit = abbreviate_units(q["unit"]) if q and q.get("unit") else None
+            if q and q.get("value") is not None and unit not in (None, "Unknown"):
+                fields[key], fields[f"{key}_unit"] = float(q["value"]), unit
+        channels.append(Channel(id=f"Channel:{i}", samples_per_pixel=1, **fields))
 
+    # MetadataOnly: the pixels are the store's; the schema asks for one of its kind
     pixels = Pixels(
         dimension_order=Pixels_DimensionOrder(fullaxes.upper()),
         **size_map, type=dtype_map[dtype],
-        **pixel_size_map, **unit_map_, channels=channels,
+        **pixel_size_map, **unit_map_, channels=channels, metadata_only=True,
     )
     return OME(images=[Image(id="Image:0", name=image_name, pixels=pixels)])
 

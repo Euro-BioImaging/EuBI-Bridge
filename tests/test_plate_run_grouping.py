@@ -85,7 +85,13 @@ def test_a_folder_row_stands_for_its_one_image_or_plate():
     except TypeError:
         pytest.skip("this micro-reader does not group plate runs (before 0.3.0)")
     (main,) = input_mains([str(RUN)])
-    assert Path(main).parent == RUN and main.endswith(".nd2")
+    # micro-reader 0.4.0 opens the run folder as its plate (plates=True): the folder
+    # stays the input; before, its first file. Both are named after the run folder
+    assert Path(main) == RUN or (Path(main).parent == RUN and main.endswith(".nd2"))
+    # a sample folder over the run (micro-reader 0.4.0 opens it too, by its one dataset
+    # below) converts the run, named after the run, not after the sample folder
+    (above,) = input_mains([str(RUN.parent)])
+    assert Path(above) == RUN or Path(above).parent == RUN
     ndtiff = DATA / "formats" / "tiff" / "ndtiff" / "github-NDTiffStorage" / "v3"
     if ndtiff.exists():
         (levels,) = input_mains([str(ndtiff / "Magellan_expolore_multi_channel")])

@@ -3,7 +3,7 @@
 A file micro-reader reads as a plate (Harmony, CellVoyager, MetaXpress, IN Cell, a CZI
 holding a plate) is written as ONE NGFF plate store in the OME-Zarr version asked for
 (0.4, 0.5, 0.6, RFC 8): every field with the job's settings, each keeping its coordinate
-system. A plate whose fields hold several tiles needs as_mosaic in 0.4 / 0.5 / 0.6 (an
+system. A plate whose fields hold several tiles needs them stitched in 0.4 / 0.5 / 0.6 (an
 NGFF plate holds one image per field); RFC 8 keeps the tiles. as_plate=False writes one
 store per image, with a warning. Images outside the plate (a CZI's slide preview) are not
 written, with a warning.
@@ -19,7 +19,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
+import zarr
 
 micro_reader = pytest.importorskip("micro_reader")
 ozp = pytest.importorskip("ome_zarr_pyramid")
@@ -157,7 +159,7 @@ def test_as_plate_false_writes_each_image_and_warns(tmp_path):
 @pytest.mark.parametrize("version", ["0.4", "0.5", "0.6"])
 def test_tiled_fields_need_as_mosaic_in_ngff_plates(tmp_path, version):
     src = _needs(CZI_TILED)
-    code, log = _run(src, tmp_path / "out", ["--ome_zarr_version", version])
+    code, log = _run(src, tmp_path / "out", ["--ome_zarr_version", version, "--as_mosaic", "False"])
     assert code != 0
     assert "holds one image per field" in log and "as_mosaic=True" in log
     assert not list((tmp_path / "out").glob("*.zarr"))
@@ -165,7 +167,7 @@ def test_tiled_fields_need_as_mosaic_in_ngff_plates(tmp_path, version):
 
 def test_tiled_fields_stitched_make_a_plate(tmp_path):
     src = _needs(CZI_TILED)
-    code, log = _run(src, tmp_path / "out", ["--ome_zarr_version", "0.6", "--as_mosaic", "True"])
+    code, log = _run(src, tmp_path / "out", ["--ome_zarr_version", "0.6"])
     assert code == 0, log[-3000:]
     (store,) = (tmp_path / "out").glob("*.zarr")
     coll, plate = _plate(store)
@@ -174,7 +176,7 @@ def test_tiled_fields_stitched_make_a_plate(tmp_path):
 
 def test_rfc8_keeps_the_tiles_of_a_field(tmp_path):
     src = _needs(CZI_TILED)
-    code, log = _run(src, tmp_path / "out", ["--ome_zarr_version", "rfc8"])
+    code, log = _run(src, tmp_path / "out", ["--ome_zarr_version", "rfc8", "--as_mosaic", "False"])
     assert code == 0, log[-3000:]
     (store,) = (tmp_path / "out").glob("*.zarr")
     coll, plate = _plate(store)
@@ -222,16 +224,24 @@ def test_an_ome_zarr_plate_converts_to_every_version_keeping_its_fields(tmp_path
     assert [w.name for w in plate.wells] == ["B2"]
 
 
-def test_a_fractal_plate_keeps_its_acquisitions_and_says_its_labels_are_not_written(tmp_path):
+def test_a_fractal_plate_keeps_its_acquisitions_and_its_labels(tmp_path):
     if not FRACTAL.exists():
         pytest.skip(f"sample not here: {FRACTAL}")
     code, log = _run(FRACTAL, tmp_path / "out", ["--ome_zarr_version", "0.5"])
     assert code == 0, log[-3000:]
-    assert "hold label images (org); they are not written" in log
+    assert "they are not written" not in log
     (store,) = (tmp_path / "out").glob("*.zarr")
     coll, plate = _plate(store)
     assert sorted(dict(k)["acquisition"] for k in coll) == [0, 1]
     assert [w.name for w in plate.wells] == ["C02"]
+    for field in ("0", "1"):
+        where = f"C/02/{field}/labels/org"
+        before = zarr.open_group(FRACTAL / where, mode="r")["0"]
+        after = zarr.open_group(store / where, mode="r")["0"]
+        image = zarr.open_group(store / f"C/02/{field}", mode="r")["0"]
+        # the labels follow the image's squeeze, plane for plane
+        assert after.shape == image.shape[-after.ndim:]
+        assert np.array_equal(after[:], np.squeeze(before[:]))
 
 
 def test_an_ome_zarr_plate_with_as_plate_false_is_refused(tmp_path):

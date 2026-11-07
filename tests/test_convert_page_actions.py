@@ -379,9 +379,9 @@ class TestBatchClusterSettings:
         import json
         from eubi_bridge.qt_gui.core.batch import config_snapshot_path
         from eubi_bridge.qt_gui.pages import convert_page
+        page._read_as_mosaic.setChecked(False)          # a batch takes the tabs when queued
         _queue(page, tmp_path, 2)
         page._max_processes.setValue(3)
-        page._read_as_mosaic.setChecked(False)
         written = page._batch_save_to(str(tmp_path / "batch.csv"))
         snapshot = json.loads(Path(config_snapshot_path(written)).read_text())
         assert snapshot["cluster"]["maxProcesses"] == 3   # recorded for reference
@@ -428,3 +428,15 @@ class TestBatchClusterSettings:
         answer(convert_page.QMessageBox.StandardButton.Yes)
         page._on_batch_load()
         assert len(page._batch) == 2             # Yes: the saved batch replaces it
+
+def test_open_log_folder_shows_the_run_logs(page, tmp_path, monkeypatch):
+    """Workplan E26: each run's log is on disk; the Run tab opens its folder."""
+    from PyQt6.QtGui import QDesktopServices
+    from PyQt6.QtWidgets import QPushButton
+    monkeypatch.setenv("EUBI_CONFIG_DIR", str(tmp_path / "cfg"))
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    (button,) = [b for b in page.findChildren(QPushButton) if b.text() == "Open Log Folder"]
+    button.click()
+    assert [Path(u.toLocalFile()) for u in opened] == [tmp_path / "cfg" / "logs"]
+    assert (tmp_path / "cfg" / "logs").is_dir()

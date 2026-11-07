@@ -306,9 +306,13 @@ def test_reader_illumination_extraction(tmp_path):
 # ===========================================================================
 
 def test_reader_tile_combination(tmp_path):
-    """as_mosaic True -> tiles stitched into a single OME-Zarr (scene 0)."""
+    """as_mosaic True -> tiles stitched into a single OME-Zarr (scene 0). The file is a
+    two-well plate (B2, B3): its scenes are chosen with --as_plate False (a series of a
+    plate is refused since review cycle 1, N-23; before, the option was ignored and the
+    whole plate written, one store, which this test took for the stitched scene)."""
     out = tmp_path / "o"
-    _convert(_path("czi_mosaic"), out, "--series_index", "0", "--as_mosaic", "True")
+    _convert(_path("czi_mosaic"), out, "--series_index", "0", "--as_mosaic", "True",
+             "--as_plate", "False")
     z = _output_zarrs(out)
     assert len(z) == 1, f"mosaic combination expected 1 output, got {len(z)}"
 

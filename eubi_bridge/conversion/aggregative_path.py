@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 from eubi_bridge.conversion.pyramid_path import SERIES
+from eubi_bridge.utils.errors import InputError
 from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -44,6 +45,8 @@ _FAMILIES = {".ome.tif": "TIFF", ".ome.tiff": "TIFF", ".ome.btf": "TIFF", ".tif"
              ".tiff": "TIFF", ".btf": "TIFF", ".ome.zarr": "OME-Zarr", ".zarr": "OME-Zarr"}
 #: files opened at once while the inputs are read
 OPEN_THREADS = 16
+#: image indices a joined output takes one value of, by --<index>_index
+PICKED_INDICES = ("view", "illumination", "rotation", "phase")
 
 
 # -- the parent: file names only ---------------------------------------------------------
@@ -77,7 +80,7 @@ def screen_group(paths: list, output: str = "") -> list:
         main = ranked[0][0]
         odd = [p for _, group in ranked[1:] for p in group]
         listed = ", ".join(os.path.basename(p) for p in odd[:10])
-        raise ValueError(
+        raise InputError(
             f"Aggregative conversion{f' of {output}' if output else ''}: the files to join "
             f"are of {len(families)} formats ({', '.join(f'{len(g)} {f}' for f, g in ranked)}). "
             f"Files joined into one image must be of one format. Not {main}: {listed}"
@@ -96,8 +99,14 @@ def _axis_list(concatenation_axes) -> list:
 
 
 def _tags(job_kwargs: dict) -> dict:
-    return {f"axis_tag{i}": job_kwargs.get(name) for i, name in
-            enumerate(("time_tag", "channel_tag", "z_tag", "y_tag", "x_tag"))}
+    return {**{f"axis_tag{i}": job_kwargs.get(name) for i, name in
+               enumerate(("time_tag", "channel_tag", "z_tag", "y_tag", "x_tag"))},
+            "tag_folders": job_kwargs.get("tag_folders")}
+
+
+def _is_dask(array) -> bool:
+    from eubi_bridge.utils.optional_deps import is_dask_array
+    return is_dask_array(array)
 
 
 def _as_tczyx(array, axes: str):
@@ -136,16 +145,18 @@ class _Inputs:
         self.all_scenes = scene == ALL_SCENES
         self.scene = 0 if self.all_scenes else scene
         self._legacy: dict = {}
+        #: {file: its _picks}: the image the metadata comes from is the image joined
+        self._picked: dict = {}
 
     def _one_scene(self, path: str, count: int) -> None:
         if self.all_scenes and count != 1:
             # 0.1.5 folded the series into the joined axis (positions became time
             # points); an aggregative output joins ONE series of each file
-            raise ValueError(
+            raise InputError(
                 f"Aggregative conversion joins one series of each file, and "
                 f"{os.path.basename(path)} has {count} series. Choose the series with "
-                f"--series_index (0 to {count - 1}); for every series, run once per "
-                f"series.")
+                f"--series_index (0 to {count - 1}), with --as_plate False if it is a plate; "
+                f"for every series, run once per series.")
 
     # -- pixels --------------------------------------------------------------
     def array(self, path: str):
@@ -155,15 +166,71 @@ class _Inputs:
         if not _micro_reason(job):
             # each file alone, also a member of a multi-file OME set: this path joins
             # the files itself (micro-reader's multifile=True would open the set)
-            arr, why = micro_array(path, self.scene, None, multifile=False)
-            if arr is not None:
-                if self.all_scenes:
-                    with _using(path, "separate", multifile=False) as entry:
-                        self._one_scene(path, len({k[SERIES] for k in entry.file.indices}))
-                return arr
+            # tiles stitched by the job's rule, as the metadata is read (image): tiles that
+            # cannot be placed stay separate there and here
+            tile = self._chosen_tile()
+            why = ""
+            for tiles in ("mosaic", "separate") if job.readers.as_mosaic else ("separate",):
+                self._picked[path] = picks = self._picks(path, tiles)
+                arr, why = micro_array(path, self.scene, tile, as_mosaic=tiles == "mosaic",
+                                       multifile=False, **picks)
+                if arr is not None:
+                    if self.all_scenes:
+                        with _using(path, tiles, multifile=False) as entry:
+                            self._one_scene(path, len({k[SERIES] for k in entry.file.indices}))
+                    return arr
             logger.info(f"{os.path.basename(path)}: older readers ({why})")
         image = self._legacy_image(path)
-        return _as_tczyx(image.array, image.axes)
+        array = image.array
+        # a zarr or numpy array of the older readers: the join takes lazy arrays
+        if not hasattr(array, "_with_transform") and not _is_dask(array):
+            from dyna_zarr import from_array
+            array = from_array(array)
+        return _as_tczyx(array, image.axes)
+
+    def _chosen_tile(self):
+        """The tile joined from each file, None without a choice (a joined output holds one
+        image of each file)."""
+        value = self.job.readers.mosaic_tile_index
+        if value in (None, "all"):
+            return None
+        if isinstance(value, (list, tuple)) or "," in str(value):
+            raise InputError(f"A joined output holds one tile of each file: --mosaic_tile_index "
+                             f"{value} names several. Run once per tile.")
+        return int(value)
+
+    def _picks(self, path: str, tiles: str) -> dict:
+        """{view, illumination, rotation, phase: position among the file's}. A joined output
+        holds one of each, as it holds one series: a file with several needs a choice, and
+        the others would otherwise be left out in silence. {} for a file not read here."""
+        from eubi_bridge.core.micro_source import _using
+        readers, name = self.job.readers, os.path.basename(path)
+        try:
+            with _using(path, tiles, multifile=False) as entry:
+                indices = [dict(k) for k in entry.file.indices]
+        except Exception as exc:                        # noqa: BLE001 - micro_array says why
+            logger.debug(f"{name}: {exc}")
+            return {}
+        picks = {}
+        for index in PICKED_INDICES:
+            count = len({k[index] for k in indices if index in k})
+            value = getattr(readers, f"{index}_index", 0)
+            if value in (None, "all"):
+                if count > 1:
+                    raise InputError(f"{name} has {count} {index}s, and a joined output holds "
+                                     f"one. Choose it with --{index}_index (0 to {count - 1}); "
+                                     f"for every {index}, run once each.")
+                value = 0
+            if isinstance(value, (list, tuple)) or "," in str(value):
+                raise InputError(f"A joined output holds one {index} of each file: "
+                                 f"--{index}_index {value} names several. Run once each.")
+            if not 0 <= int(value) < max(count, 1):
+                raise InputError(f"{name}: no {index} {value} (it has {max(count, 1)}).")
+            picks[index] = int(value)
+        tile, count = self._chosen_tile(), len({k["tile"] for k in indices if "tile" in k})
+        if tile is not None and tiles == "separate" and not 0 <= tile < max(count, 1):
+            raise InputError(f"{name}: no tile {tile} (it has {max(count, 1)}).")
+        return picks
 
     def _legacy_file(self, path: str):
         if path not in self._legacy:
@@ -173,12 +240,24 @@ class _Inputs:
             self._legacy[path] = NgffFile(job) if is_zarr_group(path) else LegacyFile(job)
         return self._legacy[path]
 
+    def _refuse_picks(self, path: str) -> None:
+        """The older readers join each file's first view, illumination and tile: one asked
+        for is refused, not swapped for the first."""
+        readers = self.job.readers
+        for option, value in [(f"{index}_index", getattr(readers, f"{index}_index", 0))
+                              for index in PICKED_INDICES] + [
+                ("mosaic_tile_index", self._chosen_tile())]:
+            if value not in (None, "all", 0, "0"):
+                raise InputError(f"{os.path.basename(path)}: --{option} {value} needs "
+                                 f"micro-reader: the older readers join each file's first.")
+
     def _legacy_image(self, path: str):
+        self._refuse_picks(path)
         f = self._legacy_file(path)
         keys = sorted({int(k[SERIES]) for k in f.indices})
         self._one_scene(path, len(keys))
         if not 0 <= self.scene < len(keys):
-            raise ValueError(f"{os.path.basename(path)}: no series {self.scene} (it has "
+            raise InputError(f"{os.path.basename(path)}: no series {self.scene} (it has "
                              f"{len(keys)})")
         first = next(k for k in f.indices if int(k[SERIES]) == keys[self.scene])
         return f.image(first)
@@ -194,13 +273,26 @@ class _Inputs:
         except NotYet:
             return self._legacy_image(path)
         try:
+            if any(SERIES not in k for k in f.indices):
+                raise InputError(f"{os.path.basename(path)} is a plate: its images have no "
+                                 f"series to join. Convert the plates one by one, or add "
+                                 f"--as_plate False to join them by series.")
             scenes = sorted({k[SERIES] for k in f.indices})
             if not 0 <= self.scene < len(scenes):
-                raise ValueError(f"{os.path.basename(path)}: no series {self.scene} (it "
+                raise InputError(f"{os.path.basename(path)}: no series {self.scene} (it "
                                  f"has {len(scenes)})")
-            # the series' first image (a mosaic's tile 0, as 0.1.5 read it)
-            index = min((k for k in f.indices if k[SERIES] == scenes[self.scene]),
-                        key=lambda k: tuple(k.values()))
+            # the series' first image of those chosen: with its tiles separate, its tile 0
+            here = [k for k in f.indices if k[SERIES] == scenes[self.scene]]
+            for index, at in self._picked.get(path, {}).items():
+                values = sorted({k[index] for k in here if index in k})
+                if values:
+                    here = [k for k in here if k[index] == values[at]]
+            tile = self._chosen_tile()
+            here = [k for k in here if k.get("tile") == tile] or here if tile is not None else here
+            if tile is None and len({k.get("tile") for k in here}) > 1:
+                logger.warning(f"{os.path.basename(path)}: its tiles are not stitched: only "
+                               f"its first tile is joined.")
+            index = min(here, key=lambda k: tuple(k.values()))
             image = f.image(tuple(index.items()))
             meta = image.metadata
             source = getattr(image, "source", image)
@@ -240,13 +332,13 @@ def _check_agreement(paths: list, arrays: list, joined: list) -> None:
     for path, arr in zip(paths[1:], arrays[1:]):
         name = os.path.basename(path)
         if np.dtype(arr.dtype) != np.dtype(ref.dtype):
-            raise ValueError(
+            raise InputError(
                 f"Aggregative conversion: {name} has pixel type {np.dtype(arr.dtype)}, "
                 f"{first} has {np.dtype(ref.dtype)}. Files joined into one image must have "
                 f"one pixel type.")
         for axis, letter in enumerate(AXES):
             if axis not in joined and arr.shape[axis] != ref.shape[axis]:
-                raise ValueError(
+                raise InputError(
                     f"Aggregative conversion: {name} has {arr.shape[axis]} along {letter}, "
                     f"{first} has {ref.shape[axis]}. Files joined along {along} must have "
                     f"the same size on the other axes (shapes {tuple(arr.shape)} and "
@@ -279,7 +371,7 @@ def _refuse_multifile_ome(paths: list) -> None:
     named |= set(re.findall(r'MetadataFile="([^"]+)"', xml))
     others = sorted({os.path.basename(n.replace("\\", "/")) for n in named} & inputs - {own})
     if others:
-        raise ValueError(
+        raise InputError(
             f"Aggregative conversion: {own} is part of a multi-file OME-TIFF: its OME-XML "
             f"refers to {len(others)} of the other input files ({', '.join(others[:3])}"
             f"{', ...' if len(others) > 3 else ''}). Such a file opens as the whole set, so "
@@ -296,18 +388,33 @@ def _channel_groups(paths: list, job_kwargs: dict) -> list:
         return [paths[0]]
     groups = fs._split_by(tag)
     if not groups:
-        raise ValueError(channel_tag_format_error(tag))
+        raise InputError(channel_tag_format_error(tag))
     return [group[0] for group in groups.values()]
 
 
-def _channels(samples: list, images: dict, sizes: dict, total: int, job_kwargs: dict) -> list:
+def _tag_names(samples: list, paths: list, job_kwargs: dict) -> dict:
+    """{sample file: the name its channel tag gives it}, for a list of channel tags (named
+    channels); empty for a numbered channel tag or none. Read as the run read them."""
+    from eubi_bridge.conversion.fileset_io import FileSet
+    fs = FileSet(paths, shapes=[(1,) * 5] * len(paths), **_tags(job_kwargs))
+    tag = fs.axis_tags[1]
+    if not isinstance(tag, tuple):
+        return {}
+    return {path: fs._places[tag][path] for path in samples if path in fs._places[tag]}
+
+
+def _channels(samples: list, images: dict, sizes: dict, total: int, job_kwargs: dict,
+              names: dict = None) -> list:
     """The output's channels: each sample file's own (RGB samples named and tinted as a
     single file's: ``rgb_sample_channels``; a file listing another count than it has:
     that many unnamed ones), joined; with override_channel_names and a list of channel
-    tags, the tags are the names."""
+    tags, each file's channels take its own tag's name (*names*, ``_tag_names``): the
+    name, or name_0, name_1, ... for a file of several channels. That holds whether the
+    channels are joined into one output or each is an output of its own."""
     from eubi_bridge.conversion.pyramid_path import rgb_sample_channels
     blank = SimpleNamespace(name=None, color=None, emission_wavelength=None,
                             excitation_wavelength=None)
+    override = bool(job_kwargs.get("override_channel_names")) and bool(names)
     out = []
     for path in samples:
         own = list(images[path].metadata.channels)
@@ -316,7 +423,15 @@ def _channels(samples: list, images: dict, sizes: dict, total: int, job_kwargs: 
             # an unnamed single RGB channel has no label: numbered in the output
             own = [SimpleNamespace(name=label, color=color, emission_wavelength=None,
                                    excitation_wavelength=None) for label, color in rgb]
-        out.extend(own if len(own) == sizes[path] else [blank] * sizes[path])
+        own = own if len(own) == sizes[path] else [blank] * sizes[path]
+        if override and names.get(path):
+            name = str(names[path])
+            labels = [name] if len(own) == 1 else [f"{name}_{k}" for k in range(len(own))]
+            own = [SimpleNamespace(name=label, color=getattr(ch, "color", None),
+                                   emission_wavelength=getattr(ch, "emission_wavelength", None),
+                                   excitation_wavelength=getattr(ch, "excitation_wavelength", None))
+                   for label, ch in zip(labels, own)]
+        out.extend(own)
     if len(out) != total:
         return []                                  # say nothing: ozp generates them
     # an unnamed channel without a colour takes eubi-bridge's default colour for its
@@ -328,15 +443,6 @@ def _channels(samples: list, images: dict, sizes: dict, total: int, job_kwargs: 
                            excitation_wavelength=getattr(ch, "excitation_wavelength", None))
            if not getattr(ch, "name", None) and not getattr(ch, "color", None) else ch
            for idx, ch in enumerate(out)]
-    tag = job_kwargs.get("channel_tag")
-    if isinstance(tag, str) and "," in tag:
-        tag = tag.split(",")
-    if job_kwargs.get("override_channel_names") and isinstance(tag, (list, tuple)):
-        out = [SimpleNamespace(name=str(name), color=getattr(ch, "color", None),
-                               emission_wavelength=getattr(ch, "emission_wavelength", None),
-                               excitation_wavelength=getattr(ch, "excitation_wavelength", None))
-               if idx < len(tag) and (name := tag[idx]) else ch
-               for idx, ch in enumerate(out)]
     return out
 
 
@@ -369,7 +475,7 @@ def _scene(job_kwargs: dict):
         return int(value)
     except (TypeError, ValueError):
         # 0.1.5 crashed on a list (TypeError in set_scene)
-        raise ValueError(
+        raise InputError(
             f"Aggregative conversion joins one series of each file: --series_index "
             f"{value!r} names several. Give one series index; for several series, run "
             f"once per series.") from None
@@ -386,6 +492,8 @@ def _build_entry(paths: list, job, job_kwargs: dict):
     from eubi_bridge.core.output_store import _ozp_version
 
     paths = natsorted(str(p) for p in paths)
+    # the output's first file, whose metadata it takes, is the first by its tags
+    paths = FileSet(paths, shapes=[(1,) * 5] * len(paths), **_tags(job_kwargs)).in_order()
     scene = _scene(job_kwargs)
     joined_axes = _axis_list(job_kwargs.get("concatenation_axes"))
     _refuse_multifile_ome(paths)
@@ -416,7 +524,8 @@ def _build_entry(paths: list, job, job_kwargs: dict):
         image = LegacyImage(
             array=array, axes=AXES, index={SERIES: scene}, name=images[paths[0]].name,
             pixel_sizes=first.pixel_sizes,
-            channels=_channels(samples, images, sizes, int(array.shape[1]), job_kwargs),
+            channels=_channels(samples, images, sizes, int(array.shape[1]), job_kwargs,
+                               _tag_names(samples, paths, job_kwargs)),
             position=first.position, index_values=first.index_values,
             coordinate_system=getattr(first, "coordinate_system", None))
         version = _ozp_version(job.conversion.zarr_format, job.conversion.ome_zarr_version)
@@ -437,8 +546,12 @@ def _build_entry(paths: list, job, job_kwargs: dict):
 
 async def convert_group(file_paths: list, output_path: str, job_kwargs: dict) -> None:
     """Convert one output's files: joined into one Pyramid, one ``write_pyramid`` call."""
+    from natsort import natsorted
+
     from eubi_bridge.conversion.conversion_worker import _convert_safely
-    from eubi_bridge.conversion.pyramid_path import _convert_entry, _retired_settings
+    from eubi_bridge.conversion.fileset_io import FileSet
+    from eubi_bridge.conversion.pyramid_path import (_convert_entry, _retired_settings,
+                                                     _warn_dtype, _warn_uncalibrated)
     from eubi_bridge.core.config_models import ConversionJob
 
     if job_kwargs.get("metadata_reader", "micro") == "micro":
@@ -446,17 +559,30 @@ async def convert_group(file_paths: list, output_path: str, job_kwargs: dict) ->
         job_kwargs = {**job_kwargs, "pixel_reader": "micro"}
     if job_kwargs.get("dtype", "auto") == "auto":
         job_kwargs = {**job_kwargs, "dtype": None}         # the source's (as 0.1.x's ozp writer)
-    # a mosaic file is read as its first tile, pixels and metadata alike (0.1.5 never
-    # passed as_mosaic on to the files it joins)
-    job_kwargs = {**job_kwargs, "as_mosaic": False}
     out = output_path if str(output_path).endswith(".zarr") else f"{output_path}.zarr"
-    paths = [str(p) for p in file_paths]
+    # the first file by its tags, as in _build_entry: the warnings name the file whose
+    # metadata the output takes
+    paths = FileSet(natsorted(str(p) for p in file_paths), shapes=[(1,) * 5] * len(file_paths),
+                    **_tags(job_kwargs)).in_order()
     job = ConversionJob.from_kwargs(input_path=paths[0], output_path=out, kwargs=job_kwargs)
-    entry, inputs = await asyncio.to_thread(_build_entry, paths, job, job_kwargs)
-    logger.info(f"{out}: {len(paths)} file(s) joined along "
-                f"{job_kwargs.get('concatenation_axes')}")
-    _retired_settings(job)
-    try:
-        await _convert_safely(_convert_entry(entry, out, job, asyncio.Semaphore(1)), out)
-    finally:
-        inputs.close()
+    from eubi_bridge.core import memory
+    from eubi_bridge.core.micro_source import (MAX_OPEN_FILES, open_file_cost_mb,
+                                               open_files_for_join)
+    # a join keeps more files open than one input (JOIN_OPEN_FILES), as many as an eighth of
+    # this process's memory plan holds at what one of its files holds: with the 128 of one
+    # input every region reopened the files of the last (Workplan E25, BARD report)
+    cost = (await asyncio.to_thread(open_file_cost_mb, paths)
+            if len(paths) > MAX_OPEN_FILES and job_kwargs.get("pixel_reader") == "micro"
+            else None)
+    plan = job.cluster.process_memory_mb or memory.process_mb(job.cluster)
+    with open_files_for_join(len(paths), cost, plan):
+        entry, inputs = await asyncio.to_thread(_build_entry, paths, job, job_kwargs)
+        logger.info(f"{out}: {len(paths)} file(s) joined along "
+                    f"{job_kwargs.get('concatenation_axes')}")
+        _retired_settings(job)
+        _warn_uncalibrated(job, [entry])
+        _warn_dtype(job, [entry])
+        try:
+            await _convert_safely(_convert_entry(entry, out, job, asyncio.Semaphore(1)), out)
+        finally:
+            inputs.close()

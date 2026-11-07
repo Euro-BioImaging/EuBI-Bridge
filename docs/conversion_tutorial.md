@@ -84,6 +84,16 @@ multichannel_timeseries_concat_zarr
 └── Channel2-T_tset.zarr
 ```  
 
+**How tags are read:** a tag is a prefix before a number (`T` in `img_T0003.tif`), found in
+the file's name or in the folders below the input, as a word of its own first. Its value is the
+digits right after it and nothing else: in `s_C001Z001`, give `C` and `Z` as tags. A number
+spread over several fields (`T00h15m30s`, `z0.5`) cannot be one tag's value. Files are joined
+in the order of the tag's number, whatever else varies in their names; a line says so when
+numbers ahead of the tag (a date, a run) would order them otherwise. Several names (`Blue,Red`)
+set the order as given. A file
+without every tag is left out, with a warning. Two files at one place are refused: add a tag for
+what differs between them, or narrow the input.
+
 **Important note:** if the `--channel_tag` was not provided, the tool would not be aware
 of the multiple channels in the image and try to concatenate all images into a single one-channeled OME-Zarr. Therefore, 
 when an aggregative conversion is performed, all dimensions existing in the input files must be specified via their respective tags. 

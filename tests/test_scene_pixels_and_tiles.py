@@ -81,7 +81,8 @@ def test_each_scene_writes_its_own_tiles(tmp_path):
                                     "StageYPosition": 500 + 0.5 * y}))
     src = tmp_path / "mosaic.czi"
     write_czi(str(src), tiles, metadata=scaling)
-    _convert(src, tmp_path / "out", "--series_index", "all", "--mosaic_tile_index", "all")
+    _convert(src, tmp_path / "out", "--series_index", "all", "--mosaic_tile_index", "all",
+             "--as_mosaic", "False")
     assert _values(tmp_path / "out") == {
         "mosaic_scene0_tile0.zarr": [10], "mosaic_scene0_tile1.zarr": [20],
         "mosaic_scene1_tile0.zarr": [30], "mosaic_scene1_tile1.zarr": [40],

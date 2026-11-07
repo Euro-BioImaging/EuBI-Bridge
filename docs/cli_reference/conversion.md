@@ -19,6 +19,8 @@ Click any command card below to expand its full parameter reference.
     eubi with_config NAME to_zarr INPUT_PATH [OPTIONS]
     ```
 
+    An option eubi-bridge does not know raises `ValueError` (a misspelled one would otherwise be ignored, and the run give a wrong result with exit code 0).
+
     <details>
     <summary>Required arguments</summary>
 
@@ -80,8 +82,19 @@ Click any command card below to expand its full parameter reference.
     <pre><code># Step 1 — validate without converting to inspect the plan
     eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask
     </code></pre>
-    <pre><code># Step 2 — pass the plan object to skip re-planning on the actual run
-    eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --plan &lt;plan&gt;
+    <pre><code># Step 2 — a plan is a Python object: pass it in Python, with the settings it was made with
+    # (the command line cannot take one; it plans the run itself)
+    # plan = EuBIBridge().validate_aggregative(inp, out, concatenation_axes='c', channel_tag='raw,mask')
+    # EuBIBridge().to_zarr(inp, out, concatenation_axes='c', channel_tag='raw,mask', plan=plan)
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--log_file</code></summary>
+    <p><strong>Type:</strong>&nbsp; `bool` or `str`</p>
+    <p><strong>Default:</strong>&nbsp; `True`</p>
+    <p>Where this run's log is also written, line by line, so it survives a crash: `True` (default) a new file in the `logs` folder of the config folder (the newest 20 are kept), a path, or `False` for none. The run's first line names the file.</p>
+    <pre><code>eubi to_zarr /data/input /data/output --log_file /data/logs/run1.log
     </code></pre>
     </details>
 
@@ -133,9 +146,8 @@ Click any command card below to expand its full parameter reference.
 
     <details>
     <summary><code>--max_threads</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `4`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+    <p><strong>Type:</strong>&nbsp; `int` or `auto`</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
     <p>Threads per conversion, each reading and writing one region at a time; scenes converted at once share them (formerly `max_concurrency`).</p>
     <pre><code>eubi to_zarr /data/input /data/output --max_threads 8
     </code></pre>
@@ -155,7 +167,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--memory_budget</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `auto`</p>
-    <p>The memory the whole run may use on this machine, e.g. `16GB`, or `auto` (default): half the RAM free when it starts. Shared out between the conversions running at once, and in each between reading and the scenes converted at once.</p>
+    <p>The memory eubi may use on this machine, e.g. `16GB`, or `auto` (default): half the memory free when it starts (inside a SLURM job or a container: what its memory limit leaves). Shared out between the conversions running at once, and in each between reading and the scenes converted at once. Runs started side by side (several batches, the GUI and the command line) share one budget, the smallest of theirs; a run with `auto` that starts beside others takes the budget they share.</p>
     <pre><code>eubi to_zarr /data/input /data/output --memory_budget 16GB
     </code></pre>
     </details>
@@ -194,9 +206,8 @@ Click any command card below to expand its full parameter reference.
 
     <details>
     <summary><code>--decode_threads</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `4`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+    <p><strong>Type:</strong>&nbsp; `int` or `auto`</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
     <p>micro-reader's decode threads per worker process (formerly `micro_read_concurrency`).</p>
     </details>
 
@@ -304,7 +315,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--target_chunk_mb</code></summary>
     <p><strong>Type:</strong>&nbsp; `float`</p>
-    <p><strong>Default:</strong>&nbsp; `1.0`</p>
+    <p><strong>Default:</strong>&nbsp; `1`</p>
     <p><strong>Valid values:</strong>&nbsp; > 0.0</p>
     <p>Target uncompressed chunk size in MB when `auto_chunk=True`.</p>
     <pre><code>eubi to_zarr /data/input /data/output --target_chunk_mb 4.0
@@ -476,7 +487,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--compressor_params</code></summary>
     <p><strong>Type:</strong>&nbsp; `dict`</p>
-    <p><strong>Default:</strong>&nbsp; *(auto)*</p>
+    <p><strong>Default:</strong>&nbsp; `{}`</p>
     <p>Codec-specific parameters dict. When omitted, sensible defaults are used (e.g. for blosc: `{'cname': 'lz4', 'clevel': 5, 'shuffle': 1}`).</p>
     <pre><code>eubi to_zarr /data/input /data/output --compressor blosc --compressor_params '{"cname": "lz4", "clevel": 9}'
     </code></pre>
@@ -695,18 +706,28 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--as_mosaic</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Default:</strong>&nbsp; `True`</p>
     <p><strong>Valid values:</strong>&nbsp; `--as_mosaic` to enable &nbsp;·&nbsp; `--as_mosaic False` to disable</p>
-    <p>Stitch all mosaic tiles into a single full field-of-view output (instead of one OME-Zarr per tile).</p>
-    <pre><code># Stitch all mosaic tiles into a single full field-of-view output
-    eubi to_zarr /data/input /data/output --as_mosaic
+    <p>Stitch a file's mosaic tiles into one image at their stored positions (the default): nothing is registered or blended, where tiles overlap one tile gives the pixel. `--as_mosaic False` writes one OME-Zarr per tile, for stitching elsewhere.</p>
+    <pre><code># Keep every tile as its own OME-Zarr, for stitching elsewhere
+    eubi to_zarr /data/input /data/output --as_mosaic False
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--as_plate</code></summary>
+    <p><strong>Type:</strong>&nbsp; `bool` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>—</p>
+    <pre><code># One store per image instead of one plate store
+    eubi to_zarr /data/plate /data/output --as_plate False
     </code></pre>
     </details>
 
     <details>
     <summary><code>--view_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
-    <p><strong>Default:</strong>&nbsp; `0`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>View(s) to read. Pass an integer, `all`, or comma-separated integers; each selected view becomes a separate OME-Zarr (named `_view{N}`) unless `--concat_views` stacks them along the channel axis.</p>
     <pre><code># Write each view as its own OME-Zarr
     eubi to_zarr /data/input /data/output --view_index all
@@ -729,7 +750,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--illumination_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
-    <p><strong>Default:</strong>&nbsp; `0`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>Illumination(s) to read. Pass an integer, `all`, or comma-separated integers; each selected illumination becomes a separate OME-Zarr (named `_illu{N}`) unless `--concat_illuminations` stacks them along the channel axis.</p>
     <pre><code># Write each illumination as its own OME-Zarr
     eubi to_zarr /data/input /data/output --illumination_index all
@@ -742,7 +763,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--series_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
-    <p><strong>Default:</strong>&nbsp; `0`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>Series index to read (a series is what some formats call a scene). Pass an integer for a single series, `all` to convert each series to a separate zarr group, or comma-separated integers (e.g. `0,2,4`) for a subset of series. The outputs are still named `_scene{N}`. Formerly `scene_index`, which still works, with a warning.</p>
     <pre><code># Convert only series 2 from a multi-series file
     eubi to_zarr /data/input /data/output --series_index 2
@@ -768,15 +789,15 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--mosaic_tile_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. Composes with series / view / illumination selection (cartesian product).</p>
-    <pre><code># Write every tile as its own OME-Zarr (default — each tile separate)
-    eubi to_zarr /data/input /data/output --mosaic_tile_index all
+    <pre><code># Write every tile as its own OME-Zarr
+    eubi to_zarr /data/input /data/output --as_mosaic False
     </code></pre>
     <pre><code># Write only tiles 0 and 2 (each as a separate output)
     eubi to_zarr /data/input /data/output --mosaic_tile_index 0,2
     </code></pre>
-    <pre><code># Stitch all tiles into one mosaic instead of writing them separately
+    <pre><code># Stitch the tiles into one mosaic (the default)
     eubi to_zarr /data/input /data/output --as_mosaic
     </code></pre>
     </details>
@@ -1014,7 +1035,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--aggregative_group</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
     <p><strong>Default:</strong>&nbsp; —</p>
-    <p>Name prefixed to the concatenated output, so several concatenated outputs stay distinguishable.  In a conversion table, rows sharing this value are concatenated together and a blank one converts on its own.  Prefer short</p>
+    <p>Name prefixed to the concatenated output, so several concatenated outputs stay distinguishable.  In a conversion table, rows sharing this value are concatenated together and a blank one converts on its own.  Prefer short labels such as `gr1` or `A`: it becomes part of the output filename.</p>
     </details>
 
 
@@ -1126,9 +1147,8 @@ Click any command card below to expand its full parameter reference.
 
     <details>
     <summary><code>--max_threads</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `4`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+    <p><strong>Type:</strong>&nbsp; `int` or `auto`</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
     <p>Threads per conversion, each reading and writing one region at a time; scenes converted at once share them (formerly `max_concurrency`).</p>
     <pre><code>eubi to_zarr /data/input /data/output --max_threads 8
     </code></pre>
@@ -1148,7 +1168,7 @@ Click any command card below to expand its full parameter reference.
     <summary><code>--memory_budget</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
     <p><strong>Default:</strong>&nbsp; `auto`</p>
-    <p>The memory the whole run may use on this machine, e.g. `16GB`, or `auto` (default): half the RAM free when it starts. Shared out between the conversions running at once, and in each between reading and the scenes converted at once.</p>
+    <p>The memory eubi may use on this machine, e.g. `16GB`, or `auto` (default): half the memory free when it starts (inside a SLURM job or a container: what its memory limit leaves). Shared out between the conversions running at once, and in each between reading and the scenes converted at once. Runs started side by side (several batches, the GUI and the command line) share one budget, the smallest of theirs; a run with `auto` that starts beside others takes the budget they share.</p>
     <pre><code>eubi to_zarr /data/input /data/output --memory_budget 16GB
     </code></pre>
     </details>
@@ -1187,9 +1207,8 @@ Click any command card below to expand its full parameter reference.
 
     <details>
     <summary><code>--decode_threads</code></summary>
-    <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `4`</p>
-    <p><strong>Valid values:</strong>&nbsp; ≥ 1</p>
+    <p><strong>Type:</strong>&nbsp; `int` or `auto`</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
     <p>micro-reader's decode threads per worker process (formerly `micro_read_concurrency`).</p>
     </details>
 
@@ -1255,18 +1274,28 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--as_mosaic</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `False`</p>
+    <p><strong>Default:</strong>&nbsp; `True`</p>
     <p><strong>Valid values:</strong>&nbsp; `--as_mosaic` to enable &nbsp;·&nbsp; `--as_mosaic False` to disable</p>
-    <p>Stitch all mosaic tiles into a single full field-of-view output (instead of one OME-Zarr per tile).</p>
-    <pre><code># Stitch all mosaic tiles into a single full field-of-view output
-    eubi to_zarr /data/input /data/output --as_mosaic
+    <p>Stitch a file's mosaic tiles into one image at their stored positions (the default): nothing is registered or blended, where tiles overlap one tile gives the pixel. `--as_mosaic False` writes one OME-Zarr per tile, for stitching elsewhere.</p>
+    <pre><code># Keep every tile as its own OME-Zarr, for stitching elsewhere
+    eubi to_zarr /data/input /data/output --as_mosaic False
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--as_plate</code></summary>
+    <p><strong>Type:</strong>&nbsp; `bool` or `None`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>—</p>
+    <pre><code># One store per image instead of one plate store
+    eubi to_zarr /data/plate /data/output --as_plate False
     </code></pre>
     </details>
 
     <details>
     <summary><code>--view_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
-    <p><strong>Default:</strong>&nbsp; `0`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>View(s) to read. Pass an integer, `all`, or comma-separated integers; each selected view becomes a separate OME-Zarr (named `_view{N}`) unless `--concat_views` stacks them along the channel axis.</p>
     <pre><code># Write each view as its own OME-Zarr
     eubi to_zarr /data/input /data/output --view_index all
@@ -1289,7 +1318,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--illumination_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
-    <p><strong>Default:</strong>&nbsp; `0`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>Illumination(s) to read. Pass an integer, `all`, or comma-separated integers; each selected illumination becomes a separate OME-Zarr (named `_illu{N}`) unless `--concat_illuminations` stacks them along the channel axis.</p>
     <pre><code># Write each illumination as its own OME-Zarr
     eubi to_zarr /data/input /data/output --illumination_index all
@@ -1302,7 +1331,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--series_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str`</p>
-    <p><strong>Default:</strong>&nbsp; `0`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>Series index to read (a series is what some formats call a scene). Pass an integer for a single series, `all` to convert each series to a separate zarr group, or comma-separated integers (e.g. `0,2,4`) for a subset of series. The outputs are still named `_scene{N}`. Formerly `scene_index`, which still works, with a warning.</p>
     <pre><code># Convert only series 2 from a multi-series file
     eubi to_zarr /data/input /data/output --series_index 2
@@ -1328,15 +1357,15 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--mosaic_tile_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int` or `str` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>Mosaic tile(s) to read when **not** stitching. Pass an integer, `all`, or comma-separated integers; each selected tile becomes a separate OME-Zarr (named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. Composes with series / view / illumination selection (cartesian product).</p>
-    <pre><code># Write every tile as its own OME-Zarr (default — each tile separate)
-    eubi to_zarr /data/input /data/output --mosaic_tile_index all
+    <pre><code># Write every tile as its own OME-Zarr
+    eubi to_zarr /data/input /data/output --as_mosaic False
     </code></pre>
     <pre><code># Write only tiles 0 and 2 (each as a separate output)
     eubi to_zarr /data/input /data/output --mosaic_tile_index 0,2
     </code></pre>
-    <pre><code># Stitch all tiles into one mosaic instead of writing them separately
+    <pre><code># Stitch the tiles into one mosaic (the default)
     eubi to_zarr /data/input /data/output --as_mosaic
     </code></pre>
     </details>

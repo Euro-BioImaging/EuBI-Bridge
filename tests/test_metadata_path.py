@@ -92,7 +92,7 @@ def _both(bridge, store, tmp_path, monkeypatch, command, name, **kwargs):
 def _same_attrs(expected: dict, store: Path, tmp_path: Path) -> None:
     actual = _golden.comparable(_attrs(store), tmp_path)
     _golden.sync_colors(expected, actual, key="attrs")
-    assert actual == expected["attrs"]
+    assert _golden._unnamed(actual) == _golden._unnamed(expected["attrs"])
 
 
 def _old_ngff(expected: dict) -> dict:

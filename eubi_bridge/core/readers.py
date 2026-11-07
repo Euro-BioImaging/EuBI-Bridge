@@ -21,6 +21,15 @@ from eubi_bridge.utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def _is_hdf5(path) -> bool:
+    """Whether *path* starts as HDF5 does: an Imaris 3 ``.ims`` is a TIFF."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(8) == b"\x89HDF\r\n\x1a\n"
+    except OSError:
+        return True                 # a remote path: as before
+
+
 async def read_single_image(
     input_path: str,
     aszarr: bool = False,
@@ -79,7 +88,7 @@ async def read_single_image(
         from eubi_bridge.core.h5_reader import read_h5
         logger.debug("Detected HDF5 format")
         reader = read_h5(input_path, **kwargs)
-    elif input_path.lower().endswith('.ims'):
+    elif input_path.lower().endswith('.ims') and _is_hdf5(input_path):
         from eubi_bridge.core.ims_reader import read_ims
         logger.debug("Detected Imaris format")
         reader = read_ims(input_path, **kwargs)

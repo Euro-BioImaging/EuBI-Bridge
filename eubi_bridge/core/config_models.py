@@ -450,7 +450,8 @@ def resolve_ome_zarr_target(ome_zarr_version, zarr_format=2, warn: bool = False)
             return v, OME_ZARR_VERSIONS[v]
         # never another version than the one asked for (it fell back to zarr_format,
         # i.e. 0.4, before eubi-bridge 0.3.2)
-        raise ValueError(
+        from eubi_bridge.utils.errors import InputError    # one line (R2-18)
+        raise InputError(
             f"ome_zarr_version {ome_zarr_version!r}: eubi-bridge writes OME-Zarr "
             f"{', '.join(repr(k) for k in OME_ZARR_VERSIONS)}. Choose one of them, or "
             f"leave ome_zarr_version unset for the zarr_format default.")
@@ -461,7 +462,7 @@ def resolve_ome_zarr_target(ome_zarr_version, zarr_format=2, warn: bool = False)
     if fmt not in (2, 3):
         fmt = 2
     version = "0.5" if fmt == 3 else "0.4"
-    if warn and not _zarr_format_deprecation_warned:
+    if warn and fmt != 2 and not _zarr_format_deprecation_warned:     # 2 is the default
         _logger.warning(
             "DEPRECATION: 'zarr_format' is deprecated; use 'ome_zarr_version' "
             "instead (e.g. ome_zarr_version='0.4', '0.5', '0.6' or 'rfc8'). This run "
@@ -504,7 +505,7 @@ class ClusterConfig(BaseModel):
     max_threads: Union[int, Literal["auto"]] = "auto"
     max_concurrent_scenes: int = Field(default=1, ge=1)
     # The memory the whole run may use on this machine: "16GB", or "auto" = half the
-    # RAM free when it starts. Shared out by core/memory.py (processes, what each
+    # memory free when it starts (a cgroup / SLURM job's limit counted, core/memory.py). Shared out by core/memory.py (processes, what each
     # already holds, reading, scenes). Replaces memory_per_worker (2026-10-08).
     memory_budget: str = "auto"
     # micro-reader's decoding memory per process: "auto" (what the file's decode unit
@@ -515,6 +516,10 @@ class ClusterConfig(BaseModel):
     # One conversion process's memory in MB, resolved once by the dispatcher before
     # the pool starts (not a user setting). None: worked out by the worker.
     process_memory_mb: Optional[float] = Field(default=None, gt=0)
+    # This conversion's claim in the memory ledger (core/memory_share.py), set by the
+    # worker (not a user setting): the writer grows its share through it when other
+    # conversions of the run have ended.
+    memory_claim: Optional[str] = None
     tensorstore_data_copy_concurrency: int = Field(default=4, ge=1)
     max_retries: int = Field(default=10, ge=0, le=100)
     # Bio-Formats read threads (dask's pool for its tile reads). Was
@@ -623,7 +628,9 @@ class ReaderConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    as_mosaic: bool = False
+    # True (the default): a file's tiles are placed on one canvas at their stored positions.
+    # False, or a chosen mosaic_tile_index: tiles stay images (_a_chosen_tile_is_a_tile).
+    as_mosaic: bool = True
     # A file micro-reader reads as a plate becomes ONE NGFF plate store. None (the
     # default): when the format is a plate format (Harmony, CellVoyager, MetaXpress,
     # IN Cell) or the file's images sit in two or more wells; a file whose images all
@@ -631,15 +638,15 @@ class ReaderConfig(BaseModel):
     # every plate file. False: one store per image, with a warning that it is a plate.
     as_plate: Optional[bool] = None
     # Accept int, 'all', or comma-separated ints (e.g. '0,1,2')
-    view_index: Union[int, str] = 0
+    view_index: Union[int, str] = 'all'
     phase_index: int = Field(default=0, ge=0)
     # Accept int, 'all', or comma-separated ints (e.g. '0,1')
-    illumination_index: Union[int, str] = 0
+    illumination_index: Union[int, str] = 'all'
     # Accept int, 'all', or comma-separated ints (e.g. '0,2,4'). Was scene_index
     # (RENAMED_INDEX_SETTINGS: still accepted, with a FutureWarning).
-    series_index: Union[int, str] = 0
+    series_index: Union[int, str] = 'all'
     rotation_index: int = Field(default=0, ge=0)
-    mosaic_tile_index: Union[int, str, None] = None
+    mosaic_tile_index: Union[int, str, None] = 'all'
     sample_index: int = Field(default=0, ge=0)
     force_bioformats: bool = False
     # Where pixels come from: 'micro' (micro-reader, the default; falls back to
@@ -718,6 +725,13 @@ class ReaderConfig(BaseModel):
             except ValueError:
                 raise ValueError(f"mosaic_tile_index must be an int, 'all', or comma-separated ints; got {v!r}")
         return v
+
+    @model_validator(mode="after")
+    def _a_chosen_tile_is_a_tile(self):
+        """Asking for tile 2 asks for a tile: there is none in a stitched image."""
+        if self.mosaic_tile_index not in (None, 'all'):
+            self.as_mosaic = False
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -1278,8 +1292,16 @@ class AggregativeConversionJob(BaseModel):
         output_path: str,
         kwargs: dict,
     ) -> "AggregativeConversionJob":
-        """Build from a flat merged-kwargs dict (mirrors ConversionJob.from_kwargs)."""
+        """Build from a flat merged-kwargs dict (mirrors ConversionJob.from_kwargs). The tags
+        are checked against the joined axes first, outside pydantic: a refusal is one line,
+        not a validation traceback."""
         kwargs = rename_settings(kwargs)
+        from eubi_bridge.conversion.dispatcher import check_tags_and_axes
+        if kwargs.get("concatenation_axes") is not None:
+            check_tags_and_axes(kwargs.get("concatenation_axes"), {
+                x: kwargs.get(name) for x, name in
+                dict(t="time_tag", c="channel_tag", z="z_tag", y="y_tag", x="x_tag").items()},
+                say=False)
         agg_keys = _AGGREGATIVE_KEYS
         return cls(
             input_path=input_path,
@@ -1369,6 +1391,10 @@ class AggregativePlan(BaseModel):
     n_outputs:    int
     outputs:      List[AggregativeOutputInfo]
     file_workers: int
+    tag_folders:  Dict[str, str] = {}
+    output_path:  str = ""
+    #: the input, axes, tags and filters it is made for (dispatcher.plan_settings)
+    made_for:     Dict[str, Any] = {}
 
     def __str__(self) -> str:
         total_files = sum(len(out.source_files) for out in self.outputs)

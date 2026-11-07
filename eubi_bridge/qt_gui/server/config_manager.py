@@ -71,7 +71,7 @@ def _config_to_react(cfg: dict) -> dict:
             "slurmWorkerMemory":    _parse_memory_gb(cluster.get("slurm_worker_memory", "3GB"), 3.0),
             "decodeMemory":         _auto_or_gb(cluster.get("decode_memory", "auto")),
             "useSlurm":             cluster.get("on_slurm", False),
-            "jvmMemory":            _parse_jvm_gb(cluster.get("jvm_memory", "2g"), 2.0),
+            "jvmMemory":            _parse_jvm_gb(cluster.get("jvm_memory", "1g"), 1.0),
             "bioformatsThreads":    cluster.get("bioformats_threads", 4),
             "decodeThreads": _threads_or_zero(cluster.get("decode_threads", "auto")),
             "maxConcurrentDownscaleLayers": cluster.get("max_concurrent_downscale_layers", 3),
@@ -82,7 +82,7 @@ def _config_to_react(cfg: dict) -> dict:
             "slurmSifPath":         cluster.get("slurm_sif_path") or "",
         },
         "reader": {
-            "readAsMosaic":         readers.get("as_mosaic", False),
+            "readAsMosaic":         readers.get("as_mosaic", True),
             "asPlate":              readers.get("as_plate"),
             # the series keys and the 0.2.x scene keys, for several releases
             **series_ui_pairs(True, str(series) if series not in (None, 0, "all") else ""),
@@ -248,7 +248,7 @@ def _react_to_config(data: dict) -> dict:
             "decode_memory":                   _gb_or_auto(cluster_d.get("decodeMemory", 0)),
             "tensorstore_data_copy_concurrency": 4,
             "max_retries":                     10,
-            "jvm_memory":                      _gb_to_jvm_str(cluster_d.get("jvmMemory", 2)),
+            "jvm_memory":                      _gb_to_jvm_str(cluster_d.get("jvmMemory", 1)),
             "bioformats_threads":             cluster_d.get("bioformatsThreads", 4),
             "decode_threads":          _zero_or_threads(cluster_d.get("decodeThreads", 0)),
             "max_concurrent_downscale_layers": cluster_d.get("maxConcurrentDownscaleLayers", 3),
@@ -259,7 +259,7 @@ def _react_to_config(data: dict) -> dict:
             "slurm_sif_path":                  cluster_d.get("slurmSifPath") or None,
         },
         "readers": {
-            "as_mosaic":            reader_d.get("readAsMosaic", False),
+            "as_mosaic":            reader_d.get("readAsMosaic", True),
             "as_plate":             reader_d.get("asPlate"),
             "series_index":         "all" if reader_d.get("readAllSeries", True) else _parse_int(reader_d.get("seriesIndices", "0")),
             "mosaic_tile_index":    "all" if reader_d.get("readAllTiles", True) else _parse_int(reader_d.get("mosaicTileIndices", "0")),
@@ -381,7 +381,7 @@ def _parse_memory_gb(value, default: float = 4.0) -> float:
         return default
 
 
-def _parse_jvm_gb(value, default: float = 2.0) -> float:
+def _parse_jvm_gb(value, default: float = 1.0) -> float:
     """Parse a JVM heap string like '2g', '4G', '2048m' → float GB.
     If *value* is already numeric it is returned as-is (assumed GB)."""
     if isinstance(value, (int, float)):
@@ -463,7 +463,7 @@ def _gb_to_memory_str(val, default: str = "4GB") -> str:
         return str(val) if val else default
 
 
-def _gb_to_jvm_str(val, default: str = "2g") -> str:
+def _gb_to_jvm_str(val, default: str = "1g") -> str:
     """Float GB → '4g' string for JVM -Xmx (rounded to nearest integer GB)."""
     try:
         return f"{max(1, round(float(val)))}g"

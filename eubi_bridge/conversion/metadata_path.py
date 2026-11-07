@@ -19,10 +19,12 @@ coarsest level, as for conversions (decision 'Windows for `auto`').
 """
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 from typing import Optional
 
+from eubi_bridge.utils.errors import InputError
 from eubi_bridge.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -40,16 +42,23 @@ _UNITS = {"t": "time_unit", "z": "z_unit", "y": "y_unit", "x": "x_unit"}
 def update_store(input_path: str, kwargs: dict):
     """Edit one OME-Zarr's metadata in place (see the module docstring); the pixels are
     never touched, so conversion settings that change them (squeeze, crop, dtype) do
-    not apply. Returns the updated Pyramid."""
+    not apply. A plate: every field, the last one's Pyramid returned. Returns the updated
+    Pyramid."""
     from ome_zarr_pyramid import IO
 
-    from eubi_bridge.conversion.pyramid_path import channel_overrides, ome_xml
+    from eubi_bridge.conversion.pyramid_path import channel_overrides, ome_xml, unit_spelled
     from eubi_bridge.core.config_models import MetadataUpdateConfig
     from eubi_bridge.core.output_store import _ozp_target_args
     from eubi_bridge.utils.path_utils import is_zarr_group
 
     if not is_zarr_group(str(input_path)):
         raise ValueError(f"Metadata update only works with OME-Zarr datasets: {input_path}")
+    if _attrs(input_path).get("type"):
+        raise InputError(f"{os.path.basename(str(input_path))} is an NGFF RFC 8 store: its "
+                         f"metadata cannot be updated yet. Convert it again with the values, "
+                         f"or write it as OME-Zarr 0.5.")
+    if _is_plate(input_path):
+        return [update_store(field, kwargs) for field in _plate_fields(input_path)][-1]
     cfg = MetadataUpdateConfig(**kwargs)
     limits = kwargs.get("channel_intensity_limits") or "keep"
     if limits not in UPDATE_WINDOWS:
@@ -61,7 +70,7 @@ def update_store(input_path: str, kwargs: dict):
     axes = current.meta.axis_order
     scales = {ax: getattr(cfg, name) for ax, name in _SCALES.items()
               if ax in axes and getattr(cfg, name) is not None}
-    units = {ax: getattr(cfg, name) for ax, name in _UNITS.items()
+    units = {ax: unit_spelled(getattr(cfg, name)) for ax, name in _UNITS.items()
              if ax in axes and getattr(cfg, name) is not None}
     count = current.base_array.shape[axes.index("c")] if "c" in axes else 1
     channels = channel_overrides(kwargs.get("channel_labels"), kwargs.get("channel_colors"),
@@ -106,11 +115,53 @@ def read_ome_zarr(path: str) -> dict:
     from eubi_bridge.core.output_store import _ozp_target_args
     try:
         target, storage_options = _ozp_target_args(str(path))
-        pyr = IO().read_pyramid(target, include_labels=False, storage_options=storage_options)
+        pyr = _first_field(target, storage_options) if _is_plate(path) else None
+        if pyr is not None:
+            logger.info(f"{path}: a plate; its first field is shown")
+        else:
+            pyr = IO().read_pyramid(target, include_labels=False, storage_options=storage_options)
         return _summary(pyr, path, 0)
     except Exception as exc:                            # noqa: BLE001 - shown per file
         logger.error(f"Failed to read OME-Zarr metadata from {path}: {exc}")
         return {"status": "error", "input_path": str(path), "error": str(exc)}
+
+
+def _attrs(path) -> dict:
+    """The NGFF attributes of the local group at *path*; {} for none."""
+    for name, inner in ((".zattrs", False), ("zarr.json", True)):
+        try:
+            with open(os.path.join(str(path), name), encoding="utf-8") as fh:
+                attrs = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        return attrs.get("attributes", {}).get("ome", {}) if inner else attrs
+    return {}
+
+
+def _is_plate(path: str) -> bool:
+    """Whether the local store at *path* declares a plate (a remote one is read as an image
+    first, as before)."""
+    return "plate" in _attrs(path)
+
+
+def _plate_fields(path) -> list:
+    """The image groups of the local plate store at *path*: every field of every well."""
+    fields = []
+    for well in _attrs(path)["plate"]["wells"]:
+        where = os.path.join(str(path), well["path"])
+        fields += [os.path.join(where, image["path"]) for image in _attrs(where)["well"]["images"]]
+    return fields
+
+
+def _first_field(target, storage_options):
+    """The first image of the plate at *target*, or None when it holds no plate."""
+    from ome_zarr_pyramid import PyramidCollection
+    try:
+        coll = PyramidCollection.from_zarr(target, storage_options=storage_options)
+    except Exception as exc:                            # noqa: BLE001 - not a collection
+        logger.debug(f"{target}: {exc}")
+        return None
+    return coll[next(iter(coll))] if coll.plates else None
 
 
 def _scenes(series, count: int) -> list:
@@ -143,6 +194,15 @@ def read_metadata(input_path: str, kwargs: dict):
         job = ConversionJob.from_kwargs(input_path=path, output_path="", kwargs=kwargs)
         f, _ = _open_input(job)
         try:
+            if any(SERIES not in k for k in f.indices):
+                # a plate: images by well and field, not by series; the first stands for it
+                image = f.image(tuple(f.indices[0].items()))
+                logger.info(f"{path}: a plate of {len(f.indices)} images; the first is shown")
+                pyr = PyramidCollection.from_file(
+                    SimpleNamespace(images=[image], path=path), name=NAME,
+                    version=_ozp_version(job.conversion.zarr_format, job.conversion.ome_zarr_version),
+                    resolutions="base")[tuple(f.indices[0].items())]
+                return _summary(apply_rgb_channels(pyr, image), path, 0)
             values = sorted({k[SERIES] for k in f.indices})
             wanted = [s for s in _scenes(series, len(values)) if 0 <= s < len(values)]
             if not wanted:
