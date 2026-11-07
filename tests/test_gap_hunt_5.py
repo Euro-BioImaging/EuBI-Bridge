@@ -480,7 +480,7 @@ def test_a_phase_or_rotation_the_file_lacks_is_refused():
     with pytest.raises(InputError, match="x.tif has no rotations: --rotation_index 2"):
         pp._picked(keys, NS(phase_index=0, rotation_index=2), "x.tif")
     keys = [(("series", 0), ("phase", p)) for p in range(2)]
-    with pytest.raises(InputError, match="No valid phase index in \[5\]: x.tif has 2 phase"):
+    with pytest.raises(InputError, match=r"No valid phase index in \[5\]: x.tif has 2 phase"):
         pp._picked(keys, NS(phase_index=5, rotation_index=0), "x.tif")
 
 

@@ -489,8 +489,13 @@ def test_more_tags_that_do_not_fit_are_refused(axes, tags, says):
 def test_names_given_as_a_list_lose_their_spaces_and_one_file_spelled_two_ways_is_one():
     paths = ["/d/x_Blue.tif", "/d/x_Red.tif"]
     assert _parse_filepaths_with_tags(paths, [("Blue", " Red")]) == paths
-    assert _parse_filepaths_with_tags(["/d/a_T1.tif", r"\d\a_T1.tif", "/d/a_T2.tif"], ["T"]) \
+    assert _parse_filepaths_with_tags(["/d/a_T1.tif", "/d/../d/a_T1.tif", "/d/a_T2.tif"], ["T"]) \
         == ["/d/a_T1.tif", "/d/a_T2.tif"]
+    # a backslash separates folders on Windows only: on Linux and macOS it is part of the
+    # name, so r"\d\a_T1.tif" there is another file
+    if os.sep == "\\":
+        assert _parse_filepaths_with_tags(["/d/a_T1.tif", r"\d\a_T1.tif", "/d/a_T2.tif"], ["T"]) \
+            == ["/d/a_T1.tif", "/d/a_T2.tif"]
 
 
 def test_a_plan_is_refused_for_other_settings(tmp_path):

@@ -241,6 +241,9 @@ def test_a_unit_ome_has_no_name_for_leaves_the_size_out(caplog):
 
 
 def test_the_ome_xml_passes_the_schema():
+    import importlib.util
+    if not any(importlib.util.find_spec(m) for m in ("lxml", "xmlschema")):
+        pytest.skip("schema validation needs lxml or xmlschema (the lite install has neither)")
     from ome_types import from_xml
     xml = pyramid_path.ome_xml(_pyramid(["micrometer"] * 3), "uint16")
     assert "MetadataOnly" in xml
