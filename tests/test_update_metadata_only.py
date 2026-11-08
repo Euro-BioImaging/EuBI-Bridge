@@ -146,8 +146,14 @@ class TestSaveOmeXml:
 
     def test_true_rewrites_it(self, bridge, tmp_path):
         store = _convert(bridge, tmp_path, "rewrite")
-        bridge.update_pixel_meta(str(store), x_scale=0.25)
+        bridge.update_pixel_meta(str(store), x_scale=0.25, x_unit="micrometer")
         assert 'PhysicalSizeX="0.25"' in _xml(store).read_text(encoding="utf-8")
+
+    def test_a_scale_without_a_unit_is_no_physical_size(self, bridge, tmp_path):
+        store = _convert(bridge, tmp_path, "relative")
+        bridge.update_pixel_meta(str(store), x_scale=0.25)
+        assert _scale(store)[-1] == 0.25
+        assert "PhysicalSizeX=" not in _xml(store).read_text(encoding="utf-8")
 
 
 class TestConversionInput:

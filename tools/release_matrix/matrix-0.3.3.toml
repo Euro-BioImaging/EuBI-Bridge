@@ -1,0 +1,111 @@
+# Version matrix for the 2026-10-28 train: micro-reader 0.3.0 (plates from more formats,
+# Plate.rows / .columns slice the plate, RGB samples as channels by default),
+# ome-zarr-pyramid 0.5.0 (one API for Pyramid and PyramidCollection) and its patch 0.4.1
+# (plates from micro-reader 0.3), eubi-bridge / eubi-bridge-lite 0.3.3 (requires
+# micro-reader>=0.2.1,<0.4 and ome_zarr_pyramid>=0.5.0,<0.6).
+#     python matrix.py build   --config matrix-0.3.3.toml
+#     python matrix.py run     --config matrix-0.3.3.toml
+#     python matrix.py resolve --config matrix-0.3.3.toml
+# ome-zarr-pyramid 0.4.1 is not a candidate here (one candidate per distribution): build
+# its wheel from the patch-0.4.1 worktree into the wheelhouse by hand, it then resolves
+# as "0.4.1" from there:
+#     <build python> -m pip wheel --no-deps -w <workdir>/wheelhouse <spatial-model/ozp-0.4.1>
+# The released eubi 0.3.2 must keep its stack (micro-reader <0.3, ozp <0.5); 0.3.3 must
+# refuse ozp 0.4 and pass with micro-reader 0.2.1 and 0.3.0. The plate sample is the
+# case ozp 0.4.0 cannot read with micro-reader 0.3.0 (no eubi pairs them: 0.3.2 bounds
+# micro-reader, 0.3.3 bounds ozp).
+# micro-reader-codecs 0.0.2 and dyna-zarr 0.1.x come from PyPI.
+
+stack = ["micro-reader-codecs", "micro-reader", "dyna-zarr", "ome-zarr-pyramid",
+         "eubi-bridge", "eubi-bridge-lite"]
+
+smoke_timeout_s = 900
+
+fallback_patterns = ['older readers \(', 'standard reader \(', 'Bio-Formats metadata']
+
+[paths]
+workdir = "C:/Users/oezdemir/.eubi-matrix/m33"
+
+[pythons]
+eubi = "C:/Users/oezdemir/miniforge3/envs/pythonenv/python.exe"
+build = "C:/Users/oezdemir/.eubi-matrix/bvenv033/Scripts/python.exe"
+
+[samples]
+czi = "C:/Users/oezdemir/Desktop/data/microscopy/formats/czi/assorted/xyz__multiple_images.czi"
+lif = "C:/Users/oezdemir/Desktop/data/microscopy/formats/lif/ome-samples/20191025 Test FRET 585. 423, 426.lif"
+plate = "C:/Users/oezdemir/Desktop/data/microscopy/plates/cv7000/bia-S-BIAD1013-cv7000/1093684368.wpi"
+
+# The candidates, from the working trees (uncommitted changes included).
+[candidates.micro-reader]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge/incubation/micro-reader/python"
+
+[candidates.ome-zarr-pyramid]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-OmeZarrPyramid/ome_zarr_pyramid"
+
+[candidates.eubi-bridge]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge"
+
+[candidates.eubi-bridge-lite]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge"
+command = ["{python}", "tools/build_lite.py"]
+dist = "dist"
+
+[axes]
+micro-reader = ["0.2.1", "candidate"]
+ome-zarr-pyramid = ["0.4.0", "0.4.1", "candidate"]
+
+[[consumers]]
+name = "eubi-bridge"
+versions = ["0.3.2", "candidate"]
+python = "eubi"
+samples = ["czi", "lif", "plate"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+[[consumers]]
+name = "eubi-bridge-lite"
+versions = ["0.3.2", "candidate"]
+python = "eubi"
+samples = ["czi", "lif", "plate"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+# Expectations, first match wins; default "pass".
+# eubi 0.3.2 bounds micro-reader <0.3 and ozp <0.5.
+[[expect]]
+when = { eubi-bridge = "==0.3.2", micro-reader = ">=0.3.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge = "==0.3.2", ome-zarr-pyramid = ">=0.5.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = "==0.3.2", micro-reader = ">=0.3.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = "==0.3.2", ome-zarr-pyramid = ">=0.5.0" }
+outcome = "unresolvable"
+# eubi 0.3.3 requires ozp >=0.5.0.
+[[expect]]
+when = { eubi-bridge = ">=0.3.3", ome-zarr-pyramid = "<0.5.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = ">=0.3.3", ome-zarr-pyramid = "<0.5.0" }
+outcome = "unresolvable"
+
+[[resolve]]
+name = "fresh eubi-bridge (with the candidates)"
+python = "eubi"
+requirements = ["eubi-bridge"]
+
+[[resolve]]
+name = "fresh eubi-bridge-lite (with the candidates)"
+python = "eubi"
+requirements = ["eubi-bridge-lite"]
+
+[[resolve]]
+name = "eubi-bridge-lite<0.3.3 (stay on 0.3.2)"
+python = "eubi"
+requirements = ["eubi-bridge-lite<0.3.3"]
+
+[[resolve]]
+name = "ome-zarr-pyramid<0.5 with micro-reader (gets the 0.4.1 patch)"
+python = "eubi"
+requirements = ["ome-zarr-pyramid<0.5", "micro-reader"]

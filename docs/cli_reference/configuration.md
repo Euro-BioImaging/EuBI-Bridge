@@ -18,7 +18,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--max_processes</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `4`</p>
     <p>Images converted at once, one per worker process (default 4). Formerly `max_workers`.</p>
     <pre><code># Convert 8 images at once, each in its own worker process
     eubi configure cluster --max_processes 8
@@ -28,7 +28,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--region_size_mb</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
     <p>Size of one read region in MB, or `'auto'` (default): each scene's write budget over 3 x its threads, 8 to 256 MB.</p>
     <pre><code># Process larger spatial regions per task (reduces overhead on large arrays)
     eubi configure cluster --region_size_mb 512
@@ -38,8 +38,8 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--memory_budget</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>The memory the whole run may use on this machine, e.g. `'16GB'`, or `'auto'` (default): half the RAM free when it starts.</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
+    <p>The memory eubi may use on this machine, e.g. `'16GB'`, or `'auto'` (default): half the memory free when it starts (inside a SLURM job or a container: what its memory limit leaves). Runs started side by side share one budget, the smallest of theirs. eubi shares it out: between the conversions running at once, then in each between what the process already holds, reading (`decode_memory`) and the scenes converted at once.</p>
     <pre><code># Let the whole run use at most 16 GB of this machine's memory
     eubi configure cluster --memory_budget 16GB
     </code></pre>
@@ -48,8 +48,8 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--max_threads</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Threads per conversion, each reading and writing one region at a time (default 4). Scenes converted at once share them. Formerly `max_concurrency`.</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
+    <p>Threads per conversion, each reading and writing one region at a time: a number, or "auto" (default: the cores over the conversions running at once, at most 16; 0 means the same). Scenes converted at once share them. Formerly `max_concurrency`.</p>
     <pre><code># Read and write 8 regions at once in each conversion (one per thread)
     eubi configure cluster --max_threads 8
     </code></pre>
@@ -58,7 +58,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--max_concurrent_scenes</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `1`</p>
     <p>Parallel scenes within one file (default 1); they share `max_threads`. Increase only when writing a multi-scene file to a large store.</p>
     <pre><code># Convert 2 scenes within a single file simultaneously
     eubi configure cluster --max_concurrent_scenes 2
@@ -68,7 +68,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--on_slurm</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--on_slurm` to enable &nbsp;·&nbsp; `--on_slurm False` to disable</p>
     <p>Submit jobs to a SLURM cluster (default False; the full eubi-bridge only).</p>
     <pre><code># Submit workers to SLURM and set partition + account
@@ -79,7 +79,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--use_threading</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--use_threading` to enable &nbsp;·&nbsp; `--use_threading False` to disable</p>
     <p>Use ThreadPool instead of ProcessPool (default False).</p>
     <pre><code># Switch from ProcessPool to ThreadPool (useful when GIL is not a bottleneck)
@@ -90,7 +90,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--max_retries</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `10`</p>
     <p>Retries on broken worker process (default 10).</p>
     <pre><code># Retry failed workers up to 5 times before aborting
     eubi configure cluster --max_retries 5
@@ -100,35 +100,35 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--bioformats_threads</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `4`</p>
     <p>Threads for parallel Bio-Formats tile reads (default 4).  `None` lets dask choose (cpu_count). Formerly `bf_read_concurrency`.</p>
     </details>
 
     <details>
     <summary><code>--decode_threads</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>micro-reader's decode threads per worker process, used with `readers(pixel_reader='micro')` (default 4). Formerly `micro_read_concurrency`.</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
+    <p>micro-reader's decode threads per worker process, used with `readers(pixel_reader='micro')`: `'auto'` (default) gives each process the cores over the conversions running at once (at most 16), fewer when its reading memory cannot hold a block per thread; or a number. Formerly `micro_read_concurrency`.</p>
     </details>
 
     <details>
     <summary><code>--decode_memory</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>micro-reader's decoding memory per process, e.g. `'1GB'`,</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
+    <p>micro-reader's decoding memory per process, e.g. `'1GB'`, or `'auto'` (default): what the file's decode unit needs, at least 64 MB and normally at most a quarter of the process's memory.</p>
     </details>
 
     <details>
     <summary><code>--jvm_memory</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `1g`</p>
     <p>Maximum JVM heap for Bio-Formats, e.g. `'8GB'`, `'4GB'`. Accepts `'NGB'` / `'NMB'` (like memory_budget) and normalises internally to JVM format (`'Ng'` / `'Nm'`).  Default `'1g'`.</p>
     </details>
 
     <details>
     <summary><code>--slurm_time</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `24:00:00`</p>
     <p>SLURM job wall-clock limit, e.g. `'24:00:00'` (used only when on_slurm=True).</p>
     <pre><code># Set SLURM wall-clock limit to 48 hours
     eubi configure cluster --on_slurm --slurm_time 48:00:00
@@ -138,7 +138,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--slurm_account</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>SLURM account/allocation to charge (default None).</p>
     <pre><code># Charge SLURM jobs to 'myproject'
     eubi configure cluster --on_slurm --slurm_account myproject
@@ -148,7 +148,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--slurm_partition</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>SLURM partition/queue to submit to (default None).</p>
     <pre><code># Submit to the 'gpu' partition
     eubi configure cluster --on_slurm --slurm_partition gpu
@@ -158,7 +158,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--slurm_worker_timeout</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `300`</p>
     <p>Seconds to wait for SLURM workers to start (default 300).</p>
     <pre><code># Wait up to 10 minutes for SLURM workers to start
     eubi configure cluster --on_slurm --slurm_worker_timeout 600
@@ -168,7 +168,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--slurm_sif_path</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Path to an Apptainer/Singularity SIF image to run workers in (default None).</p>
     <pre><code>eubi to_zarr /data/input /data/output --on_slurm --slurm_sif_path /apps/eubi.sif
     </code></pre>
@@ -177,7 +177,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--slurm_worker_memory</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `3GB`</p>
     <p>Each SLURM worker's memory, e.g. `'8GB'` (default `'3GB'`; used only when on_slurm=True): the SLURM job's memory, shared by its conversions. Formerly `memory_per_worker`.</p>
     <pre><code># Each SLURM worker job gets 8 GB
     eubi configure cluster --slurm_worker_memory 8GB
@@ -201,8 +201,8 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--ome_zarr_version</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>OME-Zarr (NGFF) version to write, e.g. `'0.4'` or `'0.5'`.  This is the preferred control and supersedes `zarr_format` (the zarr container format is derived from it).</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>OME-Zarr (NGFF) version to write: `'0.4'`, `'0.5'`, `'0.6'` or `'rfc8'` (NGFF RFC 8, a draft: a collection holding the image). This is the preferred control and supersedes `zarr_format` (the zarr container format is derived from it); any other value is an error.</p>
     <pre><code># Default to OME-Zarr 0.5 (Zarr v3, enables sharding)
     eubi configure conversion --ome_zarr_version 0.5
     </code></pre>
@@ -214,8 +214,8 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--zarr_format</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>DEPRECATED zarr container version — `2` (default) or `3`.  Used only when `ome_zarr_version` is unset/unrecognised; prefer `ome_zarr_version`.</p>
+    <p><strong>Default:</strong>&nbsp; `2`</p>
+    <p>DEPRECATED zarr container version — `2` (default) or `3`.  Used only when `ome_zarr_version` is unset; prefer `ome_zarr_version`.</p>
     <pre><code># Deprecated — prefer 'ome_zarr_version'. Switch to Zarr v3 (supports sharding)
     eubi configure conversion --zarr_format 3
     </code></pre>
@@ -224,7 +224,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--auto_chunk</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `True`</p>
     <p><strong>Valid values:</strong>&nbsp; `--auto_chunk` to enable &nbsp;·&nbsp; `--auto_chunk False` to disable</p>
     <p>Auto-compute chunk shape from array size (default True).</p>
     <pre><code># Disable auto-chunking and set chunk sizes manually
@@ -235,8 +235,8 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--target_chunk_mb</code></summary>
     <p><strong>Type:</strong>&nbsp; `float`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Target chunk size in MB when auto_chunk is True.</p>
+    <p><strong>Default:</strong>&nbsp; `1`</p>
+    <p>Target chunk size in MB when auto_chunk is True. time_chunk / channel_chunk / z_chunk / y_chunk / x_chunk: Manual per-axis chunk sizes (used when auto_chunk is False). time_shard_coef / channel_shard_coef / z_shard_coef / y_shard_coef / x_shard_coef: Shard-to-chunk multipliers for Zarr v3 sharding (default 3 on spatial axes). time_range / channel_range / z_range / y_range / x_range: Crop ranges as `"start,stop"` strings applied before writing.</p>
     <pre><code># Target 4 MB uncompressed chunks when auto_chunk is on
     eubi configure conversion --target_chunk_mb 4.0
     </code></pre>
@@ -245,8 +245,8 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--time_chunk</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p> Manual per-axis chunk sizes (used when auto_chunk is False).</p>
+    <p><strong>Default:</strong>&nbsp; `1`</p>
+    <p>Chunk size along the time axis. Applies only when `auto_chunk=False`.</p>
     <pre><code># Process one time point per chunk
     eubi configure conversion --auto_chunk False --time_chunk 1
     </code></pre>
@@ -255,7 +255,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--channel_chunk</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `1`</p>
     <p>Chunk size along the channel axis. Applies only when `auto_chunk=False`.</p>
     <pre><code># Process one channel per chunk
     eubi configure conversion --auto_chunk False --channel_chunk 1
@@ -265,7 +265,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--z_chunk</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `96`</p>
     <p>Chunk size along the z axis. Applies only when `auto_chunk=False`.</p>
     <pre><code># Set manual z chunk size (requires auto_chunk False)
     eubi configure conversion --auto_chunk False --z_chunk 64
@@ -275,7 +275,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--y_chunk</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `96`</p>
     <p>Chunk size along the y axis. Applies only when `auto_chunk=False`.</p>
     <pre><code># Set manual y chunk size (requires auto_chunk False)
     eubi configure conversion --auto_chunk False --y_chunk 256
@@ -285,7 +285,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--x_chunk</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `96`</p>
     <p>Chunk size along the x axis. Applies only when `auto_chunk=False`.</p>
     <pre><code># Set manual x chunk size (requires auto_chunk False)
     eubi configure conversion --auto_chunk False --x_chunk 256
@@ -295,8 +295,8 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--time_shard_coef</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p> Shard-to-chunk multipliers for Zarr v3 sharding (default 3 on spatial axes).</p>
+    <p><strong>Default:</strong>&nbsp; `1`</p>
+    <p>Shard size = chunk × coef for the time axis. Zarr v3 only — ignored for v2.</p>
     <pre><code># Shard = 1 × time chunk (no sharding on time axis)
     eubi configure conversion --ome_zarr_version 0.5 --time_shard_coef 1
     </code></pre>
@@ -305,7 +305,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--channel_shard_coef</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `1`</p>
     <p>Shard size = chunk × coef for the channel axis. Zarr v3 only — ignored for v2.</p>
     <pre><code># Shard = 1 × channel chunk
     eubi configure conversion --ome_zarr_version 0.5 --channel_shard_coef 1
@@ -315,7 +315,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--z_shard_coef</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `3`</p>
     <p>Shard size = chunk × coef for the z axis. Zarr v3 only — ignored for v2.</p>
     <pre><code># Shard = 5 × z chunk on the z axis
     eubi configure conversion --ome_zarr_version 0.5 --z_shard_coef 5
@@ -325,7 +325,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--y_shard_coef</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `3`</p>
     <p>Shard size = chunk × coef for the y axis. Zarr v3 only — ignored for v2.</p>
     <pre><code># Shard = 5 × y chunk on the y axis
     eubi configure conversion --ome_zarr_version 0.5 --y_shard_coef 5
@@ -335,7 +335,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--x_shard_coef</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `3`</p>
     <p>Shard size = chunk × coef for the x axis. Zarr v3 only — ignored for v2.</p>
     <pre><code># Shard = 5 × x chunk on the x axis
     eubi configure conversion --ome_zarr_version 0.5 --x_shard_coef 5
@@ -345,8 +345,8 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--time_range</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p> Crop ranges as `"start,stop"` strings applied before writing.</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>Crop the time axis before writing. Pass as a `"start,stop"` string (e.g. `"0,10"` to keep frames 0–9).</p>
     <pre><code># Keep only time frames 0–9 (start inclusive, stop exclusive)
     eubi configure conversion --time_range "0,10"
     </code></pre>
@@ -355,7 +355,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--channel_range</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Crop the channel axis. Same format as `time_range`, e.g. `"0,2"` keeps the first two channels.</p>
     <pre><code># Keep only the first two channels
     eubi configure conversion --channel_range "0,2"
@@ -365,7 +365,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--z_range</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Crop the z axis. Same format as `time_range`, e.g. `"5,50"` keeps z-slices 5–49.</p>
     <pre><code># Keep z-slices 5 through 49
     eubi configure conversion --z_range "5,50"
@@ -375,7 +375,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--y_range</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Crop the y axis. Same format as `time_range`.</p>
     <pre><code># Crop y to the first 512 pixels
     eubi configure conversion --y_range "0,512"
@@ -385,7 +385,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--x_range</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Crop the x axis. Same format as `time_range`.</p>
     <pre><code># Crop x to the first 512 pixels
     eubi configure conversion --x_range "0,512"
@@ -395,7 +395,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--compressor</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `blosc`</p>
     <p>Compression codec — `'blosc'` (default), `'gzip'`, `'zstd'`, `'bz2'`, or `'none'`.</p>
     <pre><code># Use zstd compression (good balance of speed and ratio)
     eubi configure conversion --compressor zstd
@@ -408,7 +408,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--compressor_params</code></summary>
     <p><strong>Type:</strong>&nbsp; `dict`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `{}`</p>
     <p>Dict of codec parameters, e.g. `{'cname': 'lz4', 'clevel': 5}`.</p>
     <pre><code># Use blosc with lz4 codec at compression level 9
     eubi configure conversion --compressor blosc --compressor_params '{"cname": "lz4", "clevel": 9}'
@@ -418,7 +418,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--overwrite</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--overwrite` to enable &nbsp;·&nbsp; `--overwrite False` to disable</p>
     <p>Overwrite existing output zarr (default False).</p>
     <pre><code># Allow overwriting an existing OME-Zarr at the output path
@@ -429,7 +429,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--save_omexml</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `True`</p>
     <p><strong>Valid values:</strong>&nbsp; `--save_omexml` to enable &nbsp;·&nbsp; `--save_omexml False` to disable</p>
     <p>Write a companion OME-XML file alongside the zarr (default True).</p>
     <pre><code># Disable OME-XML sidecar file generation
@@ -440,15 +440,15 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--export_acquisition_metadata</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p><strong>Valid values:</strong>&nbsp; `--export_acquisition_metadata` to enable &nbsp;·&nbsp; `--export_acquisition_metadata False` to disable</p>
-    <p>Write acquisition metadata that NGFF has no field for (view/illumination indices, objective NA, per-channel emission) into the namespaced `eubi_bridge` attrs</p>
+    <p>Write acquisition metadata that NGFF has no field for (view/illumination indices, objective NA, per-channel emission) into the namespaced `eubi_bridge` attrs block.  `None`/unset means auto: enabled when the conversion splits an acquisition into several containers, since that is when the relationship between the pieces would otherwise be lost.</p>
     </details>
 
     <details>
     <summary><code>--squeeze</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `True`</p>
     <p><strong>Valid values:</strong>&nbsp; `--squeeze` to enable &nbsp;·&nbsp; `--squeeze False` to disable</p>
     <p>Remove singleton dimensions before writing (default True).</p>
     <pre><code># Keep length-1 dimensions instead of removing them
@@ -459,7 +459,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--dtype</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `auto`</p>
     <p>Output dtype — `'auto'` keeps the source dtype, or any NumPy dtype string such as `'uint16'`.</p>
     <pre><code># Cast pixel values to uint8 on write (reduces file size)
     eubi configure conversion --dtype uint8
@@ -472,7 +472,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--verbose</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--verbose` to enable &nbsp;·&nbsp; `--verbose False` to disable</p>
     <p>Log verbose progress output (default False).</p>
     <pre><code># Enable verbose per-chunk progress logging
@@ -483,7 +483,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--io_backend</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `tensorstore`</p>
     <p>The bytes backend ome_zarr_pyramid writes with: `'tensorstore'` (default) or `'zarrista'` (Rust, via zarrs; `pip install "dyna-zarr[zarrista]"`). With either, shards larger than the region budget are written chunk by chunk in bounded memory (local outputs).</p>
     </details>
 
@@ -504,7 +504,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--n_layers</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Number of downscale pyramid levels to generate. `None` (default) auto-derives the count from `min_dimension_size`.</p>
     <pre><code># Generate 5 pyramid levels
     eubi configure downscale --n_layers 5
@@ -514,7 +514,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--min_dimension_size</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `64`</p>
     <p>Stop adding levels when the smallest spatial dimension falls below this pixel count (default 64).</p>
     <pre><code># Stop downscaling when the smallest spatial dimension is below 32 px
     eubi configure downscale --min_dimension_size 32
@@ -524,7 +524,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--time_scale_factor</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `1`</p>
     <p>Downscale factor along the time axis (default 1, i.e. no downscaling).</p>
     <pre><code># Disable time-axis downscaling (value 1 = no downscaling)
     eubi configure downscale --time_scale_factor 1
@@ -534,7 +534,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--channel_scale_factor</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `1`</p>
     <p>Downscale factor along the channel axis (default 1).</p>
     <pre><code># Disable channel-axis downscaling
     eubi configure downscale --channel_scale_factor 1
@@ -544,7 +544,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--z_scale_factor</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `2`</p>
     <p>Downscale factor along the z axis (default 2).</p>
     <pre><code># Isotropic downscaling on all spatial axes
     eubi configure downscale --z_scale_factor 2 --y_scale_factor 2 --x_scale_factor 2
@@ -557,7 +557,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--y_scale_factor</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `2`</p>
     <p>Downscale factor along the y axis (default 2).</p>
     <pre><code>eubi configure downscale --y_scale_factor 2
     </code></pre>
@@ -566,7 +566,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--x_scale_factor</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `2`</p>
     <p>Downscale factor along the x axis (default 2).</p>
     <pre><code>eubi configure downscale --x_scale_factor 2
     </code></pre>
@@ -575,7 +575,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--downscale_method</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `simple`</p>
     <p>Pixel aggregation method for downscaling — one of 'simple', 'mean', 'median', 'min', 'max', 'mode' (default 'simple').</p>
     <pre><code># Use mean aggregation (recommended for fluorescence images)
     eubi configure downscale --downscale_method mean
@@ -588,7 +588,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--keep_existing_resolutions</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--keep_existing_resolutions` to enable &nbsp;·&nbsp; `--keep_existing_resolutions False` to disable</p>
     <p>If the input format already carries its own multiscale pyramid (e.g. `.ims`, `.zarr`), write each existing resolution level straight to the output OME-Zarr instead of rebuilding the pyramid with the above scale factors (default False).</p>
     <pre><code># Copy a source pyramid (.ims / .zarr) verbatim instead of rebuilding it
@@ -599,7 +599,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--apply_smart_downscaling</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--apply_smart_downscaling` to enable &nbsp;·&nbsp; `--apply_smart_downscaling False` to disable</p>
     <p>Make the first pyramid level use automatically-computed factors that drive the voxels toward isotropy (default False).</p>
     <pre><code># Pick per-axis downscale factors automatically from voxel anisotropy
@@ -610,7 +610,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--time_smart_scale_factor</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Per-axis override for smart downscaling on the time axis (default None = auto).</p>
     <pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --time_smart_scale_factor 1
     </code></pre>
@@ -619,7 +619,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--z_smart_scale_factor</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Per-axis smart-downscaling override for z.</p>
     <pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --z_smart_scale_factor 1
     </code></pre>
@@ -628,7 +628,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--y_smart_scale_factor</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Per-axis smart-downscaling override for y.</p>
     <pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --y_smart_scale_factor 2
     </code></pre>
@@ -637,7 +637,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--x_smart_scale_factor</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Per-axis smart-downscaling override for x.</p>
     <pre><code>eubi to_zarr /data/input /data/output --apply_smart_downscaling --x_smart_scale_factor 2
     </code></pre>
@@ -660,18 +660,29 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--as_mosaic</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `True`</p>
     <p><strong>Valid values:</strong>&nbsp; `--as_mosaic` to enable &nbsp;·&nbsp; `--as_mosaic False` to disable</p>
-    <p>Treat tiled acquisitions as a stitched mosaic (default False).</p>
-    <pre><code># Stitch tiled acquisitions into a single mosaic array on read
-    eubi configure readers --as_mosaic
+    <p>Treat tiled acquisitions as a stitched mosaic (default True).</p>
+    <pre><code># Write each tile as its own OME-Zarr by default
+    eubi configure readers --as_mosaic False
+    </code></pre>
+    </details>
+
+    <details>
+    <summary><code>--as_plate</code></summary>
+    <p><strong>Type:</strong>&nbsp; boolean flag</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p><strong>Valid values:</strong>&nbsp; `--as_plate` to enable &nbsp;·&nbsp; `--as_plate False` to disable</p>
+    <p>Write a plate file as one NGFF plate store, in the OME-Zarr version asked for. Unset (the default): plate formats (Harmony, CellVoyager, MetaXpress, IN Cell) and files whose images sit in two or more wells (a CZI of several wells); a file whose images all sit in one well is converted per image. True: every file read as a plate. False: one store per image, with a warning. A plate whose fields hold several tiles needs as_mosaic=True in 0.4 / 0.5 / 0.6 (RFC 8 keeps the tiles).</p>
+    <pre><code># One store per image instead of one plate store
+    eubi to_zarr /data/plate /data/output --as_plate False
     </code></pre>
     </details>
 
     <details>
     <summary><code>--view_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>View index for multi-view formats (default 0). Pass `'all'` or a comma-separated list (e.g. `'0,2'`) to expose multiple views.</p>
     <pre><code># Write each view separately
     eubi configure readers --view_index all
@@ -684,7 +695,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--phase_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `0`</p>
     <p>Phase index (default 0).</p>
     <pre><code># Select phase index 1
     eubi configure readers --phase_index 1
@@ -694,7 +705,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--illumination_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>Illumination index (default 0). Pass `'all'` or a comma-separated list to expose multiple illuminations.</p>
     <pre><code># Write each illumination separately
     eubi configure readers --illumination_index all
@@ -707,7 +718,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--series_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>Series index to read (a series is what some formats call a scene).  Pass an integer, `'all'`, or a comma-separated list such as `'0,2,4'` (default 0).  Formerly `scene_index`, which still works, with a FutureWarning.</p>
     <pre><code># Always read series 2 from multi-series files
     eubi configure readers --series_index 2
@@ -723,7 +734,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--rotation_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `0`</p>
     <p>Rotation index (default 0).</p>
     <pre><code># Select rotation index 0
     eubi configure readers --rotation_index 0
@@ -733,7 +744,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--mosaic_tile_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `all`</p>
     <p>Mosaic tile index.  Pass an integer, `'all'`, or a comma-separated list (default None = all tiles).</p>
     <pre><code># Write every tile separately (default)
     eubi configure readers --mosaic_tile_index all
@@ -746,7 +757,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--sample_index</code></summary>
     <p><strong>Type:</strong>&nbsp; `int`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `0`</p>
     <p>Sample index (default 0).</p>
     <pre><code># Select sample index 0
     eubi configure readers --sample_index 0
@@ -756,7 +767,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--force_bioformats</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--force_bioformats` to enable &nbsp;·&nbsp; `--force_bioformats False` to disable</p>
     <p>Force the Java Bio-Formats reader even for formats EuBI-Bridge reads natively (CZI, ND2, LIF, IMS...); a fallback when a native read fails.</p>
     <pre><code># Always route reads through the Java Bio-Formats reader
@@ -767,7 +778,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--concat_views</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--concat_views` to enable &nbsp;·&nbsp; `--concat_views False` to disable</p>
     <p>Stack multiple views along the channel axis instead of writing separate OME-Zarr outputs (default False).</p>
     <pre><code># Always stack views onto the channel axis
@@ -778,7 +789,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--concat_illuminations</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--concat_illuminations` to enable &nbsp;·&nbsp; `--concat_illuminations False` to disable</p>
     <p>Stack multiple illuminations along the channel axis instead of writing separate OME-Zarr outputs (default False).</p>
     <pre><code># Always stack illuminations onto the channel axis
@@ -789,7 +800,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--pixel_reader</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `micro`</p>
     <p>`'micro'` (default): read the pixels with micro-reader (a file it does not read falls back to the standard reader with a warning), or `'standard'`.</p>
     </details>
 
@@ -810,7 +821,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--metadata_reader</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `micro`</p>
     <p>Metadata backend — `'micro'` (default): micro-reader's metadata, and its pixels with it (no JVM unless a file falls back to Bio-Formats; also writes the stage position as the NGFF translation and wavelengths in the `eubi_bridge` attributes); `'bfio'` or `'bioio'`.</p>
     <pre><code>eubi configure metadata --metadata_reader bfio
     </code></pre>
@@ -819,7 +830,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--override_channel_names</code></summary>
     <p><strong>Type:</strong>&nbsp; boolean flag</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `False`</p>
     <p><strong>Valid values:</strong>&nbsp; `--override_channel_names` to enable &nbsp;·&nbsp; `--override_channel_names False` to disable</p>
     <p>Replace channel names with ones derived from the concatenation tag values (default False).</p>
     <pre><code>eubi configure metadata --override_channel_names
@@ -829,7 +840,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--channel_intensity_limits</code></summary>
     <p><strong>Type:</strong>&nbsp; `Literal['from_dtype', 'from_array', 'auto']`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `from_dtype`</p>
     <p>How to set OMERO window limits — `'from_dtype'` (default) uses dtype min/max, `'from_array'` computes per-channel min/max from pixel data, `'auto'` gives a display window from a quick overview: the 0.1 and 99.9 percentiles of the smallest resolution level (the dtype's range when that level is over 64 MB).</p>
     <pre><code>eubi configure metadata --channel_intensity_limits from_array
     </code></pre>
@@ -838,7 +849,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--channel_colors</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `""`</p>
     <p>Per-channel colour overrides as `"0,FF0000;1,00FF00"`. Channels left out keep their source colour, or are given one automatically.</p>
     <pre><code>eubi configure metadata --channel_colors "0,FF0000;1,00FF00"
     </code></pre>
@@ -847,7 +858,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--channel_labels</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; `""`</p>
     <p>Per-channel name overrides as `"0,DAPI;1,GFP"`.</p>
     <pre><code>eubi configure metadata --channel_labels "0,DAPI;1,GFP"
     </code></pre>
@@ -856,7 +867,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--time_scale</code></summary>
     <p><strong>Type:</strong>&nbsp; `float`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Physical size of one time step. Unset keeps whatever the source file states.</p>
     <pre><code>eubi configure metadata --time_scale 2.5 --time_unit second
     </code></pre>
@@ -865,7 +876,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--z_scale</code></summary>
     <p><strong>Type:</strong>&nbsp; `float`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Physical pixel size along z (e.g. `0.5`). Unset keeps the source value.</p>
     <pre><code>eubi configure metadata --z_scale 0.5 --z_unit micrometer
     </code></pre>
@@ -874,7 +885,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--y_scale</code></summary>
     <p><strong>Type:</strong>&nbsp; `float`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Physical pixel size along y. Unset keeps the source value.</p>
     <pre><code>eubi configure metadata --y_scale 0.1 --y_unit micrometer
     </code></pre>
@@ -883,7 +894,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--x_scale</code></summary>
     <p><strong>Type:</strong>&nbsp; `float`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Physical pixel size along x. Unset keeps the source value.</p>
     <pre><code>eubi configure metadata --x_scale 0.1 --x_unit micrometer
     </code></pre>
@@ -892,7 +903,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--time_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Unit for `time_scale` (e.g. `'second'`).</p>
     <pre><code>eubi configure metadata --time_unit second
     </code></pre>
@@ -901,7 +912,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--z_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Unit for `z_scale` (e.g. `'micrometer'`).</p>
     <pre><code>eubi configure metadata --z_unit micrometer
     </code></pre>
@@ -910,7 +921,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--y_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Unit for `y_scale`.</p>
     <pre><code>eubi configure metadata --y_unit micrometer
     </code></pre>
@@ -919,7 +930,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--x_unit</code></summary>
     <p><strong>Type:</strong>&nbsp; `str`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Unit for `x_scale`.</p>
     <pre><code>eubi configure metadata --x_unit micrometer
     </code></pre>
@@ -942,7 +953,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--concatenation_axes</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `int` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Axes along which to concatenate files.  Pass a string of axis letters such as `'tc'` or `'z'`, or an integer axis index.  `None` disables aggregative mode entirely.</p>
     <pre><code># Concatenate files along the channel axis
     eubi configure concatenation --concatenation_axes c --channel_tag raw,mask
@@ -955,7 +966,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--time_tag</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `tuple` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Filename substring (or tuple of substrings) that identifies a file as contributing to the time axis.</p>
     <pre><code># Identify three time-point files by substrings in their names
     eubi configure concatenation --concatenation_axes t --time_tag t001,t002,t003
@@ -965,7 +976,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--channel_tag</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `tuple` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Filename substring (or tuple of substrings) identifying the channel axis.</p>
     <pre><code># Two channels — raw fluorescence and segmentation mask
     eubi configure concatenation --concatenation_axes c --channel_tag raw,mask
@@ -978,7 +989,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--z_tag</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `tuple` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Filename substring (or tuple of substrings) identifying the z axis.</p>
     <pre><code># Multiple z-slices acquired as separate files
     eubi configure concatenation --concatenation_axes z --z_tag slice001,slice002,slice003
@@ -988,7 +999,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--y_tag</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `tuple` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Filename substring (or tuple of substrings) identifying the y axis.</p>
     <pre><code># Two rows of a tile scan
     eubi configure concatenation --concatenation_axes y --y_tag row_top,row_bottom
@@ -998,7 +1009,7 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--x_tag</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `tuple` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
     <p>Filename substring (or tuple of substrings) identifying the x axis.</p>
     <pre><code># Two columns of a tile scan
     eubi configure concatenation --concatenation_axes x --x_tag col_left,col_right
@@ -1008,8 +1019,8 @@ Click any command card below to expand its full parameter reference.
     <details>
     <summary><code>--aggregative_group</code></summary>
     <p><strong>Type:</strong>&nbsp; `str` or `None`</p>
-    <p><strong>Default:</strong>&nbsp; `default`</p>
-    <p>Name prefixed to the concatenated output, so several concatenated outputs from one run stay distinguishable. In a conversion table, rows sharing this value are concatenated together and a blank one converts on its own.  Prefer short</p>
+    <p><strong>Default:</strong>&nbsp; —</p>
+    <p>Name prefixed to the concatenated output, so several concatenated outputs from one run stay distinguishable. In a conversion table, rows sharing this value are concatenated together and a blank one converts on its own.  Prefer short labels such as `gr1` or `A`: it becomes part of the output filename.</p>
     </details>
 
 

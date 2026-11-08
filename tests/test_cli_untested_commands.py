@@ -206,7 +206,7 @@ class TestChannelAxisUnit:
         source = tmp_path / "img.tif"
         tifffile.imwrite(
             source, np.random.randint(0, 255, (3, 16, 16)).astype(np.uint8),
-            imagej=True, metadata={"axes": "CYX"})
+            imagej=True, resolution=(2, 2), metadata={"axes": "CYX", "unit": "um"})
         out = tmp_path / "out"
         bridge.to_zarr(str(source), str(out), zarr_format=zarr_format,
                        verbose=False)

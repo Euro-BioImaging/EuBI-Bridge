@@ -275,35 +275,106 @@ def _memory_plan_for(array, job: ConversionJob) -> tuple:
     at once."""
     from eubi_bridge.core import memory
     clus = job.cluster
-    process = clus.process_memory_mb or memory.process_mb(clus)
-    micro = job.readers.pixel_reader == 'micro' or job.metadata.metadata_reader == 'micro'
-    threads = None
+    micro = _is_micro(job)
+    unit = _unit_mb(array) if micro else None
+    process, sharers = _process_now(clus)
+    p = _plan(job, unit, process, sharers)
     if micro:
-        unit = _unit_mb(array)
-        threads = memory.decode_threads(clus.decode_threads, _decode_sharers(clus), process,
-                                        unit)
-        decode, cache = memory.reader_share(process, clus.decode_memory, threads, unit)
         from eubi_bridge.core.micro_source import set_read_concurrency, set_read_memory
-        set_read_concurrency(threads)
-        set_read_memory(decode, cache)
+        set_read_concurrency(p['decode_threads'])
+        set_read_memory(p['decode'], p['cache'])
+    region = memory.region_mb(clus.region_size_mb, p['scene'], p['threads'])
+    threads = p['decode_threads']
+    reading = (f"{p['reader']:.0f} MB reading"
+               + (f" ({threads} decode threads)" if threads else ""))
+    line = (f"Memory: {process:.0f} MB for this conversion = {p['held']:.0f} MB already "
+            f"held + {reading} + {p['scene']:.0f} MB writing per scene ({p['scenes']} at "
+            f"once); regions of {region:.0f} MB")
+    # once per process for each plan: a plate asks for one per field
+    (logger.debug if line in _memory_logged else logger.info)(line)
+    _memory_logged.add(line)
+    return p['scene'], region
+
+
+_memory_logged: set = set()
+
+
+def _is_micro(job) -> bool:
+    return job.readers.pixel_reader == 'micro' or job.metadata.metadata_reader == 'micro'
+
+
+def _process_now(clus) -> tuple:
+    """``(this conversion's memory in MB, conversions sharing the cores)`` now: as the
+    dispatcher planned it, grown by what conversions of the run that have ended left
+    free (core/memory_share.regrow)."""
+    from eubi_bridge.core import memory
+    process = clus.process_memory_mb or memory.process_mb(clus)
+    sharers = _decode_sharers(clus)
+    if clus.memory_claim and not clus.on_slurm:
+        from eubi_bridge.core.memory_share import regrow
+        grown = regrow(clus.memory_claim)
+        if grown is not None:
+            process = max(process, grown[0])
+            if not clus.use_threading:     # threads of one process share one pool anyway
+                sharers = max(1, min(sharers, int(grown[1])))
+    return process, sharers
+
+
+def _plan(job, unit, process: float, sharers: int, quiet: bool = False) -> dict:
+    """One conversion's plan for *process* MB beside *sharers* conversions: micro-reader's
+    decode threads and memory, what is left per scene for writing, and its threads."""
+    from eubi_bridge.core import memory
+    clus = job.cluster
+    threads = decode = cache = None
+    if _is_micro(job):
+        threads = memory.decode_threads(clus.decode_threads, sharers, process, unit)
+        decode, cache = memory.reader_share(process, clus.decode_memory, threads, unit,
+                                            quiet=quiet)
         reader = decode + cache
     else:                                                    # Bio-Formats: the JVM heap
         reader = memory.parse_mb(clus.jvm_memory or '1g')
     held = memory.baseline_mb()
     scenes = max(1, int(clus.max_concurrent_scenes or 1))
-    scene = memory.scene_mb(process, held, reader, scenes)
-    region = memory.region_mb(clus.region_size_mb, scene, _threads_per_scene(clus))
-    reading = f"{reader:.0f} MB reading" + (f" ({threads} decode threads)" if threads else "")
-    line = (f"Memory: {process:.0f} MB for this conversion = {held:.0f} MB already held + "
-            f"{reading} + {scene:.0f} MB writing per scene ({scenes} at once); "
-            f"regions of {region:.0f} MB")
-    # once per process for each plan: a plate asks for one per field
-    (logger.debug if line in _memory_logged else logger.info)(line)
-    _memory_logged.add(line)
-    return scene, region
+    write = max(1, memory.write_threads(clus.max_threads or "auto", sharers) // scenes)
+    return dict(scene=memory.scene_mb(process, held, reader, scenes, quiet=quiet),
+                threads=write,
+                decode_threads=threads, decode=decode, cache=cache, reader=reader,
+                held=held, scenes=scenes)
 
 
-_memory_logged: set = set()
+def _write_share(array, job, label: Optional[str] = None):
+    """The writer's memory share for one output (dyna-zarr's ``io.memory_share``):
+    ``share() -> (write budget MB, write threads)`` now, or None when this conversion
+    holds no claim. When conversions of the run have ended, the plan is made again with
+    the grown memory and fewer conversions sharing the cores; micro-reader's decode
+    threads and memory follow (they only grow)."""
+    clus = job.cluster
+    if not clus.memory_claim or clus.on_slurm:
+        return None
+    micro = _is_micro(job)
+    unit = _unit_mb(array) if micro else None
+    label = label or os.path.basename(str(job.input_path or "")) or "output"
+    said = {"process": None}
+
+    def share():
+        process, sharers = _process_now(clus)
+        p = _plan(job, unit, process, sharers, quiet=True)
+        if micro:
+            import micro_reader
+
+            from eubi_bridge.core.micro_source import set_read_concurrency, set_read_memory
+            if p['decode_threads'] > micro_reader.decode_threads():
+                set_read_concurrency(p['decode_threads'])
+            set_read_memory(p['decode'], p['cache'])
+        if said["process"] is not None and process > said["process"] + 1.0:
+            logger.info(f"{label}: conversions of this run have ended; this one now has "
+                        f"{process:.0f} MB ({p['scene']:.0f} MB writing, {p['threads']} "
+                        f"threads" + (f", {p['decode_threads']} decode threads"
+                                      if p['decode_threads'] else "") + ").")
+        said["process"] = process if said["process"] is None else max(said["process"],
+                                                                      process)
+        return p['scene'], p['threads']
+    return share
 
 
 def _decode_sharers(clus) -> int:
@@ -400,7 +471,8 @@ async def unary_worker(job: ConversionJob) -> None:
 
 
 def _report_failures(results: list, job: ConversionJob, total_in_file: int = 0) -> None:
-    """Log the outputs that failed; raise when all did."""
+    """Log the outputs that failed and raise: a batch script must not read a partial
+    conversion as a success (the outputs written stay)."""
     failures = [r for r in results if isinstance(r, BaseException)]
     if failures:
         from eubi_bridge.conversion.pyramid_path import ReaderCapabilityError
@@ -427,6 +499,8 @@ def _report_failures(results: list, job: ConversionJob, total_in_file: int = 0) 
             f"The file itself may still be fine; if the reason names damaged or "
             f"corrupt data, re-export or repair the source file.\n" + "=" * 78
         )
+        raise RuntimeError(f"{job.input_path}: partial conversion, {written} of "
+                           f"{total_in_file} scene(s) written: {reasons}")
 
 
 @safe_worker_wrapper
@@ -439,8 +513,24 @@ def unary_worker_sync(job: ConversionJob) -> dict:
     """
     import concurrent.futures
     from eubi_bridge.core.memory import baseline_mb
+    from eubi_bridge.core.memory_share import task_claim
     baseline_mb()            # what this process holds before it reads anything
 
+    with task_claim(job.cluster.process_memory_mb, job.cluster.on_slurm,
+                    os.path.basename(str(job.input_path))) as claim:
+        update = {}
+        if claim.mb and claim.mb != job.cluster.process_memory_mb:
+            update['process_memory_mb'] = claim.mb
+        if claim.path is not None:
+            update['memory_claim'] = str(claim.path)
+        if update:
+            job = job.model_copy(update={'cluster': job.cluster.model_copy(update=update)})
+        return _unary_worker_sync(job)
+
+
+def _unary_worker_sync(job: ConversionJob) -> dict:
+    """unary_worker_sync's work, with this conversion's memory claimed."""
+    import concurrent.futures
     if job.conversion.verbose:
         logger.info(f"[Worker] Processing: {job.input_path}")
 
@@ -476,8 +566,22 @@ def aggregative_worker_from_paths(
     """
     import concurrent.futures
     from eubi_bridge.core.memory import baseline_mb
+    from eubi_bridge.core.memory_share import task_claim
     baseline_mb()            # what this process holds before it reads anything
 
+    wanted = job_kwargs.get('process_memory_mb')
+    with task_claim(wanted, bool(job_kwargs.get('on_slurm')),
+                    os.path.basename(str(output_path))) as claim:
+        if claim.mb and claim.mb != wanted:
+            job_kwargs = {**job_kwargs, 'process_memory_mb': claim.mb}
+        if claim.path is not None:
+            job_kwargs = {**job_kwargs, 'memory_claim': str(claim.path)}
+        return _aggregative_worker_from_paths(file_paths, output_path, job_kwargs)
+
+
+def _aggregative_worker_from_paths(file_paths, output_path, job_kwargs) -> dict:
+    """aggregative_worker_from_paths' work, with this output's memory claimed."""
+    import concurrent.futures
     soft_start_jvm()
 
     def _run():

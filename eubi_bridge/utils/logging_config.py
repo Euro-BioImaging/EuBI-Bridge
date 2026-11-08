@@ -65,6 +65,11 @@ def setup_logging(level=logging.INFO):
         log.propagate = False
         log.setLevel(logging.CRITICAL)
 
+    # a worker process of a run that writes its log to a file appends to it too
+    # (Workplan E26; utils/run_log.py)
+    from eubi_bridge.utils.run_log import add_worker_handler
+    add_worker_handler(root_logger)
+
 
 def get_logger(name: str) -> logging.Logger:
     """Return a namespaced logger under eubi_bridge"""

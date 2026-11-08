@@ -75,6 +75,7 @@ def _convert(src: Path, out: Path, args: list) -> str:
 
 
 ALL = ["--series_index", "all", "--mosaic_tile_index", "all"]
+TILES = [*ALL, "--as_mosaic", "False"]
 CASES = {
     "defaults": ALL,
     "settings": ALL + ["--channel_labels", "0,Nuclei;1,auto", "--channel_colors", "1,red",
@@ -162,23 +163,23 @@ def _mosaic_czi(path: Path, tiles_per_scene=(4, 4)) -> Path:
     return path
 
 
-@pytest.mark.parametrize("args", [ALL, ["--series_index", "all", "--as_mosaic"]],
+@pytest.mark.parametrize("args", [TILES, ["--series_index", "all"]],
                          ids=["tiles", "stitched"])
 def test_czi_mosaics_on_both_paths(tmp_path, args):
     """Step 1c, group 3: tiles as separate outputs (named, positioned) or stitched."""
     src = _mosaic_czi(tmp_path / "mosaic.czi")
     log = _convert(src, tmp_path / "new", args)
     assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
-    new = _golden.check(f"pyramid_path-czi_mosaic-{'tiles' if args is ALL else 'stitched'}",
+    new = _golden.check(f"pyramid_path-czi_mosaic-{'tiles' if args is TILES else 'stitched'}",
                         tmp_path / "new", tmp_path)
-    assert len(new) == (8 if args is ALL else 2)
+    assert len(new) == (8 if args is TILES else 2)
 
 
 def test_each_scene_has_its_own_tiles(tmp_path):
     """Roadmap 'Bug: scenes with different tile counts': 0.1.5 used scene 0's tile count
     for every scene. The new path writes each scene's own tiles, at their own places."""
     src = _mosaic_czi(tmp_path / "mosaic.czi", tiles_per_scene=(2, 3))
-    _convert(src, tmp_path / "new", ALL)
+    _convert(src, tmp_path / "new", TILES)
     names = sorted(p.name for p in (tmp_path / "new").glob("*.zarr"))
     assert names == ["mosaic_scene0_tile0.zarr", "mosaic_scene0_tile1.zarr",
                      "mosaic_scene1_tile0.zarr", "mosaic_scene1_tile1.zarr",
@@ -444,3 +445,17 @@ def test_smart_downscaling_makes_the_levels_isotropic(tmp_path):
     scales = [d["coordinateTransformations"][0]["scale"][-3:] for d in datasets]
     assert scales == [[2.0, 0.5, 0.5], [2.0, 2.0, 2.0]]
     assert group[datasets[1]["path"]].shape[-3:] == (8, 32, 40)
+
+
+def test_a_size_without_its_unit_beside_one_with_a_unit_is_said(tmp_path):
+    """review cycle 1, N-26: --y_scale 0.1 --x_scale 0.1 --x_unit micrometer wrote y as a
+    relative size, no unit, in silence (and the NOT CALIBRATED line was gone too)."""
+    src = tmp_path / "u.tif"
+    tifffile.imwrite(str(src), np.zeros((4, 16, 16), "u1"))
+    log = _convert(src, tmp_path / "a", ["--z_scale", "0.5", "--y_scale", "0.1", "--x_scale",
+                                         "0.1", "--x_unit", "micrometer"])
+    assert "a size is given for z, y but no unit, while x is in micrometer" in log
+    assert "add --z_unit micrometer --y_unit micrometer" in log
+    log = _convert(src, tmp_path / "b", ["--y_scale", "0.1", "--x_scale", "0.1", "--y_unit",
+                                         "micrometer", "--x_unit", "micrometer"])
+    assert "relative size" not in log

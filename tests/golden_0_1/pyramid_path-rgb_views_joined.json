@@ -17,13 +17,11 @@
       },
       {
        "name": "y",
-       "type": "space",
-       "unit": "micrometer"
+       "type": "space"
       },
       {
        "name": "x",
-       "type": "space",
-       "unit": "micrometer"
+       "type": "space"
       }
      ],
      "datasets": [

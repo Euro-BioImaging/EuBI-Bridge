@@ -247,7 +247,7 @@ def _build_kwargs(config: dict) -> dict:
                                      else "standard"),
         "series_index":             series_idx,
         "mosaic_tile_index":        mosaic_idx,
-        "as_mosaic":                reader_config.get("readAsMosaic", False),
+        "as_mosaic":                reader_config.get("readAsMosaic", True),
         "as_plate":                 reader_config.get("asPlate"),
         "view_index":               view_idx,
         "phase_index":              _parse_index(reader_config.get("phaseIndex", "0")),

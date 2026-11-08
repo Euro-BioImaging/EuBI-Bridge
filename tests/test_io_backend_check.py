@@ -1,6 +1,7 @@
 """io_backend='zarrista' without zarrista installed: one clear error before any
 file is converted, for a run's own setting and for a table row naming it."""
 import os
+import sys
 
 import pandas as pd
 import pytest
@@ -59,3 +60,19 @@ def test_a_table_row_naming_zarrista_stops_the_run(tmp_path, no_zarrista, no_dis
                   "io_backend": ["tensorstore", "zarrista"]}).to_csv(table, index=False)
     with pytest.raises(IOBackendUnavailableError):
         EuBIBridge().to_zarr(str(table), str(tmp_path / "out"))
+
+
+def test_the_command_line_says_it_in_one_line(monkeypatch, capsys):
+    """review cycle 1, N-27: the message came after a full traceback."""
+    from eubi_bridge import cli
+    import fire
+
+    def refuse(_component):
+        raise IOBackendUnavailableError("io_backend='zarrista' is set ... not installed")
+    monkeypatch.setattr(fire, "Fire", refuse)
+    monkeypatch.setattr(sys, "argv", ["eubi", "to_zarr", "x.czi", "out"])
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+    assert caught.value.code == 1
+    err = capsys.readouterr().err
+    assert "ERROR: io_backend='zarrista' is set" in err and "Traceback" not in err

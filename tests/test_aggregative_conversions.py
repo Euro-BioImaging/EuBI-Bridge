@@ -374,7 +374,7 @@ class TestNoMatchingTags:
         # Must fail with explicit error message
         assert result.returncode != 0, f"Expected failure but got success. stderr: {result.stderr}"
         # Verify error message is explicit about tag mismatch
-        assert 'does not match any files' in result.stderr, f"Expected error about tag not matching files. Got: {result.stderr}"
+        assert 'matches no file below the input' in result.stderr, f"Expected error about tag not matching files. Got: {result.stderr}"
 
     def test_single_categorical_tag_gives_clear_error(self, aggregative_channel_categorical_files, tmp_path):
         """A single categorical channel tag (present in filenames but with no

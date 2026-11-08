@@ -14,8 +14,7 @@
      "axes": [
       {
        "name": "t",
-       "type": "time",
-       "unit": "second"
+       "type": "time"
       },
       {
        "name": "c",

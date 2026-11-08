@@ -119,6 +119,11 @@ To upgrade an existing installation to the latest release:
 pip install --upgrade eubi-bridge   # or: pip install --upgrade eubi-bridge-lite
 ```
 
+This also upgrades micro-reader and ome-zarr-pyramid to the releases it needs (0.3.4:
+micro-reader 0.4 and ome-zarr-pyramid 0.6, which write no invented calibration). If you
+installed them on their own, or with `--no-deps`, upgrade them too:
+`pip install --upgrade micro-reader ome-zarr-pyramid`.
+
 Then, after installing or upgrading, run this once:
 
 ```bash
@@ -126,8 +131,9 @@ eubi reset_config
 ```
 
 EuBI-Bridge keeps your settings in a configuration file. That file is written the
-first time you run the tool, and later versions do not change it. So if you have
-used EuBI-Bridge before, you keep the old defaults until you reset it.
+first time you run the tool, and later versions change it only where a release says so
+(0.3.4 sets the image indices to `all` once, with a line saying so). So if you have
+used EuBI-Bridge before, you keep the other old defaults until you reset it.
 
 - Resetting gives you the current defaults. For example, files are now read with
   micro-reader, and Java only starts if a file needs Bio-Formats.

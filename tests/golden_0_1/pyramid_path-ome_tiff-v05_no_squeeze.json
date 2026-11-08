@@ -15,8 +15,7 @@
       "axes": [
        {
         "name": "t",
-        "type": "time",
-        "unit": "second"
+        "type": "time"
        },
        {
         "name": "c",
@@ -24,8 +23,7 @@
        },
        {
         "name": "z",
-        "type": "space",
-        "unit": "micrometer"
+        "type": "space"
        },
        {
         "name": "y",
@@ -45,7 +43,7 @@
           "scale": [
            1.0,
            1.0,
-           0.25,
+           1.0,
            0.25,
            0.25
           ],

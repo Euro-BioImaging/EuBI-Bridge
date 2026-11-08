@@ -264,7 +264,7 @@ def test_a_file_in_use_is_not_closed(tmp_path, monkeypatch):
         for p in paths[1:]:
             with micro_source._using(p, "separate"):
                 pass
-        assert held.file.images[0][...][0, 0] == 0                # still open under its user
+        assert held.file.images[0][...].ravel()[0] == 0           # still open under its user
     assert len(micro_source._files) <= 1
 
 

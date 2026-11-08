@@ -38,9 +38,10 @@ class TestDisambiguation:
         assert result["/a/img.tif"] == "a_img"
 
     def test_shared_parent_walks_further_up(self):
-        """A common parent cannot disambiguate; keep climbing until it does."""
+        """A common parent cannot disambiguate; keep climbing until it does, keeping the
+        folders climbed (r1_s_img, not r1_img: the name maps back to its path)."""
         result = disambiguate_output_names(["/r1/s/img.tif", "/r2/s/img.tif"])
-        assert result == {"/r1/s/img.tif": "r1_img", "/r2/s/img.tif": "r2_img"}
+        assert result == {"/r1/s/img.tif": "r1_s_img", "/r2/s/img.tif": "r2_s_img"}
 
     def test_three_way_collision(self):
         result = disambiguate_output_names(
@@ -219,3 +220,13 @@ class TestGeneratedPath:
         """Disambiguation must not disturb multi-scene/tile naming."""
         assert _generate_output_path(
             "/out", "/a/img.tif", scene, tile, resolved_basename="A_img") == expected
+
+
+def test_names_come_from_the_folders_below_the_common_root():
+    # review cycle 1, N-19: coll/a/img was named coll_img (the input folder every file shares)
+    # and coll/c/a/img c_img (its own folder dropped)
+    from eubi_bridge.utils.path_utils import disambiguate_output_names
+    assert disambiguate_output_names(["/x/coll/a/img.tif", "/x/coll/b/img.tif",
+                                      "/x/coll/c/a/img.tif"]) == {
+        "/x/coll/a/img.tif": "a_img", "/x/coll/b/img.tif": "b_img",
+        "/x/coll/c/a/img.tif": "c_a_img"}

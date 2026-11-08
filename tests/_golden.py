@@ -33,6 +33,12 @@ Changes made to them since, by hand or by script, never by recording:
   colours alone; no re-recording. metadata_path-auto_windows-v2/-v3 (compared with the
   converted store, not the updated one) had their two white channels set by hand to
   DAPI's and GFP's colours (``wavelength_color(461)`` / ``(509)``).
+- 2026-11-03 (0.3.4, ozp 0.6.0): the unit of a one-step t or z the file gives no size for
+  (``second``, ``micrometer`` with ``squeeze=False``) dropped from 5 goldens
+  (metadata_path-channel_meta-*, -from_array_windows-*, pyramid_path-ome_tiff-v05_no_squeeze)
+  by ``tools/drop_one_step_units_from_goldens.py``, which checks each axis is t or z with
+  ozp's default unit and, where levels are held, size 1; the comparison tests found these
+  keys the only difference. No re-recording (tenth review N-08).
 """
 from __future__ import annotations
 
@@ -184,12 +190,26 @@ def fingerprint(array) -> list:
     return [list(array.shape), str(array.dtype), hashlib.sha256(array.tobytes()).hexdigest()]
 
 
+def _unnamed(attrs: dict) -> dict:
+    """`attrs` without the multiscales name, and with the source's file name only: 0.1.x wrote
+    'Series 0' everywhere and the full path, 0.3.4 the image's name and the file's
+    (test_mosaic_default, test_gap_hunt_4)."""
+    attrs = json.loads(json.dumps(attrs))
+    for holder in (attrs, attrs.get("ome") or {}):
+        for multiscale in holder.get("multiscales") or ():
+            multiscale.pop("name", None)
+        acquisition = (holder.get("eubi_bridge") or {}).get("acquisition") or {}
+        if "source_path" in acquisition:
+            acquisition["source_path"] = acquisition["source_path"].replace("\\", "/").rsplit("/")[-1]
+    return attrs
+
+
 def assert_same(expected: dict, actual: dict, what: str = "") -> None:
     """Every store, attribute and level of `actual` as in `expected`."""
     assert sorted(actual) == sorted(expected), f"{what}: stores {sorted(actual)} != {sorted(expected)}"
     for store in expected:
         e, a = expected[store], actual[store]
-        assert a["attrs"] == e["attrs"], f"{what}: {store} attributes differ"
+        assert _unnamed(a["attrs"]) == _unnamed(e["attrs"]), f"{what}: {store} attributes differ"
         assert a["levels"] == e["levels"], f"{what}: {store} levels differ"
 
 

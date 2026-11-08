@@ -12,17 +12,23 @@ reference in ``legacy_0_1/``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import glob
 import json
 import logging
 import os
 import pathlib
 import re
+import shutil
+import uuid
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
+from eubi_bridge.utils.errors import InputError
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import named_folder, output_stem
 
@@ -80,19 +86,27 @@ FORMATS = (".ome.tif", ".ome.tiff",
            ".xlif", ".xlcf", ".lof", ".ndpis", ".omp2info", ".companion.ome",
            # 0.3.3: plates micro-reader reads from 0.3.0 on (FORMATS_SINCE): Opera Flex,
            # ImageXpress HCS.ai, Cellomics; Columbus and scanR index files are .xml
-           ".flex", ".jdce", ".c01")
+           ".flex", ".jdce", ".c01",
+           # 0.3.4: KLB, micro-reader's own reader: every time point (Bio-Formats keeps the
+           # first of test.klb's 10), and no Java, so eubi-bridge-lite reads it too
+           ".klb")
 #: formats on the route only from a micro-reader release on (with an older one, the older
 #: readers read them): VSI from 0.3.0, the first that fills a slide's unscanned tiles with
 #: the ETS background colour, as Bio-Formats does (0.2.x left them black); the plate
-#: formats micro-reader 0.3.0 added
+#: formats micro-reader 0.3.0 added; KLB from 0.4.0, its first reader of it
 FORMATS_SINCE = {".vsi": (0, 3, 0), ".flex": (0, 3, 0), ".jdce": (0, 3, 0),
-                 ".c01": (0, 3, 0)}
+                 ".c01": (0, 3, 0), ".klb": (0, 4, 0)}
 #: micro-reader's name of the series index (micro-reader 0.1.0; it was "scene"). The
 #: older readers (legacy_image) and the aggregative path name their index the same, so
 #: one name serves every file; eubi's own option for it is series_index
 SERIES = "series"
-#: image indices outputs are selected by
+#: image indices outputs are selected by; every other index (block, excitation,
+#: lifetime, a BigDataViewer file's sequence, ...) gives one output per value, its
+#: name ending in the index (``_block1``, decision E-1)
 INDICES = {SERIES, "tile", "view", "illumination"}
+#: indices eubi-bridge has an option for that picks one value (0 by default): one output,
+#: named as without the index
+PICKED = {"phase": "phase_index", "rotation": "rotation_index"}
 #: the image indices of a plate file (micro-reader's plates=True)
 PLATE_INDICES = {"plate", "acquisition", "well", "field"}
 #: micro-reader's plate formats (always plate acquisitions, even a one-well subset): with
@@ -102,7 +116,7 @@ PLATE_BACKENDS = {"harmony", "cv7000", "metaxpress", "incell",
                   "flex", "columbus", "scanr", "cellomics", "jdce"}
 #: eubi-bridge's channel_intensity_limits -> ozp's write_pyramid(windows=...)
 WINDOWS = {"from_dtype": "dtype", "from_array": "data", "auto": "auto"}
-#: the multiscale name eubi-bridge writes
+#: the multiscale name of an output with no image name of its own (a joined set)
 NAME = "Series 0"
 
 
@@ -176,9 +190,23 @@ def _positions(value, count: int, what: str) -> list:
         logger.warning(f"Skipping out-of-range {what} indices: {set(wanted) - set(valid)}")
     if not valid:
         counted = what if what.endswith("s") else f"{what}(s)"       # "series" stays
-        raise ValueError(f"No valid {what} index in {sorted(set(wanted))}: the file has "
+        # the user's choice, so one line (an InputError is a ValueError, as before)
+        raise InputError(f"No valid {what} index in {sorted(set(wanted))}: the file has "
                          f"{count} {counted}, so valid indices are 0..{count - 1}.")
     return valid
+
+
+def _check_positions(value, count: int, what: str, name: str, option: str) -> None:
+    """A view / illumination index given for a file: refused when the file has none of
+    them or none it names, positions it lacks skipped with a warning, as for series and
+    tiles (review cycle 1, N-24: --view_index 3 on a file without views was ignored in
+    silence). The default (0) and 'all' always fit."""
+    if value == "all" or value == 0:
+        return
+    if count <= 1 and (not isinstance(value, list) or any(v != 0 for v in value)):
+        raise InputError(f"{name} has no {what}s: {option} {value} has none to pick "
+                         f"(leave it out).")
+    _positions(value, count, what)
 
 
 def _tile_positions(value, count: int, scene: int) -> list:
@@ -215,8 +243,46 @@ def _values(keys, name) -> list:
     return found or [None]
 
 
+def _other_values(keys) -> list:
+    """The combinations of the indices outside INDICES among *keys*, sorted: one tuple
+    of (name, value) per output they ask for; ``[()]`` when there are none."""
+    return sorted({tuple((k, v) for k, v in key if k not in INDICES) for key in keys})
+
+
+def _other_suffix(other: tuple, varying) -> str:
+    """The end of an output's name: the indices with more than one value in the file."""
+    return "".join(f"_{name}{value}" for name, value in other
+                   if name not in PICKED and name in varying)
+
+
+def _picked(keys, readers, file_name: str) -> list:
+    """*keys* with one value of each index in PICKED: the one its option asks for."""
+    for name, option in PICKED.items():
+        values = _values(keys, name)
+        at = int(getattr(readers, option, 0) or 0)
+        if values == [None]:
+            if at:
+                # cycle 2, R2-02: ignored with exit 0, unlike the other index options
+                raise InputError(f"{file_name} has no {name}s: --{option} {at} has none to "
+                                 f"pick (leave it out).")
+            continue
+        if not 0 <= at < len(values):
+            raise InputError(f"No valid {name} index in [{at}]: {file_name} has "
+                             f"{len(values)} {name}(s), so valid indices are "
+                             f"0..{len(values) - 1}.")
+        keys = [k for k in keys if dict(k).get(name) == values[at]]
+    return keys
+
+
+def _full_key(key: tuple, other: tuple, keys) -> tuple:
+    """The key among *keys* of the image *key* selects, with the values *other*: index
+    names in the file's order."""
+    wanted = {**dict(key), **dict(other)}
+    return next(k for k in keys if dict(k) == wanted)
+
+
 def _key(scene, tile, view, illumination) -> tuple:
-    out = [(SERIES, scene)]
+    out = [(SERIES, scene)] if scene is not None else []      # plate formats have no series
     for name, value in (("tile", tile), ("view", view), ("illumination", illumination)):
         if value is not None:
             out.append((name, value))
@@ -230,7 +296,8 @@ def _joined(parts, path):
     try:
         return concatenate(parts, axis="c")
     except ValueError as exc:
-        raise ValueError(
+        # what the user asked for (--concat_views) cannot be: one line, no traceback
+        raise InputError(
             f"{os.path.basename(path)}: its views / illuminations cannot be joined into one "
             f"image: {exc}. An OME-Zarr image has one pixel size and one position per axis "
             f"for all its channels, so images that differ in either cannot share it. "
@@ -317,11 +384,49 @@ class _MicroFile:
         self._f.close()
 
 
+def _opened(path: str, tiles: str, **options):
+    """micro-reader's file. Its MissingImagesWarning, parts of a set that are missing and read
+    as zeros, goes to the run's log as a warning, where the user looks."""
+    import warnings
+
+    import micro_reader
+
+    from eubi_bridge.core.micro_source import open_renamed
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        f = open_renamed(path, tiles=tiles, **options)
+    missing = getattr(micro_reader, "MissingImagesWarning", ())
+    for caught in seen:
+        if issubclass(caught.category, missing):
+            logger.warning(f"{os.path.basename(path)}: {caught.message}")
+        else:
+            warnings.warn_explicit(caught.message, caught.category, caught.filename, caught.lineno)
+    return f
+
+
+def _open_tiles(path: str, job) -> tuple:
+    """``(file, tiles)``: *path* with its tiles stitched (as_mosaic, the default). A file whose
+    tiles cannot be placed keeps them as images, with a warning; one micro-reader does not read
+    at all raises from the second open as from the first."""
+    import micro_reader
+
+    options = dict(axes="tczyx", samples="channels", plates=True)
+    if not job.readers.as_mosaic:
+        return _opened(path, "separate", **options), "separate"
+    try:
+        return _opened(path, "mosaic", **options), "mosaic"
+    except (micro_reader.UnsupportedFormatError, ValueError) as exc:
+        f = _opened(path, "separate", **options)
+        logger.warning(f"{os.path.basename(path)}: its tiles cannot be stitched ({exc}): they "
+                       f"stay separate.")
+        return f, "separate"
+
+
 def _open_micro(job) -> _MicroFile:
     """The file opened with micro-reader, or ``NotYet`` when it is not micro-reader's."""
     import micro_reader
 
-    from eubi_bridge.core.micro_source import (RENAME, require_micro_reader,
+    from eubi_bridge.core.micro_source import (require_micro_reader,
                                                set_read_concurrency)
     reason = _micro_reason(job, suffix=False)
     if reason:
@@ -337,13 +442,19 @@ def _open_micro(job) -> _MicroFile:
     from eubi_bridge.core.memory import decode_threads
     set_read_concurrency(decode_threads(job.cluster.decode_threads, _decode_sharers(job.cluster)))
     path = str(job.input_path)
-    tiles = "mosaic" if job.readers.as_mosaic else "separate"
     try:
         # plates=True: a plate file is read as one (File.plates); other files are not
         # changed by it
-        f = micro_reader.open(path, tiles=tiles, rename=RENAME, axes="tczyx",
-                              samples="channels", plates=True)
+        f, tiles = _open_tiles(path, job)
     except micro_reader.UnsupportedFormatError as exc:
+        from eubi_bridge.conversion.dispatcher import _not_in_its_set
+        if _not_in_its_set(str(exc)):
+            # a side file of a set that does not list it (a CQ1 measurement's calibration
+            # images): no image of its own, so no other reader either. Among several inputs
+            # the run skips it (_report_failures), alone it fails in one line; the older
+            # readers were tried first: a JVM started for nothing, and lite failed the run
+            # with NeedsFullEubiBridge (review cycle 2, R2-07)
+            raise InputError(f"{os.path.basename(path)}: {exc}") from None
         raise NotYet(off_route or f"micro-reader does not read it ({exc})") from exc
     except micro_reader.MicroReaderError as exc:
         if off_route:
@@ -362,15 +473,36 @@ def _open_micro(job) -> _MicroFile:
         if plate is not None:
             return plate
         f.close()                                  # as_plate=False: read without plates
-        f = micro_reader.open(path, tiles=tiles, rename=RENAME, axes="tczyx",
-                              samples="channels")
+        f = _opened(path, tiles, axes="tczyx", samples="channels", plates=False)
         names = set().union(*(set(k) for k in f.indices)) - {"resolution"}
     # tiles, views and illuminations of every format are micro-reader's (0.3.2; until
-    # 0.3.1 those outside a CZI went to the older readers, as in 0.1.5)
-    if names - INDICES:
-        f.close()
-        raise NotYet(f"image indices {sorted(names - INDICES)}")
+    # 0.3.1 those outside a CZI went to the older readers, as in 0.1.5), and so is every
+    # other index (0.3.4)
     return _MicroFile(f)
+
+
+#: the index options and the value that picks nothing out (their defaults)
+INDEX_OPTIONS = {"series_index": "all", "mosaic_tile_index": "all", "view_index": "all",
+                 "illumination_index": "all", "phase_index": 0, "rotation_index": 0}
+
+
+def _refuse_indices_on_a_plate(f, job, name: str) -> None:
+    """A file written as a plate is written whole: an index option choosing some of its
+    images picks nothing there. Refused in one line naming --as_plate False, for every
+    index option alike (review cycle 1, N-23: --series_index was ignored, the whole plate
+    written; cycle 2, R2-01: --view_index / --illumination_index too, and a tile index
+    gave PlateFieldTilesError's wrong advice). The defaults pick nothing out."""
+    chosen = [(option, getattr(job.readers, option, None))
+              for option, default in INDEX_OPTIONS.items()]
+    chosen = [(o, v) for o, v in chosen
+              if v not in (None, INDEX_OPTIONS[o]) and str(v) != str(INDEX_OPTIONS[o])]
+    if chosen:
+        f.close()
+        given = " ".join(f"--{o} {v}" for o, v in chosen)
+        raise InputError(f"{name} is read as a plate, which is written whole: {given} picks "
+                         f"nothing there. To convert only those images, each as a store of "
+                         f"its own, add --as_plate False; to convert the plate, leave "
+                         f"{'it' if len(chosen) == 1 else 'them'} out.")
 
 
 def _plate_or_not(f, job, names: set):
@@ -400,6 +532,7 @@ def _plate_or_not(f, job, names: set):
             f"no plate, wells or fields. Leave as_plate unset, or set it to True, to write "
             f"one NGFF plate.")
         return None
+    _refuse_indices_on_a_plate(f, job, path)
     field = sorted(PLATE_INDICES & names)
     per_field = {}
     for index in f.indices:
@@ -426,7 +559,9 @@ def _open_input(job):
     """``(file, reader)``: an OME-Zarr input read by ozp itself; else micro-reader's when
     it takes the file, else the older readers' (``LegacyFile``, roadmap step 2), with the
     reason micro-reader did not."""
+    from eubi_bridge.core.micro_source import require_ozp
     from eubi_bridge.utils.path_utils import is_zarr_group, ome_zarr_kind
+    require_ozp()               # OzpVersionError: an older ozp invents calibration
     if is_zarr_group(str(job.input_path)):
         kind = ome_zarr_kind(str(job.input_path))
         if kind in ("plate", "collection"):
@@ -439,10 +574,14 @@ def _open_input(job):
                 f"image.")
         from eubi_bridge.conversion.legacy_image import NgffFile
         return NgffFile(job), "ome_zarr_pyramid (an OME-Zarr input)"
+    if str(job.input_path).lower().endswith(".zip"):
+        raise ValueError(f"{os.path.basename(str(job.input_path))} is a zip file: eubi-bridge "
+                         f"does not read inside zip files. Unzip it first.")
     try:
         return _open_micro(job), "micro-reader"
     except NotYet as exc:
         from eubi_bridge.conversion.legacy_image import LegacyFile
+        job.extra["micro_reader_said"] = str(exc)
         return LegacyFile(job), f"older readers ({exc})"
 
 
@@ -485,12 +624,16 @@ def _load_input_collection(job):
 
     f, reader = _open_input(job)
     if getattr(f, "is_plate", False):
+        # a plate is written whole: an index option is refused (an OME-Zarr plate input
+        # too, which does not pass _plate_or_not)
+        _refuse_indices_on_a_plate(f, job, os.path.basename(str(job.input_path)))
         # one NGFF plate for the whole file (_convert_plate)
         return f, [SimpleNamespace(plate=True)], reader + ", as a plate"
     try:
         path = str(job.input_path)
         readers = job.readers
         keys = [tuple((k, v) for k, v in index.items()) for index in f.indices]
+        keys = _picked(keys, readers, os.path.basename(path))
         stem = job.resolved_basename or output_stem(path)
         file = pathlib.Path(path)
 
@@ -507,17 +650,26 @@ def _load_input_collection(job):
         if by_view or by_illu:
             view_option = view_option if by_view else 0
             illu_option = illu_option if by_illu else 0
-            first = [k for k in keys if dict(k)[SERIES] == scene_values[scenes[0]]]
+            first = [k for k in keys if dict(k).get(SERIES) == scene_values[scenes[0]]]
             n_views_file = len([v for v in _values(first, "view") if v is not None]) or 1
             n_illus_file = len([v for v in _values(first, "illumination")
                                 if v is not None]) or 1
+            _check_positions(view_option, n_views_file, "view", os.path.basename(path),
+                             "--view_index")
+            _check_positions(illu_option, n_illus_file, "illumination",
+                             os.path.basename(path), "--illumination_index")
             if n_views_file <= 1 and n_illus_file <= 1:
                 by_view = by_illu = False             # nothing to iterate
 
         option = readers.mosaic_tile_index
         plans, tiled = [], False                  # (entry, keys, group or None)
-        for scene in scenes:
-            here = [k for k in keys if dict(k)[SERIES] == scene_values[scene]]
+        by_scene = [[k for k in keys if dict(k).get(SERIES) == scene_values[scene]]
+                    for scene in scenes]
+        varying = {name for key in keys for name, _ in key if len(_values(keys, name)) > 1}
+        for scene, here, other in ((s, [k for k in scoped if set(o) <= set(k)], o)
+                                   for s, scoped in zip(scenes, by_scene)
+                                   for o in _other_values(scoped)):
+            more = _other_suffix(other, varying)
             tile_values = _values(here, "tile")
             views, illus = _values(here, "view"), _values(here, "illumination")
             tiled = tiled or len(tile_values) > 1
@@ -530,11 +682,12 @@ def _load_input_collection(job):
             for tile in picked:
                 tile_value = tile_values[tile or 0]
                 if not (by_view or by_illu):
-                    key = _key(scene_values[scene], tile_value, views[0], illus[0])
+                    key = _full_key(_key(scene_values[scene], tile_value, views[0], illus[0]),
+                                    other, here)
                     plans.append((SimpleNamespace(
                         scene=scene, tile=tile,
-                        series_path=f"{path}_{scene}" + (f"_tile{tile}" if tile else ""),
-                        basename=stem,
+                        series_path=f"{path}_{scene}" + (f"_tile{tile}" if tile else "") + more,
+                        basename=stem + more, other_index=bool(more),
                         name_scene=scene if n_scenes > 1 else None, name_tile=tile),
                         [key], None))
                     continue
@@ -554,15 +707,15 @@ def _load_input_collection(job):
                     groups = [[c] for c in combos]
                 for group in groups:
                     view, illumination = group[-1]
-                    suffix = ""
+                    suffix = more
                     if n_views_file > 1:
                         suffix += "_view_concat" if concat_views else f"_view{view}"
                     if n_illus_file > 1:
                         suffix += "_illu_concat" if concat_illus else f"_illu{illumination}"
                     if tile_named is not None:
                         suffix += f"_tile{tile_named}"
-                    group_keys = [_key(scene_values[scene], tile_value, views[v], illus[i])
-                                  for v, i in group]
+                    group_keys = [_full_key(_key(scene_values[scene], tile_value, views[v],
+                                                 illus[i]), other, here) for v, i in group]
                     plans.append((SimpleNamespace(
                         scene=scene, tile=tile_named,
                         series_path=str(file.parent / (file.stem + suffix + file.suffix)),
@@ -571,9 +724,20 @@ def _load_input_collection(job):
                         group_keys,
                         group if (concat_views or concat_illus) else None))
         if not plans:
-            raise ValueError(f"No valid mosaic tile index in {option!r} for "
-                             f"{os.path.basename(path)}: tiles only exist when reading an "
-                             f"unstitched mosaic (as_mosaic=False).")
+            counts = {s: len(_values([k for k in scoped], "tile"))
+                      for s, scoped in zip(scenes, by_scene)}
+            tiled_scenes = {s: n for s, n in counts.items() if n > 1}
+            if not tiled_scenes:
+                # a chosen tile index already reads the tiles apart (as_mosaic off,
+                # _a_chosen_tile_is_a_tile): a file with none has no tiles at all (cycle 2,
+                # R2-03: the reason sent the user to --as_mosaic False, which changes nothing)
+                raise InputError(f"{os.path.basename(path)} has no tiles: "
+                                 f"--mosaic_tile_index {option} has none to pick (leave it "
+                                 f"out).")
+            reason = "; ".join(f"series {s} has {n} tiles (0..{n - 1})"   # cycle 1, N-24
+                               for s, n in tiled_scenes.items())
+            raise InputError(f"No valid mosaic tile index in {option!r} for "
+                             f"{os.path.basename(path)}: {reason}.")
 
         # only the images the outputs need, read one at a time
         needed = list(dict.fromkeys(k for _, plan_keys, _ in plans for k in plan_keys))
@@ -585,7 +749,7 @@ def _load_input_collection(job):
         coll = PyramidCollection.from_file(
             SimpleNamespace(images=[images[k] for k in needed], path=path,
                             coordinate_systems=getattr(f, "coordinate_systems", None)),
-            version=version, name=NAME,
+            version=version,            # each named after its image
             # keep_existing_resolutions: the file's stored levels too (folded into the
             # image's Pyramid by from_file)
             resolutions="all" if job.downscale.keep_existing_resolutions else "base")
@@ -596,12 +760,13 @@ def _load_input_collection(job):
         for entry, plan_keys, group in plans:
             if group is None and source is not None and job.downscale.keep_existing_resolutions:
                 # an OME-Zarr input keeping its levels: the input Pyramid itself (its
-                # own scales per level, as 0.1.x wrote them), named as eubi names
-                # every output
-                entry.pyramid = source.rename(NAME)
+                # own scales per level, as 0.1.x wrote them), named after its image
+                entry.pyramid = source.rename(images[plan_keys[0]].name or NAME)
             elif group is None:
                 # coll.pyramid(key): the image stamped with its system (3.26)
                 entry.pyramid = coll.pyramid(plan_keys[0])
+                if source is not None:
+                    _warn_time_origin(source)
                 # an OME-Zarr input's other coordinate systems and transformations
                 # (carry_foreign_transforms); None for every other reader
                 entry.foreign_source = source
@@ -680,7 +845,7 @@ async def _convert_plate(f, job, plate: int, output_path: str) -> None:
     # an OME-Zarr plate input (NgffPlate) is a collection already
     read = getattr(f, "collection", None)
     coll = read if read is not None else PyramidCollection.from_file(
-        source, version=version, name=NAME,
+        source, version=version,
         resolutions="all" if job.downscale.keep_existing_resolutions else "base")
     # the job's settings on every field, before the plate is built: squeeze or crop can
     # change a field's axes, and the plate's systems and scenes follow the fields as
@@ -693,8 +858,12 @@ async def _convert_plate(f, job, plate: int, output_path: str) -> None:
                                 series_path=str(f.path), scene=None, tile=None,
                                 foreign_source=read[key] if read is not None else None)
         processed[key], _ = _prepared(entry, job, output_path)
-    if read is not None:
-        warn_labels_not_written(str(job.input_path), [read[key] for key in read])
+    if read is None:
+        # the plate's fields as a whole: one line per input
+        shown = [SimpleNamespace(pyramid=coll[key], image=images[key]) for key in coll]
+        _warn_uncalibrated(job, shown)
+        _warn_ragged(job, shown)
+    _warn_dtype(job, [SimpleNamespace(pyramid=pyr) for pyr in processed.values()])
     systems = [dataclasses.replace(cs, axes=None)
                for cs in coll.coordinate_systems.values()]
     tree = (tree_from_file(source, processed, name=file_stem(f.path)) if read is None
@@ -712,10 +881,72 @@ async def _convert_plate(f, job, plate: int, output_path: str) -> None:
         _write(pyr, str(target), job, scene_budget_mb=budget, region_size_mb=region,
                xml=xml, image_only=True)
 
-    target, storage_options = _ozp_target_args(output_path)
-    await asyncio.to_thread(written.write_plate, target, plate=plate,
-                            version=conv.ome_zarr_version, overwrite=conv.overwrite,
-                            storage_options=storage_options, writer=write_field)
+    with _replaced_on_success(output_path, conv.overwrite) as path:
+        target, storage_options = _ozp_target_args(path)
+        await asyncio.to_thread(written.write_plate, target, plate=plate,
+                                version=conv.ome_zarr_version, overwrite=conv.overwrite,
+                                storage_options=storage_options, writer=write_field)
+
+
+@contextmanager
+def _replaced_on_success(output_path: str, overwrite: bool):
+    """The path to write to. A local store that overwrite would replace is written beside it
+    and takes its place only when the write succeeds: a failed run must not leave a broken
+    store, valid-looking, where a good one stood. Needs room for both meanwhile. The old store
+    goes aside by a rename, which either happens or leaves it whole, and is deleted last.
+    Anything else (a new store, a remote one) is written where it goes."""
+    if not (overwrite and os.path.isdir(output_path)):
+        yield output_path
+        return
+    stem = str(output_path).rstrip("/\\")
+    stem = stem[:-len(".zarr")] if stem.endswith(".zarr") else stem
+    for stale in glob.glob(f"{glob.escape(stem)}.*-*.zarr"):         # of a killed run
+        if LEFT_BESIDE.fullmatch(os.path.basename(stale)[len(os.path.basename(stem)):]):
+            shutil.rmtree(stale, ignore_errors=True)
+    _warn_room(output_path)
+    token = uuid.uuid4().hex[:8]
+    beside, aside = f"{stem}.writing-{token}.zarr", f"{stem}.replaced-{token}.zarr"
+    try:
+        yield beside
+        try:
+            os.replace(output_path, aside)
+        except OSError as exc:
+            raise InputError(f"{output_path} is in use and stays as it was: close what has it "
+                             f"open and run again ({exc}).") from exc
+        try:
+            os.replace(beside, output_path)
+        except OSError:
+            os.replace(aside, output_path)
+            raise
+    finally:
+        shutil.rmtree(beside, ignore_errors=True)
+    shutil.rmtree(aside, ignore_errors=True)
+    if os.path.exists(aside):
+        logger.warning(f"{aside}: the replaced store could not be removed: delete it by hand.")
+
+
+#: the name of a store beside the one being replaced, after the stem
+LEFT_BESIDE = re.compile(r"\.(writing|replaced)-[0-9a-f]{8}\.zarr")
+
+
+def _warn_room(store: str) -> None:
+    """A line when the drive has less room than the store being replaced takes: both stand
+    until the new one is finished."""
+    size = sum(os.path.getsize(os.path.join(folder, name))
+               for folder, _, names in os.walk(store) for name in names)
+    free = shutil.disk_usage(store).free
+    if free < size:
+        logger.warning(f"{store}: --overwrite keeps the old store until the new one is written, "
+                       f"which needs about {size / 1e9:.1f} GB; {free / 1e9:.1f} GB are free.")
+
+
+def _warn_time_origin(source) -> None:
+    """An OME-Zarr input's translation along t: outputs built from its image start at 0."""
+    meta = source.meta
+    origin = dict(zip(meta.axis_order, meta.get_translation(meta.resolution_paths[0]) or ())).get("t")
+    if origin:
+        logger.warning(f"{meta.multiscales.get('name') or 'The input'}: its time origin "
+                       f"({origin}) is not kept: the output starts at time 0.")
 
 
 def warn_labels_not_written(path: str, pyramids) -> None:
@@ -1010,6 +1241,12 @@ def harmonise_length_units(pyr):
     from micro_reader import Quantity
     meta = pyr.meta
     axes = meta.axis_order
+    # every route's units by their NGFF names: um beside micrometer is one unit
+    spelled = {ax: unit_spelled(unit) for ax, unit in zip(axes, meta.unit_list) if unit}
+    respelled = {ax: unit for ax, unit in spelled.items()
+                 if unit != dict(zip(axes, meta.unit_list))[ax]}
+    if respelled:
+        pyr.update_units(**respelled)
     units = dict(zip(axes, meta.unit_list))
     lengths = {ax: units[ax] for ax in "zyx" if ax in units and units[ax]}
     factors = {}
@@ -1059,8 +1296,33 @@ def apply_axis_metadata(pyr, job, scales_too: bool = True):
     if scales and scales_too:
         pyr.update_scales(**{ax: float(v) for ax, v in scales.items()})
     if units:
-        pyr.update_units(**units)
+        pyr.update_units(**{ax: unit_spelled(u) for ax, u in units.items()})
     return pyr
+
+
+#: a slide's associated images, by the role micro-reader names them with (a fixed word, not
+#: a free name): appended to their store, so they are told from the scans at a glance
+#: (Bugra, 2026-11-04, review cycle 1 N-08: Image_V4.1_BF_scene0.zarr was the label photo)
+SLIDE_ROLES = ("label", "macro", "overview", "thumbnail", "map", "preview")
+
+
+def _slide_role(entry) -> Optional[str]:
+    """The role of a file's associated image (``_scene0_label``), when the file gives several
+    images; None for a scan or a file of one image."""
+    if getattr(entry, "name_scene", None) is None:
+        return None
+    name = str(getattr(getattr(entry, "image", None), "name", "") or "").strip().lower()
+    return name if name in SLIDE_ROLES else None
+
+
+def unit_spelled(unit: str) -> str:
+    """*unit* as OME-Zarr names it (``um`` is ``micrometer``); one micro-reader does not know
+    stays as given."""
+    try:
+        from micro_reader._metadata import unit_name
+    except ImportError:                         # a micro-reader before 0.4.0
+        return unit
+    return unit_name(unit) or unit
 
 
 def channel_overrides(labels, colors, count: int, where) -> dict:
@@ -1133,7 +1395,8 @@ def acquisition_metadata(entry, pyr, job, origin: dict) -> Optional[dict]:
     extras = dict(getattr(pyr, "acquisition", None) or {})
     base = os.path.basename(entry.series_path)
     is_split = (entry.tile is not None or bool(origin)
-                or any(m in base for m in ("_view", "_illu", "_tile", "_scene")))
+                or any(m in base for m in ("_view", "_illu", "_tile", "_scene"))
+                or getattr(entry, "other_index", False))
     if flag is False:
         return None
     if flag is None and not is_split:
@@ -1151,30 +1414,44 @@ def acquisition_metadata(entry, pyr, job, origin: dict) -> Optional[dict]:
     if origin:
         unit = entry.units.get("x", "micrometer")
         meta["origin_um" if unit in ("micrometer", "µm", "um") else f"origin_{unit}"] = dict(origin)
-    meta["source_path"] = str(job.input_path or "")
+    # the file's name only: a store is shared, and a full path gives away the user's folders
+    meta["source_path"] = os.path.basename(str(job.input_path or "").rstrip("/\\"))
     return meta or None
 
 
-def ome_xml(pyr, dtype) -> str:
+def ome_xml(pyr, dtype, acquisition: Optional[dict] = None) -> str:
     """The small OME-XML eubi-bridge saves beside an output (0.1.x's ArrayManager.save_omexml):
-    shape, axes, pixel sizes and units, dtype and channel names of what is written."""
-    from eubi_bridge.core.data_manager import PFFImageMeta, create_ome_xml
+    shape, axes, pixel sizes and units, dtype, channel names and wavelengths of what is
+    written (*acquisition*, else the pyramid's: ``channel_wavelengths``, one per channel). An axis
+    without a unit has no physical size: it is left out, not given as 1 µm or 1 s. So is one
+    whose unit OME has no name for, with a warning."""
+    from eubi_bridge.core.data_manager import PFFImageMeta, abbreviate_units, create_ome_xml
     meta = pyr.meta
     axes = meta.axis_order
     scales = dict(zip(axes, meta.get_scale(meta.resolution_paths[0])))
-    units = {ax: u for ax, u in zip(axes, meta.unit_list) if u}
+    units = {ax: unit_spelled(u) for ax, u in zip(axes, meta.unit_list) if u}
+    for ax, unit in list(units.items()):
+        if abbreviate_units(unit) == "Unknown":
+            logger.warning(f"Axis {ax}: OME has no unit {unit!r}: the OME-XML leaves its size out.")
+            del units[ax]
     channels = (meta.metadata.get("omero") or {}).get("channels") or []
     ome = create_ome_xml(
         image_shape=tuple(pyr.base_array.shape), axis_order=axes,
-        **{f"pixel_size_{ax}": scales.get(ax, 1) for ax in "tzyx"},
-        **{f"unit_{ax}": units.get(ax, "second" if ax == "t" else "micrometer")
-           for ax in "tzyx"},
-        dtype=str(np.dtype(dtype)), channel_names=[ch.get("label") for ch in channels])
+        **{f"pixel_size_{ax}": scales.get(ax) if ax in units else None for ax in "tzyx"},
+        **{f"unit_{ax}": units.get(ax) for ax in "tzyx"},
+        dtype=str(np.dtype(dtype)), image_name=meta.tag or NAME,
+        channel_names=[ch.get("label") for ch in channels],
+        # each channel's wavelengths (a lambda scan's bands): only the colour and the name
+        # carried them (review cycle 1, N-21)
+        channel_wavelengths=(acquisition or getattr(pyr, "acquisition", None) or {}).get(
+            "channel_wavelengths"))
     pixels = ome.images[0].pixels
     # one image per document: a fixed id (ome_types counts ids up per process, so the
     # n-th output of a run said "Pixels:n")
     pixels.id = "Pixels:0"
-    pixels.model_fields_set.update(PFFImageMeta.essential_omexml_fields - pixels.model_fields_set)
+    pixels.model_fields_set.update(
+        field for field in PFFImageMeta.essential_omexml_fields - pixels.model_fields_set
+        if getattr(pixels, field.removesuffix("_unit"), None) is not None)
     ome.images[0].pixels = pixels
     return ome.to_xml()
 
@@ -1240,8 +1517,21 @@ def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dty
                    region_size_mb, budget, job, xml, image_only=False):
     from ome_zarr_pyramid import IO
 
-    from eubi_bridge.conversion.conversion_worker import _threads_per_scene
+    from eubi_bridge.conversion.conversion_worker import _threads_per_scene, _write_share
     pyr = _system_for_output(pyr)
+    threads = _threads_per_scene(clus)
+    # what conversions of this run that have ended left free goes to the ones still
+    # busy: before each pass and during one (dyna-zarr's io.memory_share, 0.1.2+)
+    sharing = contextlib.nullcontext()
+    share = _write_share(arr, job, os.path.basename(str(target).rstrip("/\\")))
+    if share is not None and budget is not None:
+        from dyna_zarr import io as dyna_io
+        if hasattr(dyna_io, "memory_share"):
+            scene_now, threads_now = share()
+            budget, threads = max(float(budget), scene_now), max(threads, threads_now)
+            sharing = dyna_io.memory_share(share)
+        else:
+            _say_no_sharing()
     write = IO().write_pyramid
     if conv.ome_zarr_version == "rfc8" and not image_only:
         # NGFF RFC 8: a collection holding the image (an NGFF 0.5 multiscale) under the
@@ -1252,16 +1542,29 @@ def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dty
         def write(pyr, target, **kwargs):
             PyramidCollection({(("series", 0),): pyr}, name=pyr.meta.tag).write_collection(
                 target, **kwargs)
-    write(
-        pyr, target, storage_options=storage_options, overwrite=conv.overwrite,
-        max_threads=_threads_per_scene(clus), region_size_mb=float(region_size_mb),
-        memory_budget_mb=budget, io_backend=conv.io_backend,
-        chunk_shape=chunks,
-        shard_coefficients=tuple(shards) if int(pyr.meta.zarr_format) == 3 else None,
-        compressor=conv.compressor, compressor_params=conv.compressor_params or {},
-        dtype=dtype if dtype != np.dtype(arr.dtype) else None,
-        windows=WINDOWS[job.metadata.channel_intensity_limits],
-        ome_xml=xml)
+    with sharing:
+        write(
+            pyr, target, storage_options=storage_options, overwrite=conv.overwrite,
+            max_threads=threads, region_size_mb=float(region_size_mb),
+            memory_budget_mb=budget, io_backend=conv.io_backend,
+            chunk_shape=chunks,
+            shard_coefficients=tuple(shards) if int(pyr.meta.zarr_format) == 3 else None,
+            compressor=conv.compressor, compressor_params=conv.compressor_params or {},
+            dtype=dtype if dtype != np.dtype(arr.dtype) else None,
+            windows=WINDOWS[job.metadata.channel_intensity_limits],
+            ome_xml=xml)
+
+
+_said_no_sharing: list = []
+
+
+def _say_no_sharing() -> None:
+    """Once per process: the installed dyna-zarr cannot hand on freed memory."""
+    if not _said_no_sharing:
+        _said_no_sharing.append(True)
+        logger.info("Memory freed by conversions that end is not handed to the ones still "
+                    "running: that needs dyna-zarr 0.1.2 or later (pip install -U "
+                    "dyna-zarr).")
 
 
 def _prepared(entry, job, output_path: str):
@@ -1290,12 +1593,106 @@ def _prepared(entry, job, output_path: str):
     if not keep:
         pyr = apply_squeeze_and_crop(pyr, job)
     dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
-    xml = ome_xml(pyr, dtype) if conv.save_omexml else None
+    xml = ome_xml(pyr, dtype, acquisition) if conv.save_omexml else None
     if not keep:
         pyr = apply_downscale(pyr, job)
         pyr = carry_foreign_transforms(pyr, getattr(entry, "foreign_source", None), output_path)
     pyr.meta.set_custom("eubi_bridge", _eubi_attrs(acquisition))
     return pyr, xml
+
+
+def _warn_dtype(job, entries) -> None:
+    """Values outside a narrower type's range are clipped: a user asking for uint8 on 16-bit
+    data gets a white image otherwise, without a word."""
+    wanted = job.conversion.dtype
+    source = next((e.pyramid.base_array.dtype for e in entries
+                   if getattr(e, "pyramid", None) is not None), None)
+    if wanted in (None, "", "auto") or source is None:
+        return
+    if not np.can_cast(source, wanted, "safe"):
+        logger.warning(f"{os.path.basename(str(job.input_path))}: --dtype {wanted} cannot hold "
+                       f"{source}: values outside its range are clipped, not rescaled.")
+
+
+def _warn_ragged(job, entries) -> None:
+    """A ragged image (a channel with fewer planes than the others) is padded with zeros in
+    its output: an array has one shape."""
+    ragged = sum(bool(getattr(getattr(e, "image", None), "is_ragged", False)) for e in entries)
+    if ragged:
+        logger.warning(f"{os.path.basename(str(job.input_path))}: {ragged} output(s) have channels "
+                       "with fewer planes than the others: the missing planes are written as zeros.")
+
+
+def _warn_uncalibrated(job, entries) -> None:
+    """A loud line for an input without calibration: its outputs have scale 1 and no unit
+    on those axes, unless the job gives a size."""
+    given = {ax for ax, name in zip("tzyx", ("time", "z", "y", "x"))
+             if getattr(job.metadata, f"{name}_scale", None) is not None}
+    per_image = []                                 # (entry, its axes without a size)
+    for entry in entries:
+        meta = getattr(getattr(entry, "pyramid", None), "meta", None)
+        if meta is None:
+            continue
+        shape = entry.pyramid.base_array.shape
+        axes = {ax for ax, unit, n in zip(meta.axis_order, meta.unit_list, shape)
+                if ax != "c" and not unit and (n > 1 or ax in "yx") and ax not in given}
+        per_image.append((entry, sorted(axes, key="tzyx".index)))
+    lacking = [(entry, axes) for entry, axes in per_image if axes]
+    if lacking:
+        names = {"t": "time", "z": "z", "y": "y", "x": "x"}
+        source = str(job.input_path)
+        left = sorted({ax for _, axes in lacking for ax in axes}, key="tzyx".index)
+        if len(lacking) == len(per_image):
+            options = ", ".join(f"--{names[ax]}_scale and --{names[ax]}_unit" for ax in left)
+            logger.warning(f"NOT CALIBRATED: no physical size found in "
+                           f"{os.path.basename(source)} for axes {', '.join(left)}. They "
+                           f"are written with no unit (scale 1, or the file's relative sizes). "
+                           f"Give the sizes with {options}.")
+        else:
+            # some images of the file only (a slide's macro photo, a CQ1 title image): the
+            # size options would overwrite the others' recorded sizes (review cycle 2, R2-15)
+            def image_name(entry):
+                image = getattr(entry, "image", None)
+                return (getattr(image, "name", None) or getattr(entry, "basename", None)
+                        or "image")
+            shown = "; ".join(f"{image_name(e)!r}: {', '.join(axes)}" for e, axes in lacking[:6])
+            more = f"; and {len(lacking) - 6} more" if len(lacking) > 6 else ""
+            logger.warning(f"NOT CALIBRATED: {len(lacking)} of the {len(per_image)} images of "
+                           f"{source} {'has' if len(lacking) == 1 else 'have'} no physical size on some axes ({shown}{more}); "
+                           f"those axes are written with no unit. The other images carry their "
+                           f"sizes: the size options would set every image of the file.")
+    _warn_mixed_units(job, entries)
+
+
+def _warn_mixed_units(job, entries) -> None:
+    """A size given without its unit while another spatial axis has one (review cycle 1,
+    N-26): `--y_scale 0.1 --x_scale 0.1 --x_unit micrometer` wrote y as a relative size,
+    no unit, x in micrometres, in silence; almost always a forgotten --y_unit. Written as
+    asked (a size without a unit is a relative size), with a line naming the fix."""
+    names = {"z": "z", "y": "y", "x": "x"}
+
+    def given(name):
+        value = getattr(job.metadata, name, None)
+        return None if value in (None, "", "default") else value
+
+    for entry in entries[:1]:
+        meta = getattr(getattr(entry, "pyramid", None), "meta", None)
+        if meta is None:
+            continue
+        source = dict(zip(meta.axis_order, meta.unit_list))
+        final = {ax: given(f"{names[ax]}_unit") or source.get(ax)
+                 for ax in names if ax in source}
+        unitless = [ax for ax in final if not final[ax]
+                    and given(f"{names[ax]}_scale") is not None]
+        with_unit = {ax: u for ax, u in final.items() if u}
+        if unitless and with_unit:
+            ax, unit = next(iter(with_unit.items()))
+            fix = " ".join(f"--{names[a]}_unit {unit}" for a in unitless)
+            logger.warning(f"{os.path.basename(str(job.input_path))}: a size is given for "
+                           f"{', '.join(unitless)} but no unit, while {ax} is in {unit}: "
+                           f"{', '.join(unitless)} written as a relative size, no unit. If "
+                           f"{'they are' if len(unitless) > 1 else 'it is'} in {unit} too, "
+                           f"add {fix}.")
 
 
 async def _convert_entry(entry, output_path: str, job, sem: asyncio.Semaphore,
@@ -1329,9 +1726,10 @@ async def _convert_one(entry, output_path: str, job, sem: asyncio.Semaphore, sto
         pyr, xml = _prepared(entry, job, output_path)
         scene_budget_mb, region_size_mb = _memory_plan_for(pyr.base_array, job)
         _warn_unused_writer_settings(job.cluster)
-        await asyncio.to_thread(_write, pyr, output_path, job,
-                                scene_budget_mb=scene_budget_mb,
-                                region_size_mb=region_size_mb, xml=xml)
+        with _replaced_on_success(output_path, conv.overwrite) as target:
+            await asyncio.to_thread(_write, pyr, target, job,
+                                    scene_budget_mb=scene_budget_mb,
+                                    region_size_mb=region_size_mb, xml=xml)
 
 
 async def convert(job) -> None:
@@ -1339,7 +1737,20 @@ async def convert(job) -> None:
     from eubi_bridge.conversion.conversion_worker import (_convert_safely,
                                                           _generate_output_path,
                                                           _report_failures)
-    f, entries, reader = await asyncio.to_thread(_load_input_collection, job)
+    try:
+        f, entries, reader = await asyncio.to_thread(_load_input_collection, job)
+    except Exception as exc:
+        said = job.extra.get("micro_reader_said")
+        if said is None or type(exc).__name__ == "NeedsFullEubiBridge" \
+                or isinstance(exc, InputError):         # the user's choice: said as itself
+            raise
+        # the older readers' failure is seldom the reason: micro-reader named it
+        raise RuntimeError(f"{os.path.basename(str(job.input_path))} cannot be converted. "
+                           f"micro-reader: {said}. The older readers then failed with "
+                           f"{type(exc).__name__}: {str(exc)[:200]}") from None
+    _warn_uncalibrated(job, entries)
+    _warn_ragged(job, entries)
+    _warn_dtype(job, entries)
     logger.info(f"{job.input_path}: {len(entries)} output(s), read by {reader}")
     _retired_settings(job)
     if entries and getattr(entries[0], "plate", False):
@@ -1360,6 +1771,9 @@ async def convert(job) -> None:
             out = _generate_output_path(job.output_path, entry.series_path,
                                         entry.name_scene, entry.name_tile,
                                         resolved_basename=entry.basename)
+            role = _slide_role(entry)
+            if role:
+                out = f"{out[:-len('.zarr')]}_{role}.zarr"
             tasks.append(asyncio.create_task(
                 _convert_safely(_convert_entry(entry, out, job, sem, stop), out)))
         results = await asyncio.gather(*tasks, return_exceptions=True)

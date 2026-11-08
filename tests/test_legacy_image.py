@@ -170,8 +170,8 @@ def test_a_czi_phase_is_the_one_asked_for(tmp_path):
     for phase in (0, 1):
         out = tmp_path / f"phase{phase}"
         log = _convert(src, out, ["--phase_index", str(phase)])
-        assert "older readers" in log, log[-1500:]
-        (store,) = out.glob("*.zarr")
+        assert "read by micro-reader" in log, log[-1500:]
+        (store,) = out.glob("*.zarr")                   # one output: a phase is picked
         values[phase] = np.unique(np.asarray(zarr.open_group(str(store), mode="r")["0"])).tolist()
     assert values == {0: [10], 1: [110]}
 

@@ -12,6 +12,9 @@ import tempfile
 # the real config.  (Set before eubi_bridge is imported; a test that needs a
 # particular config passes `configpath=` itself.)
 os.environ["EUBI_CONFIG_DIR"] = tempfile.mkdtemp(prefix="eubi_test_config_")
+# and their own memory ledger: a conversion the developer runs meanwhile does not share
+# its budget with the tests' (core/memory_share.py)
+os.environ["EUBI_MEMORY_LEDGER"] = tempfile.mkdtemp(prefix="eubi_test_ledger_")
 
 import pytest  # noqa: E402
 

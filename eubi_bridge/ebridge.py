@@ -21,6 +21,7 @@ from typing import Literal, Optional, Union
 from rich.console import Console
 from rich.table import Table
 
+from eubi_bridge.utils.errors import InputError
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import is_table_path
 from eubi_bridge.core.config_models import (
@@ -131,6 +132,39 @@ def _check_io_backend(*backends) -> None:
             "tensorstore for this run; in the GUI, Byte Backend on the Conversion page).")
 
 
+def _refused_group_listing(group_id, rows, reason: str, columns=None) -> str:
+    """One refused aggregative group of a conversion table: why, then each of its table
+    rows by its number (1 = the first row under the header, as the GUI's batch table
+    counts) and its table index (0-based, pandas'), and every cell the table gives
+    (*columns*, the table's own; blank cells are left out)."""
+    lines = [f"Group {group_id}: {reason}"]
+    for index, row in rows.iterrows():
+        cells = {k: v for k, v in row.to_dict().items()
+                 if (columns is None or k in columns) and v is not None and v == v
+                 and str(v).strip() != ""}
+        path = cells.pop("input_path", "")
+        settings = ", ".join(f"{k}={v}" for k, v in cells.items())
+        where = (f"row {index + 1} (table index {index})" if isinstance(index, int)
+                 else f"table index {index}")
+        lines.append(f"    {where}: {path}" + (f"  [{settings}]" if settings else ""))
+    return "\n".join(lines)
+
+
+def _report_refused_groups(refused: list, n_groups: int, failure=None, columns=None) -> None:
+    """End a conversion-table run whose aggregative groups were partly refused: the rest
+    ran, and this lists what was not converted, then exits 1 (TasksFailedError: one
+    message, no traceback). *failure* is the run's other error, if any, kept in the
+    message."""
+    from eubi_bridge.utils.errors import TasksFailedError
+    listing = "\n".join(_refused_group_listing(g, rows, reason, columns)
+                        for g, rows, reason in refused)
+    message = (f"{len(refused)} of {n_groups} aggregative group(s) of the table were not "
+               f"converted (the rest of the table was):\n{listing}")
+    if failure is not None:
+        message += f"\nAnd the conversions that ran: {failure}"
+    raise TasksFailedError(message)
+
+
 # Heavy imports are deferred — config commands don't need zarr/dask/JVM.
 def _ensure_heavy_imports():
     """Lazy-load heavy modules only when needed for actual conversions."""
@@ -238,14 +272,16 @@ class ConfigManager:
             slurm_sif_path=None,
         ),
         readers=dict(
-            as_mosaic=False,
+            as_mosaic=True,
+            mosaic_default=True,            # _adopt_mosaic_default
             as_plate=None,
-            view_index=0,
+            view_index='all',
             phase_index=0,
-            illumination_index=0,
-            series_index=0,
+            illumination_index='all',
+            series_index='all',
             rotation_index=0,
-            mosaic_tile_index=0,
+            mosaic_tile_index='all',
+            index_defaults_all=True,        # _adopt_index_defaults
             sample_index=0,
             force_bioformats=False,
             pixel_reader='micro',
@@ -395,6 +431,11 @@ class ConfigManager:
                 dirty = True
             if rename_config_keys(config, where=f"{self._get_json_path()}: "):
                 dirty = True
+            # before the backfill, which would add the marker to an old file
+            if self._adopt_index_defaults(config):
+                dirty = True
+            if self._adopt_mosaic_default(config):
+                dirty = True
             for section, defaults in self._ROOT_DEFAULTS.items():
                 if section not in config:
                     config[section] = dict(defaults)
@@ -417,6 +458,59 @@ class ConfigManager:
             if dirty:
                 self._save_config_to_json(config)
         self._config = config
+
+    def check_option_names(self, options: dict) -> None:
+        """Raise ``ValueError`` naming the *options* no setting has, with the nearest name."""
+        import difflib
+
+        from eubi_bridge.core.config_models import (RENAMED_INDEX_SETTINGS, RENAMED_SETTINGS,
+                                                    RETIRED_SETTINGS)
+        known = {key for section in self._ROOT_DEFAULTS.values() for key in section}
+        known |= set(RENAMED_SETTINGS) | set(RENAMED_INDEX_SETTINGS) | set(RETIRED_SETTINGS)
+        known |= {"as_ome_zarr", "bf_tile_size_mb", "output_tiff"}
+        unknown = sorted(set(options) - known)
+        if unknown:
+            hints = [f"--{name}" + "".join(f" (did you mean --{m}?)" for m in
+                                           difflib.get_close_matches(name, known, 1))
+                     for name in unknown]
+            from eubi_bridge.utils.errors import InputError
+            raise InputError(f"unknown option(s): {', '.join(hints)}")
+
+    def _adopt_index_defaults(self, config: dict) -> bool:
+        """Once per config file: series, tiles, views and illuminations default to all
+        since 0.3.4, as in the GUI. Every older file holds the old default 0, saved on the
+        first run and not chosen, so it would never reach anyone: 0 becomes 'all', and a
+        line says so. A value chosen later in a marked file stays."""
+        readers = config.get('readers')
+        if not isinstance(readers, dict) or readers.get('index_defaults_all'):
+            return False
+        readers['index_defaults_all'] = True
+        keys = ('series_index', 'mosaic_tile_index', 'view_index', 'illumination_index')
+        changed = [key for key in keys if readers.get(key) in (0, None, '0')]
+        for key in changed:
+            readers[key] = 'all'
+        if 'scene_index' in readers and 'series_index' in changed:
+            readers['scene_index'] = 'all'
+        if changed:
+            logger.warning(f"{self._get_json_path()}: {', '.join(changed)} changed from 0 to 'all': "
+                           "eubi-bridge now converts every image of a file by default, as "
+                           "its GUI does. Set them to 0 to convert only the first.")
+        return True
+
+    def _adopt_mosaic_default(self, config: dict) -> bool:
+        """Once per config file: tiles are stitched by default since 0.3.4. Every older file
+        holds the old default False, saved on the first run and not chosen. A value chosen
+        later in a marked file stays."""
+        readers = config.get('readers')
+        if not isinstance(readers, dict) or readers.get('mosaic_default'):
+            return False
+        readers['mosaic_default'] = True
+        if readers.get('as_mosaic') is False:
+            readers['as_mosaic'] = True
+            logger.warning(f"{self._get_json_path()}: as_mosaic changed from False to True: "
+                           "eubi-bridge now stitches a file's tiles into one image by default. "
+                           "Set it to False to write each tile as a store of its own.")
+        return True
 
     #: Settings that no longer have any effect, removed from a config on load.
     #: bf_tile_size_mb: Bio-Formats images are read one region at a time since
@@ -763,7 +857,7 @@ class ConfigManager:
         import json
         import re
         if not re.match(r'^[A-Za-z0-9_\-]+$', name):
-            raise ValueError(
+            raise InputError(
                 f"Config name '{name}' must contain only letters, digits, "
                 "hyphens, and underscores."
             )
@@ -826,7 +920,7 @@ class ConfigManager:
                 target = Path(registry[name])
             elif create:
                 if not re.match(r'^[A-Za-z0-9_\-]+$', name):
-                    raise ValueError(
+                    raise InputError(
                         f"Config name '{name}' must contain only letters, "
                         "digits, hyphens, and underscores."
                     )
@@ -1023,8 +1117,10 @@ class ConfigureGroup:
                 (warned about once when set).
             region_size_mb: Size of one read region in MB, or ``'auto'`` (default):
                 each scene's write budget over 3 x its threads, 8 to 256 MB.
-            memory_budget: The memory the whole run may use on this machine, e.g.
-                ``'16GB'``, or ``'auto'`` (default): half the RAM free when it starts.
+            memory_budget: The memory eubi may use on this machine, e.g.
+                ``'16GB'``, or ``'auto'`` (default): half the memory free when it starts
+                (inside a SLURM job or a container: what its memory limit leaves).
+                Runs started side by side share one budget, the smallest of theirs.
                 eubi shares it out: between the conversions running at once, then in
                 each between what the process already holds, reading
                 (``decode_memory``) and the scenes converted at once.
@@ -1097,7 +1193,7 @@ class ConfigureGroup:
         """Update file-reader parameters. Omitted arguments keep their current values.
 
         Args:
-            as_mosaic: Treat tiled acquisitions as a stitched mosaic (default False).
+            as_mosaic: Treat tiled acquisitions as a stitched mosaic (default True).
             as_plate: Write a plate file as one NGFF plate store, in the OME-Zarr
                 version asked for. Unset (the default): plate formats (Harmony,
                 CellVoyager, MetaXpress, IN Cell) and files whose images sit in two or
@@ -1385,10 +1481,17 @@ class ConversionManager:
             if not (isinstance(input_path, pd.DataFrame)
                     or (isinstance(input_path, str)
                         and is_table_path(input_path))):
-                raise ValueError(
+                from eubi_bridge.utils.errors import InputError
+                raise InputError(              # one line (review cycle 2, R2-18)
                     "output_path is required unless input_path is a conversion "
                     "table (.csv/.tsv/.txt/.xlsx) whose rows carry their own "
                     "output_path.")
+        else:
+            from eubi_bridge.core.output_store import _is_remote_path
+            if not _is_remote_path(str(output_path)):
+                # absolute and without "..": TensorStore refuses "out/../o" as an invalid
+                # file path, every task failing with its traceback (tenth review N-01)
+                output_path = os.path.abspath(os.fspath(output_path))
 
         # Collect CLI overrides (explicit non-None args take priority)
         cli_kwargs = {k: v for k, v in dict(
@@ -1480,6 +1583,14 @@ class ConversionManager:
         else:
             _input = os.path.abspath(input_path)
 
+        if plan is not None:
+            # before any branch: without axes the plan would go unused, in silence
+            from eubi_bridge.conversion.dispatcher import check_plan, plan_settings
+            check_plan(plan, plan_settings(
+                _input, effective_concatenation_axes,
+                dict(t=effective_time_tag, c=effective_channel_tag, z=effective_z_tag,
+                     y=effective_y_tag, x=effective_x_tag), includes, excludes))
+
         # A conversion table may mix both kinds of job, so it is read before the
         # branch below rather than after it: rows sharing an aggregative_group
         # are concatenated together, the rest convert one-to-one.  Everything
@@ -1509,7 +1620,12 @@ class ConversionManager:
                 includes=includes, excludes=excludes,
             )
         elif effective_concatenation_axes is not None:
-            from eubi_bridge.conversion.dispatcher import dispatch_aggregative_job
+            from eubi_bridge.conversion.dispatcher import (check_tags_and_axes,
+                                                           dispatch_aggregative_job)
+            # before the job model: a refusal is one line, not a validation traceback
+            check_tags_and_axes(effective_concatenation_axes, dict(
+                t=effective_time_tag, c=effective_channel_tag, z=effective_z_tag,
+                y=effective_y_tag, x=effective_x_tag), say=False)
             job = AggregativeConversionJob(
                 input_path=_input,
                 output_path=str(output_path) if output_path is not None else "",
@@ -1600,7 +1716,8 @@ class ConversionManager:
         # passing any GUI check, which is why the guard lives on this path.
         problems = concat_without_group_problems(table, concat_p)
         if problems:
-            raise ValueError("\n".join(problems))
+            from eubi_bridge.utils.errors import InputError
+            raise InputError("\n".join(problems))        # the table's, so no traceback
 
         unary_rows, groups = partition_by_group(table)
 
@@ -1628,14 +1745,26 @@ class ConversionManager:
                     resolved_basename=unique_names.get(str(inp))))
 
         # ── aggregative groups ───────────────────────────────────────────────
+        from eubi_bridge.conversion.dispatcher import check_tags_and_axes
+        from eubi_bridge.utils.errors import InputError
         aggregative_jobs = []
+        # a group the table cannot convert is set aside, the rest of the batch still
+        # runs, and the end of the log lists its table rows; the run then exits 1
+        # (review cycle 1, #5)
+        refused_groups = []                   # (group id, its rows, reason)
+        rows_of = {}
         for group_id, group_rows in groups:
             first = group_rows.iloc[0].to_dict()
             paths = [str(path) for path in group_rows["input_path"].tolist()]
             out = first.get("output_path") or output_path
             # Concatenation settings describe the group as a whole, so they are
             # resolved across all of its rows and a disagreement is refused.
-            concat = resolve_group_concat_params(group_id, group_rows, concat_p)
+            try:
+                concat = resolve_group_concat_params(group_id, group_rows, concat_p)
+            except ValueError as exc:
+                refused_groups.append((group_id, group_rows, str(exc)))
+                logger.warning(f"Group {group_id} set aside, not converted: {exc}")
+                continue
             # Everything else still comes from the first row: those settings
             # describe one output, so a per-row difference has nothing to apply
             # to.  The concatenation keys are dropped here to keep the resolved
@@ -1644,6 +1773,15 @@ class ConversionManager:
                 k: v for k, v in first.items()
                 if k not in ("input_path", "output_path")
                 and k not in PER_GROUP_CONCAT_KEYS})
+            try:
+                check_tags_and_axes(concat["concatenation_axes"], {
+                    x: concat[f"{name}_tag"] for x, name in
+                    dict(t="time", c="channel", z="z", y="y", x="x").items()}, say=False)
+            except InputError as exc:
+                refused_groups.append((group_id, group_rows, str(exc)))
+                logger.warning(f"Group {group_id} set aside, not converted: {exc}")
+                continue
+            rows_of[str(group_id)] = group_rows
             aggregative_jobs.append(AggregativeConversionJob(
                 input_path=paths,
                 output_path=str(out) if out is not None else "",
@@ -1671,7 +1809,19 @@ class ConversionManager:
         # one pool for both kinds, running at the same time (roadmap step 3; on SLURM
         # and on the old path they still run one after the other)
         _check_io_backend(*(j.conversion.io_backend for j in unary_jobs + aggregative_jobs))
-        dispatch_mixed_jobs(unary_jobs, aggregative_jobs)
+        planning_refused = []
+        failure = None
+        try:
+            dispatch_mixed_jobs(unary_jobs, aggregative_jobs, refused=planning_refused)
+        except (InputError, RuntimeError) as exc:     # TasksFailedError is a RuntimeError
+            if not (refused_groups or planning_refused):
+                raise
+            failure = exc
+        refused_groups += [(job.aggregative_group, rows_of[job.aggregative_group], reason)
+                           for job, reason in planning_refused]
+        if refused_groups:
+            _report_refused_groups(refused_groups, len(groups), failure,
+                                   columns=table.attrs.get("table_columns"))
 
 
     def validate_aggregative(
@@ -1705,7 +1855,7 @@ class ConversionManager:
         """
         from eubi_bridge.utils.path_utils import take_filepaths
         from eubi_bridge.conversion.dispatcher import (
-            _parse_filepaths_with_tags, _build_aggregative_plan,
+            _parse_filepaths_with_tags, _build_aggregative_plan, _warn_left_out,
         )
 
         cli_kwargs = {k: v for k, v in kwargs.items() if v is not None}
@@ -1743,15 +1893,22 @@ class ConversionManager:
         eff_tags = [concat_p['time_tag'], concat_p['channel_tag'],
                     concat_p['z_tag'], concat_p['y_tag'], concat_p['x_tag']]
         filepaths_accepted = _parse_filepaths_with_tags(filepaths, eff_tags)
+        taken = set(filepaths_accepted)
+        _warn_left_out(list(dict.fromkeys(f for f in filepaths if f not in taken)), len(filepaths))
         from eubi_bridge.conversion import aggregative_path
         # by name, before grouping: OME companions left out, mixed formats refused
         filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
 
-        common_dir  = os.path.commonpath(filepaths_accepted)
+        if not filepaths_accepted:
+            from eubi_bridge.utils.errors import InputError
+            raise InputError(f"None of the {len(filepaths)} file(s) can be joined: joining needs "
+                             f"a tag that matches them, such as --z_tag or --channel_tag.")
+        # one file: its folder (the common path of one file is the file: a store named "..zarr")
+        common_dir  = os.path.commonpath([os.path.dirname(p) for p in filepaths_accepted])
         output_base = output_path or common_dir
         max_processes = cluster_p.get('max_processes', 4)
 
-        return _build_aggregative_plan(
+        plan = _build_aggregative_plan(
             filepaths_accepted,
             concatenation_axes=concat_p['concatenation_axes'],
             common_dir=common_dir,
@@ -1763,6 +1920,12 @@ class ConversionManager:
             y_tag=concat_p['y_tag'],
             x_tag=concat_p['x_tag'],
         )
+        from eubi_bridge.conversion.dispatcher import plan_settings
+        plan.made_for = plan_settings(
+            _input, concat_p['concatenation_axes'],
+            {x: concat_p[f'{name}_tag'] for x, name in
+             dict(t='time', c='channel', z='z', y='y', x='x').items()}, includes, excludes)
+        return plan
 
 
 # ---------------------------------------------------------------------------
@@ -2164,9 +2327,13 @@ class EuBIBridge:
         on_slurm: bool = None,
         on_local_cluster: bool = None,
         plan: 'AggregativePlan | None' = None,
+        log_file: Union[bool, str] = True,
         **kwargs,
     ) -> None:
         """Convert image data to OME-Zarr format.
+
+        An option eubi-bridge does not know raises ``ValueError`` (a misspelled one would
+        otherwise be ignored, and the run give a wrong result with exit code 0).
 
         Args:
             input_path: File path, directory, or table (.csv/.tsv/.xlsx) of paths.
@@ -2195,21 +2362,31 @@ class EuBIBridge:
                 labels such as ``gr1`` or ``A``: it becomes part of the output
                 filename.
             plan: Pre-computed AggregativePlan from validate_aggregative().
+            log_file: Where this run's log is also written, line by line, so it
+                survives a crash: ``True`` (default) a new file in the ``logs`` folder
+                of the config folder (the newest 20 are kept), a path, or ``False``
+                for none. The run's first line names the file.
             **kwargs: Any ReaderConfig / ConversionConfig / DownscaleConfig field
                 overrides (e.g. ``zarr_format=3``, ``z_chunk=64``,
                 ``region_size_mb=512``, ``jvm_memory='8GB'``,
                 ``force_bioformats=True``).
         """
-        return self._conv.to_zarr(
-            input_path, output_path, includes, excludes,
-            time_tag, channel_tag, z_tag, y_tag, x_tag,
-            concatenation_axes=concatenation_axes,
-            aggregative_group=aggregative_group,
-            max_processes=max_processes, max_retries=max_retries,
-            tensorstore_data_copy_concurrency=tensorstore_data_copy_concurrency,
-            use_threading=use_threading, on_slurm=on_slurm,
-            on_local_cluster=on_local_cluster, plan=plan, **kwargs,
-        )
+        from eubi_bridge.core.memory_share import run as shared_memory_run
+        from eubi_bridge.utils.run_log import run_log
+        self._cfg.check_option_names(kwargs)
+        # the memory budget is shared with the other eubi runs on this machine / in
+        # this SLURM job (core/memory_share.py)
+        with run_log(log_file, self._cfg._configpath), shared_memory_run():
+            return self._conv.to_zarr(
+                input_path, output_path, includes, excludes,
+                time_tag, channel_tag, z_tag, y_tag, x_tag,
+                concatenation_axes=concatenation_axes,
+                aggregative_group=aggregative_group,
+                max_processes=max_processes, max_retries=max_retries,
+                tensorstore_data_copy_concurrency=tensorstore_data_copy_concurrency,
+                use_threading=use_threading, on_slurm=on_slurm,
+                on_local_cluster=on_local_cluster, plan=plan, **kwargs,
+            )
 
     def validate_aggregative(
         self,

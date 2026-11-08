@@ -96,7 +96,7 @@ KWARGS_SECTIONS: dict[str, Any] = {
 # the dispatcher runs at once, for the region budget).
 _HIDDEN_PARAMS: frozenset[str] = frozenset({
     "bf_tile_size_mb", "skip_dask", "concurrent_jobs", "on_local_cluster",
-    "process_memory_mb", "micro_check_pixels", "writer", "queue_size",
+    "process_memory_mb", "memory_claim", "micro_check_pixels", "writer", "queue_size",
     "max_concurrent_downscale_layers", "tensorstore_data_copy_concurrency",
     *RENAMED_SETTINGS, *RENAMED_INDEX_SETTINGS})
 
@@ -115,7 +115,7 @@ _FIELD_HINTS: dict[str, str] = {
     "max_processes": "Images converted at once, one per worker process (formerly `max_workers`).",
     "queue_size": "Internal write-queue depth per worker.",
     "region_size_mb": "Size of one read region in MB, or `auto` (default): each scene's write budget over 3 x its threads, 8 to 256 MB.",
-    "memory_budget": "The memory the whole run may use on this machine, e.g. `16GB`, or `auto` (default): half the RAM free when it starts. Shared out between the conversions running at once, and in each between reading and the scenes converted at once.",
+    "memory_budget": "The memory eubi may use on this machine, e.g. `16GB`, or `auto` (default): half the memory free when it starts (inside a SLURM job or a container: what its memory limit leaves). Shared out between the conversions running at once, and in each between reading and the scenes converted at once. Runs started side by side (several batches, the GUI and the command line) share one budget, the smallest of theirs; a run with `auto` that starts beside others takes the budget they share.",
     "decode_memory": "micro-reader's decoding memory per process, e.g. `1GB`, or `auto` (default): what the file's compressed blocks need.",
     "slurm_worker_memory": "Each SLURM worker's memory (the SLURM job's), shared by its conversions (formerly `memory_per_worker`).",
     "max_threads": "Threads per conversion, each reading and writing one region at a time; scenes converted at once share them (formerly `max_concurrency`).",
@@ -211,7 +211,7 @@ _FIELD_HINTS: dict[str, str] = {
         "(named `_tile{N}`). Use `--as_mosaic` instead to stitch tiles into one output. "
         "Composes with series / view / illumination selection (cartesian product)."
     ),
-    "as_mosaic": "Stitch all mosaic tiles into a single full field-of-view output (instead of one OME-Zarr per tile).",
+    "as_mosaic": "Stitch a file's mosaic tiles into one image at their stored positions (the default): nothing is registered or blended, where tiles overlap one tile gives the pixel. `--as_mosaic False` writes one OME-Zarr per tile, for stitching elsewhere.",
     "view_index": (
         "View(s) to read. Pass an integer, `all`, or comma-separated integers; each "
         "selected view becomes a separate OME-Zarr (named `_view{N}`) unless "
@@ -279,8 +279,10 @@ _EXAMPLES: dict[str, str | list[str]] = {
         "# Step 1 — validate without converting to inspect the plan",
         "eubi validate_aggregative /data/input /data/output --concatenation_axes c --channel_tag raw,mask",
         "",
-        "# Step 2 — pass the plan object to skip re-planning on the actual run",
-        "eubi to_zarr /data/input /data/output --concatenation_axes c --channel_tag raw,mask --plan <plan>",
+        "# Step 2 — a plan is a Python object: pass it in Python, with the settings it was made with",
+        "# (the command line cannot take one; it plans the run itself)",
+        "# plan = EuBIBridge().validate_aggregative(inp, out, concatenation_axes='c', channel_tag='raw,mask')",
+        "# EuBIBridge().to_zarr(inp, out, concatenation_axes='c', channel_tag='raw,mask', plan=plan)",
     ],
     "output_file": "eubi show_pixel_meta /data/input --output_file report.html",
     "name": "eubi show_config --name hpc",
@@ -300,6 +302,7 @@ _EXAMPLES: dict[str, str | list[str]] = {
     ],
     "on_local_cluster": "eubi to_zarr /data/input /data/output --on_local_cluster",
     "memory_budget": "eubi to_zarr /data/input /data/output --memory_budget 16GB",
+    "log_file": "eubi to_zarr /data/input /data/output --log_file /data/logs/run1.log",
     "tensorstore_data_copy_concurrency": "eubi to_zarr /data/input /data/output --tensorstore_data_copy_concurrency 8",
     "slurm_time": "eubi to_zarr /data/input /data/output --on_slurm --slurm_time 48:00:00",
     "slurm_account": "eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount",
@@ -388,18 +391,22 @@ _EXAMPLES: dict[str, str | list[str]] = {
         "# Convert series 0, 2 and 4 only",
         "eubi to_zarr /data/input /data/output --series_index 0,2,4",
     ],
+    "as_plate": [
+        "# One store per image instead of one plate store",
+        "eubi to_zarr /data/plate /data/output --as_plate False",
+    ],
     "as_mosaic": [
-        "# Stitch all mosaic tiles into a single full field-of-view output",
-        "eubi to_zarr /data/input /data/output --as_mosaic",
+        "# Keep every tile as its own OME-Zarr, for stitching elsewhere",
+        "eubi to_zarr /data/input /data/output --as_mosaic False",
     ],
     "mosaic_tile_index": [
-        "# Write every tile as its own OME-Zarr (default — each tile separate)",
-        "eubi to_zarr /data/input /data/output --mosaic_tile_index all",
+        "# Write every tile as its own OME-Zarr",
+        "eubi to_zarr /data/input /data/output --as_mosaic False",
         "",
         "# Write only tiles 0 and 2 (each as a separate output)",
         "eubi to_zarr /data/input /data/output --mosaic_tile_index 0,2",
         "",
-        "# Stitch all tiles into one mosaic instead of writing them separately",
+        "# Stitch the tiles into one mosaic (the default)",
         "eubi to_zarr /data/input /data/output --as_mosaic",
     ],
     "view_index": [
@@ -838,8 +845,8 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
     # ── configure_readers ─────────────────────────────────────────────────────
     "configure.readers": {
         "as_mosaic": [
-            "# Stitch tiled acquisitions into a single mosaic array on read",
-            "eubi configure readers --as_mosaic",
+            "# Write each tile as its own OME-Zarr by default",
+            "eubi configure readers --as_mosaic False",
         ],
         "series_index": [
             "# Always read series 2 from multi-series files",
@@ -1125,9 +1132,37 @@ def _constraints_str(field_info: Any) -> str:
     return ", ".join(parts) if parts else "—"
 
 
-def _default_str(field_info: Any) -> str:
-    """Return the Pydantic field default as a Markdown string."""
+def _installation_default(name: str):
+    """The installation default of option *name* (``eubi show_root_defaults``: the
+    ConfigManager table every run starts from), or ``_NO_DEFAULT`` when it is no setting
+    there. The reference pages took the models' field defaults (``None``) and the configure
+    commands' placeholder ``"default"`` (review cycle 1, N-14)."""
+    from eubi_bridge.ebridge import ConfigManager
+    for section in ConfigManager._ROOT_DEFAULTS.values():
+        if name in section:
+            return section[name]
+    return _NO_DEFAULT
+
+
+_NO_DEFAULT = object()
+
+
+def _shown_default(value) -> str:
+    if value is None:
+        return "—"
+    if value == "":
+        return '`""`'
+    return f"`{value}`"
+
+
+def _default_str(field_info: Any, name: str | None = None) -> str:
+    """Return the option's default as a Markdown string: its installation default when
+    it has one, else the Pydantic field default."""
     from pydantic_core import PydanticUndefined
+    if name is not None:
+        installed = _installation_default(name)
+        if installed is not _NO_DEFAULT:
+            return _shown_default(installed)
     default = field_info.default
     if default is PydanticUndefined:
         return "*(auto)*" if field_info.default_factory is not None else "*required*"
@@ -1149,6 +1184,7 @@ def _parse_args_section(docstring: str | None) -> dict[str, str]:
     result: dict[str, str] = {}
     in_args = False
     current: str | None = None
+    indent: int | None = None          # the parameters' own indent: deeper is continuation
     for line in docstring.splitlines():
         stripped = line.strip()
         if stripped in ("Args:", "Arguments:"):
@@ -1158,9 +1194,13 @@ def _parse_args_section(docstring: str | None) -> dict[str, str]:
             # A new top-level section starts (no leading indent)
             if stripped and not line[0].isspace():
                 break
-            # Match "    param_name[^:]*: description" — [^:]* skips optional type hints
-            m = re.match(r"^\s{4,8}(\w+)[^:]*:\s*(.*)", line)
-            if m:
+            depth = len(line) - len(line.lstrip())
+            # "param_name[ (type)]: description" at the parameters' indent; a wrapped line
+            # is deeper (a fixed 4-8 spaces cut 12-space docstrings to their first line)
+            m = re.match(r"^\s*(\w+)(\s*\([^)]*\))?:\s*(.*)", line)
+            if m and (indent is None or depth <= indent):
+                indent = depth if indent is None else indent
+                m = re.match(r"^\s*(\w+)(?:\s*\([^)]*\))?:\s*(.*)", line)
                 current = m.group(1)
                 result[current] = m.group(2).strip()
             elif current and stripped:
@@ -1206,7 +1246,7 @@ def _build_kwargs_collapsibles(
         if fname in _HIDDEN_PARAMS:
             continue
         type_s = _type_str(finfo.annotation)
-        default_s = _default_str(finfo)
+        default_s = _default_str(finfo, fname)
         valid_s = _constraints_for(fname, finfo)
         if type_s == "`bool`":
             type_s = "boolean flag"
@@ -1434,7 +1474,10 @@ def _render_command(name: str, method: Any) -> str:
         for pname, p in visible_optional:
             typ = _type_str(p.annotation)
             default = "—" if p.default is None else f"`{p.default}`"
-            if p.default is False:
+            installed = _installation_default(pname)
+            if installed is not _NO_DEFAULT and (p.default in (None, "default")):
+                default = _shown_default(installed)       # the run's, not the placeholder
+            elif p.default is False:
                 default = "`False`"
             elif p.default is True:
                 default = "`True`"

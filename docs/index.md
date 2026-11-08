@@ -27,7 +27,7 @@ OME-Zarr output is written by `ome_zarr_pyramid` on `dyna-zarr`, region by regio
 - N-dimensional downscaling
 - Options for displaying/updating pixel metadata
 - A graphical interface (`eubi-gui`) next to the command line
-- Memory-bounded conversion within a memory budget (default: half the free RAM)
+- Memory-bounded conversion within a memory budget (default: half the free memory, or of what a SLURM job's limit leaves)
 - `eubi-bridge-lite`: the same tool without Java and Bio-Formats
 
 ---

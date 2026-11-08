@@ -80,7 +80,8 @@ def sample_channel_labels(names, samples: int) -> list:
     *names* (one entry per real channel, None for unnamed) become, channel-major.
 
     "<name> R" / "G" / "B" ("A"), tinted from ``SAMPLE_COLORS``; an unnamed
-    channel among several is "Channel {c} R" / ...  A single unnamed channel
+    channel among several is "Channel {c} R" / ...; two channels of one name are
+    "<name> {c} R" (as micro-reader names them).  A single unnamed channel
     keeps the writer's own labels (label None: ``Channel 0/1/2``), tinted too.
     Sample counts without labels (e.g. 2) are numbered ("<name> 0") and get no
     colour (None: the writer's white).
@@ -90,7 +91,9 @@ def sample_channel_labels(names, samples: int) -> list:
     colors = SAMPLE_COLORS.get(samples) or (None,) * samples
     if len(names) == 1 and not names[0]:
         return [(None, colors[i]) for i in range(samples)]
-    return [(f"{name or f'Channel {c}'} {labels[i]}", colors[i])
+    def label(c, name):         # two channels of one name are told apart by their position
+        return (name if names.count(name) == 1 else f"{name} {c}") if name else f"Channel {c}"
+    return [(f"{label(c, name)} {labels[i]}", colors[i])
             for c, name in enumerate(names) for i in range(samples)]
 
 

@@ -1,6 +1,14 @@
 """EuBI-Bridge: Distributed OME-Zarr image conversion toolkit."""
 
 
+def __getattr__(name):
+    """``from eubi_bridge import EuBIBridge``, without importing everything on ``import eubi_bridge``."""
+    if name == "EuBIBridge":
+        from eubi_bridge.ebridge import EuBIBridge
+        return EuBIBridge
+    raise AttributeError(f"module 'eubi_bridge' has no attribute {name!r}")
+
+
 def _load_the_system_cpp_runtime():
     """Windows: load the system's C++ runtime (msvcp140.dll) before Qt can.
 

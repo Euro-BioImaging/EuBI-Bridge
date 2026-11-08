@@ -39,6 +39,7 @@ from eubi_bridge.core.config_models import (AggregativeConversionJob,
                                              AggregativePlan,
                                              ConversionJob)
 from eubi_bridge.utils.jvm_manager import soft_start_jvm
+from eubi_bridge.utils.errors import InputError
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import (is_zarr_array, is_zarr_group,
                                           prefix_with_group, sensitive_glob,
@@ -61,23 +62,42 @@ def _raise_version_error(results: list) -> None:
             raise result
 
 
+#: what micro-reader says of a file its set does not list (companion.NotInItsSet, a member
+#: whose set "does not list it"): a set's side file, among several inputs no failure
+_NOT_IN_ITS_SET = ("NotInItsSet", "which does not list it", "is not part of the set")
+
+
+def _not_in_its_set(error: str) -> bool:
+    return any(words in error for words in _NOT_IN_ITS_SET)
+
+
 def _report_failures(results: list, label: str = "Main") -> None:
     """Log and raise RuntimeError if any result signals failure (a
     MicroReaderVersionError as itself, ``_raise_version_error``)."""
     failed = []
     for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error(f"[{label}] Task {i} failed: {result}")
-            failed.append((i, str(result)))
-        elif isinstance(result, dict) and result.get('status') == 'error':
-            logger.error(f"[{label}] Task {i} failed: {result.get('error')}")
-            failed.append((i, result.get('error', 'Unknown error')))
-        else:
+        error = (str(result) if isinstance(result, Exception) else
+                 str(result.get('error', 'Unknown error'))
+                 if isinstance(result, dict) and result.get('status') == 'error' else None)
+        if error is None:
             logger.info(f"[{label}] Task {i} succeeded.")
+        elif len(results) > 1 and _not_in_its_set(error):
+            # one of several inputs is a file its set does not list (a CQ1 measurement's
+            # calibration images, its MIP companion): a side file of a set converted
+            # anyway, no failure of the run (review cycle 1, N-13). Given alone, it fails.
+            logger.info(f"[{label}] Task {i} skipped: a file its set does not list, no "
+                        f"image of its own: {error[:200]}")
+        else:
+            logger.error(f"[{label}] Task {i} failed: {error[:300]}")
+            failed.append((i, error))
     if failed:
         _raise_version_error(results)
+        said = [str(e).split(": ", 1)[-1] for _, e in failed if str(e).startswith("InputError: ")]
+        if len(said) == len(failed):                # what the user asked for: one line, each
+            raise InputError("; ".join(dict.fromkeys(said)))
+        from eubi_bridge.utils.errors import TasksFailedError
         summary = "\n".join(f"  Task {i}: {e}" for i, e in failed)
-        raise RuntimeError(f"{len(failed)}/{len(results)} tasks failed:\n{summary}")
+        raise TasksFailedError(f"{len(failed)}/{len(results)} tasks failed:\n{summary}")
 
 
 #: how long a worker process gets to exit once all work is done, before it is stopped
@@ -269,6 +289,10 @@ def dispatch_unary_jobs(jobs: list) -> list:
     # first; threads: it is each conversion's own baseline (measured in the worker)
     per_process = process_mb(first, 1 if first.on_slurm else running,
                              0.0 if first.use_threading else main_process_mb())
+    if not first.on_slurm:
+        # so the conversions still busy can take what the finished ones held
+        from eubi_bridge.core.memory_share import plan_tasks
+        plan_tasks(len(jobs), running, per_process * running)
     jobs = [job.model_copy(update={
                 'cluster': job.cluster.model_copy(update={
                     'concurrent_jobs': running, 'process_memory_mb': per_process})})
@@ -338,6 +362,104 @@ async def _dispatch_unary_with_slurm(jobs: list) -> list:
 # Aggregative planning
 # ---------------------------------------------------------------------------
 
+#: the option naming each axis's tag
+TAG_OPTIONS = dict(t="time_tag", c="channel_tag", z="z_tag", y="y_tag", x="x_tag")
+
+
+def check_tags_and_axes(concatenation_axes, tags: dict, say: bool = True) -> list:
+    """The joined axes as positions in t c z y x, after checking them against the tags, before
+    any file is grouped. Each joined axis needs its tag, and each axis is joined once; one tag
+    names one axis. A tag of an axis that is not joined splits the outputs: one per value,
+    with a line saying so (*say*: the planner says it, the checks ahead of it do not).
+    Joining along several axes joins each one in its own lines: along t, the files of one
+    channel; along c, the files of one time point."""
+    axes = 'tczyx'
+    letters = [x for x in str(concatenation_axes or '').lower() if x not in " ,;()[]'\""]
+    unknown = [x for x in letters if x not in axes]
+    if unknown:
+        raise InputError(f"--concatenation_axes {concatenation_axes}: {', '.join(unknown)} is no "
+                         f"axis; join along t, c, z, y or x.")
+    twice = sorted({x for x in letters if letters.count(x) > 1})
+    if twice:
+        raise InputError(f"--concatenation_axes {concatenation_axes} names {', '.join(twice)} "
+                         f"twice: each axis is joined once.")
+    given = {x: tag for x, tag in tags.items() if tag is not None}
+    untagged = [x for x in letters if x not in given]
+    if untagged:
+        raise InputError(
+            f"Joining along {', '.join(untagged)} needs a tag that numbers or names the files "
+            f"along it: --{' --'.join(TAG_OPTIONS[x] for x in untagged)}.")
+    seen, named, numbered = {}, {}, {}
+    for x, tag in given.items():
+        parsed = _parse_tag(tag)
+        if isinstance(parsed, list):
+            if x in letters and len(parsed) == 1:
+                raise InputError(f"--{TAG_OPTIONS[x]} {tag} names one {TAG_OPTIONS[x][:-4]} only: "
+                                 f"joining along {x} needs two names or more, with commas and no "
+                                 f"space between them, or quoted ('{parsed[0]}, ...').")
+            named.update((item, x) for item in parsed)
+        else:
+            numbered[str(parsed).rstrip('/\\')] = x       # frames/ and frames are one tag
+        for item in (parsed if isinstance(parsed, list) else [str(parsed).rstrip('/\\')]):
+            if item in seen:
+                raise InputError(
+                    f"{item!r} is named twice in --{TAG_OPTIONS[x]}: each name is one channel."
+                    if seen[item] == x else
+                    f"--{TAG_OPTIONS[seen[item]]} and --{TAG_OPTIONS[x]} are both {item!r}: one "
+                    f"tag names one axis.")
+            seen[item] = x
+    for prefix, x in numbered.items():
+        inside = next((name for name, other in named.items()
+                       if other != x and re.match(re.escape(prefix) + r'[/\\]?\d', name)), None)
+        if inside:
+            raise InputError(f"--{TAG_OPTIONS[x]} {prefix} is read in --{TAG_OPTIONS[named[inside]]}'s "
+                             f"name {inside}: give tags that do not hold each other.")
+    split = [x for x in given if x not in letters]
+    if say and letters and split:
+        logger.info(f"Joined along {', '.join(letters)}; one output per "
+                    f"{' and '.join(TAG_OPTIONS[x] for x in split)} value.")
+    return [axes.index(x) for x in letters]
+
+
+def plan_settings(input_path, concatenation_axes, tags: dict, includes=None,
+                  excludes=None) -> dict:
+    """What a plan is made for, spelled one way: its input, joined axes, tags and filters.
+    A run with a plan compares its own (check_plan)."""
+    if isinstance(input_path, (list, tuple)):
+        where = sorted(os.path.normcase(os.path.abspath(str(path))) for path in input_path)
+    elif isinstance(input_path, (str, Path)):
+        where = os.path.normcase(os.path.abspath(str(input_path)))
+    else:
+        where = None                                    # a table built already
+
+    def spelled(tag):
+        parsed = _parse_tag(tag)
+        if isinstance(parsed, list):
+            return ','.join(parsed)
+        return None if parsed is None else str(parsed).rstrip('/\\')
+
+    return dict(input=where,
+                concatenation_axes=''.join(x for x in str(concatenation_axes or '').lower()
+                                           if x in 'tczyx'),
+                **{TAG_OPTIONS[x]: spelled(tag) for x, tag in tags.items()},
+                includes=includes or None, excludes=excludes or None)
+
+
+def check_plan(plan, settings: dict) -> None:
+    """Refuse a plan for a run it was not made for: its groups would be written whatever the
+    run's input, tags or axes say."""
+    made = getattr(plan, 'made_for', None) or {}
+    differ = [key for key, value in made.items()
+              if settings.get(key) != value and not (key == 'input' and None in (value, settings.get(key)))]
+    if differ:
+        def shown(value):
+            return f"{len(value)} files" if isinstance(value, list) else (value or 'none')
+        raise InputError(
+            "This plan was made for other settings: "
+            + "; ".join(f"{key} {shown(made[key])}, not {shown(settings.get(key))}" for key in differ)
+            + ". Make the plan with the run's settings, or run it with the plan's.")
+
+
 def _build_aggregative_plan(
     filepaths: list,
     concatenation_axes,
@@ -360,12 +482,8 @@ def _build_aggregative_plan(
     from eubi_bridge.conversion.fileset_io import FileSet
 
     axes_str = 'tczyx'
-    if isinstance(concatenation_axes, str):
-        axlist = [axes_str.index(x) for x in concatenation_axes.lower() if x in axes_str]
-    elif concatenation_axes is not None:
-        axlist = [axes_str.index(x) for x in str(concatenation_axes) if x in axes_str]
-    else:
-        axlist = []
+    axlist = check_tags_and_axes(concatenation_axes, dict(
+        t=time_tag, c=channel_tag, z=z_tag, y=y_tag, x=x_tag))
 
     dummy      = (1, 1, 1, 1, 1)
     shape_list = [dummy] * len(filepaths)
@@ -379,6 +497,7 @@ def _build_aggregative_plan(
         axis_tag3=y_tag,
         axis_tag4=x_tag,
     )
+    fileset.check_places(axlist)
     for axis in axlist:
         fileset.concatenate_along(axis)
 
@@ -386,7 +505,7 @@ def _build_aggregative_plan(
     for src_path, output_key in fileset.path_dict.items():
         rel      = os.path.relpath(output_key, common_dir)
         rel      = os.sep.join(p for p in rel.split(os.sep) if p != '..')
-        name     = os.path.splitext(rel)[0].replace(os.sep, '-')
+        name     = _short_name(os.path.splitext(rel)[0].replace(os.sep, '-'))
         # The derived name says which axes were concatenated (img_t0_zset), and
         # that is what keeps sibling outputs apart when one run produces several
         # groups.  The group is therefore prefixed rather than replacing it.
@@ -403,6 +522,29 @@ def _build_aggregative_plan(
     n_outputs    = len(file_groups)
     file_workers = min(n_outputs, max_processes)
 
+    joined = {f for grp in file_groups.values() for f in grp['source_files']}
+    _warn_left_out([f for f in filepaths if f not in joined], len(filepaths))
+    from eubi_bridge.conversion.fileset_io import _shared_folder_length, find_tag
+
+    def tag_named(files):
+        """The folders the files differ in are a tag's (Blue/, Red/; frames/000/)."""
+        cut = _shared_folder_length(files)
+        return all(any(find_tag(os.path.dirname(f)[cut:] + os.sep, str(item),
+                                not isinstance(tag, tuple))
+                       for tag in fileset.dimension_tags
+                       for item in (tag if isinstance(tag, tuple) else (tag,)))
+                   for f in files)
+
+    spread = next((grp['source_files'] for grp in file_groups.values()
+                   if len({os.path.dirname(f) for f in grp['source_files']}) > 1
+                   and not tag_named(grp['source_files'])), None)
+    if spread:
+        folders = sorted({os.path.basename(os.path.dirname(f)) for f in spread})
+        logger.warning(f"{len(spread)} files from {len(folders)} folders "
+                       f"({', '.join(folders[:4])}{' ...' if len(folders) > 4 else ''}) are "
+                       f"joined into one output. If they do not belong together, narrow the "
+                       f"input with --includes or --excludes.")
+
     outputs = [
         AggregativeOutputInfo(output_path=out_path, source_files=grp['source_files'])
         for out_path, grp in file_groups.items()
@@ -412,6 +554,8 @@ def _build_aggregative_plan(
         n_outputs=n_outputs,
         outputs=outputs,
         file_workers=file_workers,
+        tag_folders=fileset.tag_folders,
+        output_path=str(output_path),
     )
 
 
@@ -456,7 +600,8 @@ def _call(task):
     return task()
 
 
-def dispatch_mixed_jobs(unary_jobs: list, aggregative_jobs: list) -> list:
+def dispatch_mixed_jobs(unary_jobs: list, aggregative_jobs: list,
+                        refused: list | None = None) -> list:
     """A conversion table's one-to-one jobs and aggregative groups in ONE pool, running
     at the same time (roadmap step 3): every unary job and every aggregative output is
     one task, up to ``max_processes`` at once, the biggest first (results in the table's
@@ -465,7 +610,11 @@ def dispatch_mixed_jobs(unary_jobs: list, aggregative_jobs: list) -> list:
     output counts as one task however many files it joins. Failures are reported once,
     at the end, for all of them.
 
-    On SLURM the two kinds still run one after the other, as in 0.1.5."""
+    On SLURM the two kinds still run one after the other, as in 0.1.5.
+
+    With *refused* (a list), a group whose plan is refused (two files at one place, a
+    tag no file carries) is appended to it as ``(job, reason)`` and the other jobs still
+    run; without it, the refusal ends the run as before."""
     import functools
 
     from eubi_bridge.core.memory import main_process_mb, process_mb
@@ -481,18 +630,30 @@ def dispatch_mixed_jobs(unary_jobs: list, aggregative_jobs: list) -> list:
 
     planned = []
     for job in aggregative_jobs:
-        groups, _, job_kwargs = _aggregative_groups(
-            job.input_path, output_path=job.output_path, includes=job.includes,
-            excludes=job.excludes, time_tag=job.time_tag, channel_tag=job.channel_tag,
-            z_tag=job.z_tag, y_tag=job.y_tag, x_tag=job.x_tag,
-            concatenation_axes=job.concatenation_axes, plan=None,
-            **job.to_conversion_kwargs())
+        try:
+            groups, _, job_kwargs = _aggregative_groups(
+                job.input_path, output_path=job.output_path, includes=job.includes,
+                excludes=job.excludes, time_tag=job.time_tag, channel_tag=job.channel_tag,
+                z_tag=job.z_tag, y_tag=job.y_tag, x_tag=job.x_tag,
+                concatenation_axes=job.concatenation_axes, plan=None,
+                **job.to_conversion_kwargs())
+        except ValueError as exc:             # InputError too: the group's files, not a bug
+            if refused is None:
+                raise
+            refused.append((job, str(exc)))
+            continue
         planned += [(paths, out, job_kwargs) for out, paths in groups.items()]
+    if not unary_jobs and not planned:
+        return []
 
     running = max(1, min(first.max_processes, len(unary_jobs) + len(planned)))
     use_threading = first.use_threading
     per_process = process_mb(first, running, 0.0 if use_threading else main_process_mb())
     memory = {'concurrent_jobs': running, 'process_memory_mb': per_process}
+    if not first.on_slurm:
+        # so the conversions still busy can take what the finished ones held
+        from eubi_bridge.core.memory_share import plan_tasks
+        plan_tasks(len(unary_jobs) + len(planned), running, per_process * running)
     tasks = [functools.partial(unary_worker_sync, job.model_copy(update={
                  'cluster': job.cluster.model_copy(update=memory)}))
              for job in unary_jobs]
@@ -537,8 +698,9 @@ def dispatch_aggregative_jobs(jobs: list) -> list:
             failures.append((label, exc))
 
     if failures:
+        from eubi_bridge.utils.errors import TasksFailedError
         summary = "\n".join(f"  {label}: {exc}" for label, exc in failures)
-        raise RuntimeError(
+        raise TasksFailedError(
             f"{len(failures)}/{len(jobs)} aggregative group(s) failed:\n{summary}")
     return results
 
@@ -546,6 +708,15 @@ def dispatch_aggregative_jobs(jobs: list) -> list:
 # ---------------------------------------------------------------------------
 # Metadata collection  (read-only; keeps flat-dict interface)
 # ---------------------------------------------------------------------------
+
+def _short_name(name: str, limit: int = 120) -> str:
+    """*name* within what a path can hold (joining 50 channels names them all); the rest goes
+    into a short hash, so names stay apart."""
+    if len(name) <= limit:
+        return name
+    import hashlib
+    return f"{name[:limit - 9]}-{hashlib.sha1(name.encode()).hexdigest()[:8]}"
+
 
 async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
     """Collect metadata from image files in parallel.
@@ -558,6 +729,9 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
         List of metadata dicts, one per file.
     """
     df = take_filepaths(input_path, **global_kwargs)
+    from eubi_bridge.utils.path_utils import input_mains
+    df = df.assign(input_path=input_mains(list(df["input_path"])))
+    df = df[df["input_path"].notna()].drop_duplicates("input_path").reset_index(drop=True)
 
     max_workers   = int(global_kwargs.get("max_processes", 4))
     use_threading = global_kwargs.get("use_threading", False)
@@ -631,8 +805,9 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
             failed.append((i, r.get('error', 'Unknown error')))
     if failed:
         _raise_version_error(results)
+        from eubi_bridge.utils.errors import TasksFailedError
         summary = "\n".join(f"  Task {i}: {e}" for i, e in failed)
-        raise RuntimeError(
+        raise TasksFailedError(
             f"Metadata collection failed for {len(failed)}/{len(results)} files:\n{summary}"
         )
     return results
@@ -643,30 +818,35 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
 # ---------------------------------------------------------------------------
 
 def _parse_tag(tag):
-    if isinstance(tag, str):
-        return tag if ',' not in tag else tag.split(',')
-    elif isinstance(tag, (tuple, list)):
+    """A tag as the files are read with it: several names as a list, without spaces and
+    empty items (`Blue, Red,`), as FileSet reads them; a prefix or one name as itself."""
+    if isinstance(tag, str) and ',' not in tag:
         return tag
+    elif isinstance(tag, (str, tuple, list)):
+        items = tag.split(',') if isinstance(tag, str) else tag
+        return [str(item).strip() for item in items if str(item).strip()]
     elif tag is None:
         return None
     else:
         raise ValueError("tag must be a string, tuple, or list")
 
 
+def _warn_left_out(left_out: list, total: int) -> None:
+    """One warning naming the files an aggregative run does not convert."""
+    if left_out:
+        shown = ", ".join(os.path.basename(f) for f in left_out[:5])
+        logger.warning(f"{len(left_out)} of {total} file(s) do not have every tag and are not "
+                       f"converted: {shown}{' ...' if len(left_out) > 5 else ''}")
+
+
 def _parse_filepaths_with_tags(filepaths, tags):
-    accepted, seen = [], set()
-    for path in filepaths:
-        for tag in tags:
-            if tag is None:
-                continue
-            tag_list = _parse_tag(tag)
-            if not isinstance(tag_list, (tuple, list)):
-                tag_list = [tag_list]
-            for item in tag_list:
-                if item in path and path not in seen:
-                    accepted.append(path)
-                    seen.add(path)
-    return accepted
+    """The files with every given tag: a file with one of them has no place in the output."""
+    from eubi_bridge.conversion.fileset_io import read_tag
+    # one file named twice is one file, also spelled two ways (a/b.tif, a\b.tif)
+    filepaths = list({os.path.normcase(os.path.abspath(path)): path
+                      for path in reversed(list(filepaths))}.values())[::-1]
+    places = [read_tag(filepaths, _parse_tag(tag)) for tag in tags if tag is not None]
+    return [path for path in filepaths if all(path in place for place in places)]
 
 
 def _slurm_worker_init(tensorstore_data_copy_concurrency='default'):
@@ -776,8 +956,14 @@ def _aggregative_groups(
 
     # ── Group assignments ─────────────────────────────────────────────────
     if plan is not None:
+        if plan.output_path and output_path and (
+                os.path.normcase(os.path.abspath(plan.output_path))
+                != os.path.normcase(os.path.abspath(str(output_path)))):
+            raise InputError(f"This plan writes to {plan.output_path}, not {output_path}: make "
+                             f"the plan with that output.")
         groups       = {out.output_path: out.source_files for out in plan.outputs}
         file_workers = plan.file_workers
+        folders      = plan.tag_folders
         if verbose:
             logger.info(
                 f"Using pre-computed plan: {len(groups)} group(s), "
@@ -788,45 +974,50 @@ def _aggregative_groups(
             input_path, series_index=series_index,
             output_path=output_path, metadata_reader=metadata_reader, **kwargs,
         )
+        from eubi_bridge.conversion.fileset_io import channel_tag_format_error, read_tag
         filepaths          = df.input_path.to_numpy().tolist()
-        filepaths_accepted = _parse_filepaths_with_tags(
-            filepaths, [time_tag, channel_tag, z_tag, y_tag, x_tag]
-        )
 
         for tag_name, tag_value in dict(
             time_tag=time_tag, channel_tag=channel_tag,
             z_tag=z_tag, y_tag=y_tag, x_tag=x_tag,
         ).items():
-            if tag_value is None:
+            if tag_value is None or read_tag(filepaths, _parse_tag(tag_value)):
                 continue
-            tag_list = _parse_tag(tag_value)
-            if not isinstance(tag_list, (list, tuple)):
-                tag_list = [tag_list]
-            if not any(str(t) in fp for t in tag_list for fp in filepaths):
-                raise ValueError(
-                    f"Tag '{tag_name}={tag_value}' does not match any files.\n"
-                    f"Available: {[Path(p).name for p in filepaths]}"
-                )
+            # A single (non-list) channel tag is treated as a prefix followed by a
+            # number.  If it matches filenames but none carry a numeric suffix, the
+            # user almost certainly meant a categorical (comma-separated) tag — fail
+            # early with an actionable message instead of an opaque worker error.
+            names = [Path(p).name for p in filepaths]
+            if tag_name == 'channel_tag' and any(str(channel_tag) in p for p in filepaths):
+                raise InputError(channel_tag_format_error(channel_tag, names))
+            # tags are read as written: say so when the letter case is all that differs
+            parsed = _parse_tag(tag_value)
+            hint = ""
+            if isinstance(parsed, str):
+                found = next((m.group(0) for n in names for m in [re.search(
+                    re.escape(parsed.rstrip('/\\')) + r"(?=\d)", n, re.IGNORECASE)] if m), None)
+                if found:
+                    hint = f" Tags are read with their letter case: did you mean --{tag_name} {found}?"
+            raise InputError(f"--{tag_name} {tag_value} matches no file below the input.{hint} "
+                             f"Files: {', '.join(names[:5])}{' ...' if len(names) > 5 else ''}")
 
-        # A single (non-list) channel tag is treated as a prefix followed by a
-        # number.  If it matches filenames but none carry a numeric suffix, the
-        # user almost certainly meant a categorical (comma-separated) tag — fail
-        # early with an actionable message instead of an opaque worker error.
-        if channel_tag is not None:
-            from eubi_bridge.conversion.fileset_io import channel_tag_format_error
-            parsed_channel = _parse_tag(channel_tag)
-            if isinstance(parsed_channel, str):
-                pat = re.compile(re.escape(parsed_channel) + r'[/\\]?\d+')
-                if not any(pat.search(fp) for fp in filepaths):
-                    raise ValueError(channel_tag_format_error(
-                        channel_tag, [Path(p).name for p in filepaths]))
+        filepaths_accepted = _parse_filepaths_with_tags(
+            filepaths, [time_tag, channel_tag, z_tag, y_tag, x_tag]
+        )
+        taken = set(filepaths_accepted)
+        _warn_left_out([f for f in filepaths if f not in taken], len(filepaths))
 
         from eubi_bridge.conversion import aggregative_path
         # by name, before the files are grouped (a stray file with tags in its name
         # would otherwise break the grouping): an OME companion is left out, files of
         # mixed formats are refused (roadmap step 3)
         filepaths_accepted = aggregative_path.screen_group(filepaths_accepted)
-        common_dir  = os.path.commonpath(filepaths_accepted)
+        if not filepaths_accepted:
+            raise InputError(f"None of the {len(filepaths)} file(s) can be joined: joining needs "
+                             f"a tag that matches them, such as --z_tag or --channel_tag.")
+        # one file: its folder (the common path of one file is the file, and the output's
+        # name is taken below it: a store named "..zarr")
+        common_dir  = os.path.commonpath([os.path.dirname(p) for p in filepaths_accepted])
         cluster_cfg = ClusterConfig(**{k: v for k, v in kwargs.items()
                                        if k in ClusterConfig.model_fields})
         inner_plan = _build_aggregative_plan(
@@ -842,6 +1033,7 @@ def _aggregative_groups(
         )
         groups       = {out.output_path: out.source_files for out in inner_plan.outputs}
         file_workers = inner_plan.file_workers
+        folders      = inner_plan.tag_folders
 
         if verbose:
             logger.info(
@@ -867,6 +1059,7 @@ def _aggregative_groups(
         concatenation_axes=concatenation_axes,
         metadata_reader=metadata_reader,
         series_index=series_index,
+        tag_folders=folders,                # a worker reads its files' tags as the plan did
         **kwargs,
     )
 
@@ -909,6 +1102,8 @@ async def run_conversions_with_concatenation(input_path, output_path, **kwargs):
     from eubi_bridge.core.memory import main_process_mb, process_mb
     per_process = process_mb(pool_cluster.model_copy(update={'on_slurm': False}),
                              file_workers, 0.0 if use_threading else main_process_mb())
+    from eubi_bridge.core.memory_share import plan_tasks
+    plan_tasks(len(groups), file_workers, per_process * file_workers)
 
     loop = asyncio.get_running_loop()
     pool = None

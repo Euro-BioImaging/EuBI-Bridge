@@ -262,6 +262,11 @@ def test_a_gui_batch_runs_every_row_with_its_own_settings(tmp_path, monkeypatch)
     page._refresh_batch_table()
 
     assert _run_batch(page, app) == "finished"
+    # the batch's log is on disk too, its worker processes' lines included (E26)
+    (run_log,) = (tmp_path / "home" / ".eubi_bridge" / "logs").glob("eubi-*.log")
+    logged = run_log.read_text(encoding="utf-8")
+    assert "Conversion starting." in logged and "Memory: " in logged
+    assert "SpawnProcess" in logged
     stores = sorted(p.name for p in out.glob("*.zarr"))
     expected = ["G_series_T_tset.zarr", "stack.zarr", "two_channels.zarr"]
     if czi.exists():

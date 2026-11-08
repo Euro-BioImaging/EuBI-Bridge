@@ -1,0 +1,124 @@
+# Version matrix for the scene -> series release (micro-reader 0.1.0).
+# See matrix.py for the commands and the release policy doc for the rules.
+# Edit `versions`, `axes` and [[expect]] for each release.
+
+# Distributions whose installed versions are recorded and matched by [[expect]].
+stack = ["micro-reader-codecs", "micro-reader", "dyna-zarr", "ome-zarr-pyramid",
+         "eubi-bridge", "eubi-bridge-lite"]
+
+smoke_timeout_s = 900
+
+# Output that means "it ran, but not on micro-reader": a silent switch.
+fallback_patterns = ['older readers \(', 'standard reader \(', 'Bio-Formats metadata']
+
+[paths]
+# Short on purpose: zarr's temporary chunk names hit Windows' 260-character limit
+# under a deep temp folder.
+workdir = "C:/Users/oezdemir/.eubi-matrix"
+
+[pythons]
+# Base interpreters; each cell makes its own venv from them (eubi needs <3.13).
+build = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge/venv/Scripts/python.exe"
+eubi = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge/venv/Scripts/python.exe"
+
+[samples]
+# Each sample must be on micro-reader's route in EVERY tested eubi: several series,
+# but no tiles / views outside a CZI (eubi 0.1.x-0.2.0 send those to the older
+# readers, which lite does not have). Both have several series, so the rename shows.
+czi = "C:/Users/oezdemir/Desktop/data/microscopy/formats/czi/assorted/xyz__multiple_images.czi"
+lif = "C:/Users/oezdemir/Desktop/data/microscopy/formats/lif/ome-samples/20191025 Test FRET 585. 423, 426.lif"
+
+# Local sources of the release candidates; `build` puts their wheels in the wheelhouse.
+[candidates.micro-reader-codecs]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge/incubation/micro-reader/codecs"
+
+[candidates.micro-reader]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge/incubation/micro-reader/python"
+
+[candidates.dyna-zarr]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-OmeZarrPyramid/dyna_zarr"
+
+[candidates.ome-zarr-pyramid]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-OmeZarrPyramid/ome_zarr_pyramid"
+
+[candidates.eubi-bridge]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge"
+
+[candidates.eubi-bridge-lite]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge"
+command = ["{python}", "tools/build_lite.py"]    # needs `build` in the build python
+dist = "dist"
+
+# What varies: one value per axis per cell; "candidate" = the wheelhouse wheel.
+[axes]
+micro-reader = ["0.0.4", "candidate"]
+
+[[consumers]]
+name = "eubi-bridge"
+versions = ["0.1.6", "0.2.0", "candidate"]       # add 0.1.7 and 0.2.1 once the pin releases exist
+python = "eubi"
+samples = ["czi", "lif"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+[[consumers]]
+name = "eubi-bridge-lite"
+versions = ["0.1.6", "0.2.0", "candidate"]
+python = "eubi"
+samples = ["czi", "lif"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+# Expectations, first match wins; default "pass".  ASSUMED: the first eubi that
+# reads series is 0.3.0 -- change "0.3.0" below once its version is fixed.
+
+# Pin releases exclude micro-reader 0.1: pip cannot install them together.
+[[expect]]
+when = { eubi-bridge = "==0.1.7", micro-reader = ">=0.1.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge = "==0.2.1", micro-reader = ">=0.1.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = "==0.1.7", micro-reader = ">=0.1.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = "==0.2.1", micro-reader = ">=0.1.0" }
+outcome = "unresolvable"
+
+# Older eubi with the renamed micro-reader: the import guard stops it, loudly.
+[[expect]]
+when = { eubi-bridge = "<0.3.0", micro-reader = ">=0.1.0" }
+outcome = "guard"
+match = "does not support micro-reader"
+[[expect]]
+when = { eubi-bridge-lite = "<0.3.0", micro-reader = ">=0.1.0" }
+outcome = "guard"
+match = "does not support micro-reader"
+
+# The new eubi requires micro-reader>=0.1.0.
+[[expect]]
+when = { eubi-bridge = ">=0.3.0", micro-reader = "<0.1.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = ">=0.3.0", micro-reader = "<0.1.0" }
+outcome = "unresolvable"
+
+# What a fresh install picks (resolve command), candidates offered from the wheelhouse.
+[[resolve]]
+name = "fresh eubi-bridge"
+python = "eubi"
+requirements = ["eubi-bridge"]
+
+[[resolve]]
+name = "fresh eubi-bridge-lite"
+python = "eubi"
+requirements = ["eubi-bridge-lite"]
+
+[[resolve]]
+name = "eubi-bridge-lite asked together with micro-reader>=0.1"
+python = "eubi"
+requirements = ["eubi-bridge-lite", "micro-reader>=0.1"]
+
+[[resolve]]
+name = "eubi-bridge asked together with micro-reader>=0.1"
+python = "eubi"
+requirements = ["eubi-bridge", "micro-reader>=0.1"]

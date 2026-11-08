@@ -96,10 +96,11 @@ class TestTileIndexValidation:
         code, output = _convert(single_scene_tiff, tmp_path / "out",
                                 series_index=0, mosaic_tile_index=9)
         assert code != 0
-        assert "No valid mosaic tile index" in output
+        assert "img.tif has no tiles: --mosaic_tile_index 9 has none to pick" in output
 
-    def test_the_message_mentions_the_mosaic_condition(self, single_scene_tiff, tmp_path):
-        """Tiles exist only for an unstitched mosaic, the usual reason for this."""
+    def test_the_message_sends_nobody_to_as_mosaic(self, single_scene_tiff, tmp_path):
+        """A file without tiles has none with as_mosaic off either: the hint changed
+        nothing (review cycle 2, R2-03; a chosen tile index already reads tiles apart)."""
         _, output = _convert(single_scene_tiff, tmp_path / "out",
                              series_index=0, mosaic_tile_index=9)
-        assert "as_mosaic" in output
+        assert "as_mosaic" not in output and "has no tiles" in output

@@ -3,6 +3,7 @@ float and the array stays float16; and the partial-conversion notice names the r
 import logging
 
 import numpy as np
+import pytest
 
 from eubi_bridge.core.data_manager import _ome_pixeltype_from_dtype, create_ome_xml
 
@@ -18,7 +19,7 @@ def test_the_partial_notice_gives_the_reason_not_a_damaged_file(caplog):
     from eubi_bridge.conversion.conversion_worker import _report_failures
     job = SimpleNamespace(input_path="/data/x.lif")
     results = ["ok", ValueError("Unsupported dtype: float16"), ValueError("Unsupported dtype: float16")]
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError, match="1 of 3 scene"):
         _report_failures(results, job, total_in_file=3)
     text = caplog.text
     assert "Unsupported dtype: float16" in text and "Reason(s)" in text

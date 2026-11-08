@@ -75,6 +75,30 @@ def build_tensorstore_context(data_copy_concurrency=None):
         return None
 
 
+#: glibc's malloc arenas a conversion worker uses (Linux). glibc gives each thread
+#: that allocates at once an arena of its own, up to 8 per core, and memory freed in one
+#: is not given back while others hold pieces of it: in the BARD reproduction (Workplan
+#: E25, 2026-11-05) a worker with 2 arenas held 28 % less, at the same speed.
+MALLOC_ARENAS = 2
+_M_ARENA_MAX = -8                                  # mallopt's parameter (malloc.h)
+
+
+def limit_malloc_arenas(arenas: int = MALLOC_ARENAS) -> bool:
+    """Limit glibc's malloc arenas in this process to *arenas* (``mallopt``), before its
+    threads start allocating; True when set. Not on other systems or C libraries (macOS,
+    Windows, musl), and not when the user set ``MALLOC_ARENA_MAX`` (theirs stands)."""
+    if not sys.platform.startswith("linux") or "MALLOC_ARENA_MAX" in os.environ:
+        return False
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None)
+        if not hasattr(libc, "gnu_get_libc_version"):      # not glibc
+            return False
+        return bool(libc.mallopt(_M_ARENA_MAX, int(arenas)))
+    except Exception:                                      # noqa: BLE001 - leave it as it is
+        return False
+
+
 def _patch_xsdata_for_cython():
     """
     Patch xsdata to handle Cython types that don't have __subclasses__.
@@ -124,6 +148,9 @@ def initialize_worker_process(tensorstore_data_copy_concurrency='default'):
 
     if _worker_initialized:
         return
+
+    # first, before any thread of this worker allocates: fewer malloc arenas (Linux)
+    limit_malloc_arenas()
 
     # Suppress the JPype overload-resolution TypeError that fires when bfio's
     # BioReader.__del__ calls loci.formats.ImageReader.close() during GC.
@@ -247,14 +274,15 @@ def safe_worker_wrapper(func):
             exc_tb = traceback.format_exc()
 
             # Create a simple, picklable RuntimeError
-            error_msg = (
-                f"Worker process failed\n"
-                f"Function: {func.__name__}\n"
-                f"Exception: {exc_type}: {exc_msg}\n"
-                f"\nFull traceback:\n{exc_tb}"
-            )
-
-            logger.error(f"[Worker Error] {error_msg}")
+            first_line = (exc_msg.strip().splitlines() or [""])[0]
+            error_msg = f"{exc_type}: {first_line}"
+            cause = e.__cause__
+            while cause is not None:
+                error_msg += f" <- {type(cause).__name__}: {str(cause)[:200]}"
+                cause = cause.__cause__
+            if "os_error_code=112" in exc_msg or "No space left" in exc_msg:
+                error_msg = f"the disk is full ({exc_type}: {first_line[:120]})"
+            logger.debug(f"[Worker Error] {func.__name__}: {exc_tb}")
             # raised there, so already imported (no import that could fail here)
             micro_source = sys.modules.get("eubi_bridge.core.micro_source")
             if micro_source is not None and isinstance(e, micro_source.MicroReaderVersionError):
