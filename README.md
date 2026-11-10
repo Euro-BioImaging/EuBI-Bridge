@@ -119,10 +119,13 @@ To upgrade an existing installation to the latest release:
 pip install --upgrade eubi-bridge   # or: pip install --upgrade eubi-bridge-lite
 ```
 
-This also upgrades micro-reader and ome-zarr-pyramid to the releases it needs (0.3.4:
-micro-reader 0.4 and ome-zarr-pyramid 0.6, which write no invented calibration). If you
-installed them on their own, or with `--no-deps`, upgrade them too:
-`pip install --upgrade micro-reader ome-zarr-pyramid`.
+This also upgrades micro-reader, ome-zarr-pyramid and dyna-zarr to the releases it needs
+(0.4.0: micro-reader 0.4.1, ome-zarr-pyramid 0.6.1 and dyna-zarr 0.1.3, which write zipped
+OME-Zarr and stitch BigDataViewer tiles). If you installed them on their own, or with
+`--no-deps`, upgrade them too:
+`pip install --upgrade micro-reader ome-zarr-pyramid dyna-zarr`.
+
+Since 0.4.0, outputs are named `<input name>.ome.zarr` (they were `<input name>.zarr`).
 
 Then, after installing or upgrading, run this once:
 
@@ -268,19 +271,53 @@ eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr --ome_zarr_ver
 
 `--zarr_format` still works, but it is deprecated. Use `--ome_zarr_version` instead.
 
+Each output is an OME-Zarr folder named `<input name>.ome.zarr`. To write each output
+straight into a zip instead, with no folder first, add `--zip_output zip`:
+
+```bash
+eubi to_zarr multichannel_timeseries multichannel_timeseries_zarr --zip_output zip
+```
+
+Each output is then `<input name>.ome.zarr.zip`, holding the folder `<input name>.ome.zarr`,
+as the [BioImage Archive](https://www.ebi.ac.uk/bioimage-archive/help-zarr/) asks for
+uploads. `--zip_output ozx` writes `<input name>.ozx` instead (the NGFF RFC-9 draft: the
+image at the top of the zip, OME-Zarr 0.5 or newer). A zip is called `.part` until it is
+complete, and zips are written on a local disk only. In the GUI, this is **Output As** on
+the Conversion page.
+
 Both of these commands will perform unary conversion, resulting in the following output:  
 
 ```bash
 multichannel_timeseries_zarr
-├── Channel1-T0001.zarr
-├── Channel1-T0002.zarr
-├── Channel1-T0003.zarr
-├── Channel1-T0004.zarr
-├── Channel2-T0001.zarr
-├── Channel2-T0002.zarr
-├── Channel2-T0003.zarr
-└── Channel2-T0004.zarr
+├── Channel1-T0001.ome.zarr
+├── Channel1-T0002.ome.zarr
+├── Channel1-T0003.ome.zarr
+├── Channel1-T0004.ome.zarr
+├── Channel2-T0001.ome.zarr
+├── Channel2-T0002.ome.zarr
+├── Channel2-T0003.ome.zarr
+└── Channel2-T0004.ome.zarr
 ```  
+
+A folder with subfolders is converted file by file into one output folder. To keep the
+subfolders, add `--keep_folder_structure True`: each output then goes where its file was,
+below a folder of the input's name:
+
+```bash
+eubi to_zarr experiment experiment_zarr --keep_folder_structure True
+```
+
+```bash
+experiment_zarr
+└── experiment
+    ├── day1
+    │   └── sample1.ome.zarr
+    └── day2
+        └── sample1.ome.zarr
+```
+
+In the GUI, tick a folder in the file browser for this; **Select All** ticks a folder's
+files instead, and those go into the output folder directly.
 
 Use **wildcards** to specifically convert the images belonging to Channel1:
 
@@ -308,8 +345,8 @@ Output:
 
 ```bash
 multichannel_timeseries_concat_zarr
-├── Channel1-T_tset.zarr
-└── Channel2-T_tset.zarr
+├── Channel1-T_tset.ome.zarr
+└── Channel2-T_tset.ome.zarr
 ```  
 
 **Important note:** if the `--channel_tag` was not provided, the tool would not be aware
@@ -331,7 +368,7 @@ Output:
 
 ```bash
 multichannel_timeseries_concat_zarr
-└── Channel_cset-T_tset.zarr
+└── Channel_cset-T_tset.ome.zarr
 ```  
 
 ### Handling Nested Directories  
@@ -367,7 +404,7 @@ Output:
 
 ```bash
 multichannel_timeseries_nested_concat_zarr
-└── Channel_cset-T_tset.zarr
+└── Channel_cset-T_tset.ome.zarr
 ```  
 
 To concatenate along the channel dimension only:  
@@ -385,10 +422,10 @@ Output:
 
 ```bash
 multichannel_timeseries_nested_concat_zarr
-├── Channel_cset-T0001.zarr
-├── Channel_cset-T0002.zarr
-├── Channel_cset-T0003.zarr
-└── Channel_cset-T0004.zarr
+├── Channel_cset-T0001.ome.zarr
+├── Channel_cset-T0002.ome.zarr
+├── Channel_cset-T0003.ome.zarr
+└── Channel_cset-T0004.ome.zarr
 ```  
 
 ### Selective Data Conversion    
@@ -409,7 +446,7 @@ Output:
 
 ```bash
 multichannel_timeseries_nested_concat_zarr
-└── Channel_cset-T0003.zarr
+└── Channel_cset-T0003.ome.zarr
 ```  
 
 **Note:** When using wildcards, the input directory path must be enclosed 
@@ -446,7 +483,7 @@ Output:
 
 ```bash
 blueredchannels_timeseries_concat_zarr
-└── BlueRed_cset-T_tset.zarr
+└── BlueRed_cset-T_tset.ome.zarr
 ```  
 
 Note that the categorical names are aggregated in the output OME-Zarr name.  
@@ -483,7 +520,7 @@ Output:
 
 ```bash
 blueredchannels_timeseries_nested_concat_zarr
-└── BlueRed_cset-T_tset.zarr
+└── BlueRed_cset-T_tset.ome.zarr
 ```
 
 ## Speed and memory

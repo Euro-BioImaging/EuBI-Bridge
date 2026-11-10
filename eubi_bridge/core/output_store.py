@@ -25,6 +25,55 @@ def _is_remote_path(path) -> bool:
     return isinstance(path, str) and path.startswith(("https://", "s3://"))
 
 
+#: ``zip_output`` -> the output's suffix: an OME-Zarr folder (decision E-3: ``X.ome.zarr``,
+#: eubi-bridge 0.3.x wrote ``X.zarr``), the BioImage Archive's zip holding that folder
+#: (decision E-8, the default zip), or NGFF RFC-9's ``.ozx`` (OME-Zarr 0.5+ only)
+OUTPUT_SUFFIXES = {"off": ".ome.zarr", "zip": ".ome.zarr.zip", "ozx": ".ozx"}
+ZIP_OUTPUTS = ("off", "zip", "ozx")
+#: every suffix an output may already carry (longest first), kept as given
+_KNOWN_SUFFIXES = (".ome.zarr.zip", ".zarr.zip", ".ome.zarr", ".ozx", ".zarr")
+
+
+def output_suffix(zip_output: str = "off") -> str:
+    """The suffix of an output written with ``zip_output`` ("off", "zip" or "ozx")."""
+    try:
+        return OUTPUT_SUFFIXES[zip_output or "off"]
+    except KeyError:
+        raise ValueError(f"zip_output={zip_output!r}: one of {ZIP_OUTPUTS}") from None
+
+
+def strip_output_suffix(path) -> str:
+    """*path* without its output suffix (``X.ome.zarr`` / ``X.ozx`` / ... -> ``X``)."""
+    text = str(path)
+    for suffix in _KNOWN_SUFFIXES:
+        if text.lower().endswith(suffix):
+            return text[:-len(suffix)]
+    return text
+
+
+def with_output_suffix(path, zip_output: str = "off") -> str:
+    """*path* named as an output written with ``zip_output``: ``X`` -> ``X.ome.zarr``
+    (``X.ome.zarr.zip``, ``X.ozx``). A suffix the path already has for that kind of
+    output is kept (``X.zarr`` stays a folder named ``X.zarr``)."""
+    text = str(path)
+    if (zip_output or "off") == "off":
+        if text.lower().endswith((".ome.zarr", ".zarr")):
+            return text
+    elif text.lower().endswith(output_suffix(zip_output)):
+        return text
+    stem = strip_output_suffix(text)
+    if stem.lower().endswith(".ome"):
+        # a joined output named after .ome.tif files keeps ".ome" in its name (X.ome):
+        # eubi-bridge 0.3.x wrote it X.ome.zarr, and it stays that, not X.ome.ome.zarr
+        stem = stem[:-len(".ome")]
+    return stem + output_suffix(zip_output)
+
+
+def is_zip_output(path) -> bool:
+    """True for an output path that is a zip (``.zip`` / ``.ozx``)."""
+    return str(path).lower().endswith((".zip", ".ozx"))
+
+
 def store_exists(path) -> bool:
     """True when a store already exists at *path*, local or remote.
 

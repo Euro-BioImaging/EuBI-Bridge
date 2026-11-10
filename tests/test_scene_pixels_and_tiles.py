@@ -61,7 +61,7 @@ def test_each_series_of_a_bioformats_file_keeps_its_pixels(tmp_path):
                  metadata={"axes": "CYX"})
     _convert(src, tmp_path / "out", "--series_index", "all", "--metadata_reader", "bfio",
              "--pixel_reader", "standard")
-    assert _values(tmp_path / "out") == {"two_scene0.zarr": [10], "two_scene1.zarr": [200]}
+    assert _values(tmp_path / "out") == {"two_scene0.ome.zarr": [10], "two_scene1.ome.zarr": [200]}
 
 
 def test_each_scene_writes_its_own_tiles(tmp_path):
@@ -84,6 +84,6 @@ def test_each_scene_writes_its_own_tiles(tmp_path):
     _convert(src, tmp_path / "out", "--series_index", "all", "--mosaic_tile_index", "all",
              "--as_mosaic", "False")
     assert _values(tmp_path / "out") == {
-        "mosaic_scene0_tile0.zarr": [10], "mosaic_scene0_tile1.zarr": [20],
-        "mosaic_scene1_tile0.zarr": [30], "mosaic_scene1_tile1.zarr": [40],
-        "mosaic_scene1_tile2.zarr": [50]}
+        "mosaic_scene0_tile0.ome.zarr": [10], "mosaic_scene0_tile1.ome.zarr": [20],
+        "mosaic_scene1_tile0.ome.zarr": [30], "mosaic_scene1_tile1.ome.zarr": [40],
+        "mosaic_scene1_tile2.ome.zarr": [50]}

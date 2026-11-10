@@ -46,7 +46,7 @@ def test_the_tile_at_the_origin_has_its_translation_on_every_level(tmp_path):
         str(src), str(out), use_threading=True, verbose=False, as_mosaic=False,
         mosaic_tile_index="all", n_layers=3, min_dimension_size=16)
     stores = sorted(out.glob("*.zarr"))
-    assert [s.name for s in stores] == ["tiles_tile0.zarr", "tiles_tile1.zarr"]
+    assert [s.name for s in stores] == ["tiles_tile0.ome.zarr", "tiles_tile1.ome.zarr"]
     first, second = (_translations(s) for s in stores)
     assert len(first) == 3
     assert first == [[0.0, 0.0]] * 3                  # (0, 0): written, on every level

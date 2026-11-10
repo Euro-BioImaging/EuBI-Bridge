@@ -94,7 +94,7 @@ def test_an_output_keeps_its_coordinate_system(tmp_path):
     src = _positioned_tiff(tmp_path / "img.ome.tif")
     sid, yx = _needs_systems(src)
     _convert(src, tmp_path / "out", ["--squeeze", "True"])
-    attrs = _attrs(tmp_path / "out" / "img.zarr")
+    attrs = _attrs(tmp_path / "out" / "img.ome.zarr")
     assert attrs[SYSTEM_KEY] == sid
     (definition,) = attrs[SYSTEMS_KEY]
     assert definition["name"] == sid
@@ -110,7 +110,7 @@ def test_an_unplaced_image_names_no_system(tmp_path):
                      photometric="minisblack",
                      metadata={"axes": "CYX", "PhysicalSizeX": 0.25, "PhysicalSizeY": 0.25})
     _convert(src, tmp_path / "out", [])
-    attrs = _attrs(tmp_path / "out" / "plain.zarr")
+    attrs = _attrs(tmp_path / "out" / "plain.ome.zarr")
     assert SYSTEM_KEY not in attrs and SYSTEMS_KEY not in attrs
 
 
@@ -130,7 +130,7 @@ def _ome_zarr_with_system(path: Path, sid="lab-stage", translation=(0.0, 0.0, 12
 def test_an_ome_zarr_inputs_system_is_kept(tmp_path):
     src = _ome_zarr_with_system(tmp_path / "in.ome.zarr")
     _convert(src, tmp_path / "out", ["--ome_zarr_version", "0.5"])
-    attrs = _attrs(tmp_path / "out" / "in.zarr")
+    attrs = _attrs(tmp_path / "out" / "in.ome.zarr")
     assert attrs[SYSTEM_KEY] == "lab-stage"
     assert [d["name"] for d in attrs[SYSTEMS_KEY]] == ["lab-stage"]
     assert _translation(attrs) == [0.0, 0.0, 12.5, -3.0]

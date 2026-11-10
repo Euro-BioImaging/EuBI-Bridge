@@ -990,6 +990,21 @@ class ConvertPage(QWidget):
         )
         fmt_layout.addLayout(_form_row("OME-Zarr Version:", self._ome_zarr_version))
 
+        # Each output straight into a zip (item data = the zip_output value)
+        self._zip_output = QComboBox()
+        self._zip_output.addItem("Folder (X.ome.zarr)", "off")
+        self._zip_output.addItem("Zip (X.ome.zarr.zip)", "zip")
+        self._zip_output.addItem("RFC-9 zip (X.ozx)", "ozx")
+        self._zip_output.setToolTip(
+            "How each output is written.\n"
+            "Folder: an OME-Zarr folder, X.ome.zarr.\n"
+            "Zip: written straight into X.ome.zarr.zip, holding the folder X.ome.zarr,\n"
+            "as the BioImage Archive asks for uploads. No folder is written first.\n"
+            "RFC-9 zip: X.ozx, the NGFF RFC-9 draft (OME-Zarr 0.5 or newer).\n"
+            "Zips are written on a local disk only."
+        )
+        fmt_layout.addLayout(_form_row("Output As:", self._zip_output))
+
         self._shard_widget = QWidget()
         shard_widget_layout = QVBoxLayout(self._shard_widget)
         shard_widget_layout.setContentsMargins(0, 0, 0, 0)
@@ -2454,6 +2469,8 @@ class ConvertPage(QWidget):
             idx = self._ome_zarr_version.findData(conv.get("zarrFormat", 2))
         if idx >= 0:
             self._ome_zarr_version.setCurrentIndex(idx)
+        idx = self._zip_output.findData(conv.get("zipOutput", "off") or "off")
+        self._zip_output.setCurrentIndex(idx if idx >= 0 else 0)
         dt = conv.get("dataType", "auto") or "auto"
         idx = self._data_type.findText(dt)
         if idx >= 0:
@@ -2622,6 +2639,7 @@ class ConvertPage(QWidget):
             },
             "conversion": {
                 "omeZarrVersion":       self._ome_zarr_version.currentText(),
+                "zipOutput":            self._zip_output.currentData(),
                 "ioBackend":            self._io_backend.currentText(),
                 "exportAcquisitionMetadata": self._export_acquisition.currentData(),
                 "dataType":             self._data_type.currentText(),

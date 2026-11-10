@@ -1,5 +1,5 @@
 {
- "mosaic_scene0_tile0.zarr": {
+ "mosaic_scene0_tile0.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [
@@ -113,7 +113,7 @@
    ]
   ]
  },
- "mosaic_scene0_tile1.zarr": {
+ "mosaic_scene0_tile1.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [
@@ -227,7 +227,7 @@
    ]
   ]
  },
- "mosaic_scene0_tile2.zarr": {
+ "mosaic_scene0_tile2.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [
@@ -341,7 +341,7 @@
    ]
   ]
  },
- "mosaic_scene0_tile3.zarr": {
+ "mosaic_scene0_tile3.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [
@@ -455,7 +455,7 @@
    ]
   ]
  },
- "mosaic_scene1_tile0.zarr": {
+ "mosaic_scene1_tile0.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [
@@ -569,7 +569,7 @@
    ]
   ]
  },
- "mosaic_scene1_tile1.zarr": {
+ "mosaic_scene1_tile1.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [
@@ -683,7 +683,7 @@
    ]
   ]
  },
- "mosaic_scene1_tile2.zarr": {
+ "mosaic_scene1_tile2.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [
@@ -797,7 +797,7 @@
    ]
   ]
  },
- "mosaic_scene1_tile3.zarr": {
+ "mosaic_scene1_tile3.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [

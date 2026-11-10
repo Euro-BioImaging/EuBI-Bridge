@@ -49,8 +49,14 @@ def update_store(input_path: str, kwargs: dict):
     from eubi_bridge.conversion.pyramid_path import channel_overrides, ome_xml, unit_spelled
     from eubi_bridge.core.config_models import MetadataUpdateConfig
     from eubi_bridge.core.output_store import _ozp_target_args
+    from eubi_bridge.core.output_store import is_zip_output
     from eubi_bridge.utils.path_utils import is_zarr_group
 
+    if is_zip_output(input_path):
+        raise InputError(f"{os.path.basename(str(input_path))} is a zipped OME-Zarr, which "
+                         f"cannot be changed in place. Convert it again with the new values, "
+                         f"or unzip it, update the folder and zip it again "
+                         f"(zarr-zip --rename-folder).")
     if not is_zarr_group(str(input_path)):
         raise ValueError(f"Metadata update only works with OME-Zarr datasets: {input_path}")
     if _attrs(input_path).get("type"):

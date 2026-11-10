@@ -166,7 +166,8 @@ def test_a_mosaic_splits_into_placed_tiles_without_the_standard_stack(zeiss_mosa
              mosaic_tile_index="all")
     stores = sorted(out.glob("*.zarr"))
     assert len(stores) == 4
-    placed = {int(s.stem.rsplit("_tile", 1)[1]): _transforms(s) for s in stores}
+    placed = {int(s.name[:-len(".ome.zarr")].rsplit("_tile", 1)[1]): _transforms(s)
+              for s in stores}
     # every tile has a place of its own
     assert len({tuple(t["translation"][-2:]) for t in placed.values()}) == 4
     from eubi_bridge.utils.optional_deps import is_installed

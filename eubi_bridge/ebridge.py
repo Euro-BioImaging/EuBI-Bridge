@@ -10,6 +10,7 @@ delegator classes:
 from __future__ import annotations
 
 import copy
+from collections import Counter
 import os
 import shutil
 import tempfile
@@ -130,6 +131,56 @@ def _check_io_backend(*backends) -> None:
             "pip install \"dyna-zarr[zarrista]\", or write with TensorStore: "
             "eubi configure conversion --io_backend tensorstore (or --io_backend "
             "tensorstore for this run; in the GUI, Byte Backend on the Conversion page).")
+
+
+def _check_zip_output(zip_output, output_path) -> None:
+    """Refuse a zipped run up front when it cannot be written: an object-store output (a
+    zip is written on a local disk), or an install without zarr-zip / a dyna-zarr that
+    writes zips. (A table row's own output_path is checked per job.)"""
+    if (zip_output or "off") == "off":
+        return
+    if output_path is not None and str(output_path).startswith(("https://", "s3://")):
+        raise InputError(
+            f"zip_output={zip_output!r} writes zips on a local disk; {output_path} is an "
+            f"object store. Write the zips to a local folder and upload them, or drop "
+            f"zip_output to write OME-Zarr to the store.")
+    from dyna_zarr import io as dyna_io
+    import importlib.util
+    if not hasattr(dyna_io, "open_zip") or importlib.util.find_spec("zarr_zip") is None:
+        raise InputError(
+            f"zip_output={zip_output!r} needs dyna-zarr 0.1.3 or newer and zarr-zip: "
+            f"pip install -U dyna-zarr zarr-zip")
+
+
+def _output_places(df, output_path, roots, keep_folder_structure: bool) -> tuple:
+    """``(table, names)`` for one-to-one rows: with ``keep_folder_structure`` each row's
+    ``output_path`` is its file's place below the folders given as inputs (`roots`;
+    Workplan E28; files given one by one keep theirs), and ``names`` gives each input an
+    output name no other input of the same output folder has (``disambiguate_output_names``,
+    per folder: mirrored folders keep their own names apart). A set or plate is named
+    after its dataset's own name (``dataset_names``, Workplan E29) unless another input of
+    its folder shares it."""
+    from eubi_bridge.utils.path_utils import (dataset_names, disambiguate_output_names,
+                                              mirrored_output, per_image_inputs)
+    if keep_folder_structure and roots:
+        df = df.copy()
+        outs = df['output_path'] if 'output_path' in df.columns else [None] * len(df)
+        df['output_path'] = [mirrored_output(ip, roots, op or output_path) or op or output_path
+                             for ip, op in zip(df['input_path'], outs)]
+    folders = (df['output_path'].tolist() if 'output_path' in df.columns
+               else [output_path] * len(df))
+    per_image = per_image_inputs(df)
+    names = {}
+    for folder in dict.fromkeys(str(f) for f in folders):
+        members = [str(p) for p, f in zip(df['input_path'], folders) if str(f) == folder]
+        # a set or plate named in its metadata takes that name (Workplan E29: Viventis
+        # batches all name their companion ome-tiff.companion.ome); inputs of one folder
+        # sharing it (two measurements of one plate) keep the names they had
+        own = dataset_names(members, per_image=per_image)
+        shared = Counter(n.lower() for n in own.values())
+        own = {path: n for path, n in own.items() if shared[n.lower()] == 1}
+        names.update(disambiguate_output_names(members, per_image=per_image, names=own))
+    return df, names
 
 
 def _refused_group_listing(group_id, rows, reason: str, columns=None) -> str:
@@ -314,6 +365,7 @@ class ConfigManager:
             compressor='blosc',
             compressor_params={},
             overwrite=False,
+            zip_output='off',
             save_omexml=True,
             export_acquisition_metadata=None,
             squeeze=True,
@@ -698,6 +750,7 @@ class ConfigManager:
                              compressor: str = 'default',
                              compressor_params: dict = 'default',
                              overwrite: bool = 'default',
+                             zip_output: str = 'default',
                              save_omexml: bool = 'default',
                              export_acquisition_metadata: bool = 'default',
                              squeeze: bool = 'default',
@@ -1255,6 +1308,7 @@ class ConfigureGroup:
                    compressor: str = 'default',
                    compressor_params: dict = 'default',
                    overwrite: bool = 'default',
+                   zip_output: str = 'default',
                    save_omexml: bool = 'default',
                    export_acquisition_metadata: bool = 'default',
                    squeeze: bool = 'default',
@@ -1288,6 +1342,12 @@ class ConfigureGroup:
             compressor_params: Dict of codec parameters, e.g.
                 ``{'cname': 'lz4', 'clevel': 5}``.
             overwrite: Overwrite existing output zarr (default False).
+            zip_output: Write each output straight into a zip: ``'off'`` (default:
+                an OME-Zarr folder ``X.ome.zarr``), ``'zip'`` (``X.ome.zarr.zip``
+                holding ``X.ome.zarr/``, as the BioImage Archive asks) or ``'ozx'``
+                (``X.ozx``, NGFF RFC-9, a draft: OME-Zarr 0.5 or newer). No folder is
+                written first; a zip is ``X.ome.zarr.zip.part`` until it is complete.
+                Local outputs only.
             dtype: Output dtype — ``'auto'`` keeps the source dtype, or any
                 NumPy dtype string such as ``'uint16'``.
             squeeze: Remove singleton dimensions before writing (default True).
@@ -1467,6 +1527,7 @@ class ConversionManager:
                 on_slurm: bool = None,
                 on_local_cluster: bool = None,
                 plan: 'AggregativePlan | None' = None,
+                keep_folder_structure: bool = False,
                 **kwargs) -> None:
         """Convert image data to OME-Zarr format."""
         _ensure_heavy_imports()
@@ -1528,11 +1589,13 @@ class ConversionManager:
         metadata_p   = self._config._collect_params('metadata',   **cli_kwargs)
         ClusterConfig(**cluster_p)
         ReaderConfig(**readers_p)
-        ConversionConfig(**conversion_p)
+        conversion_checked = ConversionConfig(**conversion_p)
         DownscaleConfig(**downscale_p)
         MetadataConfig(**metadata_p)
         # a backend that is not installed fails the run here, before any file is read
         _check_io_backend(conversion_p.get('io_backend'))
+        # zipped outputs: local only, and zarr-zip / a dyna-zarr that writes zips installed
+        _check_zip_output(conversion_checked.zip_output, output_path)
         # The metadata readers every conversion will use: a conversion table
         # (a batch) states its own per row
         row_readers, any_forced = _row_metadata_readers(
@@ -1613,6 +1676,7 @@ class ConversionManager:
         if _mixed_table:
             self._run_mixed_table(
                 _table, output_path=output_path,
+                keep_folder_structure=keep_folder_structure,
                 cluster_p=cluster_p, readers_p=readers_p,
                 conversion_p=conversion_p, downscale_p=downscale_p,
                 metadata_p=metadata_p, concat_p=concat_p,
@@ -1641,6 +1705,7 @@ class ConversionManager:
                 y_tag=effective_y_tag,
                 x_tag=effective_x_tag,
                 aggregative_group=effective_aggregative_group,
+                keep_folder_structure=bool(keep_folder_structure),
                 includes=includes,
                 excludes=excludes,
                 extra=extra,
@@ -1658,18 +1723,22 @@ class ConversionManager:
                 includes=includes, excludes=excludes,
                 **merged, **extra,
             )
+            # A folder among the inputs (a checked folder in the GUI, a folder in a list
+            # or a batch row) stands for the files below it (Workplan E28)
+            from eubi_bridge.utils.path_utils import expand_folder_rows, folder_inputs
+            df, expanded = expand_folder_rows(df, includes=includes, excludes=excludes,
+                                              output_path=output_path)
+            roots = folder_inputs(_input) + expanded
             # The file(s) of a plate or other image set become its main file, once
             # (group_input_rows): any file of a plate may be chosen.
             from eubi_bridge.utils.path_utils import group_input_rows
             df = group_input_rows(df)
-            # Two inputs sharing a basename would target one output — the
-            # second either refused (overwrite=False) or destroying the first
-            # (overwrite=True).  Give the colliding ones a parent-directory
-            # prefix so every job writes somewhere distinct.
-            from eubi_bridge.utils.path_utils import (disambiguate_output_names,
-                                                      per_image_inputs)
-            unique_names = disambiguate_output_names(
-                [str(p) for p in df['input_path'].tolist()], per_image=per_image_inputs(df))
+            # each output where its file was, below the folder given (E28; files picked
+            # by hand stay in the output folder itself). Two inputs sharing a basename
+            # would target one output — the second either refused (overwrite=False) or
+            # destroying the first (overwrite=True) — so the colliding ones get a
+            # parent-directory prefix, within each output folder.
+            df, unique_names = _output_places(df, output_path, roots, keep_folder_structure)
 
             jobs = []
             for _, row in df.iterrows():
@@ -1695,7 +1764,8 @@ class ConversionManager:
 
     def _run_mixed_table(self, table, *, output_path, cluster_p, readers_p,
                          conversion_p, downscale_p, metadata_p, concat_p,
-                         merged, extra, includes, excludes) -> None:
+                         merged, extra, includes, excludes,
+                         keep_folder_structure: bool = False) -> None:
         """Run a conversion table that may contain both kinds of job.
 
         Rows sharing an ``aggregative_group`` become one concatenated output;
@@ -1719,6 +1789,10 @@ class ConversionManager:
             from eubi_bridge.utils.errors import InputError
             raise InputError("\n".join(problems))        # the table's, so no traceback
 
+        # a folder row (a ticked folder in the GUI's batch) stands for its files (E28)
+        from eubi_bridge.utils.path_utils import expand_folder_rows
+        table, roots = expand_folder_rows(table, includes=includes, excludes=excludes,
+                                          output_path=output_path)
         unary_rows, groups = partition_by_group(table)
 
         def _row_overrides(row_dict: dict) -> dict:
@@ -1733,9 +1807,8 @@ class ConversionManager:
         if len(unary_rows):
             from eubi_bridge.utils.path_utils import group_input_rows, per_image_inputs
             unary_rows = group_input_rows(unary_rows)
-            unique_names = disambiguate_output_names(
-                [str(path) for path in unary_rows["input_path"].tolist()],
-                per_image=per_image_inputs(unary_rows))
+            unary_rows, unique_names = _output_places(unary_rows, output_path, roots,
+                                                      keep_folder_structure)
             for _, row in unary_rows.iterrows():
                 row_dict = row.to_dict()
                 inp = row_dict.pop("input_path")
@@ -2328,6 +2401,7 @@ class EuBIBridge:
         on_local_cluster: bool = None,
         plan: 'AggregativePlan | None' = None,
         log_file: Union[bool, str] = True,
+        keep_folder_structure: bool = False,
         **kwargs,
     ) -> None:
         """Convert image data to OME-Zarr format.
@@ -2362,6 +2436,12 @@ class EuBIBridge:
                 labels such as ``gr1`` or ``A``: it becomes part of the output
                 filename.
             plan: Pre-computed AggregativePlan from validate_aggregative().
+            keep_folder_structure: Mirror the folders given as inputs (default False):
+                each output goes to ``<output_path>/<folder name>/<the folders below
+                it>``, where its file was, instead of all into ``output_path``. Files
+                given one by one still go into ``output_path``. A plate's output goes
+                beside its folder; a joined output into the deepest folder its files
+                share. The GUI sets it for checked folders.
             log_file: Where this run's log is also written, line by line, so it
                 survives a crash: ``True`` (default) a new file in the ``logs`` folder
                 of the config folder (the newest 20 are kept), a path, or ``False``
@@ -2385,7 +2465,8 @@ class EuBIBridge:
                 max_processes=max_processes, max_retries=max_retries,
                 tensorstore_data_copy_concurrency=tensorstore_data_copy_concurrency,
                 use_threading=use_threading, on_slurm=on_slurm,
-                on_local_cluster=on_local_cluster, plan=plan, **kwargs,
+                on_local_cluster=on_local_cluster, plan=plan,
+                keep_folder_structure=keep_folder_structure, **kwargs,
             )
 
     def validate_aggregative(

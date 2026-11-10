@@ -1,5 +1,5 @@
 {
- "levels.zarr": {
+ "levels.ome.zarr": {
   "attrs": {
    "eubi_bridge": {},
    "multiscales": [

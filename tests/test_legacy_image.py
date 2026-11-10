@@ -64,7 +64,7 @@ def _two_series_btf(path: Path) -> Path:
 def test_bioformats_file_on_both_paths(tmp_path):
     out = _both(_two_series_btf(tmp_path / "two.ome.btf"), tmp_path,
                 ["--series_index", "all", *STANDARD], "legacy_image-bioformats_two_series")
-    assert sorted(out) == ["two_scene0.zarr", "two_scene1.zarr"]
+    assert sorted(out) == ["two_scene0.ome.zarr", "two_scene1.ome.zarr"]
     values = [np.unique(np.asarray(zarr.open_group(str(tmp_path / "new" / name))["0"])).tolist()
               for name in sorted(out)]
     assert values == [[10], [200]]                          # each scene its own pixels

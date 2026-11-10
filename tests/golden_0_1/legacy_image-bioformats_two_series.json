@@ -1,5 +1,5 @@
 {
- "two_scene0.zarr": {
+ "two_scene0.ome.zarr": {
   "attrs": {
    "eubi_bridge": {
     "acquisition": {
@@ -103,7 +103,7 @@
    ]
   ]
  },
- "two_scene1.zarr": {
+ "two_scene1.ome.zarr": {
   "attrs": {
    "eubi_bridge": {
     "acquisition": {

@@ -1,5 +1,5 @@
 {
- "rgb.zarr": {
+ "rgb.ome.zarr": {
   "attrs": {
    "eubi_bridge": {
     "acquisition": {

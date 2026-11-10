@@ -268,8 +268,10 @@ class TestSidebarBrowserDrop:
         assert not output_browser.acceptDrops()
         output_browser.deleteLater()
 
-    def test_a_plain_folder_cannot_be_ticked(self, browser, tmp_path):
-        """Ticking one used to hand the folder to the reader, which failed."""
+    def test_a_plain_folder_can_be_ticked(self, browser, tmp_path):
+        """A ticked folder converts the files below it, its folders mirrored in the
+        output (Workplan E28; until then a ticked folder reached the reader and failed,
+        so folders had no box)."""
         from PyQt6.QtCore import Qt
         browser.navigate_to(str(tmp_path / "sub"))
         checkable = {}
@@ -277,7 +279,7 @@ class TestSidebarBrowserDrop:
             item = browser._list.item(row)
             name = item.text().split(" ", 1)[1]
             checkable[name] = bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
-        assert checkable == {"plain": False, "img.zarr": True,
+        assert checkable == {"plain": True, "img.zarr": True,
                              "a.tif": True, "b.czi": True}
 
     def test_select_all_skips_plain_folders(self, browser, tmp_path):
@@ -286,8 +288,9 @@ class TestSidebarBrowserDrop:
         assert sorted(Path(p).name for p in browser.selected_paths()) == [
             "a.tif", "b.czi", "img.zarr"]
 
-    def test_dropped_folders_are_skipped_but_files_kept(self, browser, tmp_path,
-                                                        monkeypatch):
+    def test_dropped_folders_are_ticked_with_the_files(self, browser, tmp_path,
+                                                       monkeypatch):
+        """A dropped folder is ticked as a folder (E28), with no warning."""
         from eubi_bridge.qt_gui.widgets import sidebar_browser
         warnings = []
         monkeypatch.setattr(sidebar_browser.QMessageBox, "warning",
@@ -296,8 +299,9 @@ class TestSidebarBrowserDrop:
         self._drop(browser, tmp_path / "sub" / "plain",
                    tmp_path / "sub" / "a.tif")
 
-        assert browser.selected_paths() == [str(tmp_path / "sub" / "a.tif")]
-        assert len(warnings) == 1 and "plain" in warnings[0][2]
+        assert sorted(browser.selected_paths()) == [str(tmp_path / "sub" / "a.tif"),
+                                                    str(tmp_path / "sub" / "plain")]
+        assert warnings == []
 
     def test_a_dropped_store_is_selected(self, browser, tmp_path):
         """An OME-Zarr store is a folder on disk but a dataset to convert."""

@@ -39,6 +39,10 @@ Changes made to them since, by hand or by script, never by recording:
   by ``tools/drop_one_step_units_from_goldens.py``, which checks each axis is t or z with
   ozp's default unit and, where levels are held, size 1; the comparison tests found these
   keys the only difference. No re-recording (tenth review N-08).
+- 2026-11-09 (0.4.0, decision E-3): stores renamed ``X.zarr`` ->
+  ``X.ome.zarr``, the name eubi-bridge writes since, in 19 goldens by
+  ``tools/rename_golden_stores_ome_zarr.py``: only the store names (the top-level keys)
+  change; ``Channel_cset_T_tset.ome.zarr`` kept its name. No re-recording.
 """
 from __future__ import annotations
 

@@ -1,0 +1,93 @@
+# Version matrix for the 2026-11-10 train: zarr-zip 0.1.0 and dyna-zarr 0.1.3 (zip writing;
+# the write_levels transaction fix) and ome-zarr-pyramid 0.6.1 (zipped OME-Zarr), all on
+# PyPI already; micro-reader 0.4.1 (BigDataViewer tiles stitched) and eubi-bridge /
+# eubi-bridge-lite 0.4.0 (outputs named X.ome.zarr, zip_output, keep_folder_structure,
+# sets and plates named after the dataset; requires micro-reader>=0.4.1,<0.5,
+# ome_zarr_pyramid>=0.6.1,<0.7, dyna-zarr>=0.1.3,<0.2).
+#     python matrix.py build   --config matrix-0.4.0.toml
+#     python matrix.py run     --config matrix-0.4.0.toml
+#     python matrix.py resolve --config matrix-0.4.0.toml
+# The released eubi 0.3.4 must keep working with the new micro-reader, ozp and dyna (its
+# bounds take them); 0.4.0 must pass with micro-reader 0.4.1 and ozp 0.6.1 and not resolve
+# with micro-reader 0.4.0 or ozp 0.6.0. dyna-zarr, zarr-zip and micro-reader-codecs come
+# from PyPI.
+
+stack = ["micro-reader-codecs", "micro-reader", "zarr-zip", "dyna-zarr", "ome-zarr-pyramid",
+         "eubi-bridge", "eubi-bridge-lite"]
+
+smoke_timeout_s = 900
+
+fallback_patterns = ['older readers \(', 'standard reader \(', 'Bio-Formats metadata']
+
+[paths]
+workdir = "C:/Users/oezdemir/.eubi-matrix/m40"
+
+[pythons]
+eubi = "C:/Users/oezdemir/miniforge3/envs/pythonenv/python.exe"
+build = "C:/Users/oezdemir/.eubi-matrix/bvenv033/Scripts/python.exe"
+
+[samples]
+czi = "C:/Users/oezdemir/Desktop/data/microscopy/formats/czi/assorted/xyz__multiple_images.czi"
+lif = "C:/Users/oezdemir/Desktop/data/microscopy/formats/lif/ome-samples/20191025 Test FRET 585. 423, 426.lif"
+plate = "C:/Users/oezdemir/Desktop/data/microscopy/plates/cv7000/bia-S-BIAD1013-cv7000/1093684368.wpi"
+bdv = "C:/Users/oezdemir/Desktop/data/microscopy/formats/h5/bdv/osf-bufza-bigstitcher/grid-3d-stitched-h5/dataset.xml"
+
+# The candidates, from the working trees (uncommitted changes included).
+[candidates.micro-reader]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge/incubation/micro-reader/python"
+
+[candidates.eubi-bridge]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge"
+
+[candidates.eubi-bridge-lite]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge"
+command = ["{python}", "tools/build_lite.py"]
+dist = "dist"
+
+[axes]
+micro-reader = ["0.4.0", "candidate"]
+ome-zarr-pyramid = ["0.6.0", "0.6.1"]
+
+[[consumers]]
+name = "eubi-bridge"
+versions = ["0.3.4", "candidate"]
+python = "eubi"
+samples = ["czi", "lif", "plate", "bdv"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+[[consumers]]
+name = "eubi-bridge-lite"
+versions = ["0.3.4", "candidate"]
+python = "eubi"
+samples = ["czi", "lif", "plate", "bdv"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+# Expectations, first match wins; default "pass".
+# eubi 0.4.0 needs micro-reader >=0.4.1 and ozp >=0.6.1.
+[[expect]]
+when = { eubi-bridge = ">=0.4.0", micro-reader = "<0.4.1" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge = ">=0.4.0", ome-zarr-pyramid = "<0.6.1" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = ">=0.4.0", micro-reader = "<0.4.1" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = ">=0.4.0", ome-zarr-pyramid = "<0.6.1" }
+outcome = "unresolvable"
+
+[[resolve]]
+name = "fresh eubi-bridge (with the candidates)"
+python = "eubi"
+requirements = ["eubi-bridge"]
+
+[[resolve]]
+name = "fresh eubi-bridge-lite (with the candidates)"
+python = "eubi"
+requirements = ["eubi-bridge-lite"]
+
+[[resolve]]
+name = "eubi-bridge<0.4.0 (stay on 0.3.4: it takes micro-reader 0.4.1, ozp 0.6.1, dyna 0.1.3)"
+python = "eubi"
+requirements = ["eubi-bridge<0.4.0"]

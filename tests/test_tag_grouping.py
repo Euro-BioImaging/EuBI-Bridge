@@ -532,7 +532,7 @@ def test_pixels_of_a_vendor_name(tmp_path):
         for z in (1, 2, 3):
             _tif(tmp_path / "in" / f"s_C{c:03d}Z{z:03d}.tif", 10 * c + z)
     _convert(tmp_path / "in", tmp_path / "o", channel_tag="C", z_tag="Z", concatenation_axes="z")
-    assert _values(tmp_path / "o") == {"s_C001Z_zset.zarr": [11, 12, 13], "s_C002Z_zset.zarr": [21, 22, 23]}
+    assert _values(tmp_path / "o") == {"s_C001Z_zset.ome.zarr": [11, 12, 13], "s_C002Z_zset.ome.zarr": [21, 22, 23]}
 
 
 # -- review cycle 1 (2026-11-04) ---------------------------------------------------------------

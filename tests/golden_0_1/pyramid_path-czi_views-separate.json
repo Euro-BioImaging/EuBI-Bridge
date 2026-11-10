@@ -1,5 +1,5 @@
 {
- "views_view0.zarr": {
+ "views_view0.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [
@@ -139,7 +139,7 @@
    ]
   ]
  },
- "views_view1.zarr": {
+ "views_view1.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [

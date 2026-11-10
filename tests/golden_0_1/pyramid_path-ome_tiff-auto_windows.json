@@ -1,5 +1,5 @@
 {
- "img_scene0.zarr": {
+ "img_scene0.ome.zarr": {
   "attrs": {
    "eubi:coordinate_system": "stage",
    "eubi:coordinate_systems": [

@@ -28,6 +28,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from eubi_bridge.core.output_store import strip_output_suffix, with_output_suffix
 from eubi_bridge.utils.errors import InputError
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import named_folder, output_stem
@@ -806,7 +807,8 @@ def _plate_outputs(f, job) -> list:
         stem = os.path.basename(folder)
     many = len(f.plates) > 1
     return [(n, _generate_output_path(job.output_path, path,
-                                      resolved_basename=f"{stem}_plate{n}" if many else stem))
+                                      resolved_basename=f"{stem}_plate{n}" if many else stem,
+                                      zip_output=job.conversion.zip_output))
             for n in range(len(f.plates))]
 
 
@@ -898,8 +900,7 @@ def _replaced_on_success(output_path: str, overwrite: bool):
     if not (overwrite and os.path.isdir(output_path)):
         yield output_path
         return
-    stem = str(output_path).rstrip("/\\")
-    stem = stem[:-len(".zarr")] if stem.endswith(".zarr") else stem
+    stem = strip_output_suffix(str(output_path).rstrip("/\\"))
     for stale in glob.glob(f"{glob.escape(stem)}.*-*.zarr"):         # of a killed run
         if LEFT_BESIDE.fullmatch(os.path.basename(stale)[len(os.path.basename(stem)):]):
             shutil.rmtree(stale, ignore_errors=True)
@@ -1542,11 +1543,15 @@ def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dty
         def write(pyr, target, **kwargs):
             PyramidCollection({(("series", 0),): pyr}, name=pyr.meta.tag).write_collection(
                 target, **kwargs)
+    io_backend = conv.io_backend
+    if conv.zip_output != "off" and io_backend == "zarrista":
+        _say_zip_backend()
+        io_backend = "tensorstore"           # dyna writes a zip through TensorStore only
     with sharing:
         write(
             pyr, target, storage_options=storage_options, overwrite=conv.overwrite,
             max_threads=threads, region_size_mb=float(region_size_mb),
-            memory_budget_mb=budget, io_backend=conv.io_backend,
+            memory_budget_mb=budget, io_backend=io_backend,
             chunk_shape=chunks,
             shard_coefficients=tuple(shards) if int(pyr.meta.zarr_format) == 3 else None,
             compressor=conv.compressor, compressor_params=conv.compressor_params or {},
@@ -1556,6 +1561,15 @@ def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dty
 
 
 _said_no_sharing: list = []
+_said_zip_backend: list = []
+
+
+def _say_zip_backend() -> None:
+    """Once per process: io_backend='zarrista' does not write zips."""
+    if not _said_zip_backend:
+        _said_zip_backend.append(True)
+        logger.info("io_backend='zarrista' writes OME-Zarr folders; zipped outputs "
+                    "(zip_output) are written with TensorStore.")
 
 
 def _say_no_sharing() -> None:
@@ -1770,10 +1784,12 @@ async def convert(job) -> None:
         for entry in entries:
             out = _generate_output_path(job.output_path, entry.series_path,
                                         entry.name_scene, entry.name_tile,
-                                        resolved_basename=entry.basename)
+                                        resolved_basename=entry.basename,
+                                        zip_output=job.conversion.zip_output)
             role = _slide_role(entry)
             if role:
-                out = f"{out[:-len('.zarr')]}_{role}.zarr"
+                out = with_output_suffix(f"{strip_output_suffix(out)}_{role}",
+                                         job.conversion.zip_output)
             tasks.append(asyncio.create_task(
                 _convert_safely(_convert_entry(entry, out, job, sem, stop), out)))
         results = await asyncio.gather(*tasks, return_exceptions=True)

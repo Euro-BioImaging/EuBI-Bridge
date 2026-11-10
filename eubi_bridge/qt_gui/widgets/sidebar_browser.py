@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
 from eubi_bridge.qt_gui.core.file_service import (
     PAGE_SIZE,
     FileEntry,
-    _is_ome_zarr_local,
+    is_ome_zarr_store,
     get_parent,
     is_remote,
     list_local,
@@ -121,6 +121,17 @@ def _is_selectable(entry: FileEntry) -> bool:
     if entry["name"].startswith("._"):
         return False
     return entry["isOmeZarr"] or not entry["isDirectory"]
+
+
+def _is_checkable(entry: FileEntry) -> bool:
+    """What can be ticked: files and OME-Zarr stores, and a local folder (Workplan E28: a
+    ticked folder converts every file below it, its folders mirrored in the output folder).
+    Select All ticks files only (``_is_selectable``): those go into the output folder
+    itself."""
+    if _is_selectable(entry):
+        return True
+    return (entry["isDirectory"] and not entry["name"].startswith("._")
+            and "://" not in str(entry["path"]))
 
 
 class SidebarBrowser(QWidget):
@@ -335,7 +346,7 @@ class SidebarBrowser(QWidget):
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, entry)
 
-            if self._mode == "conversion" and _is_selectable(entry):
+            if self._mode == "conversion" and _is_checkable(entry):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 state = Qt.CheckState.Checked if entry["path"] in self._checked_paths else Qt.CheckState.Unchecked
                 item.setCheckState(state)
@@ -629,17 +640,9 @@ class SidebarBrowser(QWidget):
                 "Clear the filters and drop the files again.")
             return False
 
-        folders = [p for p in paths
-                   if os.path.isdir(p) and not _is_ome_zarr_local(p)]
-        inputs = [p for p in paths if p not in folders]
-        if folders:
-            names = "\n".join(f"  {os.path.basename(p)}" for p in folders)
-            QMessageBox.warning(
-                self, "Folders skipped",
-                f"Folders cannot be selected as inputs, so these were "
-                f"skipped:\n{names}\n\n"
-                "To convert a folder's files, open it in the browser and use "
-                "Select All.")
+        # a dropped folder is ticked as a folder (E28): its files are converted, its
+        # folders mirrored in the output folder
+        inputs = list(paths)
         if not inputs:
             return False
 
@@ -661,7 +664,7 @@ class SidebarBrowser(QWidget):
                 "Drop a single OME-Zarr store to inspect it.")
             return False
         path = paths[0]
-        if not (os.path.isdir(path) and _is_ome_zarr_local(path)):
+        if not is_ome_zarr_store(path):
             QMessageBox.warning(
                 self, "Not an OME-Zarr store",
                 f"'{os.path.basename(path)}' is not an OME-Zarr store, so it "

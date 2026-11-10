@@ -67,7 +67,7 @@ def _ome(store: Path) -> dict:
 def test_ngff_06_output(tmp_path):
     src = _tiff(tmp_path / "img.ome.tif")
     _convert(src, tmp_path / "out", ["--ome_zarr_version", "0.6"])
-    store = tmp_path / "out" / "img.zarr"
+    store = tmp_path / "out" / "img.ome.zarr"
     ome = _ome(store)
     assert ome["version"] == "0.6"
     ms = ome["multiscales"][0]
@@ -82,7 +82,7 @@ def test_rfc8_output(tmp_path):
     src = _tiff(tmp_path / "img.ome.tif")
     log = _convert(src, tmp_path / "out", ["--ome_zarr_version", "rfc8"])
     assert "RFC 8 output is experimental" in log
-    store = tmp_path / "out" / "img.zarr"
+    store = tmp_path / "out" / "img.ome.zarr"
     ome = _ome(store)
     assert ome["version"] == "0.x" and ome["type"] == "collection"
     coll = ozp.PyramidCollection.from_zarr(str(store))
@@ -105,4 +105,4 @@ def test_an_unknown_version_is_an_error(tmp_path):
                   ["--ome_zarr_version", "0.7"])
     assert result.returncode != 0
     assert "eubi-bridge writes OME-Zarr" in result.stdout + result.stderr
-    assert not (tmp_path / "out" / "img.zarr").exists()
+    assert not (tmp_path / "out" / "img.ome.zarr").exists()

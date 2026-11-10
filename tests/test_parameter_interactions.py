@@ -417,7 +417,7 @@ class TestParameterCombinations:
         ])
         assert result.returncode == 0, result.stderr
 
-        group = zarr.open_group(str(output / "odd.zarr"), mode='r')
+        group = zarr.open_group(str(output / "odd.ome.zarr"), mode='r')
         levels = sorted(k for k in group.array_keys())
         assert len(levels) == 3
         assert group['1'].chunks[-2:] == (64, 64)

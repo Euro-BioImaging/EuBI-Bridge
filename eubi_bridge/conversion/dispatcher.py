@@ -472,6 +472,7 @@ def _build_aggregative_plan(
     y_tag=None,
     x_tag=None,
     aggregative_group=None,
+    mirror_roots=None,
 ) -> AggregativePlan:
     """Determine output groups and allocate ``file_workers``.
 
@@ -502,8 +503,21 @@ def _build_aggregative_plan(
         fileset.concatenate_along(axis)
 
     file_groups: dict = {}
+    from eubi_bridge.core.output_store import store_join
+    from eubi_bridge.utils.path_utils import mirrored_output
+    by_key: dict = {}
     for src_path, output_key in fileset.path_dict.items():
-        rel      = os.path.relpath(output_key, common_dir)
+        by_key.setdefault(output_key, []).append(src_path)
+    for output_key, sources in by_key.items():
+        out_dir, base = output_path, common_dir
+        if mirror_roots:
+            # E28: in the deepest folder the group's files share, below
+            # <output>/<folder name>; named from there
+            shared = os.path.commonpath([os.path.dirname(s) for s in sources])
+            mirrored = mirrored_output(os.path.join(shared, "_"), mirror_roots, output_path)
+            if mirrored is not None:
+                out_dir, base = mirrored, shared
+        rel      = os.path.relpath(output_key, base)
         rel      = os.sep.join(p for p in rel.split(os.sep) if p != '..')
         name     = _short_name(os.path.splitext(rel)[0].replace(os.sep, '-'))
         # The derived name says which axes were concatenated (img_t0_zset), and
@@ -513,11 +527,10 @@ def _build_aggregative_plan(
         # store_join, not os.path.join: on Windows the latter put a backslash into
         # a remote key (".../out\\name.zarr"), so an S3 output landed beside, not
         # under, the requested prefix
-        from eubi_bridge.core.output_store import store_join
-        full_out = store_join(output_path, name)
+        full_out = store_join(out_dir, name)
         if full_out not in file_groups:
             file_groups[full_out] = {'source_files': []}
-        file_groups[full_out]['source_files'].append(src_path)
+        file_groups[full_out]['source_files'].extend(sources)
 
     n_outputs    = len(file_groups)
     file_workers = min(n_outputs, max_processes)
@@ -953,6 +966,7 @@ def _aggregative_groups(
     from eubi_bridge.core.config_models import ClusterConfig
 
     verbose = kwargs.get('verbose', None)
+    keep_folder_structure = bool(kwargs.pop('keep_folder_structure', False))
 
     # ── Group assignments ─────────────────────────────────────────────────
     if plan is not None:
@@ -975,6 +989,12 @@ def _aggregative_groups(
             output_path=output_path, metadata_reader=metadata_reader, **kwargs,
         )
         from eubi_bridge.conversion.fileset_io import channel_tag_format_error, read_tag
+        # a folder among the inputs (a checked folder in the GUI) stands for its files (E28)
+        from eubi_bridge.utils.path_utils import expand_folder_rows, folder_inputs
+        df, expanded = expand_folder_rows(df, includes=kwargs.get('includes'),
+                                          excludes=kwargs.get('excludes'),
+                                          output_path=output_path)
+        roots = folder_inputs(input_path) + expanded
         filepaths          = df.input_path.to_numpy().tolist()
 
         for tag_name, tag_value in dict(
@@ -1020,17 +1040,35 @@ def _aggregative_groups(
         common_dir  = os.path.commonpath([os.path.dirname(p) for p in filepaths_accepted])
         cluster_cfg = ClusterConfig(**{k: v for k, v in kwargs.items()
                                        if k in ClusterConfig.model_fields})
-        inner_plan = _build_aggregative_plan(
-            filepaths_accepted,
+        plan_kwargs = dict(
             concatenation_axes=concatenation_axes,
-            common_dir=common_dir,
             output_path=output_path,
             max_processes=cluster_cfg.max_processes,
-
             time_tag=time_tag, channel_tag=channel_tag,
             z_tag=z_tag, y_tag=y_tag, x_tag=x_tag,
             aggregative_group=kwargs.get('aggregative_group'),
+            mirror_roots=roots if keep_folder_structure else None,
         )
+        try:
+            inner_plan = _build_aggregative_plan(filepaths_accepted, common_dir=common_dir,
+                                                 **plan_kwargs)
+        except InputError as exc:
+            # mirrored folders whose files share names (A/img_T1.tif, B/img_T1.tif): each
+            # folder is joined on its own (E28), as its output is written into its own
+            # mirrored folder; otherwise the clash is the user's to resolve
+            by_folder: dict = {}
+            for f in filepaths_accepted:
+                by_folder.setdefault(os.path.dirname(f), []).append(f)
+            if not (keep_folder_structure and roots and len(by_folder) > 1
+                    and "at one place" in str(exc)):
+                raise
+            plans = [_build_aggregative_plan(files, common_dir=folder, **plan_kwargs)
+                     for folder, files in by_folder.items()]
+            outputs = [out for p in plans for out in p.outputs]
+            inner_plan = AggregativePlan(
+                n_outputs=len(outputs), outputs=outputs,
+                file_workers=max(1, min(len(outputs), cluster_cfg.max_processes)),
+                tag_folders={k: v for p in plans for k, v in p.tag_folders.items()})
         groups       = {out.output_path: out.source_files for out in inner_plan.outputs}
         file_workers = inner_plan.file_workers
         folders      = inner_plan.tag_folders

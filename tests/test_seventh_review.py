@@ -55,7 +55,7 @@ def test_two_identical_rows_run_and_write(tmp_path):
     table = tmp_path / "t.csv"
     table.write_text(f"input_path,output_path\n{a},{tmp_path / 'o'}\n{a},{tmp_path / 'o'}\n")
     EuBIBridge().to_zarr(str(table), str(tmp_path / "other"), use_threading=True)
-    assert [p.name for p in (tmp_path / "o").iterdir()] == ["a.zarr"]
+    assert [p.name for p in (tmp_path / "o").iterdir()] == ["a.ome.zarr"]
 
 
 # -- overwrite -------------------------------------------------------------------------------
@@ -199,7 +199,7 @@ def test_an_input_unit_comes_out_by_its_ngff_name(tmp_path, unit):
     src = tmp_path / "in.zarr"
     _ome_zarr(src, unit)
     EuBIBridge().to_zarr(str(src), str(tmp_path / "o"), use_threading=True, zarr_format=2)
-    meta = _attrs(tmp_path / "o" / "in.zarr")
+    meta = _attrs(tmp_path / "o" / "in.ome.zarr")
     assert {ax["name"]: ax.get("unit") for ax in meta["axes"]}["x"] == "micrometer"
     moved = [t for t in meta["datasets"][0]["coordinateTransformations"] if t["type"] == "translation"]
     assert moved[0]["translation"] == [0.0, 7.0, 8.0, 9.0]    # the time origin: a warning
@@ -211,7 +211,7 @@ def test_a_plate_like_input_with_short_units_keeps_its_sizes_in_the_xml(tmp_path
     _ome_zarr(src, "um")
     EuBIBridge().to_zarr(str(src), str(tmp_path / "o"), use_threading=True, zarr_format=2,
                          keep_existing_resolutions=True, save_omexml=True)
-    meta = _attrs(tmp_path / "o" / "in.zarr")
+    meta = _attrs(tmp_path / "o" / "in.ome.zarr")
     assert {ax["name"]: ax.get("unit") for ax in meta["axes"]}["x"] == "micrometer"
 
 

@@ -166,9 +166,9 @@ def test_a_long_conversion_takes_what_the_short_ones_left(tmp_path, monkeypatch)
                          region_size_mb=4, ome_zarr_version="0.5", log_file=str(log),
                          verbose=False)
     text = log.read_text(encoding="utf-8", errors="replace")
-    assert "a_big.zarr: conversions of this run have ended; this one now has 2048 MB"         in text, text[-4000:]
+    assert "a_big.ome.zarr: conversions of this run have ended; this one now has 2048 MB"         in text, text[-4000:]
     # the line comes from the share dyna polls DURING the pass (one pass here, its two
     # threads given: dyna's own "memory share grew" needs a later pass or more threads,
     # dyna-zarr's tests/test_memory_share.py)
     np.testing.assert_array_equal(
-        zarr.open_array(str(tmp_path / "out" / "a_big.zarr" / "0"))[...].squeeze(), big)
+        zarr.open_array(str(tmp_path / "out" / "a_big.ome.zarr" / "0"))[...].squeeze(), big)

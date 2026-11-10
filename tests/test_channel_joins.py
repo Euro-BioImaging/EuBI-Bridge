@@ -63,7 +63,7 @@ def test_named_channels_join_in_the_order_given(tmp_path, order, override):
     names = order.split(",")
     got = _convert(tmp_path / "in", tmp_path / "o", channel_tag=order, concatenation_axes="c",
                    override_channel_names=override)
-    full, labels, colors, xml = _read(got[f"x_{''.join(names)}_cset.zarr"])
+    full, labels, colors, xml = _read(got[f"x_{''.join(names)}_cset.ome.zarr"])
     assert _values(full) == [10 if n == "Blue" else 20 for n in names]
     if override:
         assert labels == names and xml in (None, names)
@@ -79,7 +79,7 @@ def test_each_store_of_a_split_channel_tag_is_named_by_its_own_tag(tmp_path):
     got = _convert(tmp_path / "in", tmp_path / "o", channel_tag="growing,moving,noise",
                    time_tag="step", concatenation_axes="t", override_channel_names=True)
     for base, name in ((10, "growing"), (20, "moving"), (30, "noise")):
-        full, labels, colors, xml = _read(got[f"tc_{name}_step_tset_16jan.zarr"])
+        full, labels, colors, xml = _read(got[f"tc_{name}_step_tset_16jan.ome.zarr"])
         assert [int(full[t, 0].max()) for t in range(3)] == [base + 1, base + 2, base + 3]
         assert labels == [name] and xml in (None, [name])
 
@@ -134,7 +134,7 @@ def test_a_name_holding_another_joins_as_given(tmp_path):
     tifffile.imwrite(tmp_path / "in" / "x_GM2_GD2.tif", _plane(20))
     got = _convert(tmp_path / "in", tmp_path / "o", channel_tag="GD2,GM2_GD2",
                    concatenation_axes="c", override_channel_names=True)
-    full, labels, colors, xml = _read(got["x_GD2GM2_GD2_cset.zarr"])
+    full, labels, colors, xml = _read(got["x_GD2GM2_GD2_cset.ome.zarr"])
     assert _values(full) == [10, 20] and labels == ["GD2", "GM2_GD2"]
 
 
