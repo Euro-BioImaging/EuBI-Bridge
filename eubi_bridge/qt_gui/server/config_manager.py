@@ -105,6 +105,7 @@ def _config_to_react(cfg: dict) -> dict:
             "zarrFormat":           conv.get("zarr_format", 2),
             "omeZarrVersion":       conv.get("ome_zarr_version")
                                     or ("0.5" if conv.get("zarr_format", 2) == 3 else "0.4"),
+            "zipOutput":            conv.get("zip_output", "off") or "off",
             "dataType":             conv.get("dtype", "auto") or "auto",
             "verbose":              conv.get("verbose", False),
             "overwrite":            conv.get("overwrite", False),
@@ -277,6 +278,7 @@ def _react_to_config(data: dict) -> dict:
         "conversion": {
             "zarr_format":           conv_d.get("zarrFormat", 2),
             "ome_zarr_version":      conv_d.get("omeZarrVersion"),
+            "zip_output":            conv_d.get("zipOutput", "off") or "off",
             "auto_chunk":            conv_d.get("autoChunk", True),
             "target_chunk_mb":       conv_d.get("targetChunkSizeMb", 1),
             "time_chunk":            conv_d.get("chunkTime", 1),

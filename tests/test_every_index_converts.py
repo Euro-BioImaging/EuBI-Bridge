@@ -46,7 +46,7 @@ def test_one_output_per_value_of_another_index(tmp_path):
                      metadata={"axes": "HZYX"})
     out = tmp_path / "out"
     log = _convert(path, out, [])
-    assert sorted(p.name for p in out.glob("*.zarr")) == ["flim_lifetime0.zarr", "flim_lifetime1.zarr"]
+    assert sorted(p.name for p in out.glob("*.ome.zarr")) == ["flim_lifetime0.ome.zarr", "flim_lifetime1.ome.zarr"]
     assert "read by micro-reader" in log.replace("\n", " ")
 
 

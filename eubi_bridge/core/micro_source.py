@@ -68,17 +68,19 @@ OPEN_FILES_SHARE = 1 / 8
 COLLECT_AFTER_CLOSES = 256
 #: ... at most this often: a full collection takes up to half a second in a large join
 COLLECT_EVERY_S = 10.0
-#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.4.0,<0.5):
-#: 0.4.0 gives no invented calibration (an axis the file does not size has none), names
-#: images and reads KLB, VSI and the plate formats this release converts; 0.2.x and 0.3.x
-#: invented units in silence. 0.1.x declares no coordinate systems, and older releases call
-#: the series index "scene". Three components: (major, minor, patch).
-MICRO_READER_RANGE = ((0, 4, 0), (0, 5, 0))
-MICRO_READER_FIX = 'pip install -U "micro-reader>=0.4.0,<0.5"'
-#: the ome_zarr_pyramid releases this eubi-bridge writes with (pyproject): 0.6.0 writes no
-#: invented unit (scale 1, no unit) on an axis the file does not size; 0.5 wrote micrometer
-OZP_RANGE = ((0, 6, 0), (0, 7, 0))
-OZP_FIX = 'pip install -U "ome_zarr_pyramid>=0.6.0,<0.7"'
+#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.4.1,<0.5):
+#: 0.4.1 stitches BigDataViewer tiles (as_mosaic); 0.4.0 gives no invented calibration (an
+#: axis the file does not size has none), names images and reads KLB, VSI and the plate
+#: formats this release converts; 0.2.x and 0.3.x invented units in silence. 0.1.x declares
+#: no coordinate systems, and older releases call the series index "scene". Three
+#: components: (major, minor, patch).
+MICRO_READER_RANGE = ((0, 4, 1), (0, 5, 0))
+MICRO_READER_FIX = 'pip install -U "micro-reader>=0.4.1,<0.5"'
+#: the ome_zarr_pyramid releases this eubi-bridge writes with (pyproject): 0.6.1 writes
+#: zipped OME-Zarr (zip_output) and opens it in Inspect; 0.6.0 writes no invented unit
+#: (scale 1, no unit) on an axis the file does not size; 0.5 wrote micrometer
+OZP_RANGE = ((0, 6, 1), (0, 7, 0))
+OZP_FIX = 'pip install -U "ome_zarr_pyramid>=0.6.1,<0.7"'
 
 
 class MicroReaderVersionError(ImportError):
@@ -144,9 +146,12 @@ def require_micro_reader() -> None:
             elif got < (0, 2, 0):
                 why = (" (it declares no coordinate systems; micro-reader 0.2.0 does, "
                        "and this eubi-bridge writes each output's system)")
-            elif got < low:
+            elif got < (0, 4, 0):
                 why = (" (it invents calibration, an axis the file does not size gets "
                        "micrometer or second; micro-reader 0.4.0 gives none)")
+            elif got < low:
+                why = (" (it does not stitch BigDataViewer tiles; micro-reader 0.4.1 "
+                       "does, as_mosaic)")
             else:
                 why = ""
             dots = ".".join
@@ -179,7 +184,8 @@ def require_ozp() -> None:
     low, high = OZP_RANGE
     if version is not None and got is not None and not (low <= got < high):
         why = (" (it writes micrometer and second on axes the file does not size; 0.6.0 "
-               "writes no unit there)" if got < low else "")
+               "writes no unit there)" if got < (0, 6, 0) else
+               " (it does not write or read zipped OME-Zarr; 0.6.1 does)" if got < low else "")
         raise OzpVersionError(
             f"eubi-bridge needs ome_zarr_pyramid >={'.'.join(map(str, low))},<{high[0]}.{high[1]}, "
             f"but ome_zarr_pyramid {version} is installed{why}. Fix: {OZP_FIX}")

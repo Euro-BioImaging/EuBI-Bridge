@@ -31,7 +31,7 @@ def _convert(src, out, **options) -> list:
 
 
 def test_tiles_are_stitched_by_default(tmp_path):
-    assert _convert(_czi(tmp_path / "scan.czi", tiles=4), tmp_path / "out") == ["scan.zarr"]
+    assert _convert(_czi(tmp_path / "scan.czi", tiles=4), tmp_path / "out") == ["scan.ome.zarr"]
 
 
 def test_as_mosaic_false_keeps_the_tiles(tmp_path):

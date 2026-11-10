@@ -268,29 +268,70 @@ def test_a_gui_batch_runs_every_row_with_its_own_settings(tmp_path, monkeypatch)
     assert "Conversion starting." in logged and "Memory: " in logged
     assert "SpawnProcess" in logged
     stores = sorted(p.name for p in out.glob("*.zarr"))
-    expected = ["G_series_T_tset.zarr", "stack.zarr", "two_channels.zarr"]
+    expected = ["G_series_T_tset.ome.zarr", "stack.ome.zarr", "two_channels.ome.zarr"]
     if czi.exists():
         # wells B2 + B3 of a plate, fields stitched (as_mosaic): one NGFF plate store
         # (eubi-bridge 0.3.2; it was one store per scene)
-        expected += ["S=2_2x2_T=3_Z=4_CH=1.zarr"]
+        expected += ["S=2_2x2_T=3_Z=4_CH=1.ome.zarr"]
     assert stores == sorted(expected)
     if czi.exists():
-        plate = dict(zarr.open_group(str(out / "S=2_2x2_T=3_Z=4_CH=1.zarr"), mode="r").attrs)
+        plate = dict(zarr.open_group(str(out / "S=2_2x2_T=3_Z=4_CH=1.ome.zarr"), mode="r").attrs)
         assert [w["path"] for w in plate.get("ome", plate)["plate"]["wells"]] == ["B/2", "B/3"]
 
     def ngff(name):
         attrs = dict(zarr.open_group(str(out / name), mode="r").attrs)
         return attrs.get("ome", attrs)
 
-    channels = ngff("two_channels.zarr")["omero"]["channels"]
+    channels = ngff("two_channels.ome.zarr")["omero"]["channels"]
     assert [(c["label"], c["color"]) for c in channels] == [("DAPI", "FF00FF"), ("GFP", "FFFF00")]
     assert 100 <= channels[0]["window"]["start"] < 200                  # from_array
-    stack_group = zarr.open_group(str(out / "stack.zarr"), mode="r")
+    stack_group = zarr.open_group(str(out / "stack.ome.zarr"), mode="r")
     assert stack_group["0"].dtype == np.uint16
-    assert len(ngff("stack.zarr")["multiscales"][0]["datasets"]) == 2     # n_layers
-    joined = np.asarray(zarr.open_group(str(out / "G_series_T_tset.zarr"), mode="r")["0"])
+    assert len(ngff("stack.ome.zarr")["multiscales"][0]["datasets"]) == 2     # n_layers
+    joined = np.asarray(zarr.open_group(str(out / "G_series_T_tset.ome.zarr"), mode="r")["0"])
     assert joined.shape[0] == 3 and [int(joined[t].max()) for t in range(3)] == [10, 20, 30]
-    assert ngff("G_series_T_tset.zarr")["omero"]["channels"][0]["label"] == "Channel 0"
+    assert ngff("G_series_T_tset.ome.zarr")["omero"]["channels"][0]["label"] == "Channel 0"
 
     result = _run_batch(page, app)                    # again: the outputs exist now
     assert result.startswith("failed") and "Output already exists" in result
+
+
+def test_a_gui_batch_mirrors_a_ticked_folder(tmp_path, monkeypatch):
+    """Workplan E28 as a user runs it: a ticked folder and a file picked by hand queued on
+    the Convert page, written zipped (a row's zip_output), Run Batch pressed. The folder's
+    files come out where they were, below <output>/<folder>; the file into <output>."""
+    from copy import deepcopy
+
+    from tests.conftest import qt_available
+    if not qt_available():
+        pytest.skip("PyQt6 unavailable or no usable Qt platform plugin")
+    if not hasattr(__import__("dyna_zarr").io, "open_zip"):
+        pytest.skip("dyna-zarr without zip writing")
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))       # never the user's config
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("EUBI_CONFIG_DIR", str(tmp_path / "home" / ".eubi_bridge"))
+    data = tmp_path / "pollen"
+    for rel in ("A/a1.tif", "A/deep/a2.tif", "B/b1.tif"):
+        (data / rel).parent.mkdir(parents=True, exist_ok=True)
+        tifffile.imwrite(str(data / rel), np.full((4, 32, 40), 7, "u2"), imagej=True,
+                         metadata={"axes": "ZYX"})
+    loose = tmp_path / "loose.tif"
+    tifffile.imwrite(str(loose), np.full((4, 32, 40), 9, "u2"), imagej=True,
+                     metadata={"axes": "ZYX"})
+
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from eubi_bridge.qt_gui.pages.convert_page import ConvertPage
+    page = ConvertPage()
+    out = tmp_path / "out"
+    config = page._batch_ui_config()
+    page._batch.set_baseline(deepcopy(config))
+    page._batch.add(config, [str(data), str(loose)], str(out))
+    page._batch.update_cells([0, 1], "zip_output", "zip")
+    page._refresh_batch_table()
+
+    assert _run_batch(page, app) == "finished"
+    made = sorted(p.relative_to(out).as_posix() for p in out.rglob("*.ome.zarr.zip"))
+    assert made == ["loose.ome.zarr.zip", "pollen/A/a1.ome.zarr.zip",
+                    "pollen/A/deep/a2.ome.zarr.zip", "pollen/B/b1.ome.zarr.zip"]
+    assert not list(out.rglob("*.part"))

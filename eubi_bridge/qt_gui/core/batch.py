@@ -249,6 +249,10 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
       for ax in ("time", "channel", "z", "y", "x")),
     ParamSpec("ome_zarr_version", "OME-Zarr version", "choice", ("0.4", "0.5", "0.6", "rfc8"),
               tab="Conversion", group="OME-Zarr Version and Sharding"),
+    ParamSpec("zip_output", "Output as", "choice", ("off", "zip", "ozx"),
+              tooltip="off: an OME-Zarr folder X.ome.zarr; zip: X.ome.zarr.zip (BioImage "
+                      "Archive); ozx: X.ozx (NGFF RFC-9, OME-Zarr 0.5+). Local outputs only.",
+              tab="Conversion", group="OME-Zarr Version and Sharding"),
     # Sharding exists only in zarr v3, which OME-Zarr 0.5, 0.6 and RFC 8 select; under
     # 0.4 the writer has no shard concept at all, so the coefficients do nothing.
     *(ParamSpec(f"{ax}_shard_coef", f"Shard coef {ax}", "int", minimum=1,

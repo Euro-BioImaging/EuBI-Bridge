@@ -30,6 +30,33 @@ def expand_path(path: str) -> str:
     return str(Path(path.replace("\\", "/")).expanduser().resolve())
 
 
+#: names of a zipped OME-Zarr: the BioImage Archive's X.ome.zarr.zip (X.zarr.zip), NGFF
+#: RFC-9's X.ozx (what eubi-bridge writes with zip_output)
+ZIPPED_OME_ZARR_SUFFIXES = (".ome.zarr.zip", ".zarr.zip", ".ozx")
+
+
+def is_zipped_ome_zarr(path: str) -> bool:
+    """A local file named as a zipped OME-Zarr (read-only in the viewer)."""
+    return str(path).lower().endswith(ZIPPED_OME_ZARR_SUFFIXES) and os.path.isfile(path)
+
+
+def is_ome_zarr_store(path: str) -> bool:
+    """A local OME-Zarr the viewer opens: a store folder or a zipped one."""
+    return (os.path.isdir(path) and _is_ome_zarr_local(path)) or is_zipped_ome_zarr(path)
+
+
+def zip_inner_root(zip_path: str) -> str:
+    """Where the store's root is inside a zipped OME-Zarr: "" when its metadata is at the
+    zip's root (RFC-9), else the one folder holding it (X.ome.zarr/ in X.ome.zarr.zip)."""
+    import zipfile
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+    if any(n in ("zarr.json", ".zattrs", ".zgroup") for n in names):
+        return ""
+    tops = {n.split("/", 1)[0] for n in names if "/" in n}
+    return tops.pop() if len(tops) == 1 else ""
+
+
 def _is_ome_zarr_local(folder_path: str) -> bool:
     try:
         return (
@@ -55,7 +82,8 @@ def list_local(path: str) -> list[FileEntry]:
             for entry in it:
                 try:
                     is_dir = entry.is_dir(follow_symlinks=False)
-                    is_zarr = _is_ome_zarr_local(entry.path) if is_dir else False
+                    is_zarr = (_is_ome_zarr_local(entry.path) if is_dir
+                               else is_zipped_ome_zarr(entry.path))
                     entries.append(
                         FileEntry(
                             name=entry.name,

@@ -9,6 +9,7 @@ cooperation from asyncio.gather or concurrent.futures.
 from __future__ import annotations
 
 import multiprocessing
+import os
 import re as _re
 import sys
 import traceback
@@ -164,24 +165,41 @@ def _ome_zarr_targets(to_zarr_kwargs: dict, table=None) -> str:
     from eubi_bridge.core.config_models import resolve_ome_zarr_target
     from eubi_bridge.utils.path_utils import _blank_cell
 
-    def target(version, fmt) -> str:
+    zipped = {"zip": ", zipped (X.ome.zarr.zip)", "ozx": ", zipped (X.ozx, RFC-9)"}
+
+    def target(version, fmt, zip_output="off") -> str:
         try:
             version, fmt = resolve_ome_zarr_target(version, fmt if fmt is not None else 2)
         except ValueError:
             return f"OME-Zarr {version} (not one eubi-bridge writes)"
-        return f"OME-Zarr {version} (zarr v{fmt})"
+        return f"OME-Zarr {version} (zarr v{fmt}){zipped.get(str(zip_output or 'off'), '')}"
 
-    base = (to_zarr_kwargs.get("ome_zarr_version"), to_zarr_kwargs.get("zarr_format", 2))
+    base = (to_zarr_kwargs.get("ome_zarr_version"), to_zarr_kwargs.get("zarr_format", 2),
+            to_zarr_kwargs.get("zip_output", "off"))
     if table is None or not hasattr(table, "to_dict"):
         return f"Output format: {target(*base)}"
     counts = Counter()
     for row in table.to_dict("records"):
-        version, fmt = (row.get(k) for k in ("ome_zarr_version", "zarr_format"))
+        version, fmt, zip_output = (row.get(k) for k in ("ome_zarr_version", "zarr_format",
+                                                         "zip_output"))
         counts[target(base[0] if _blank_cell(version) else version,
-                      base[1] if _blank_cell(fmt) else fmt)] += 1
+                      base[1] if _blank_cell(fmt) else fmt,
+                      base[2] if _blank_cell(zip_output) else zip_output)] += 1
     if not counts:
         return f"Output format: {target(*base)}"
     return "Output format: " + "; ".join(f"{name}: {n} row(s)" for name, n in counts.items())
+
+
+def _has_folder_inputs(input_path) -> bool:
+    """A local folder among the run's inputs: a ticked folder, in a list or a batch row."""
+    if hasattr(input_path, "to_dict"):
+        paths = [str(p) for p in input_path.get("input_path", []) if p is not None]
+    elif isinstance(input_path, (list, tuple)):
+        paths = [str(p) for p in input_path]
+    else:
+        paths = [str(input_path)] if input_path else []
+    from eubi_bridge.utils.path_utils import folder_inputs
+    return bool(folder_inputs(paths))
 
 
 def _build_kwargs(config: dict) -> dict:
@@ -260,6 +278,7 @@ def _build_kwargs(config: dict) -> dict:
         "verbose":                  conv_config.get("verbose", False),
         "zarr_format":              zarr_format,
         "ome_zarr_version":         ome_zarr_version,
+        "zip_output":               conv_config.get("zipOutput", "off") or "off",
         "auto_chunk":               conv_config.get("autoChunk", True),
         "time_chunk":               conv_config.get("chunkTime", 1),
         "channel_chunk":            conv_config.get("chunkChannel", 1),
@@ -386,6 +405,10 @@ class ConversionWorker(QThread):
 
         try:
             to_zarr_kwargs = _build_kwargs(config)
+            # ticked folders are mirrored in the output folder (Workplan E28); files ticked
+            # one by one (also by Select All) go into it directly
+            if _has_folder_inputs(input_path):
+                to_zarr_kwargs["keep_folder_structure"] = True
         except ValueError as exc:            # a setting the run cannot use, e.g. a scale
             self.failed.emit(str(exc))
             return
@@ -404,7 +427,10 @@ class ConversionWorker(QThread):
         if hasattr(input_path, "to_dict"):             # a batch's table, not its repr
             self.log_line.emit(f"Input: a batch of {len(input_path)} row(s)")
         elif isinstance(input_path, list):
-            self.log_line.emit(f"Input: {len(input_path)} file(s) selected")
+            folders = sum(1 for p in input_path if os.path.isdir(str(p)))
+            self.log_line.emit(f"Input: {len(input_path) - folders} file(s) and {folders} "
+                               f"folder(s) selected, the folders mirrored in the output"
+                               if folders else f"Input: {len(input_path)} file(s) selected")
         else:
             self.log_line.emit(f"Input: {input_path}")
         self.log_line.emit(f"Output: {output_path}")

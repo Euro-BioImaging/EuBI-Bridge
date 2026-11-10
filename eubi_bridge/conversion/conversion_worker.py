@@ -408,7 +408,11 @@ def _warn_unused_writer_settings(clus) -> None:
 async def _convert_safely(conversion, output_path: str) -> None:
     """Await one output's `conversion`; on failure remove any partial output it
     created and re-raise."""
-    target = output_path if output_path.endswith('.zarr') else f"{output_path}.zarr"
+    from eubi_bridge.core.output_store import strip_output_suffix, with_output_suffix
+    # callers pass the output's own name (X.ome.zarr, X.ome.zarr.zip, X.ozx); a bare
+    # name is the folder it would be
+    target = (output_path if strip_output_suffix(output_path) != output_path
+              else with_output_suffix(output_path))
     # Whether the output already existed BEFORE this run.  A pre-existing
     # dataset is never ours to delete — only partial output created by this run
     # may be cleaned up on failure.
@@ -435,7 +439,8 @@ async def _convert_safely(conversion, output_path: str) -> None:
 def _generate_output_path(base_path: str, series_path: str,
                           series_idx: Optional[int] = None,
                           tile_idx: Optional[int] = None,
-                          resolved_basename: Optional[str] = None) -> str:
+                          resolved_basename: Optional[str] = None,
+                          zip_output: str = "off") -> str:
     """
     Generate output path with optional scene/tile suffixes.
 
@@ -448,10 +453,13 @@ def _generate_output_path(base_path: str, series_path: str,
             *series_path*.  Set when two inputs share a filename and would
             otherwise write to the same store.  Scene/tile suffixes still apply
             on top of it, so multi-scene naming is unaffected.
+        zip_output: "off" (default) names an OME-Zarr folder ``X.ome.zarr``; "zip" the
+            BioImage Archive's ``X.ome.zarr.zip``; "ozx" NGFF RFC-9's ``X.ozx``.
 
     Returns:
         Complete output path
     """
+    from eubi_bridge.core.output_store import output_suffix
     from eubi_bridge.utils.path_utils import output_stem
     basename = resolved_basename or output_stem(series_path)
     suffix = ""
@@ -461,7 +469,7 @@ def _generate_output_path(base_path: str, series_path: str,
     if tile_idx is not None:
         suffix += f"_tile{tile_idx}"
 
-    return f"{base_path}/{basename}{suffix}.zarr"
+    return f"{base_path}/{basename}{suffix}{output_suffix(zip_output)}"
 
 
 async def unary_worker(job: ConversionJob) -> None:

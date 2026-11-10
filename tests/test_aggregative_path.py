@@ -281,7 +281,7 @@ def test_many_files_never_stay_open_together(tmp_path, monkeypatch):
         "overwrite": True, "squeeze": False}))
     assert 0 < peak[0] <= 8 + aggregative_path.OPEN_THREADS
     assert len(micro_source._files) <= 8                  # idle again: back to the cap
-    arr = np.asarray(zarr.open_group(f"{out}.zarr", mode="r")["0"])
+    arr = np.asarray(zarr.open_group(f"{out}.ome.zarr", mode="r")["0"])
     assert arr.shape == (n, 1, 1, 16, 20)
     np.testing.assert_array_equal(arr[:, 0, 0, 0, 0], np.arange(n))
 
@@ -309,8 +309,8 @@ def test_a_conversion_table_runs_both_kinds_in_one_pool(tmp_path, caplog):
         EuBIBridge().to_zarr(str(table), use_threading=True, max_processes=3, squeeze=False,
                              verbose=False)
     assert "2 one-to-one job(s) and 1 aggregative output(s) in one pool" in caplog.text
-    assert (out / "single.zarr").is_dir()
-    (joined,) = [p for p in out.glob("*.zarr") if p.name != "single.zarr"]
+    assert (out / "single.ome.zarr").is_dir()
+    (joined,) = [p for p in out.glob("*.ome.zarr") if p.name != "single.ome.zarr"]
     arr = np.asarray(zarr.open_group(str(joined), mode="r")["0"])
     assert arr.shape == (3, 1, 1, 16, 20)
     np.testing.assert_array_equal(arr[:, 0, 0, 0, 0], [0, 1, 2])

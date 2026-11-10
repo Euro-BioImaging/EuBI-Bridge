@@ -1,5 +1,5 @@
 {
- "img_scene0.zarr": {
+ "img_scene0.ome.zarr": {
   "attrs": {
    "eubi_bridge": {
     "acquisition": {
@@ -111,7 +111,7 @@
    ]
   ]
  },
- "img_scene1.zarr": {
+ "img_scene1.ome.zarr": {
   "attrs": {
    "eubi_bridge": {
     "acquisition": {

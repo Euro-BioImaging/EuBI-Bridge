@@ -774,6 +774,10 @@ class ConversionConfig(BaseModel):
     compressor: Optional[str] = "blosc"
     compressor_params: dict = Field(default_factory=dict)
     overwrite: bool = False
+    # Each output straight into a zip: "off" (an OME-Zarr folder X.ome.zarr), "zip"
+    # (X.ome.zarr.zip holding X.ome.zarr/, the BioImage Archive's layout) or "ozx"
+    # (NGFF RFC-9, OME-Zarr 0.5+). Local outputs only.
+    zip_output: Literal["off", "zip", "ozx"] = "off"
     save_omexml: bool = True
     # Write acquisition metadata NGFF has no field for (view/illumination
     # indices, objective NA, per-channel emission) into the namespaced
@@ -870,6 +874,17 @@ class ConversionConfig(BaseModel):
         warn_retired("skip_dask", v)
         return None
 
+    @field_validator("zip_output", mode="before")
+    @classmethod
+    def _coerce_zip_output(cls, v):
+        # --zip_output / a table cell / the GUI: True / "true" / "yes" mean the default zip
+        if v is None or v is False or str(v).strip().lower() in ("", "off", "false", "no", "0",
+                                                                 "none"):
+            return "off"
+        if v is True or str(v).strip().lower() in ("true", "yes", "1", "on", "bia"):
+            return "zip"
+        return str(v).strip().lower().lstrip(".")
+
     @field_validator("ome_zarr_version", mode="before")
     @classmethod
     def _coerce_ome_zarr_version(cls, v):
@@ -892,6 +907,11 @@ class ConversionConfig(BaseModel):
                                                warn=False)
         self.ome_zarr_version = version
         self.zarr_format = fmt
+        if self.zip_output == "ozx" and fmt != 3:
+            raise ValueError(
+                f"zip_output='ozx' (NGFF RFC-9) holds OME-Zarr 0.5 or newer (zarr v3); "
+                f"ome_zarr_version is {version}. Use zip_output='zip' (X.ome.zarr.zip, any "
+                f"version), or ome_zarr_version='0.5'.")
         return self
 
     @model_validator(mode="after")
@@ -1180,6 +1200,18 @@ class ConversionJob(BaseModel):
     metadata: MetadataConfig     = Field(default_factory=MetadataConfig)
     extra: dict               = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _zip_output_is_local(self) -> "ConversionJob":
+        """A zip is written on a local disk (an object store cannot append to a file):
+        refused for an s3:// / https:// output, naming the way out."""
+        if self.conversion.zip_output != "off" and str(self.output_path).startswith(
+                ("https://", "s3://")):
+            raise ValueError(
+                f"zip_output={self.conversion.zip_output!r} writes a zip on a local disk; "
+                f"{self.output_path} is an object store. Write the zips to a local folder "
+                f"and upload them, or drop zip_output to write OME-Zarr to the store.")
+        return self
+
     @classmethod
     def from_kwargs(
         cls,
@@ -1245,6 +1277,9 @@ class AggregativeConversionJob(BaseModel):
     # None means no prefix, which is what every conversion did before the
     # column existed.
     aggregative_group: Optional[str] = None
+    # mirror the folders given as inputs (Workplan E28): each joined output in the deepest
+    # folder its files share, below <output>/<folder name>
+    keep_folder_structure: bool = False
     cluster: ClusterConfig       = Field(default_factory=ClusterConfig)
     readers: ReaderConfig        = Field(default_factory=ReaderConfig)
     conversion: ConversionConfig = Field(default_factory=ConversionConfig)
@@ -1336,6 +1371,8 @@ class AggregativeConversionJob(BaseModel):
         # keeping several groups from one run distinguishable.
         if self.aggregative_group:
             result["aggregative_group"] = self.aggregative_group
+        if self.keep_folder_structure:
+            result["keep_folder_structure"] = True
         return result
 
 

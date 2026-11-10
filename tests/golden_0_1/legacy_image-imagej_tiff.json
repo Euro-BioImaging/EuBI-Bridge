@@ -1,5 +1,5 @@
 {
- "stack.zarr": {
+ "stack.ome.zarr": {
   "attrs": {
    "eubi_bridge": {
     "acquisition": {

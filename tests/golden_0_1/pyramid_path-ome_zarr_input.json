@@ -1,5 +1,5 @@
 {
- "in.zarr": {
+ "in.ome.zarr": {
   "attrs": {
    "eubi_bridge": {
     "acquisition": {

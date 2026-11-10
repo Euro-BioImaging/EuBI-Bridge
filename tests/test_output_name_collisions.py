@@ -201,20 +201,20 @@ class TestOutputStem:
 
 class TestGeneratedPath:
     def test_default_naming_unchanged(self):
-        assert _generate_output_path("/out", "/a/img.ome.tiff") == "/out/img.zarr"
+        assert _generate_output_path("/out", "/a/img.ome.tiff") == "/out/img.ome.zarr"
 
     def test_a_dot_in_the_name_stays(self):
         assert _generate_output_path("/out", "/a/Image_V4.1_BF.vsi", 2) == \
-            "/out/Image_V4.1_BF_scene2.zarr"
+            "/out/Image_V4.1_BF_scene2.ome.zarr"
 
     def test_resolved_basename_replaces_derived_name(self):
         assert _generate_output_path(
-            "/out", "/a/img.ome.tiff", resolved_basename="A_img") == "/out/A_img.zarr"
+            "/out", "/a/img.ome.tiff", resolved_basename="A_img") == "/out/A_img.ome.zarr"
 
     @pytest.mark.parametrize("scene,tile,expected", [
-        (2, None, "/out/A_img_scene2.zarr"),
-        (None, 5, "/out/A_img_tile5.zarr"),
-        (2, 5, "/out/A_img_scene2_tile5.zarr"),
+        (2, None, "/out/A_img_scene2.ome.zarr"),
+        (None, 5, "/out/A_img_tile5.ome.zarr"),
+        (2, 5, "/out/A_img_scene2_tile5.ome.zarr"),
     ])
     def test_suffixes_compose_with_resolved_basename(self, scene, tile, expected):
         """Disambiguation must not disturb multi-scene/tile naming."""

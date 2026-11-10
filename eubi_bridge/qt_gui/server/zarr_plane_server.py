@@ -162,6 +162,11 @@ def _ngff_meta_mtime(path: str):
     """
     if not isinstance(path, str) or path.startswith(("http://", "https://", "s3://", "gs://")):
         return None
+    if os.path.isfile(path):                   # a zipped OME-Zarr: the zip itself
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return None
     for name in ("zarr.json", ".zattrs"):
         try:
             return os.path.getmtime(os.path.join(path, name))
@@ -395,6 +400,16 @@ class TensorStoreCache:
             base = zarr_path.rstrip("/")
             array_url = f"{base}/{level_path}"
             return {'driver': 'http', 'base_url': array_url}
+
+        # A zipped OME-Zarr (X.ome.zarr.zip, X.ozx): TensorStore's zip store, read-only,
+        # over the zip file, at the store's root inside it
+        import os as _os
+        if _os.path.isfile(zarr_path):
+            from eubi_bridge.qt_gui.core.file_service import zip_inner_root
+            inner = zip_inner_root(zarr_path)
+            prefix = "/".join(p for p in (inner, level_path.strip("/")) if p)
+            return {'driver': 'zip', 'base': {'driver': 'file', 'path': zarr_path},
+                    'path': prefix + "/"}
 
         # Local filesystem
         from pathlib import Path

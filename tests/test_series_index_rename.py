@@ -11,7 +11,7 @@ reads it, and its own option follows: scene_index -> series_index (plan 7.7, 8.3
   releases), and outputs keep their _scene<N> names.
 - so do the files eubi saves (the config, a batch's batch.csv and batch_config.json):
   equal pairs load silently, pairs that differ (eubi 0.2.x changed its own) warn.
-- a micro-reader outside >=0.4.0,<0.5 (since eubi-bridge 0.3.4; <0.4 in 0.3.3, <0.3 in 0.3.2, >=0.1,<0.2
+- a micro-reader outside >=0.4.1,<0.5 (since eubi-bridge 0.3.4; <0.4 in 0.3.3, <0.3 in 0.3.2, >=0.1,<0.2
   before) stops
   a conversion with MicroReaderVersionError, not a silent fallback to the older readers.
 """
@@ -121,9 +121,10 @@ def test_micro_array_finds_the_series(tmp_path):
 @pytest.mark.parametrize("version, why", [("0.0.4", "names the series index 'scene'"),
                                           ("0.1.0", "declares no coordinate systems"),
                                           ("0.3.0", "invents calibration"),
+                                          ("0.4.0", "does not stitch BigDataViewer tiles"),
                                           ("0.5.0", None)])
 def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, why):
-    """A micro-reader outside >=0.4.0,<0.5 forced in (pip check reports it): every route
+    """A micro-reader outside >=0.4.1,<0.5 forced in (pip check reports it): every route
     that reads with micro-reader raises MicroReaderVersionError naming the fix, none
     goes to the older readers with only a log line."""
     import micro_reader
@@ -133,7 +134,7 @@ def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, why
     path = str(_czi(tmp_path / "one.czi"))
     monkeypatch.setattr(micro_reader, "__version__", version)
     monkeypatch.setattr(micro_source, "_micro_reader_checked", False)
-    fix = r'pip install -U "micro-reader>=0.4.0,<0.5"'
+    fix = r'pip install -U "micro-reader>=0.4.1,<0.5"'
     for call in (lambda: _open_input(ConversionJob.from_kwargs(path, "out", {})),
                  lambda: micro_source.MicroReader.open(path),
                  lambda: micro_source.micro_array(path, 0, None)):
@@ -141,15 +142,15 @@ def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, why
                            match=f"micro-reader {version} is installed.*{fix}") as err:
             call()
         for reason in ("names the series index 'scene'", "declares no coordinate systems",
-                       "invents calibration"):
+                       "invents calibration", "does not stitch BigDataViewer tiles"):
             assert (reason in str(err.value)) == (reason == why)
-    monkeypatch.setattr(micro_reader, "__version__", "0.4.0")     # the right one: taken
+    monkeypatch.setattr(micro_reader, "__version__", "0.4.1")     # the right one: taken
     assert micro_source.MicroReader.open(path) is not None
 
 
-@pytest.mark.parametrize("version", ["0.5.0", "0.7.0"])
+@pytest.mark.parametrize("version", ["0.5.0", "0.6.0", "0.7.0"])
 def test_a_wrong_ome_zarr_pyramid_stops_every_route(tmp_path, monkeypatch, version):
-    """An ome_zarr_pyramid outside >=0.6.0,<0.7 forced in: 0.5 wrote micrometer and second
+    """An ome_zarr_pyramid outside >=0.6.1,<0.7 forced in: 0.5 wrote micrometer and second
     on axes a file does not size, in silence. The older readers' route is stopped too."""
     import ome_zarr_pyramid
 
@@ -162,14 +163,14 @@ def test_a_wrong_ome_zarr_pyramid_stops_every_route(tmp_path, monkeypatch, versi
         monkeypatch.setattr(micro_source, "_micro_reader_checked", False)
         with pytest.raises(micro_source.OzpVersionError,
                            match=f"ome_zarr_pyramid {version} is installed.*"
-                                 r'pip install -U "ome_zarr_pyramid>=0\.6\.0,<0\.7"'):
+                                 r'pip install -U "ome_zarr_pyramid>=0\.6\.1,<0\.7"'):
             _open_input(ConversionJob.from_kwargs(path, "out", {"metadata_reader": reader}))
-    monkeypatch.setattr(ome_zarr_pyramid, "__version__", "0.6.0")
+    monkeypatch.setattr(ome_zarr_pyramid, "__version__", "0.6.1")
     monkeypatch.setattr(micro_source, "_ozp_checked", False)
     micro_source.require_ozp()
 
 
-FIX = r'pip install -U "micro-reader>=0.4.0,<0.5"'
+FIX = r'pip install -U "micro-reader>=0.4.1,<0.5"'
 
 
 def test_a_wrong_micro_reader_reaches_a_script_as_itself(tmp_path, monkeypatch):
@@ -224,13 +225,13 @@ def test_a_wrong_micro_reader_reaches_a_script_from_a_worker_process(tmp_path):
                          text=True, timeout=300)
     last = [line for line in run.stdout.splitlines() if line.startswith(("TYPED", "OTHER"))]
     assert last and last[-1].startswith("TYPED"), (run.stdout[-2000:], run.stderr[-2000:])
-    assert 'pip install -U "micro-reader>=0.4.0,<0.5"' in last[-1]
+    assert 'pip install -U "micro-reader>=0.4.1,<0.5"' in last[-1]
     assert not out.exists()
 
 
 def _raise_version_error():
     from eubi_bridge.core.micro_source import MicroReaderVersionError
-    raise MicroReaderVersionError("eubi-bridge needs micro-reader >=0.4.0,<0.5. Fix: x")
+    raise MicroReaderVersionError("eubi-bridge needs micro-reader >=0.4.1,<0.5. Fix: x")
 
 
 def test_the_worker_wrapper_and_the_dispatcher_keep_the_version_error():
@@ -505,7 +506,7 @@ def test_scene_index_converts_as_series_index(tmp_path):
         results[name] = _outputs(out)
     assert results["series_index"] == results["scene_index"]
     (name, (block, pixels)), = results["series_index"].items()
-    assert name.endswith("_scene1.zarr")                         # the suffix stays (8.32)
+    assert name.endswith("_scene1.ome.zarr")                         # the suffix stays (8.32)
     acquisition = block["acquisition"]
     assert acquisition["series_index"] == acquisition["scene_index"] == 1
     assert np.unique(pixels).tolist() == [9]

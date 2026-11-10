@@ -584,6 +584,7 @@ TEXT_SUFFIXES = (".txt", ".md", ".log", ".json", ".csv", ".tsv", ".ini", ".cfg",
 SIDE_FILE_SUFFIXES = TEXT_SUFFIXES + (".xml", ".aas", ".xgapp", ".env", ".mes", ".wpp",
                                       ".mrf", ".mlf", ".db", ".mdb", ".tmp", ".bak", ".xslt",
                                       ".xsl", ".pdf", ".xlsx", ".docx", ".mp4", ".avi", ".zip",
+                                      ".ozx",                   # zipped OME-Zarr (RFC-9)
                                       ".bin", ".mat", ".npz", ".npy", ".pkl", ".pickle",
                                       ".mxprotocol")             # ImageXpress protocols
 
@@ -1025,7 +1026,60 @@ def input_mains(input_paths: List[str], plates: bool = True) -> List[Optional[st
     return out
 
 
-def disambiguate_output_names(input_paths: List[str], per_image=()) -> dict:
+#: inputs that open an image set or a plate whose own name may name the output (Workplan
+#: E29), beside the index and plate data files ``named_folder`` knows: an OME companion
+#: (Viventis batches all name theirs ome-tiff.companion.ome), CellVoyager .wpi,
+#: MetaXpress .htd, InCell .xdce, Opera .flex
+DATASET_NAMED_SUFFIXES = (".companion.ome", ".wpi", ".htd", ".xdce", ".flex")
+#: names that say nothing about the dataset: a kind with a number (Plate01, Image:0,
+#: Series 0, Microplate, Position 1), a GUID, nothing
+_GENERIC_DATASET_NAME = re.compile(
+    r"(?:image|series|plate|microplate|well|field|position|default|untitled|sample|"
+    r"experiment|measurement|dataset)[\s_:.#-]*\d*"
+    r"|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\W*", re.IGNORECASE)
+
+
+def usable_dataset_name(name) -> Optional[str]:
+    """*name* as an output name, or None when it names nothing (``_GENERIC_DATASET_NAME``):
+    characters a file system refuses become ``_``, trailing dots and spaces go."""
+    if not isinstance(name, str) or _GENERIC_DATASET_NAME.fullmatch(name.strip()):
+        return None
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name.strip()).rstrip(" .")
+    return safe[:120] or None
+
+
+def dataset_names(input_paths: List[str], per_image=()) -> dict:
+    """``{input: name}`` for the inputs that open an image set or a plate (an index or data
+    file ``named_folder`` knows, or one of DATASET_NAMED_SUFFIXES) and name it: a file
+    holding one plate, the plate's name; a set holding one image, the image's name
+    (micro-reader's ``Plate.name`` / ``Image.name``; Workplan E29). Generic names, files
+    of several plates or images, inputs in `per_image` and files micro-reader cannot
+    open are left out: they keep the names they had. (A later eubi-bridge takes this
+    name from micro-reader's own File.name, Workplan MR22.)"""
+    per_image = {str(p) for p in per_image}
+    names = {}
+    for path in (str(p) for p in input_paths):
+        if path in per_image or not (named_folder(path) is not None
+                                     or path.lower().endswith(DATASET_NAMED_SUFFIXES)):
+            continue
+        try:
+            import micro_reader
+            with micro_reader.open(path, plates=True) as f:
+                plates = list(getattr(f, "plates", ()) or ())
+                if plates:
+                    name = plates[0].name if len(plates) == 1 else None
+                else:
+                    base = [im for im in f.images if not dict(im.index).get("resolution")]
+                    name = base[0].name if len(base) == 1 else None
+        except Exception:                       # noqa: BLE001 - keeps the name it had
+            continue
+        name = usable_dataset_name(name)
+        if name:
+            names[path] = name
+    return names
+
+
+def disambiguate_output_names(input_paths: List[str], per_image=(), names=None) -> dict:
     """Map each input path to a unique output basename.
 
     A plate's data file (a Cellomics ``.C01``, a NIS-Elements run's ``.nd2``) is named
@@ -1069,14 +1123,18 @@ def disambiguate_output_names(input_paths: List[str], per_image=()) -> dict:
                 if part not in ('', '.', '..')]
 
     per_image = {str(p) for p in per_image}
+    given = {str(k): v for k, v in (names or {}).items()}     # dataset names (E29)
 
     def named(path: str) -> Optional[str]:
         return named_folder(path, plate=path not in per_image)
 
     def stem(path: str) -> str:
         # Matches _generate_output_path (output_stem): 'image.ome.tiff' -> 'image',
-        # 'img.v2.tif' -> 'img.v2'; a plate index with a fixed name, or a plate's data
-        # file, takes its folder's name.
+        # 'img.v2.tif' -> 'img.v2'; a set or plate named in its metadata takes that
+        # name (`names`, dataset_names); a plate index with a fixed name, or a plate's
+        # data file, takes its folder's name.
+        if path in given:
+            return given[path]
         folder = named(path)
         if folder is not None:
             return _segments(folder)[-1]
@@ -1093,7 +1151,8 @@ def disambiguate_output_names(input_paths: List[str], per_image=()) -> dict:
     def own(path: str) -> str:
         """The stem, with the suffix when files of the same folder share the stem."""
         name = stem(path)
-        if same_folder[(tuple(parents(path)), name)] > 1 and named(path) is None:
+        if (same_folder[(tuple(parents(path)), name)] > 1 and named(path) is None
+                and path not in given):
             suffix = _segments(path)[-1][len(name):].strip('.').lower().replace('.', '_')
             if suffix:
                 return f"{name}_{suffix}"
@@ -1138,6 +1197,82 @@ def disambiguate_output_names(input_paths: List[str], per_image=()) -> dict:
     return names
 
 
+def _is_input_folder(path) -> bool:
+    """A local folder of inputs: not a Zarr store or an image group inside one (those are
+    one input each), and not an OME-Zarr folder."""
+    text = str(path).rstrip('/\\')
+    if '://' in text or not os.path.isdir(text) or text.lower().endswith('.zarr'):
+        return False
+    if os.path.exists(os.path.join(text, 'zarr.json')) or \
+            os.path.exists(os.path.join(text, '.zattrs')):
+        return False
+    return not _is_image_group(text)
+
+
+def folder_inputs(input_path) -> list:
+    """The folders given as inputs: the input itself, or the folders in a list of inputs
+    (the GUI's checked folders). What ``keep_folder_structure`` mirrors (Workplan E28)."""
+    given = input_path if isinstance(input_path, (list, tuple)) else [input_path]
+    return [os.path.abspath(str(p)) for p in given
+            if isinstance(p, (str, os.PathLike)) and _is_input_folder(p)]
+
+
+def expand_folder_rows(df: pd.DataFrame, includes=None, excludes=None,
+                       output_path=None) -> tuple:
+    """``(table, roots)``: each row whose ``input_path`` is a folder of inputs (a checked
+    folder in the GUI, a folder in a list or a batch row) replaced by one row per file
+    below it (``take_filepaths_from_path``, with the row's other cells), and the folders
+    so expanded. Rows naming files or stores are kept as they are."""
+    if 'input_path' not in df.columns:
+        return df, []
+    rows, roots = [], []
+    for row in df.to_dict('records'):
+        path = row.get('input_path')
+        if path is None or not _is_input_folder(path):
+            rows.append(row)
+            continue
+        folder = os.path.abspath(str(path))
+        roots.append(folder)
+        for file_path in take_filepaths_from_path(
+                folder, includes=includes, excludes=excludes,
+                output_path=row.get('output_path') or output_path):
+            rows.append({**row, 'input_path': file_path})
+    if not roots:
+        return df, []
+    return pd.DataFrame(rows, columns=list(df.columns)), roots
+
+
+def mirrored_output(input_path, roots, output_path) -> Optional[str]:
+    """The folder an output goes to under ``keep_folder_structure`` (Workplan E28):
+    ``<output_path>/<root folder's name>/<the folders between the root and the input>``,
+    for an input below one of `roots` (the folders given as inputs, the innermost that
+    holds it); None for one below none (a file picked by hand: it goes to `output_path`
+    itself). A plate or set named after its folder (``named_folder``) counts as that
+    folder: its output goes beside it, not into it."""
+    if not roots or output_path is None or '://' in str(output_path):
+        return None
+    path = os.path.abspath(str(input_path))
+    named = named_folder(path)
+    place = os.path.dirname(named) if named else os.path.dirname(path)
+    norm = os.path.normcase(place)
+    holding = [r for r in roots if norm == os.path.normcase(r)
+               or norm.startswith(os.path.normcase(r).rstrip('/\\') + os.sep)]
+    if named and not holding:
+        # the plate's folder is itself the root given: its output goes to the root's place
+        place = os.path.dirname(path)
+        norm = os.path.normcase(place)
+        holding = [r for r in roots if norm == os.path.normcase(r)
+                   or norm.startswith(os.path.normcase(r).rstrip('/\\') + os.sep)]
+        if holding:
+            return str(output_path)
+    if not holding:
+        return None
+    root = max(holding, key=len)
+    rel = os.path.relpath(place, root)
+    parts = [os.path.basename(root.rstrip('/\\'))] + ([] if rel == '.' else rel.split(os.sep))
+    return os.path.join(str(output_path), *parts)
+
+
 def _without_own_outputs(paths: list, output_path, input_path) -> list:
     """Leaves out what a run wrote: a store being written beside another (a killed run), and
     the output folder when it is inside the input folder: a repeated run would convert its
@@ -1154,9 +1289,20 @@ def _without_own_outputs(paths: list, output_path, input_path) -> list:
         return os.path.normcase(os.path.abspath(path)).startswith(out)
 
     if out == folder:
-        # the output folder is the input folder: a store beside its source is its output
-        stems = {os.path.splitext(p)[0] for p in paths if not str(p).endswith('.zarr')}
-        kept = [p for p in paths if not (str(p).endswith('.zarr') and p[:-len('.zarr')] in stems)]
+        # the output folder is the input folder: a store (X.ome.zarr, X.zarr up to 0.3.x)
+        # or a zip (X.ome.zarr.zip, X.ozx) beside its source is its output
+        from eubi_bridge.core.output_store import strip_output_suffix
+
+        def bare(path):
+            return str(path).rstrip('/\\')
+
+        def output_like(path):
+            return strip_output_suffix(bare(path)) != bare(path)
+
+        stems = {os.path.normcase(os.path.join(os.path.dirname(bare(p)), output_stem(p)))
+                 for p in paths if not output_like(p)}
+        kept = [p for p in paths if not (output_like(p) and os.path.normcase(
+            strip_output_suffix(bare(p))) in stems)]
     elif out.startswith(folder):
         kept = [p for p in paths if not inside(p)]
     else:

@@ -559,7 +559,8 @@ async def convert_group(file_paths: list, output_path: str, job_kwargs: dict) ->
         job_kwargs = {**job_kwargs, "pixel_reader": "micro"}
     if job_kwargs.get("dtype", "auto") == "auto":
         job_kwargs = {**job_kwargs, "dtype": None}         # the source's (as 0.1.x's ozp writer)
-    out = output_path if str(output_path).endswith(".zarr") else f"{output_path}.zarr"
+    from eubi_bridge.core.output_store import with_output_suffix
+    out = with_output_suffix(output_path, job_kwargs.get("zip_output") or "off")
     # the first file by its tags, as in _build_entry: the warnings name the file whose
     # metadata the output takes
     paths = FileSet(natsorted(str(p) for p in file_paths), shapes=[(1,) * 5] * len(file_paths),

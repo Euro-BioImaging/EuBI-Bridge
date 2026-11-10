@@ -453,8 +453,20 @@ class InspectPage(QWidget):
 
     # ── Save metadata ─────────────────────────────────────────────────────────
 
+    def _refuse_saving_a_zip(self, lbl, cb, btn) -> bool:
+        """A zipped OME-Zarr cannot be changed in place: say so instead of saving."""
+        from eubi_bridge.qt_gui.core.file_service import is_zipped_ome_zarr
+        if not is_zipped_ome_zarr(self._path):
+            return False
+        self._show_save_status(lbl, cb, btn, ok=False,
+                               msg="A zipped OME-Zarr is read-only: convert it again with "
+                                   "the new values, or unzip it and save into the folder.")
+        return True
+
     def _on_save_pixel_sizes(self):
         if not self._path:
+            return
+        if self._refuse_saving_a_zip(self._ps_status_lbl, self._ps_confirm_cb, self._save_ps_btn):
             return
         scales = []
         for row in range(self._ps_table.rowCount()):
@@ -484,6 +496,8 @@ class InspectPage(QWidget):
 
     def _on_save_channels(self):
         if not self._path:
+            return
+        if self._refuse_saving_a_zip(self._ch_status_lbl, self._ch_confirm_cb, self._save_ch_btn):
             return
         try:
             _update_channels_on_disk(self._path, self._viewer.channels)
@@ -560,6 +574,15 @@ def _read_store_json(path: str, fname: str) -> dict | None:
     join produces a path no local filesystem has -- so remote stores read back
     no pixel sizes at all and the Inspect tab showed nothing.
     """
+    if os.path.isfile(str(path)):               # a zipped OME-Zarr
+        import zipfile
+        from eubi_bridge.qt_gui.core.file_service import zip_inner_root
+        inner = zip_inner_root(path)
+        try:
+            with zipfile.ZipFile(path) as zf:
+                return json.loads(zf.read(f"{inner}/{fname}" if inner else fname))
+        except KeyError:
+            return None
     if not str(path).startswith(("https://", "http://", "s3://")):
         fpath = os.path.join(path, fname)
         if not os.path.exists(fpath):

@@ -98,7 +98,7 @@ def test_new_path_writes_what_the_old_one_does(tmp_path, case):
 def test_new_path_writes_the_ome_xml_in_the_same_write(tmp_path):
     src = _ome_tiff(tmp_path / "img.ome.tif")
     _convert(src, tmp_path / "new", ["--series_index", "0"])
-    store = tmp_path / "new" / "img_scene0.zarr"
+    store = tmp_path / "new" / "img_scene0.ome.zarr"
     xml = (store / "OME" / "METADATA.ome.xml").read_text(encoding="utf-8")
     assert 'Name="DAPI"' in xml and 'SizeX="48"' in xml
     # a plain file: an image root that is no bioformats2raw layout gets no OME group
@@ -112,7 +112,7 @@ def test_auto_windows_come_from_the_coarsest_level(tmp_path):
     the dtype's range, as from_dtype)."""
     src = _ome_tiff(tmp_path / "img.ome.tif")
     _convert(src, tmp_path / "new", ["--channel_intensity_limits", "auto"])
-    group = zarr.open_group(str(tmp_path / "new" / "img_scene0.zarr"), mode="r")
+    group = zarr.open_group(str(tmp_path / "new" / "img_scene0.ome.zarr"), mode="r")
     coarsest = np.asarray(group[str(len(list(group.array_keys())) - 1)])
     channels = group.attrs["omero"]["channels"]
     axes = [a["name"] for a in group.attrs["multiscales"][0]["axes"]]
@@ -130,7 +130,7 @@ def test_writer_eubi_is_retired_and_writes_with_ozp(tmp_path):
     log = _convert(src, tmp_path / "out", ["--writer", "eubi"])
     assert "writer='eubi' is no longer available" in log
     assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
-    assert (tmp_path / "out" / "img_scene0.zarr").is_dir()
+    assert (tmp_path / "out" / "img_scene0.ome.zarr").is_dir()
 
 
 def test_an_imagej_hyperstack_on_both_paths(tmp_path):
@@ -181,16 +181,16 @@ def test_each_scene_has_its_own_tiles(tmp_path):
     src = _mosaic_czi(tmp_path / "mosaic.czi", tiles_per_scene=(2, 3))
     _convert(src, tmp_path / "new", TILES)
     names = sorted(p.name for p in (tmp_path / "new").glob("*.zarr"))
-    assert names == ["mosaic_scene0_tile0.zarr", "mosaic_scene0_tile1.zarr",
-                     "mosaic_scene1_tile0.zarr", "mosaic_scene1_tile1.zarr",
-                     "mosaic_scene1_tile2.zarr"]
+    assert names == ["mosaic_scene0_tile0.ome.zarr", "mosaic_scene0_tile1.ome.zarr",
+                     "mosaic_scene1_tile0.ome.zarr", "mosaic_scene1_tile1.ome.zarr",
+                     "mosaic_scene1_tile2.ome.zarr"]
     places = set()
     for name in names:
         attrs = zarr.open_group(str(tmp_path / "new" / name), mode="r").attrs
         transforms = attrs["multiscales"][0]["datasets"][0]["coordinateTransformations"]
         places.add(tuple(next((t["translation"] for t in transforms
                                if t["type"] == "translation"), [])))
-        assert attrs["eubi_bridge"]["acquisition"]["tile_index"] == int(name[-6])
+        assert attrs["eubi_bridge"]["acquisition"]["tile_index"] == int(name[-len("0.ome.zarr")])
     assert len(places) == 5                                     # five different tiles
 
 
@@ -259,8 +259,8 @@ def test_czi_views_on_both_paths(tmp_path, args):
     assert re.search(r"\d+ output\(s\), read by", log), log[-2000:]
     new = _golden.check(f"pyramid_path-czi_views-{'separate' if len(args) == 2 else 'joined'}",
                         tmp_path / "new", tmp_path)
-    assert sorted(new) == (["views_view0.zarr", "views_view1.zarr"] if len(args) == 2
-                           else ["views_view_concat.zarr"])
+    assert sorted(new) == (["views_view0.ome.zarr", "views_view1.ome.zarr"] if len(args) == 2
+                           else ["views_view_concat.ome.zarr"])
 
 
 def test_rgb_views_joined_as_0_1_joined_them(tmp_path):
@@ -297,7 +297,7 @@ def test_views_that_differ_are_not_joined(tmp_path):
     assert not list((tmp_path / "joined").glob("*.zarr"))
     _convert(src, tmp_path / "separate", ["--view_index", "all"])
     places = []
-    for name in ("views_view0.zarr", "views_view1.zarr"):
+    for name in ("views_view0.ome.zarr", "views_view1.ome.zarr"):
         attrs = zarr.open_group(str(tmp_path / "separate" / name), mode="r").attrs
         transforms = attrs["multiscales"][0]["datasets"][0]["coordinateTransformations"]
         places.append(next(t["translation"] for t in transforms if t["type"] == "translation"))
@@ -312,7 +312,7 @@ def test_micro_check_pixels_is_retired_with_a_warning(tmp_path):
                                                   "--micro_check_pixels", "True"])
     assert "micro_check_pixels no longer has an effect" in log
     assert "pixel_reader='standard'" in log
-    assert (tmp_path / "new" / "img_scene0.zarr").is_dir()
+    assert (tmp_path / "new" / "img_scene0.ome.zarr").is_dir()
 
 
 def _ome_zarr_input(path: Path, translation=None) -> Path:
@@ -341,7 +341,7 @@ def test_an_ome_zarr_inputs_translation_is_kept(tmp_path):
     """Decided 2026-10-15: the input's translation is kept (0.1.5 dropped it)."""
     src = _ome_zarr_input(tmp_path / "in.ome.zarr", translation=[0.0, 0.0, 12.5, -3.0])
     _convert(src, tmp_path / "new", [])
-    attrs = zarr.open_group(str(tmp_path / "new" / "in.zarr"), mode="r").attrs
+    attrs = zarr.open_group(str(tmp_path / "new" / "in.ome.zarr"), mode="r").attrs
     transforms = attrs["multiscales"][0]["datasets"][0]["coordinateTransformations"]
     assert {"type": "translation", "translation": [0.0, 0.0, 12.5, -3.0]} in transforms
 

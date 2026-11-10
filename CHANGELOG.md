@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.4.0 (2026-11-10)
+
+Zipped outputs need zarr-zip 0.1 and the dyna-zarr and ome_zarr_pyramid releases that write
+zips (versions to be set at release).
+
+### Changed
+- **Outputs are named `X.ome.zarr`** (they were `X.zarr`): the name OME-Zarr folders are
+  given, and what the BioImage Archive asks for. Scripts that look for `X.zarr` need the new
+  name. A rerun next to the inputs leaves outputs of either name out of its inputs.
+
+- **Image sets and plates are named after the dataset** where their metadata names it: an
+  OME companion holding one image takes the image's name, a file holding one plate the
+  plate's name (Viventis batches each holding an `ome-tiff.companion.ome` all wrote
+  `ome-tiff.zarr` and collided; a Harmony export named by a GUID folder now takes its
+  plate's name). Generic names (`Plate01`, `Image:0`, `Series 0`, a GUID) are skipped, and
+  sets of one output folder that share a name (two measurements of one plate) keep the
+  names they had. Single image files keep their file names.
+
+### Added
+- `--zip_output zip` writes each output straight into `X.ome.zarr.zip`, holding the folder
+  `X.ome.zarr`, as the BioImage Archive asks for uploads; `--zip_output ozx` writes NGFF
+  RFC-9's `X.ozx` (OME-Zarr 0.5 or newer). No folder is written first, and no second pass
+  zips it: chunks and shards go into the zip as they are written, large shards through
+  temporary files next to it. A zip is `X.ome.zarr.zip.part` until it is complete and
+  checked; a failed conversion leaves none. Single files, joined files, plates, scenes and
+  tiles alike; local outputs only (an object store is refused, naming the way out). In the
+  GUI: **Output As** on the Conversion page; in a batch table: the `zip_output` column.
+- Metadata updates (`update_pixel_meta`, `update_channel_meta`) refuse a zipped output,
+  which cannot be changed in place, naming the way out.
+- `--keep_folder_structure` (off by default) mirrors the folders given as inputs: each
+  output goes to `<output>/<folder name>/<the folders below it>`, where its file was,
+  instead of all into the output folder. Files given one by one still go into the output
+  folder. A plate's output goes beside its folder; a joined output into the deepest folder
+  its files share (folders whose files share names are joined each on its own). Output
+  names are made unique per folder, so `A/x.tif` and `B/x.tif` stay `x`. In the GUI,
+  folders can now be ticked (and dropped): a ticked folder converts every file below it,
+  mirrored this way, in a run or a batch; Select All still ticks files only, which go into
+  the output folder.
+- The Inspect page opens zipped OME-Zarr (`X.ome.zarr.zip`, `X.zarr.zip`, `X.ozx`),
+  read-only: the browser lists them, planes are read inside the zip, and saving pixel
+  sizes or channels says a zip cannot be changed in place.
+- A folder may now be one of several inputs (`to_zarr([folder, file])`): its files are
+  converted, flat unless `keep_folder_structure` is on.
+
+### Fixed
+- `io_backend='zarrista'` in a saved configuration no longer fails zipped outputs: they
+  are written with TensorStore, with one log line.
+
 ## 0.3.4 (2026-11-07)
 
 Requires micro-reader 0.4 (`>=0.4.0,<0.5`) and ome_zarr_pyramid 0.6 (`>=0.6.0,<0.7`): with

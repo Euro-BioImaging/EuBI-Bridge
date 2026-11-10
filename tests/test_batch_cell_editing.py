@@ -946,7 +946,10 @@ class TestChoicesMatchTheConfigModels:
             if spec.kind != "choice":
                 continue
             for choice in spec.choices:
-                ConversionJob.from_kwargs("/in.tif", "/out", {spec.key: choice})
+                # an RFC-9 zip holds OME-Zarr 0.5 or newer: refused beside the default 0.4
+                pair = ({"ome_zarr_version": "0.5"} if (spec.key, choice) == ("zip_output", "ozx")
+                        else {})
+                ConversionJob.from_kwargs("/in.tif", "/out", {spec.key: choice, **pair})
 
 
 class TestEveryParameterIsReachable:

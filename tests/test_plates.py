@@ -85,17 +85,19 @@ def test_a_plate_file_is_one_ngff_plate(tmp_path, version):
         assert ozp.validate(str(store)) == []
 
 
-def test_a_plate_from_a_fixed_index_name_is_named_after_its_folder(tmp_path):
+def test_a_plate_from_a_fixed_index_name_is_named_after_its_plate(tmp_path):
+    """Index.idx.xml names nothing; the plate's own name does (Workplan E29: it was named
+    after its folder, HMEC_21Hits_Images, until 0.3.4)."""
     src = _needs(HARMONY)
     code, log = _run(src, tmp_path / "out", [])
     assert code == 0, log[-3000:]
-    assert [p.name for p in (tmp_path / "out").glob("*.zarr")] == ["HMEC_21Hits_Images.zarr"]
+    assert [p.name for p in (tmp_path / "out").glob("*.ome.zarr")] == ["261021-HMEC-1.1.ome.zarr"]
 
 
 def test_a_side_file_of_a_plate_converts_the_plate_once(tmp_path):
     """A Harmony measurement's side files (images/image.index.txt, the measurement's
     .kw.txt) are parts of its index: choosing one, or one beside the index, converts the
-    plate once, named after the measurement folder."""
+    plate once, named after its plate (E29; the measurement folder is a GUID)."""
     index = _needs(HS_MEASUREMENT / "images" / "index.xml")
     side = HS_MEASUREMENT / "images" / "image.index.txt"
     from eubi_bridge.utils.path_utils import group_inputs
@@ -108,8 +110,8 @@ def test_a_side_file_of_a_plate_converts_the_plate_once(tmp_path):
     from eubi_bridge.ebridge import EuBIBridge
     out = tmp_path / "out"
     EuBIBridge().to_zarr([str(side), str(index)], str(out))
-    assert [p.name for p in out.glob("*.zarr")] == [f"{HS_MEASUREMENT.name}.zarr"]
-    _plate(out / f"{HS_MEASUREMENT.name}.zarr")
+    assert [p.name for p in out.glob("*.ome.zarr")] == ["F11_96w_20x_bin2_DPC_test.ome.zarr"]
+    _plate(out / "F11_96w_20x_bin2_DPC_test.ome.zarr")
 
 
 def test_every_file_of_a_plate_folder_stands_for_the_plate():
