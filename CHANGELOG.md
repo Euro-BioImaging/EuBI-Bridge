@@ -1,9 +1,34 @@
 # Changelog
 
+## 0.4.1 (2026-11-12)
+
+### Changed
+- **Faster conversions of large images when the memory budget allows**: with
+  `region_size_mb='auto'` (the default), regions grow with the budget past the former
+  256 MB, for images read through micro-reader that still give every write thread at
+  least four regions. Larger regions read each input tile fewer times; on the layout of
+  the BARD light-sheet set (one-plane TIFFs in 512 x 512 tiles) a conversion ran ~14 %
+  faster at 432 MB regions, and ~28 % at 1000 MB, using more of its budget (peak 4.9
+  and 9.9 GB against 2.6 GB at 4 threads). Smaller images, small budgets and
+  Bio-Formats reads (the JVM heap) keep 256 MB at most. Regions stay on whole output
+  chunks and shards. With dyna-zarr 0.1.4 their shape also follows the input's tiles.
+
+### Fixed
+- **Joins of many files open each file once per pass, not once per thread**: the write
+  threads read the same files in the same order, so a file that had been closed was
+  opened by every thread at once (format detection and all) and all but one copy thrown
+  away. On 768 one-plane TIFFs each file was opened ~5 times with 4 threads and ~8 times
+  with 8; now twice (the join's setup and its write), and the conversion ran ~13 %
+  faster with 4 threads, ~19 % with 8.
+- **Sizes of very large images on Windows with numpy < 2**: element counts were
+  multiplied in 32-bit integers there and wrapped past ~2.1 billion elements (the BARD
+  set came out as 747 MB instead of 1.26 TB). Image and chunk sizes are now counted in
+  64 bits.
+
 ## 0.4.0 (2026-11-10)
 
-Zipped outputs need zarr-zip 0.1 and the dyna-zarr and ome_zarr_pyramid releases that write
-zips (versions to be set at release).
+Requires dyna-zarr 0.1.3 (which brings zarr-zip 0.1), ome_zarr_pyramid 0.6.1 and
+micro-reader 0.4.1: the releases that write zips.
 
 ### Changed
 - **Outputs are named `X.ome.zarr`** (they were `X.zarr`): the name OME-Zarr folders are

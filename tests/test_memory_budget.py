@@ -134,6 +134,21 @@ def test_auto_region_size(scene, threads, region):
     assert memory.region_mb("auto", scene, threads) == pytest.approx(region)
 
 
+@pytest.mark.parametrize("scene, threads, image, jvm, region", [
+    (10000, 4, 1.3e6, False, 10000 / 12),    # BARD well, 10 GB scene: past the old 256 MB
+    (30000, 4, 16384, False, 1024),          # 16 GB image: 4 regions per thread at most
+    (30000, 4, 2048, False, 256),            # mid-size image: as before
+    (3000, 4, 1.3e6, False, 250),            # small budget: as before
+    (10000, 4, 1.3e6, True, 256),            # Bio-Formats: the region is in the JVM heap
+])
+def test_auto_regions_grow_with_the_budget_for_large_images(scene, threads, image, jvm,
+                                                            region):
+    """Workplan E30: larger regions decode each input tile fewer times (BARD layout,
+    256 -> 1000 MB: ~28 % faster); the writer keeps them on whole shards."""
+    assert memory.region_mb("auto", scene, threads, image_mb=image, jvm=jvm) == \
+        pytest.approx(region)
+
+
 def test_an_explicit_region_size_is_kept():
     assert memory.region_mb(512.0, 100, 4) == 512.0
 
@@ -141,3 +156,12 @@ def test_an_explicit_region_size_is_kept():
 def test_old_memory_per_worker_becomes_the_slurm_worker_memory():
     c = ClusterConfig(memory_per_worker="12GB")
     assert c.slurm_worker_memory == "12GB" and c.memory_budget == "auto"
+
+
+def test_image_mb_does_not_wrap_for_huge_images():
+    """numpy < 2 multiplies a shape in int32 on Windows: the BARD set's 6.6e11 elements
+    wrapped to a negative size, which would have kept such images at 256 MB regions."""
+    from types import SimpleNamespace
+    from eubi_bridge.conversion.conversion_worker import _image_mb
+    big = SimpleNamespace(shape=(1, 1920, 14040, 24551), dtype=np.uint16)
+    assert _image_mb(big) == pytest.approx(1920 * 14040 * 24551 * 2 / 2**20)

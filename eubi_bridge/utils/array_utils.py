@@ -98,7 +98,7 @@ def _stats_blocks(shape, chunks, itemsize: int, max_bytes: int):
     for axis in reversed(range(ndim)):
         while block[axis] < shape[axis]:
             grown = min(shape[axis], block[axis] + chunks[axis])
-            if int(np.prod(block[:axis] + [grown] + block[axis + 1:])) * itemsize > max_bytes:
+            if int(np.prod(block[:axis] + [grown] + block[axis + 1:], dtype=np.int64)) * itemsize > max_bytes:
                 break
             block[axis] = grown
         if block[axis] < shape[axis]:
@@ -162,7 +162,7 @@ def get_array_size(array, as_str: bool = True) -> Union[str, int]:
     Returns:
         Formatted string like "2.5GB" or integer bytes
     """
-    voxelcount = np.prod(array.shape)
+    voxelcount = np.prod(array.shape, dtype=np.int64)
     arraysize = voxelcount * array.dtype.itemsize
     if as_str:
         return f"{arraysize / 1024 ** 3:.2f}GB"
@@ -258,7 +258,7 @@ def get_chunksize_from_array(arr) -> str:
     """
     chunks = get_chunk_shape(arr)
     itemsize = arr.dtype.itemsize
-    chunk_size = itemsize * np.prod(chunks)
+    chunk_size = itemsize * np.prod(chunks, dtype=np.int64)
     chunk_size_gb = chunk_size / (1024 ** 3)
     return f'{chunk_size_gb * 1.1:.2f}GB'
 
@@ -327,14 +327,14 @@ def autocompute_chunk_shape(
                 if trial_shape[i] < array_shape[i]:
                     trial_shape[i] += 1
 
-            trial_elements = np.prod([trial_shape[i] for i in spatial_indices])
+            trial_elements = np.prod([trial_shape[i] for i in spatial_indices], dtype=np.int64)
             if trial_elements <= max_elements and trial_shape != chunk_shape:
                 chunk_shape = trial_shape
             else:
                 break
 
         # Final safety trim if somehow over
-        while np.prod([chunk_shape[i] for i in spatial_indices]) > max_elements:
+        while np.prod([chunk_shape[i] for i in spatial_indices], dtype=np.int64) > max_elements:
             for i in reversed(spatial_indices):  # Trim z first
                 if chunk_shape[i] > 1:
                     chunk_shape[i] -= 1
@@ -353,7 +353,7 @@ def autocompute_chunk_shape(
         for i in reversed(spatial_indices):
             while (32 <= chunk_shape[i] and chunk_shape[i] + 32 <= array_shape[i]
                    and np.prod([chunk_shape[j] + (32 if j == i else 0)
-                                for j in spatial_indices]) <= max_elements):
+                                for j in spatial_indices], dtype=np.int64) <= max_elements):
                 chunk_shape[i] += 32
 
     return tuple(chunk_shape)
@@ -387,7 +387,7 @@ def compute_chunk_batch(
     itemsize = np_dtype.itemsize
 
     # Calculate memory per chunk
-    chunk_size = np.prod(chunk_shape)
+    chunk_size = np.prod(chunk_shape, dtype=np.int64)
     memory_per_chunk = chunk_size * itemsize
     memory_per_chunk_mb = memory_per_chunk / (1024 ** 2)
 
@@ -418,7 +418,7 @@ def compute_chunk_batch(
 
     # Greedily increase dimensions to approach isotropy
     while True:
-        current_total = np.prod(batch_chunks)
+        current_total = np.prod(batch_chunks, dtype=np.int64)
         if current_total >= max_chunks:
             break
 
@@ -431,7 +431,7 @@ def compute_chunk_batch(
             test_batch = batch_chunks.copy()
             test_batch[min_ratio_idx] += 1
 
-            if np.prod(test_batch) <= max_chunks:
+            if np.prod(test_batch, dtype=np.int64) <= max_chunks:
                 batch_chunks[min_ratio_idx] += 1
             else:
                 break
@@ -448,7 +448,7 @@ def compute_chunk_batch(
             test_batch = batch_chunks.copy()
             test_batch[next_best_idx] += 1
 
-            if np.prod(test_batch) <= max_chunks:
+            if np.prod(test_batch, dtype=np.int64) <= max_chunks:
                 batch_chunks[next_best_idx] += 1
             else:
                 break

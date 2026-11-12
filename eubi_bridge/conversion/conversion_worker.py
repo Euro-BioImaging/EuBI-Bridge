@@ -263,7 +263,16 @@ def _unit_mb(arr) -> Optional[float]:
         unit = read_unit(arr)
         if unit is None:
             return None
-        return float(np.prod(unit)) * np.dtype(arr.dtype).itemsize / 2 ** 20
+        return float(np.prod(unit, dtype=np.int64)) * np.dtype(arr.dtype).itemsize / 2 ** 20
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def _image_mb(arr) -> Optional[float]:
+    """The source image's size in MB (what one scene writes at full resolution), or None
+    when its shape or dtype is not known."""
+    try:
+        return float(np.prod(arr.shape, dtype=np.float64)) * np.dtype(arr.dtype).itemsize / 2 ** 20
     except Exception:                                        # noqa: BLE001
         return None
 
@@ -283,7 +292,8 @@ def _memory_plan_for(array, job: ConversionJob) -> tuple:
         from eubi_bridge.core.micro_source import set_read_concurrency, set_read_memory
         set_read_concurrency(p['decode_threads'])
         set_read_memory(p['decode'], p['cache'])
-    region = memory.region_mb(clus.region_size_mb, p['scene'], p['threads'])
+    region = memory.region_mb(clus.region_size_mb, p['scene'], p['threads'],
+                              image_mb=_image_mb(array), jvm=not micro)
     threads = p['decode_threads']
     reading = (f"{p['reader']:.0f} MB reading"
                + (f" ({threads} decode threads)" if threads else ""))
