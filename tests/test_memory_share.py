@@ -99,13 +99,35 @@ def test_a_conversion_waits_while_the_others_hold_the_budget(ledger, other_proce
                                                              caplog):
     _entry(ledger, "run-other", other_process.pid, budget_mb=8 * 1024.0)
     held = _entry(ledger, "claim-other", other_process.pid, mb=8 * 1024.0)
-    threading.Timer(0.5, held.unlink).start()                 # the other conversion ends
-    start = time.time()
-    with memory_share.run(), caplog.at_level(logging.INFO):
-        memory_share.run_total_mb("8GB", _total(8))
-        with memory_share.task_share(4096.0, label="a.tif") as granted:
-            waited = time.time() - start
-    assert waited >= 0.4 and granted == 2048.0               # half: two runs
+
+    # The other conversion ends once this one says it waits - not after a fixed delay: on a
+    # slow runner the run's setup (the ledger lock retries once a second on Windows) took
+    # longer than such a delay, the memory was free before it was asked for, and nothing
+    # waited (CI, release v0.4.0, Windows / Python 3.11). The fallback only keeps a broken
+    # wait from hanging the test.
+    ended = threading.Event()
+
+    class _EndTheOther(logging.Handler):
+        def emit(self, record):
+            if "a.tif: waiting for memory" in record.getMessage():
+                held.unlink(missing_ok=True)
+                ended.set()
+
+    fallback = threading.Timer(30.0, lambda: held.unlink(missing_ok=True))
+    fallback.start()
+    handler = _EndTheOther(level=logging.INFO)
+    share_logger = logging.getLogger(memory_share.logger.name)
+    share_logger.addHandler(handler)
+    try:
+        with memory_share.run(), caplog.at_level(logging.INFO):
+            memory_share.run_total_mb("8GB", _total(8))
+            with memory_share.task_share(4096.0, label="a.tif") as granted:
+                pass
+    finally:
+        share_logger.removeHandler(handler)
+        fallback.cancel()
+    assert ended.is_set()                                     # it waited for the other
+    assert granted == 2048.0                                  # half: two runs
     messages = [r.getMessage() for r in caplog.records]
     assert any("a.tif: waiting for memory" in m for m in messages)
     assert any("a.tif: 2048 MB of the shared 8.0 GB (1 other eubi run(s) here)" in m

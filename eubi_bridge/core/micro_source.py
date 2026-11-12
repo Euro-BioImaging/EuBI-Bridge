@@ -202,6 +202,8 @@ class _Open:
 #: (path, tiles, multifile) -> _Open, oldest first
 _files: "OrderedDict[tuple, _Open]" = OrderedDict()
 _files_lock = threading.Lock()
+#: (path, tiles, multifile) -> Event: a file one thread is opening; the others wait on it
+_opening: dict = {}
 #: the open-file limits of the joins running in this process (``open_files_for_join``)
 _join_limits: list = []
 #: files closed since the last collection (``_collect_if_due``)
@@ -385,36 +387,49 @@ def _using(path: str, tiles: str, multifile: bool = True):
     needed, held open while the block runs.  *multifile*: micro-reader's
     option -- False opens a file of a multi-file OME set alone (the aggregative
     path joins the files itself), True the whole set."""
-    import micro_reader
     require_micro_reader()
     key = (path, tiles, bool(multifile))
-    with _files_lock:
-        entry = _files.get(key)
-        if entry is not None:
-            _files.move_to_end(key)
-            entry.users += 1
-            _evict()
-    if entry is None:
-        # opened outside the lock, so several files open at once (an aggregative
-        # input's files are opened on a thread pool); a file two threads opened at
-        # once is kept once
-        # samples="keep": RGB samples stay an 's' axis, folded into channels here
-        # (micro-reader 0.3.0 folds them by default); axes="canonical": t c z y x, a
-        # lambda scan's bands along c (axes="native" would add an axis l, micro-reader
-        # 0.4.0); plates=False: by series, this reader's selection (0.4.0's default is True)
-        opened = open_renamed(path, tiles=tiles, multifile=bool(multifile), samples="keep",
-                              axes="canonical", plates=False)
+    while True:
         with _files_lock:
             entry = _files.get(key)
-            if entry is None:
-                entry = _files[key] = _Open(opened)
-                opened = None
-            else:
+            if entry is not None:
                 _files.move_to_end(key)
+                entry.users += 1
+                _evict()
+                break
+            # one thread opens a file, the others wait for it: the threads of a join
+            # read the same files in the same order, so they all missed a closed file at
+            # once and each opened it (format detection and all) only to close all but
+            # one copy (4 threads: each file opened ~5 times; 8 threads: ~8; Workplan E30)
+            opening = _opening.get(key)
+            mine = opening is None
+            if mine:
+                opening = _opening[key] = threading.Event()
+        if not mine:
+            opening.wait()
+            continue                       # opened (or failed: then this thread tries)
+        try:
+            # opened outside the lock, so several files open at once (an aggregative
+            # input's files are opened on a thread pool)
+            # samples="keep": RGB samples stay an 's' axis, folded into channels here
+            # (micro-reader 0.3.0 folds them by default); axes="canonical": t c z y x, a
+            # lambda scan's bands along c (axes="native" would add an axis l, micro-reader
+            # 0.4.0); plates=False: by series, this reader's selection (0.4.0's default
+            # is True)
+            opened = open_renamed(path, tiles=tiles, multifile=bool(multifile),
+                                  samples="keep", axes="canonical", plates=False)
+        except BaseException:
+            with _files_lock:
+                _opening.pop(key, None)
+            opening.set()
+            raise
+        with _files_lock:
+            entry = _files[key] = _Open(opened)
             entry.users += 1
+            _opening.pop(key, None)
             _evict()
-        if opened is not None:
-            opened.close()
+        opening.set()
+        break
     try:
         yield entry
     finally:
