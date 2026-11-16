@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Joins of many files read each region in one call**: when micro-reader has
+  `read_many` (micro-reader 0.5.0) and dyna-zarr's concatenation hands its parts over
+  together (the dyna-zarr release after 0.1.4), the files of a region are borrowed in
+  groups that stay under the open-file limit, and micro-reader reads and decodes all
+  their tiles together instead of one file at a time. On a well of 768 one-plane TIFFs
+  (2048 x 2048), a conversion took 6.9-8.8 s instead of 10.3 s with 8 threads and about
+  12 s instead of 15 s with 4, with identical output. With older micro-reader or
+  dyna-zarr, each file is read on its own as before.
+
 ## 0.4.1 (2026-11-12)
 
 ### Changed

@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from typing import Optional
 
@@ -504,16 +504,45 @@ class MicroSource:
         #: tile, an IMS chunk). dyna's writer plans its y/x tiles from it.
         self.read_unit = None if read_unit is None else tuple(int(n) for n in read_unit)
 
+    def _view(self, entry):
+        """This image of the open file *entry* (``_using``) as T C Z Y X."""
+        view_key = (self.index, self.level)
+        view = entry.views.get(view_key)
+        if view is None:
+            image = entry.file.images[self.index]
+            if self.level:
+                image = image.resolutions[self.level]
+            view = entry.views[view_key] = image.as_axes(STANDARD, samples="channels")
+        return view
+
     def __getitem__(self, key):
         with _using(self.path, self.tiles, getattr(self, "multifile", True)) as entry:
-            view_key = (self.index, self.level)
-            view = entry.views.get(view_key)
-            if view is None:
-                image = entry.file.images[self.index]
-                if self.level:
-                    image = image.resolutions[self.level]
-                view = entry.views[view_key] = image.as_axes(STANDARD, samples="channels")
-            return view[key]
+            return self._view(entry)[key]
+
+    @staticmethod
+    def read_many(requests) -> None:
+        """Fill ``out`` with ``source[key]`` for each ``(source, key, out)`` of
+        *requests*: the region of a join, which dyna's concatenation asks of its
+        parts in one call (it looks for ``read_many`` on their type).  The files
+        are borrowed in groups that keep the open-file limit, and each group is
+        one ``micro_reader.read_many``: every file's strips and tiles read and
+        decoded together with the GIL released, straight into the region.  With
+        a micro-reader before ``read_many`` (0.5.0), one read per source."""
+        import micro_reader
+        requests = list(requests)
+        if not hasattr(micro_reader, "read_many"):
+            for source, key, out in requests:
+                out[...] = source[key]
+            return
+        group = max(1, open_files_limit() // 4)
+        for at in range(0, len(requests), group):
+            with ExitStack() as stack:
+                calls = []
+                for source, key, out in requests[at:at + group]:
+                    entry = stack.enter_context(
+                        _using(source.path, source.tiles, getattr(source, "multifile", True)))
+                    calls.append((source._view(entry), key, out))
+                micro_reader.read_many(calls)
 
     def __repr__(self):
         return (f"<MicroSource {self.path!r} image {self.index} level {self.level} "
