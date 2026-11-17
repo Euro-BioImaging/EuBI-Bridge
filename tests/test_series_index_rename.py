@@ -11,7 +11,7 @@ reads it, and its own option follows: scene_index -> series_index (plan 7.7, 8.3
   releases), and outputs keep their _scene<N> names.
 - so do the files eubi saves (the config, a batch's batch.csv and batch_config.json):
   equal pairs load silently, pairs that differ (eubi 0.2.x changed its own) warn.
-- a micro-reader outside >=0.4.1,<0.5 (since eubi-bridge 0.3.4; <0.4 in 0.3.3, <0.3 in 0.3.2, >=0.1,<0.2
+- a micro-reader outside >=0.4.1,<0.6 (since eubi-bridge 0.3.4; <0.4 in 0.3.3, <0.3 in 0.3.2, >=0.1,<0.2
   before) stops
   a conversion with MicroReaderVersionError, not a silent fallback to the older readers.
 """
@@ -122,9 +122,9 @@ def test_micro_array_finds_the_series(tmp_path):
                                           ("0.1.0", "declares no coordinate systems"),
                                           ("0.3.0", "invents calibration"),
                                           ("0.4.0", "does not stitch BigDataViewer tiles"),
-                                          ("0.5.0", None)])
+                                          ("0.6.0", None)])
 def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, why):
-    """A micro-reader outside >=0.4.1,<0.5 forced in (pip check reports it): every route
+    """A micro-reader outside >=0.4.1,<0.6 forced in (pip check reports it): every route
     that reads with micro-reader raises MicroReaderVersionError naming the fix, none
     goes to the older readers with only a log line."""
     import micro_reader
@@ -134,7 +134,7 @@ def test_a_wrong_micro_reader_is_no_fallback(tmp_path, monkeypatch, version, why
     path = str(_czi(tmp_path / "one.czi"))
     monkeypatch.setattr(micro_reader, "__version__", version)
     monkeypatch.setattr(micro_source, "_micro_reader_checked", False)
-    fix = r'pip install -U "micro-reader>=0.4.1,<0.5"'
+    fix = r'pip install -U "micro-reader>=0.4.1,<0.6"'
     for call in (lambda: _open_input(ConversionJob.from_kwargs(path, "out", {})),
                  lambda: micro_source.MicroReader.open(path),
                  lambda: micro_source.micro_array(path, 0, None)):
@@ -170,7 +170,7 @@ def test_a_wrong_ome_zarr_pyramid_stops_every_route(tmp_path, monkeypatch, versi
     micro_source.require_ozp()
 
 
-FIX = r'pip install -U "micro-reader>=0.4.1,<0.5"'
+FIX = r'pip install -U "micro-reader>=0.4.1,<0.6"'
 
 
 def test_a_wrong_micro_reader_reaches_a_script_as_itself(tmp_path, monkeypatch):
@@ -225,13 +225,13 @@ def test_a_wrong_micro_reader_reaches_a_script_from_a_worker_process(tmp_path):
                          text=True, timeout=300)
     last = [line for line in run.stdout.splitlines() if line.startswith(("TYPED", "OTHER"))]
     assert last and last[-1].startswith("TYPED"), (run.stdout[-2000:], run.stderr[-2000:])
-    assert 'pip install -U "micro-reader>=0.4.1,<0.5"' in last[-1]
+    assert 'pip install -U "micro-reader>=0.4.1,<0.6"' in last[-1]
     assert not out.exists()
 
 
 def _raise_version_error():
     from eubi_bridge.core.micro_source import MicroReaderVersionError
-    raise MicroReaderVersionError("eubi-bridge needs micro-reader >=0.4.1,<0.5. Fix: x")
+    raise MicroReaderVersionError("eubi-bridge needs micro-reader >=0.4.1,<0.6. Fix: x")
 
 
 def test_the_worker_wrapper_and_the_dispatcher_keep_the_version_error():
@@ -649,10 +649,10 @@ def test_the_gui_config_writes_both_pairs():
     assert old["readers"]["series_index"] == 3
 
 
-@pytest.mark.parametrize("package, version", [("micro_reader", "0.5.0rc1"), ("micro_reader", "0.3.9b2"),
+@pytest.mark.parametrize("package, version", [("micro_reader", "0.6.0rc1"), ("micro_reader", "0.3.9b2"),
                                               ("ome_zarr_pyramid", "0.7.0a1"), ("ome_zarr_pyramid", "0.5.9rc1")])
 def test_a_pre_release_outside_the_range_is_refused(tmp_path, monkeypatch, package, version):
-    # review cycle 1, N-09: "0.5.0rc1" did not parse, was taken as unknown and let through
+    # review cycle 1, N-09: "0.5.0rc1" (then outside <0.5) did not parse, was taken as unknown and let through
     import importlib
     from eubi_bridge.core import micro_source
     monkeypatch.setattr(importlib.import_module(package), "__version__", version, raising=False)

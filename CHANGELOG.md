@@ -1,11 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.2 (2026-11-17)
+
+Requires micro-reader `>=0.4.1,<0.6`, so micro-reader 0.5.0 and its native read engine
+can be installed with this release (0.4.1 allowed only `<0.5`).
 
 ### Changed
 - **Joins of many files read each region in one call**: when micro-reader has
   `read_many` (micro-reader 0.5.0) and dyna-zarr's concatenation hands its parts over
-  together (the dyna-zarr release after 0.1.4), the files of a region are borrowed in
+  together (dyna-zarr 0.1.5), the files of a region are borrowed in
   groups that stay under the open-file limit, and micro-reader reads and decodes all
   their tiles together instead of one file at a time. On a well of 768 one-plane TIFFs
   (2048 x 2048), a conversion took 6.9-8.8 s instead of 10.3 s with 8 threads and about
