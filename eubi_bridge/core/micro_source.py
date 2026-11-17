@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from typing import Optional
 
@@ -68,14 +68,16 @@ OPEN_FILES_SHARE = 1 / 8
 COLLECT_AFTER_CLOSES = 256
 #: ... at most this often: a full collection takes up to half a second in a large join
 COLLECT_EVERY_S = 10.0
-#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.4.1,<0.5):
-#: 0.4.1 stitches BigDataViewer tiles (as_mosaic); 0.4.0 gives no invented calibration (an
+#: the micro-reader releases this eubi-bridge reads (pyproject: micro-reader>=0.4.1,<0.6):
+#: 0.5.0 reads through its native engine and has read_many (joins use it;
+#: MicroSource.read_many reads one source at a time without it); 0.4.1 stitches
+#: BigDataViewer tiles (as_mosaic); 0.4.0 gives no invented calibration (an
 #: axis the file does not size has none), names images and reads KLB, VSI and the plate
 #: formats this release converts; 0.2.x and 0.3.x invented units in silence. 0.1.x declares
 #: no coordinate systems, and older releases call the series index "scene". Three
 #: components: (major, minor, patch).
-MICRO_READER_RANGE = ((0, 4, 1), (0, 5, 0))
-MICRO_READER_FIX = 'pip install -U "micro-reader>=0.4.1,<0.5"'
+MICRO_READER_RANGE = ((0, 4, 1), (0, 6, 0))
+MICRO_READER_FIX = 'pip install -U "micro-reader>=0.4.1,<0.6"'
 #: the ome_zarr_pyramid releases this eubi-bridge writes with (pyproject): 0.6.1 writes
 #: zipped OME-Zarr (zip_output) and opens it in Inspect; 0.6.0 writes no invented unit
 #: (scale 1, no unit) on an axis the file does not size; 0.5 wrote micrometer
@@ -114,7 +116,7 @@ def _installed_version():
 
 def release_tuple(version) -> Optional[tuple]:
     """``(major, minor, patch)`` of a version text, a pre-release by its release
-    (``0.5.0rc1``: ``(0, 5, 0)``, so it is outside ``<0.5`` as pip counts it; review
+    (``0.6.0rc1``: ``(0, 6, 0)``, so it is outside ``<0.6`` as pip counts it; review
     cycle 1, N-09: such a text was "unknown" and let through); None without numbers."""
     import re
     match = re.match(r"\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(version))
@@ -504,16 +506,45 @@ class MicroSource:
         #: tile, an IMS chunk). dyna's writer plans its y/x tiles from it.
         self.read_unit = None if read_unit is None else tuple(int(n) for n in read_unit)
 
+    def _view(self, entry):
+        """This image of the open file *entry* (``_using``) as T C Z Y X."""
+        view_key = (self.index, self.level)
+        view = entry.views.get(view_key)
+        if view is None:
+            image = entry.file.images[self.index]
+            if self.level:
+                image = image.resolutions[self.level]
+            view = entry.views[view_key] = image.as_axes(STANDARD, samples="channels")
+        return view
+
     def __getitem__(self, key):
         with _using(self.path, self.tiles, getattr(self, "multifile", True)) as entry:
-            view_key = (self.index, self.level)
-            view = entry.views.get(view_key)
-            if view is None:
-                image = entry.file.images[self.index]
-                if self.level:
-                    image = image.resolutions[self.level]
-                view = entry.views[view_key] = image.as_axes(STANDARD, samples="channels")
-            return view[key]
+            return self._view(entry)[key]
+
+    @staticmethod
+    def read_many(requests) -> None:
+        """Fill ``out`` with ``source[key]`` for each ``(source, key, out)`` of
+        *requests*: the region of a join, which dyna's concatenation asks of its
+        parts in one call (it looks for ``read_many`` on their type).  The files
+        are borrowed in groups that keep the open-file limit, and each group is
+        one ``micro_reader.read_many``: every file's strips and tiles read and
+        decoded together with the GIL released, straight into the region.  With
+        a micro-reader before ``read_many`` (0.5.0), one read per source."""
+        import micro_reader
+        requests = list(requests)
+        if not hasattr(micro_reader, "read_many"):
+            for source, key, out in requests:
+                out[...] = source[key]
+            return
+        group = max(1, open_files_limit() // 4)
+        for at in range(0, len(requests), group):
+            with ExitStack() as stack:
+                calls = []
+                for source, key, out in requests[at:at + group]:
+                    entry = stack.enter_context(
+                        _using(source.path, source.tiles, getattr(source, "multifile", True)))
+                    calls.append((source._view(entry), key, out))
+                micro_reader.read_many(calls)
 
     def __repr__(self):
         return (f"<MicroSource {self.path!r} image {self.index} level {self.level} "

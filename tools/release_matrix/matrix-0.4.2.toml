@@ -1,0 +1,82 @@
+# Version matrix for eubi-bridge / eubi-bridge-lite 0.4.2 and dyna-zarr 0.1.5 (2026-11-17):
+# eubi allows micro-reader <0.6 (micro-reader 0.5.0, the native read engine, is on PyPI), and
+# joins read a region's files with one micro_reader.read_many call when dyna-zarr 0.1.5 hands
+# the parts over together. Candidates: eubi + lite 0.4.2, dyna 0.1.5 (local wheels).
+#     python matrix.py build   --config matrix-0.4.2.toml
+#     python matrix.py plan    --config matrix-0.4.2.toml
+#     python matrix.py run     --config matrix-0.4.2.toml
+#     python matrix.py resolve --config matrix-0.4.2.toml
+
+stack = ["micro-reader-codecs", "micro-reader-core", "micro-reader", "zarr-zip", "dyna-zarr",
+         "ome-zarr-pyramid", "eubi-bridge", "eubi-bridge-lite"]
+
+smoke_timeout_s = 900
+
+fallback_patterns = ['older readers \(', 'standard reader \(', 'Bio-Formats metadata']
+
+[paths]
+workdir = "C:/Users/oezdemir/.eubi-matrix/m42"
+
+[pythons]
+eubi = "C:/Users/oezdemir/miniforge3/envs/pythonenv/python.exe"
+build = "C:/Users/oezdemir/.eubi-matrix/bvenv041/Scripts/python.exe"
+
+[samples]
+czi = "C:/Users/oezdemir/Desktop/data/microscopy/formats/czi/assorted/xyz__multiple_images.czi"
+lif = "C:/Users/oezdemir/Desktop/data/microscopy/formats/lif/ome-samples/20191025 Test FRET 585. 423, 426.lif"
+plate = "C:/Users/oezdemir/Desktop/data/microscopy/plates/cv7000/bia-S-BIAD1013-cv7000/1093684368.wpi"
+bdv = "C:/Users/oezdemir/Desktop/data/microscopy/formats/h5/bdv/osf-bufza-bigstitcher/grid-3d-stitched-h5/dataset.xml"
+jxr = "C:/Users/oezdemir/Desktop/data/microscopy/formats/czi/os-zeiss/Zeiss-5-JXR.czi"
+
+[candidates.dyna-zarr]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-OmeZarrPyramid/dyna_zarr"
+
+[candidates.eubi-bridge]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge"
+
+[candidates.eubi-bridge-lite]
+path = "C:/Users/oezdemir/Desktop/vscode_projects/WS-EuBI-Bridge"
+command = ["{python}", "tools/build_lite.py"]
+dist = "dist"
+
+[axes]
+dyna-zarr = ["0.1.4", "candidate"]
+micro-reader = ["0.4.5", "0.5.0"]
+
+[[consumers]]
+name = "eubi-bridge"
+versions = ["0.4.1", "candidate"]
+python = "eubi"
+samples = ["czi", "lif", "plate", "bdv", "jxr"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+[[consumers]]
+name = "eubi-bridge-lite"
+versions = ["0.4.1", "candidate"]
+python = "eubi"
+samples = ["czi", "lif", "plate", "bdv", "jxr"]
+smoke = ["{bin}/eubi", "to_zarr", "{sample}", "{out}"]
+
+# Released 0.4.1 pins micro-reader <0.5. With dyna 0.1.5 it must still pass: its MicroSource
+# has no read_many, so concatenation reads one part at a time.
+[[expect]]
+when = { eubi-bridge = "==0.4.1", micro-reader = ">=0.5.0" }
+outcome = "unresolvable"
+[[expect]]
+when = { eubi-bridge-lite = "==0.4.1", micro-reader = ">=0.5.0" }
+outcome = "unresolvable"
+
+[[resolve]]
+name = "fresh eubi-bridge (with the candidates: 0.4.2, dyna 0.1.5, micro-reader 0.5.0)"
+python = "eubi"
+requirements = ["eubi-bridge"]
+
+[[resolve]]
+name = "fresh eubi-bridge-lite (with the candidates)"
+python = "eubi"
+requirements = ["eubi-bridge-lite"]
+
+[[resolve]]
+name = "eubi-bridge<0.4.2 (stays on micro-reader 0.4.5)"
+python = "eubi"
+requirements = ["eubi-bridge<0.4.2"]
