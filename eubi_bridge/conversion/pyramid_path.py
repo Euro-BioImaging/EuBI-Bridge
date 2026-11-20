@@ -1533,6 +1533,14 @@ def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dty
             sharing = dyna_io.memory_share(share)
         else:
             _say_no_sharing()
+    # the budget is eubi's own share of the run's memory (core/memory.py), never a number
+    # the user gave dyna: one too small for dyna's smallest write warns and writes with it,
+    # as scene_mb does below MIN_SCENE_MB (dyna-zarr 0.2.0+ raises otherwise)
+    soft = contextlib.nullcontext()
+    if budget is not None:
+        from dyna_zarr import io as dyna_io
+        if hasattr(dyna_io, "soft_memory_budget"):
+            soft = dyna_io.soft_memory_budget()
     write = IO().write_pyramid
     if conv.ome_zarr_version == "rfc8" and not image_only:
         # NGFF RFC 8: a collection holding the image (an NGFF 0.5 multiscale) under the
@@ -1547,7 +1555,7 @@ def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dty
     if conv.zip_output != "off" and io_backend == "zarrista":
         _say_zip_backend()
         io_backend = "tensorstore"           # dyna writes a zip through TensorStore only
-    with sharing:
+    with sharing, soft:
         write(
             pyr, target, storage_options=storage_options, overwrite=conv.overwrite,
             max_threads=threads, region_size_mb=float(region_size_mb),
