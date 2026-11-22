@@ -162,6 +162,11 @@ STYLESHEETS: dict[str, str] = {
 _current_theme = "Dark (default)"
 _current_font_size = 9   # pt
 _current_ui_scale = 1.0  # stored; applied via QT_SCALE_FACTOR at next launch
+_current_viewer = "auto"  # "auto" | "gpu" | "classic"; the Inspect page's viewer
+
+_VIEWER_OPTIONS = ["GPU viewer when installed (auto)", "GPU viewer (micro-viewer)",
+                   "Classic viewer"]
+_VIEWER_VALUES = ["auto", "gpu", "classic"]
 
 _UI_SCALE_OPTIONS = ["100%", "125%", "150%", "175%", "200%"]
 _UI_SCALE_VALUES  = [1.0,    1.25,   1.5,    1.75,   2.0]
@@ -176,13 +181,15 @@ def _settings_path() -> str:
 
 
 def _load_settings() -> None:
-    global _current_theme, _current_font_size, _current_ui_scale
+    global _current_theme, _current_font_size, _current_ui_scale, _current_viewer
     try:
         with open(_settings_path(), "r", encoding="utf-8") as fh:
             data = json.load(fh)
         _current_theme     = data.get("theme",     _current_theme)
         _current_font_size = int(data.get("font_size", _current_font_size))
         _current_ui_scale  = float(data.get("ui_scale",  _current_ui_scale))
+        viewer = data.get("viewer", _current_viewer)
+        _current_viewer    = viewer if viewer in _VIEWER_VALUES else "auto"
     except (FileNotFoundError, json.JSONDecodeError, KeyError):
         pass
 
@@ -194,6 +201,7 @@ def _save_settings() -> None:
                 "theme":     _current_theme,
                 "font_size": _current_font_size,
                 "ui_scale":  _current_ui_scale,
+                "viewer":    _current_viewer,
             }, fh, indent=2)
     except OSError:
         pass
@@ -212,6 +220,19 @@ def current_font_size() -> int:
 
 def current_ui_scale() -> float:
     return _current_ui_scale
+
+
+def current_viewer() -> str:
+    """The Inspect page's viewer as chosen: "auto", "gpu" or "classic" (see
+    widgets/viewers.py; the environment variable EUBI_VIEWER overrides it)."""
+    return _current_viewer
+
+
+def set_viewer(choice: str) -> None:
+    """Choose the Inspect page's viewer (takes effect at the next launch)."""
+    global _current_viewer
+    _current_viewer = choice if choice in _VIEWER_VALUES else "auto"
+    _save_settings()
 
 
 def apply_settings(theme: str, font_size: int, ui_scale: float | None = None) -> None:
@@ -294,6 +315,27 @@ class SettingsDialog(QDialog):
 
         outer.addWidget(ap_group)
 
+        # ── Viewer group ──────────────────────────────────────────────────────
+        vw_group = QGroupBox("Viewer")
+        vw_layout = QFormLayout(vw_group)
+        self._viewer_combo = QComboBox()
+        self._viewer_combo.addItems(_VIEWER_OPTIONS)
+        self._viewer_combo.setCurrentIndex(_VIEWER_VALUES.index(_current_viewer))
+        vw_layout.addRow("Inspect viewer:", self._viewer_combo)
+        try:
+            from eubi_bridge.qt_gui.widgets.viewers import gpu_available
+            ok, detail = gpu_available()
+        except Exception as exc:  # noqa: BLE001
+            ok, detail = False, str(exc)
+        vw_note = QLabel(
+            (f"micro-viewer {detail} is installed." if ok else
+             "micro-viewer is not installed: the classic viewer is used.")
+            + " A change takes effect after restart.")
+        vw_note.setWordWrap(True)
+        vw_note.setStyleSheet("font-size: 9px; color: #aaa;")
+        vw_layout.addRow("", vw_note)
+        outer.addWidget(vw_group)
+
         # ── Buttons ───────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -351,6 +393,7 @@ class SettingsDialog(QDialog):
                        self._selected_scale())
 
     def _on_accept(self):
+        set_viewer(_VIEWER_VALUES[self._viewer_combo.currentIndex()])
         apply_settings(self._theme_combo.currentText(), self._font_slider.value(),
                        self._selected_scale())
         self.accept()

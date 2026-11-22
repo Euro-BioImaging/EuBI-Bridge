@@ -45,10 +45,13 @@ def test_a_zipped_ome_zarr_opens_in_inspect(tmp_path, name, version):
     assert "multiscales" in held
 
 
-def test_the_inspect_page_draws_a_zip_as_it_draws_the_folder(tmp_path):
+def test_the_inspect_page_draws_a_zip_as_it_draws_the_folder(tmp_path, monkeypatch):
     """The Inspect page opened on a zipped OME-Zarr renders the same picture as on the
-    same image written as a folder (the viewer's own render path, off screen)."""
+    same image written as a folder (the classic viewer's own render path, off screen;
+    the GPU viewer draws without Python frames)."""
     import time
+
+    monkeypatch.setenv("EUBI_VIEWER", "classic")
 
     from ome_zarr_pyramid import IO, Pyramid
     from PyQt6.QtWidgets import QApplication
