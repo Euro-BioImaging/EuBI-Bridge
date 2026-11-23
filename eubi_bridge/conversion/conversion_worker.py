@@ -418,7 +418,8 @@ def _warn_unused_writer_settings(clus) -> None:
 async def _convert_safely(conversion, output_path: str) -> None:
     """Await one output's `conversion`; on failure remove any partial output it
     created and re-raise."""
-    from eubi_bridge.core.output_store import strip_output_suffix, with_output_suffix
+    from eubi_bridge.core.output_store import (remove_partial_store, strip_output_suffix,
+                                               with_output_suffix)
     # callers pass the output's own name (X.ome.zarr, X.ome.zarr.zip, X.ozx); a bare
     # name is the folder it would be
     target = (output_path if strip_output_suffix(output_path) != output_path
@@ -436,11 +437,11 @@ async def _convert_safely(conversion, output_path: str) -> None:
         # Name collision with overwrite=False: surface the error and leave the
         # existing dataset completely untouched.
         raise
-    except Exception:
-        import shutil
+    except Exception as exc:
         try:
-            if not preexisting and os.path.isdir(target):
-                shutil.rmtree(target, ignore_errors=True)
+            if not preexisting:
+                remove_partial_store(target, f"its conversion failed: {type(exc).__name__}: "
+                                             f"{exc}")
         except Exception:
             pass
         raise

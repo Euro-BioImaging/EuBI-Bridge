@@ -29,7 +29,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from eubi_bridge.core.output_store import strip_output_suffix, with_output_suffix
+from eubi_bridge.core.output_store import (remove_partial_store, store_bytes,
+                                           strip_output_suffix, with_output_suffix)
 from eubi_bridge.utils.errors import InputError
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import named_folder, output_stem
@@ -958,9 +959,12 @@ def _replaced_on_success(output_path: str, overwrite: bool):
         yield output_path
         return
     stem = strip_output_suffix(str(output_path).rstrip("/\\"))
+    shown = os.path.basename(str(output_path).rstrip("/\\"))
     for stale in glob.glob(f"{glob.escape(stem)}.*-*.zarr"):         # of a killed run
         if LEFT_BESIDE.fullmatch(os.path.basename(stale)[len(os.path.basename(stem)):]):
-            shutil.rmtree(stale, ignore_errors=True)
+            replaced = ".replaced-" in os.path.basename(stale)
+            remove_partial_store(stale, "left by an earlier run that was stopped", shown,
+                                 kind="old, set-aside" if replaced else "partly written")
     _warn_room(output_path)
     token = uuid.uuid4().hex[:8]
     beside, aside = f"{stem}.writing-{token}.zarr", f"{stem}.replaced-{token}.zarr"
@@ -977,7 +981,9 @@ def _replaced_on_success(output_path: str, overwrite: bool):
             os.replace(aside, output_path)
             raise
     finally:
-        shutil.rmtree(beside, ignore_errors=True)
+        # still there only when the new store was not finished: the old one stays
+        remove_partial_store(beside, f"the overwrite did not finish; the old {shown} stays "
+                                     f"as it was", shown)
     shutil.rmtree(aside, ignore_errors=True)
     if os.path.exists(aside):
         logger.warning(f"{aside}: the replaced store could not be removed: delete it by hand.")
@@ -990,8 +996,7 @@ LEFT_BESIDE = re.compile(r"\.(writing|replaced)-[0-9a-f]{8}\.zarr")
 def _warn_room(store: str) -> None:
     """A line when the drive has less room than the store being replaced takes: both stand
     until the new one is finished."""
-    size = sum(os.path.getsize(os.path.join(folder, name))
-               for folder, _, names in os.walk(store) for name in names)
+    size = store_bytes(store)
     free = shutil.disk_usage(store).free
     if free < size:
         logger.warning(f"{store}: --overwrite keeps the old store until the new one is written, "

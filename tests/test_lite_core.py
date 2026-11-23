@@ -127,6 +127,11 @@ def test_every_module_imports_without_the_standard_stack():
         print(json.dumps(failed))
     """))
     failed = json.loads(out.strip().splitlines()[-1])
+    # modules that only an optional extra makes importable, with the package it brings;
+    # eubi imports them only when that package is there (widgets/viewers.py)
+    extras = {"eubi_bridge.qt_gui.widgets.gpu_viewer": "micro_viewer"}    # [viewer]
+    failed = {m: why for m, why in failed.items()
+              if not (m in extras and f"No module named '{extras[m]}'" in why)}
     assert not failed, "\n".join(f"{m}: {why}" for m, why in failed.items())
 
 
