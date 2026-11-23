@@ -1,8 +1,8 @@
-"""The Inspect page on the GPU viewer (micro-viewer, Workplan WP14): 3-D views, linked
+"""The Inspect page on the GPU viewer (micro-glancer, Workplan WP14): 3-D views, linked
 views, the histogram panel, saving a transform, plates, and the choice between the GPU
 and the classic viewer.
 
-micro-viewer is not on PyPI yet: these tests skip when it cannot be imported (put its
+micro-glancer is not on PyPI yet: these tests skip when it cannot be imported (put its
 ``python`` folder on PYTHONPATH to run them).
 """
 import json
@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("PyQt6.QtWidgets")
-pytest.importorskip("micro_viewer.qt")
+pytest.importorskip("micro_glancer.qt")
 ozp = pytest.importorskip("ome_zarr_pyramid")
 
 
@@ -26,7 +26,7 @@ def app():
 @pytest.fixture(autouse=True)
 def gpu(monkeypatch):
     monkeypatch.setenv("EUBI_VIEWER", "gpu")
-    monkeypatch.setenv("MICRO_VIEWER_MODE", "offscreen")
+    monkeypatch.setenv("MICRO_GLANCER_MODE", "offscreen")
 
 
 def _write(path, data, axes, scales):
@@ -133,7 +133,7 @@ def test_histogram_and_channels_stay_in_step(app, volume):
     _pump(app, 0.5)
     viewer.histogram_panel.refresh()
     assert viewer.histogram_panel.hist._hist is not None
-    # contrast set on micro-viewer's side flows into eubi's panel ("Save Channels")
+    # contrast set on micro-glancer's side flows into eubi's panel ("Save Channels")
     v.set_channel(0, lo=100.0, hi=900.0, layer=0)
     viewer.view._changed()
     _pump(app, 0.2)

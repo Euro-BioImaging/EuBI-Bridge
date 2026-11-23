@@ -1,12 +1,12 @@
-"""Which viewer the Inspect page shows: the GPU viewer (micro-viewer) or the classic one.
+"""Which viewer the Inspect page shows: the GPU viewer (micro-glancer) or the classic one.
 
 The choice comes from the environment variable ``EUBI_VIEWER`` ("gpu" or "classic")
 when it is set, else from the settings ("Viewer" in Settings: "auto", "gpu" or
-"classic"). "auto" takes the GPU viewer when micro-viewer is installed. When the GPU
-viewer is chosen but micro-viewer cannot be imported, or the GPU viewer cannot be built,
+"classic"). "auto" takes the GPU viewer when micro-glancer is installed. When the GPU
+viewer is chosen but micro-glancer cannot be imported, or the GPU viewer cannot be built,
 the classic viewer is used and the reason is kept in ``fallback_reason()``.
 
-micro-viewer is in development (Workplan WP14) and not on PyPI yet: to try it, put its
+micro-glancer is in development (Workplan WP14) and not on PyPI yet: to try it, put its
 ``python`` folder (built with ``maturin develop``) on ``PYTHONPATH``, or install it into
 eubi's environment.
 """
@@ -18,13 +18,13 @@ _reason = ""
 
 
 def gpu_available() -> tuple[bool, str]:
-    """Whether micro-viewer can be imported: (True, its version) or (False, why not)."""
+    """Whether micro-glancer can be imported: (True, its version) or (False, why not)."""
     try:
-        import micro_viewer
-        import micro_viewer.qt  # noqa: F401 (the widget needs PyQt6 and the core)
+        import micro_glancer
+        import micro_glancer.qt  # noqa: F401 (the widget needs PyQt6 and the core)
     except Exception as exc:  # noqa: BLE001 (any failure means: not available)
-        return False, f"micro-viewer cannot be imported: {exc}"
-    return True, getattr(micro_viewer, "__version__", "?")
+        return False, f"micro-glancer cannot be imported: {exc}"
+    return True, getattr(micro_glancer, "__version__", "?")
 
 
 def viewer_choice() -> str:

@@ -1,10 +1,10 @@
-"""eubi's GPU viewer: micro-viewer (Workplan WP14) in the Inspect page's Viewer tab.
+"""eubi's GPU viewer: micro-glancer (Workplan WP14) in the Inspect page's Viewer tab.
 
 ``GpuZarrViewer`` has the members the Inspect page uses of the classic ``ZarrViewer``
 (signals ``frame_ready``, ``dataset_loaded``, ``status_changed``; ``channel_panel``;
 ``load_dataset``, ``path``, ``axes``, ``shape``, ``channels``, ``level_idx``,
 ``level_paths``, ``orientation``, ``z``, ``fov_center``, ``image_widget``), and
-``status_text()`` for the page's status line. micro-viewer draws on the GPU from a tile
+``status_text()`` for the page's status line. micro-glancer draws on the GPU from a tile
 cache, so frames never pass through Python (``frame_ready`` carries no image).
 
 What it shows on top of the classic viewer:
@@ -13,7 +13,7 @@ What it shows on top of the classic viewer:
   along the axes), and the volume seen whole in 3-D: maximum intensity, the volume
   composited, or surfaces, with shading and a density;
 - linked views: the plane, its YZ and XZ companions and the 3-D view in quarters;
-- each channel's histogram (micro-viewer's panel under eubi's channel panel), with the
+- each channel's histogram (micro-glancer's panel under eubi's channel panel), with the
   contrast limits, the surface level and the opacity curve dragged on it; contrast
   changed there flows back into eubi's panel, so "Save Channels" writes what is shown;
 - moving and turning the image by hand (Ctrl + drag, Ctrl + wheel) and saving that
@@ -25,7 +25,7 @@ What it shows on top of the classic viewer:
   scene); the store's contents (wells, fields, series, label images) as a tree; label
   images drawn over their image.
 
-Several images as layers of one view are left out until micro-viewer's layers are
+Several images as layers of one view are left out until micro-glancer's layers are
 stable. Errors never escape a slot (PyQt6 ends the process when one does): they go to
 ``status_changed``.
 """
@@ -41,15 +41,15 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabe
                              QMessageBox, QSizePolicy, QSlider, QSpinBox, QSplitter,
                              QToolBar, QVBoxLayout, QWidget)
 
-import micro_viewer
-from micro_viewer import ERRORS
-from micro_viewer.contents import ContentsPanel, open_node
-from micro_viewer.panel import ChannelPanel as HistogramPanel
-from micro_viewer.qt import ViewerWidget
+import micro_glancer
+from micro_glancer import ERRORS
+from micro_glancer.contents import ContentsPanel, open_node
+from micro_glancer.panel import ChannelPanel as HistogramPanel
+from micro_glancer.qt import ViewerWidget
 
 from eubi_bridge.qt_gui.widgets.channel_panel import ChannelPanel
 
-#: what the projection shows: the label in the menu, micro-viewer's name
+#: what the projection shows: the label in the menu, micro-glancer's name
 _MODES = [("maximum intensity", "mip"), ("volume", "volume"), ("surfaces", "iso")]
 _ORIENTATIONS = {"XY": ([1, 0, 0], [0, 1, 0]), "XZ": ([1, 0, 0], [0, 0, 1]),
                  "YZ": ([0, 0, 1], [0, 1, 0])}
@@ -99,7 +99,7 @@ def _rgb(text: str):
 
 
 class GpuZarrViewer(QWidget):
-    """The Inspect page's viewer on micro-viewer (see the module's notes)."""
+    """The Inspect page's viewer on micro-glancer (see the module's notes)."""
 
     frame_ready = pyqtSignal(object, float, int)
     dataset_loaded = pyqtSignal(object)
@@ -326,7 +326,7 @@ class GpuZarrViewer(QWidget):
         return self
 
     def set_frame(self, *_args):
-        """The classic image widget takes frames from Python; micro-viewer draws its own."""
+        """The classic image widget takes frames from Python; micro-glancer draws its own."""
 
     def status_text(self) -> str:
         """The page's status line: level, plane, what the view shows, what is under the
@@ -374,16 +374,16 @@ class GpuZarrViewer(QWidget):
     def load_dataset(self, zarr_path: str, _keep_tree: bool = False):
         """Open the store at `zarr_path`: an image, a plate (whole), a well or a
         bioformats2raw collection (whole: each image at its position; with a
-        micro-viewer older than that, a collection's first series), and list its contents
+        micro-glancer older than that, a collection's first series), and list its contents
         (`_keep_tree`: an image of the store shown, whose tree stays)."""
         from zarr_plane_server import pyramid_cache  # type: ignore (on the page's path)
         try:
-            node = micro_viewer.tree(zarr_path)
-        except ERRORS:  # noqa: BLE001 (micro-viewer then says why when it opens)
+            node = micro_glancer.tree(zarr_path)
+        except ERRORS:  # noqa: BLE001 (micro-glancer then says why when it opens)
             node = {"kind": "image", "children": []}
         kind = node.get("kind", "image")
         shown = zarr_path
-        whole = hasattr(micro_viewer.Viewer, "members")   # micro-viewer with positions
+        whole = hasattr(micro_glancer.Viewer, "members")   # micro-glancer with positions
         if kind == "collection" and node.get("children") and not whole:
             shown = node["children"][0]["path"]
         meta_path = shown
@@ -649,7 +649,7 @@ class GpuZarrViewer(QWidget):
                 node["kind"] == "well" and not self.is_plate):
             # another image of the store: the page's metadata follows it (a well
             # opens whole, each field at its position)
-            whole = hasattr(micro_viewer.Viewer, "members")
+            whole = hasattr(micro_glancer.Viewer, "members")
             path = (node.get("first_field") if node["kind"] == "well" and not whole
                     else node["path"])
             self._load_inner(path or node["path"])
@@ -704,5 +704,5 @@ class GpuZarrViewer(QWidget):
 
 
 def describe() -> str:
-    """micro-viewer's version and where it was imported from (for bug reports)."""
-    return f"micro-viewer {micro_viewer.__version__} ({os.path.dirname(micro_viewer.__file__)})"
+    """micro-glancer's version and where it was imported from (for bug reports)."""
+    return f"micro-glancer {micro_glancer.__version__} ({os.path.dirname(micro_glancer.__file__)})"

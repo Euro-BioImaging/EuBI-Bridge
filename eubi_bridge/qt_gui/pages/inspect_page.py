@@ -7,7 +7,7 @@ Two-pane layout:
             Metadata tab : dataset info, pixel sizes, pyramid layers (read-only tree)
             Viewer tab   : the viewer + status bar
 
-The viewer is the GPU viewer (micro-viewer: 3-D, linked views, histograms, transforms,
+The viewer is the GPU viewer (micro-glancer: 3-D, linked views, histograms, transforms,
 plates) when it is installed and chosen, else the classic ZarrViewer (see
 widgets/viewers.py).
 """

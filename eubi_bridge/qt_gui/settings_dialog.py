@@ -164,7 +164,7 @@ _current_font_size = 9   # pt
 _current_ui_scale = 1.0  # stored; applied via QT_SCALE_FACTOR at next launch
 _current_viewer = "auto"  # "auto" | "gpu" | "classic"; the Inspect page's viewer
 
-_VIEWER_OPTIONS = ["GPU viewer when installed (auto)", "GPU viewer (micro-viewer)",
+_VIEWER_OPTIONS = ["GPU viewer when installed (auto)", "GPU viewer (micro-glancer)",
                    "Classic viewer"]
 _VIEWER_VALUES = ["auto", "gpu", "classic"]
 
@@ -328,8 +328,8 @@ class SettingsDialog(QDialog):
         except Exception as exc:  # noqa: BLE001
             ok, detail = False, str(exc)
         vw_note = QLabel(
-            (f"micro-viewer {detail} is installed." if ok else
-             "micro-viewer is not installed: the classic viewer is used.")
+            (f"micro-glancer {detail} is installed." if ok else
+             "micro-glancer is not installed: the classic viewer is used.")
             + " A change takes effect after restart.")
         vw_note.setWordWrap(True)
         vw_note.setStyleSheet("font-size: 9px; color: #aaa;")
