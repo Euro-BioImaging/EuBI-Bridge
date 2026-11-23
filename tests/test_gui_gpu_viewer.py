@@ -175,6 +175,9 @@ def test_a_plate(app, plate):
     top = viewer.contents.view.topLevelItem(0)
     assert top.childCount() == 2
     spin, _ = viewer._rows["field"]
+    # every field of each well (at its position) first, one field on request
+    assert v.plate(layer=0)["field"] is None and spin.text() == "all"
+    assert "plate: every field" in viewer.status_text()
     spin.setValue(1)
     assert v.plate(layer=0)["field"] == 1
     assert "plate: field 1" in viewer.status_text()
@@ -214,3 +217,40 @@ def test_the_viewer_setting_round_trips(monkeypatch, tmp_path):
     assert viewer_choice() == "classic"
     sd.set_viewer("auto")
     assert viewer_choice() == "gpu"
+
+
+def test_a_collection_opens_with_every_image_at_its_position(app, tmp_path):
+    # a bioformats2raw collection of two tiles 50 apart: opened whole, each where it sits
+    root = str(tmp_path / "tiles.ome.zarr")
+    for s in range(2):
+        data = np.full((30, 40), 1000 + 100 * s, "uint16")
+        path = _write(os.path.join(root, str(s)), data, "yx", [[1.0, 1.0]])
+        doc_path = os.path.join(path, "zarr.json")
+        with open(doc_path) as f:
+            doc = json.load(f)
+        for ds in doc["attributes"]["ome"]["multiscales"][0]["datasets"]:
+            ts = [t for t in ds["coordinateTransformations"] if t["type"] != "translation"]
+            ds["coordinateTransformations"] = ts + [
+                {"type": "translation", "translation": [0.0, 50.0 * s]}]
+        with open(doc_path, "w") as f:
+            json.dump(doc, f)
+    _group(root, {"ome": {"version": "0.5", "bioformats2raw.layout": 3}})
+    page = _page(app, root)
+    viewer = page._viewer
+    v = viewer.view.viewer
+    m = v.members(layer=0)
+    assert m["names"] == ["series 0", "series 1"] and not m["gridded"]
+    assert "2 images at their positions" in viewer.status_text()
+    assert page._pyr is not None                            # the metadata of series 0
+    # the second tile 50 to the right: its pixel at world (60, 10) has its value
+    v.look_at(45.0, 15.0, 1.0)
+    v.settle(30.0)
+    w, h = v.size
+    q = v.pick(w / 2 + 15.0, h / 2 - 5.0)
+    assert q["member"] == ("series 1", "1") and q["values"][0]["value"] == 1100
+    # its transform is not saved: no one image holds the collection
+    said = []
+    viewer.status_changed.connect(said.append)
+    viewer._save_transform()
+    assert any("collection" in text for text in said), said
+    page.close()

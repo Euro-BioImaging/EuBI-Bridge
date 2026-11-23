@@ -18,9 +18,12 @@ What it shows on top of the classic viewer:
   changed there flows back into eubi's panel, so "Save Channels" writes what is shown;
 - moving and turning the image by hand (Ctrl + drag, Ctrl + wheel) and saving that
   transform into the image (metadata only);
-- plates opened whole (the wells on a grid, one field each, the field chosen under
-  Planes) and the store's contents (wells, fields, label images) as a tree; label images
-  drawn over their image.
+- image positions: a plate opens whole with every field of each well at its position
+  (one field on request under Planes), a well or a bioformats2raw collection (tiles,
+  views, positions) with each image at its position, an image of a collection or a
+  field at its own position (NGFF 0.4 / 0.5: the image's translation; 0.6: its owner's
+  scene); the store's contents (wells, fields, series, label images) as a tree; label
+  images drawn over their image.
 
 Several images as layers of one view are left out until micro-viewer's layers are
 stable. Errors never escape a slot (PyQt6 ends the process when one does): they go to
@@ -346,7 +349,12 @@ class GpuZarrViewer(QWidget):
                 parts.append("linked views")
             if self.is_plate:
                 info = v.plate(layer=0)
-                parts.append(f"plate: field {info['field']}")
+                parts.append("plate: every field" if info["field"] is None
+                             else f"plate: field {info['field']}")
+            elif v.layers[0].get("group"):
+                members = v.members(layer=0)
+                parts.append(f"{len(members['names'])} images at their positions"
+                             + (" (no positions: on a grid)" if members["gridded"] else ""))
             m = v.transform_matrix(0)
             k = len(m)
             moved = any(abs(m[r][c] - (1.0 if r == c else 0.0)) > 1e-9
@@ -364,9 +372,10 @@ class GpuZarrViewer(QWidget):
 
     # ------------------------------------------------------------------ loading
     def load_dataset(self, zarr_path: str, _keep_tree: bool = False):
-        """Open the store at `zarr_path`: an image, a plate (whole), a bioformats2raw
-        collection (its first series), and list its contents (`_keep_tree`: an image
-        of the store shown, whose tree stays)."""
+        """Open the store at `zarr_path`: an image, a plate (whole), a well or a
+        bioformats2raw collection (whole: each image at its position; with a
+        micro-viewer older than that, a collection's first series), and list its contents
+        (`_keep_tree`: an image of the store shown, whose tree stays)."""
         from zarr_plane_server import pyramid_cache  # type: ignore (on the page's path)
         try:
             node = micro_viewer.tree(zarr_path)
@@ -374,9 +383,12 @@ class GpuZarrViewer(QWidget):
             node = {"kind": "image", "children": []}
         kind = node.get("kind", "image")
         shown = zarr_path
-        if kind == "collection" and node.get("children"):
+        whole = hasattr(micro_viewer.Viewer, "members")   # micro-viewer with positions
+        if kind == "collection" and node.get("children") and not whole:
             shown = node["children"][0]["path"]
         meta_path = shown
+        if kind == "collection" and node.get("children"):
+            meta_path = node["children"][0]["path"]
         if kind == "plate":
             wells = [w for w in node.get("children", []) if w.get("children")]
             if wells:
@@ -388,6 +400,10 @@ class GpuZarrViewer(QWidget):
             image = v.image
             if image is None:
                 raise ValueError(f"nothing to show in {shown}")
+            members = v.members(layer=0) if whole else None
+            if members and members["paths"] and meta_path == shown:
+                # a well opened whole: the metadata tab shows its first field
+                meta_path = os.path.join(shown, members["paths"][0])
         except ERRORS as exc:  # noqa: BLE001 (the page shows it)
             self.view._changed()
             self.status_changed.emit(f"Error loading: {exc}")
@@ -401,8 +417,8 @@ class GpuZarrViewer(QWidget):
         self._path, self._shown, self._pyr, self._kind = zarr_path, shown, pyr, kind
         self._image = image
         paths = [lv["path"] for lv in image["levels"]]
-        if pyr is not None and kind == "plate":
-            # the levels the wells have (the plate adds coarser ones of its own)
+        if pyr is not None and (kind == "plate" or v.layers[0].get("group")):
+            # the levels the fields have (a plate or a group adds coarser ones)
             paths = [p for p in paths if p in getattr(pyr, "layers", {})]
         self._level_paths = paths
         self._note = ""
@@ -454,9 +470,12 @@ class GpuZarrViewer(QWidget):
             lay.addWidget(QLabel(f"{name.upper() if name != 'field' else 'Field'}:"))
             if name == "field":
                 spin = QSpinBox()
-                spin.setRange(0, size - 1)
-                spin.setValue(plate["field"])
-                spin.setToolTip("the field shown in every well")
+                # -1: every field of each well at its position
+                spin.setRange(-1, size - 1)
+                spin.setSpecialValueText("all")
+                spin.setValue(-1 if plate["field"] is None else plate["field"])
+                spin.setToolTip("the field shown in every well (all: every field at its "
+                                "position)")
                 spin.valueChanged.connect(self._field)
                 lay.addWidget(spin)
                 lay.addStretch(1)
@@ -532,7 +551,7 @@ class GpuZarrViewer(QWidget):
 
     @_safe
     def _field(self, value: int):
-        self.view.viewer.set_field(int(value), layer=0)
+        self.view.viewer.set_field(None if int(value) < 0 else int(value), layer=0)
         self.view._changed()
 
     @_safe
@@ -617,7 +636,9 @@ class GpuZarrViewer(QWidget):
             where = (f"x={p['voxel'][0]} y={p['voxel'][1]} z={p['voxel'][2]}"
                      if p.get("voxel") else f"x={p['pixel'][0]} y={p['pixel'][1]}")
             if p.get("well"):
-                where = f"well {p['well'][0]}  " + where
+                where = f"well {p['well'][0]} ({p['well'][1]})  " + where
+            elif p.get("member"):
+                where = f"{p['member'][0]}  " + where
             self._pick = f"{where}  {vals}"
         self._later.start()
 
@@ -626,8 +647,11 @@ class GpuZarrViewer(QWidget):
         v = self.view.viewer
         if node["kind"] in ("image", "collection", "plate") or (
                 node["kind"] == "well" and not self.is_plate):
-            # another image of the store: the page's metadata follows it
-            path = node.get("first_field") if node["kind"] == "well" else node["path"]
+            # another image of the store: the page's metadata follows it (a well
+            # opens whole, each field at its position)
+            whole = hasattr(micro_viewer.Viewer, "members")
+            path = (node.get("first_field") if node["kind"] == "well" and not whole
+                    else node["path"])
             self._load_inner(path or node["path"])
             return
         self._note = open_node(v, node)
@@ -643,6 +667,10 @@ class GpuZarrViewer(QWidget):
         if self.is_plate:
             raise ValueError("a plate is its wells on a grid, which no image stores: open "
                              "a field (in Contents) to save its transform")
+        if self.view.viewer.layers[0].get("group"):
+            raise ValueError("a well or a collection is its images at their positions, "
+                             "which no one image stores: open one of them (in Contents) "
+                             "to save its transform")
         keep = self.view.viewer.current
         self.view.viewer.current = 0
         try:
