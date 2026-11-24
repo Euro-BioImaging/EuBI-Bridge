@@ -329,7 +329,8 @@ class SettingsDialog(QDialog):
             ok, detail = False, str(exc)
         vw_note = QLabel(
             (f"micro-glancer {detail} is installed." if ok else
-             "micro-glancer is not installed: the classic viewer is used.")
+             "micro-glancer is not installed: the classic viewer is used. For the GPU "
+             "viewer: pip install \"eubi-bridge[viewer]\" (or \"eubi-bridge-lite[viewer]\").")
             + " A change takes effect after restart.")
         vw_note.setWordWrap(True)
         vw_note.setStyleSheet("font-size: 9px; color: #aaa;")

@@ -63,6 +63,23 @@ pip install eubi-bridge-lite
 eubi reset_config
 ```
 
+### The GPU viewer (optional)
+
+The `viewer` extra adds [micro-glancer](https://github.com/bugraoezdemir/micro-glancer),
+which draws the Inspect page's viewer on the GPU: 3-D views (planes at any angle,
+maximum intensity, volume and surfaces), linked XY / XZ / YZ views, a histogram for each
+channel, and whole plates with every field at its place. It works with both packages:
+
+```bash
+pip install "eubi-bridge[viewer]"        # or: pip install "eubi-bridge-lite[viewer]"
+```
+
+With micro-glancer installed, the Inspect page uses it; without it, the classic viewer.
+Settings > Viewer chooses between them, and so does `EUBI_VIEWER=gpu` or
+`EUBI_VIEWER=classic`. On a computer without a usable GPU, micro-glancer draws with a
+software renderer (on Linux this needs the `mesa-vulkan-drivers` package). micro-glancer
+is new (alpha); the classic viewer stays for one more release.
+
 ### Docker
 
 The Docker image has the full tool (Java and Bio-Formats included), the CLI and the

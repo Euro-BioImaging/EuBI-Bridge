@@ -7,7 +7,7 @@ dependencies.
 
 The staging folder gets a copy of eubi_bridge/ without bioformats/, the README
 and the licence, and a pyproject.toml written from this repository's: the
-name, description, Python range and dependencies from
+name, description, Python range, dependencies and extras from
 [tool.eubi-bridge.lite], everything else (version, authors, licence, commands,
 package data) from [project].  It builds with plain setuptools: no JDK is
 downloaded.  The wheel is built from the sdist, which checks the sdist is
@@ -66,6 +66,12 @@ def lite_pyproject(project: dict, lite: dict) -> str:
         f"dependencies = {_toml(lite['dependencies'])}",
         f"classifiers = {_toml(classifiers)}",
         "",
+    ]
+    extras = lite.get("optional-dependencies", {})
+    if extras:
+        lines += ["[project.optional-dependencies]",
+                  *(f"{k} = {_toml(v)}" for k, v in extras.items()), ""]
+    lines += [
         "[project.scripts]",
         *(f"{k} = {_toml(v)}" for k, v in project["scripts"].items()),
         "",

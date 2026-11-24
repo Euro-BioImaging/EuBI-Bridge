@@ -57,9 +57,33 @@ def test_every_lite_dependency_is_a_full_one_with_the_same_specifier():
 
 
 def test_lite_pulls_in_none_of_the_full_stack():
-    lite = _requirements(_config()["tool"]["eubi-bridge"]["lite"]["dependencies"])
+    lite_config = _config()["tool"]["eubi-bridge"]["lite"]
+    lists = [lite_config["dependencies"], *lite_config.get("optional-dependencies", {}).values()]
+    lite = _requirements(line for deps in lists for line in deps)
     bad = {n for n in lite if n in FULL_ONLY or n.startswith(("bioio", "dask"))}
     assert not bad, f"lite depends on the full stack: {sorted(bad)}"
+
+
+def test_every_lite_extra_is_a_full_one_with_the_same_requirements():
+    config = _config()
+    full = config["project"].get("optional-dependencies", {})
+    lite = config["tool"]["eubi-bridge"]["lite"].get("optional-dependencies", {})
+    for extra, deps in lite.items():
+        assert extra in full, f"[{extra}]: an extra of lite but not of the full eubi-bridge"
+        assert ({str(r) for r in _requirements(deps).values()}
+                == {str(r) for r in _requirements(full[extra]).values()}), \
+            f"[{extra}]: lite says {deps}, full says {full[extra]}"
+
+
+def test_both_packages_have_the_viewer_extra():
+    # eubi-bridge[viewer] / eubi-bridge-lite[viewer] put the GPU viewer (micro-glancer)
+    # in the Inspect page; widgets/viewers.py imports it when it is installed
+    config = _config()
+    for extras in (config["project"]["optional-dependencies"],
+                   config["tool"]["eubi-bridge"]["lite"]["optional-dependencies"]):
+        names = {canonicalize_name(r.name) for r in _requirements(extras["viewer"]).values()}
+        assert names == {"micro-glancer"}
+        assert "qt" in next(iter(_requirements(extras["viewer"]).values())).extras
 
 
 def test_the_staged_source_is_eubi_bridge_without_bioformats(tmp_path):
@@ -86,6 +110,7 @@ def test_the_lite_pyproject_comes_from_the_main_one(tmp_path):
     assert project["version"] == config["project"]["version"]          # lockstep
     assert project["requires-python"] == wanted["requires-python"]
     assert project["dependencies"] == wanted["dependencies"]
+    assert project.get("optional-dependencies", {}) == wanted.get("optional-dependencies", {})
     assert project["scripts"] == config["project"]["scripts"]
     assert project["license"] == config["project"]["license"]
     data = lite["tool"]["setuptools"]["package-data"]["eubi_bridge"]
