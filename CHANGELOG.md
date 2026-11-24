@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Plates convert several fields at once**: with ome-zarr-pyramid's `images_at_once`
+  (next release), a plate's fields are written in parallel, as many as the write threads
+  while each still has four times its field's size of the memory budget (fields as large
+  as an ordinary image are still written one at a time, with every thread). With older
+  ome-zarr-pyramid, one at a time as before. A 384-well Columbus plate (10,640 fields of
+  4 x 500 x 667, NGFF 0.6) took 6.1 min instead of 22.6 min with 4 threads (40 random
+  fields checked pixel for pixel against the source).
+- **Each field's OME-XML is built once**: it was built for every field before the plate
+  was written and thrown away, then built again for each field; it now carries the
+  field's acquisition block, as an image's does. Fields of one shape share one built
+  document, filled in with their names.
+
 ## 0.4.2 (2026-11-17)
 
 Requires micro-reader `>=0.4.1,<0.6`, so micro-reader 0.5.0 and its native read engine

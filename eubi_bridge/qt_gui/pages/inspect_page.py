@@ -5,7 +5,11 @@ Two-pane layout:
   Left  : SidebarBrowser (zarr mode), navigate filesystem, click OME-Zarr to load
   Right : QTabWidget
             Metadata tab : dataset info, pixel sizes, pyramid layers (read-only tree)
-            Viewer tab   : ZarrViewer + status bar
+            Viewer tab   : the viewer + status bar
+
+The viewer is the GPU viewer (micro-glancer: 3-D, linked views, histograms, transforms,
+plates) when it is installed and chosen, else the classic ZarrViewer (see
+widgets/viewers.py).
 """
 from __future__ import annotations
 
@@ -37,7 +41,8 @@ from PyQt6.QtWidgets import (
 )
 
 from eubi_bridge.qt_gui.widgets.sidebar_browser import SidebarBrowser
-from eubi_bridge.qt_gui.widgets.zarr_viewer import ZarrViewer, _ORI
+from eubi_bridge.qt_gui.widgets.viewers import fallback_reason, make_viewer
+from eubi_bridge.qt_gui.widgets.zarr_viewer import _ORI
 
 _SERVER_DIR = os.path.join(os.path.dirname(__file__), "..", "server")
 if _SERVER_DIR not in sys.path:
@@ -190,7 +195,7 @@ class InspectPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        self._viewer = ZarrViewer(
+        self._viewer = make_viewer(
             self,
             enable_minmax=True,
             show_fov_combo=True,
@@ -222,7 +227,7 @@ class InspectPage(QWidget):
         ch_save_layout.addStretch()
         layout.addWidget(ch_save_group)
 
-        self._status_bar = QLabel("")
+        self._status_bar = QLabel(fallback_reason())
         self._status_bar.setStyleSheet("font-size: 10px; color: #aaa; padding: 2px 4px;")
         layout.addWidget(self._status_bar)
 
@@ -463,10 +468,21 @@ class InspectPage(QWidget):
                                    "the new values, or unzip it and save into the folder.")
         return True
 
+    def _refuse_saving_a_plate(self, lbl, cb, btn) -> bool:
+        """The GPU viewer shows a plate whole: its metadata lives in each field."""
+        if not getattr(self._viewer, "is_plate", False):
+            return False
+        self._show_save_status(lbl, cb, btn, ok=False,
+                               msg="A plate's metadata is in each field: open a field "
+                                   "(in the viewer's Contents) to save it.")
+        return True
+
     def _on_save_pixel_sizes(self):
         if not self._path:
             return
         if self._refuse_saving_a_zip(self._ps_status_lbl, self._ps_confirm_cb, self._save_ps_btn):
+            return
+        if self._refuse_saving_a_plate(self._ps_status_lbl, self._ps_confirm_cb, self._save_ps_btn):
             return
         scales = []
         for row in range(self._ps_table.rowCount()):
@@ -499,6 +515,8 @@ class InspectPage(QWidget):
             return
         if self._refuse_saving_a_zip(self._ch_status_lbl, self._ch_confirm_cb, self._save_ch_btn):
             return
+        if self._refuse_saving_a_plate(self._ch_status_lbl, self._ch_confirm_cb, self._save_ch_btn):
+            return
         try:
             _update_channels_on_disk(self._path, self._viewer.channels)
             with pyramid_cache._lock:
@@ -526,6 +544,10 @@ class InspectPage(QWidget):
 
     def _on_frame_ready(self, rgb: np.ndarray, elapsed_ms: float, generation: int):
         """Receives a rendered frame from ZarrViewer; updates image + status bar."""
+        if hasattr(self._viewer, "status_text"):
+            # the GPU viewer draws its own frames and says what it shows
+            self._status_bar.setText(self._viewer.status_text())
+            return
         aspect = self._compute_pixel_aspect()
         self._viewer.image_widget.set_frame(rgb, aspect, elapsed_ms)
         self._update_status_bar(elapsed_ms)
@@ -543,6 +565,9 @@ class InspectPage(QWidget):
         return ratio if 0.01 < ratio < 100 else 1.0
 
     def _update_status_bar(self, elapsed_ms: float):
+        if hasattr(self._viewer, "status_text"):
+            self._status_bar.setText(self._viewer.status_text())
+            return
         if not self._pyr:
             return
         level_idx   = self._viewer.level_idx

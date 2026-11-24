@@ -9,6 +9,7 @@ reference in ``legacy_0_1/`` at the repository root.
 from __future__ import annotations
 
 import os
+import shutil
 from typing import Optional
 
 import numpy as np
@@ -105,6 +106,44 @@ def store_exists(path) -> bool:
         # Never let a probe failure masquerade as "already exists" and block a
         # legitimate conversion; the writer still raises if it truly collides.
         return False
+
+
+def store_bytes(path) -> int:
+    """The bytes of the files under a local store folder."""
+    return sum(os.path.getsize(os.path.join(folder, name))
+               for folder, _, names in os.walk(path) for name in names)
+
+
+def _size_text(n: int) -> str:
+    if n >= 1e8:
+        return f"{n / 1e9:.2f} GB"
+    return f"{n / 1e6:.1f} MB" if n >= 1e5 else f"{n / 1e3:.1f} KB"
+
+
+def remove_partial_store(path, why: str, store_name: Optional[str] = None,
+                         kind: str = "partly written") -> None:
+    """Delete a local store folder that a run wrote only in part, and say so in the log:
+    which OME-Zarr it was, the folder it is removed from and the room that gives back.
+
+    ``store_name`` is the output's own name when ``path`` is a temporary one (the store
+    an overwrite writes beside the old one); ``kind`` says what the store was."""
+    path = str(path).rstrip("/\\")
+    if not os.path.isdir(path):
+        return
+    try:
+        size = store_bytes(path)
+    except OSError:
+        size = None
+    shutil.rmtree(path, ignore_errors=True)
+    name, folder = os.path.basename(path), os.path.dirname(path)
+    shown = name if store_name is None else f"{store_name} (on disk as {name})"
+    amount = "its space" if size is None else _size_text(size)
+    if os.path.exists(path):
+        logger.warning(f"The {kind} OME-Zarr {shown} in {folder} could not be removed "
+                       f"({why}): delete it by hand to free {amount}.")
+    else:
+        logger.warning(f"Removed the {kind} OME-Zarr {shown} from {folder} ({why}); "
+                       f"this freed {amount}.")
 
 
 def store_join(base, key: str) -> str:

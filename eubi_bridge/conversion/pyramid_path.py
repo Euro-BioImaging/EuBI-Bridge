@@ -23,12 +23,14 @@ import shutil
 import uuid
 from contextlib import contextmanager
 from types import SimpleNamespace
+from xml.sax.saxutils import escape as xml_escape
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
-from eubi_bridge.core.output_store import strip_output_suffix, with_output_suffix
+from eubi_bridge.core.output_store import (remove_partial_store, store_bytes,
+                                           strip_output_suffix, with_output_suffix)
 from eubi_bridge.utils.errors import InputError
 from eubi_bridge.utils.logging_config import get_logger
 from eubi_bridge.utils.path_utils import named_folder, output_stem
@@ -821,6 +823,7 @@ async def _convert_plate(f, job, plate: int, output_path: str) -> None:
     import dataclasses
 
     from ome_zarr_pyramid import PyramidCollection
+    from ome_zarr_pyramid.core.eubi_keys import key_from_json
     from ome_zarr_pyramid.core.plates import file_stem, tree_from_file
 
     from eubi_bridge.conversion.conversion_worker import (_memory_plan_for,
@@ -852,14 +855,16 @@ async def _convert_plate(f, job, plate: int, output_path: str) -> None:
     # the job's settings on every field, before the plate is built: squeeze or crop can
     # change a field's axes, and the plate's systems and scenes follow the fields as
     # written
-    processed = {}
+    processed, xmls = {}, {}
     for key in coll:
         # a field has no series or tile index of eubi's: its place is plate, well, field
         # an OME-Zarr 0.6 plate's fields keep their other systems (carry_foreign_transforms)
         entry = SimpleNamespace(pyramid=coll.pyramid(key), image=images[key],
                                 series_path=str(f.path), scene=None, tile=None,
                                 foreign_source=read[key] if read is not None else None)
-        processed[key], _ = _prepared(entry, job, output_path)
+        # the field's OME-XML is built here, once, with its acquisition block, as an
+        # image's is; write_field hands it over
+        processed[key], xmls[key] = _prepared(entry, job, output_path)
     if read is None:
         # the plate's fields as a whole: one line per input
         shown = [SimpleNamespace(pyramid=coll[key], image=images[key]) for key in coll]
@@ -874,20 +879,73 @@ async def _convert_plate(f, job, plate: int, output_path: str) -> None:
                                 coordinate_systems=systems, system_of=coll.system_of)
     _warn_unused_writer_settings(job.cluster)
 
+    # several fields at once (ozp's images_at_once; older ozp and RFC 8: one at a time)
+    import inspect
+
+    from ome_zarr_pyramid.core.ngff_plate import write_plate as _ngff_write_plate
+    at_once = 1
+    if ("images_at_once" in inspect.signature(_ngff_write_plate).parameters
+            and conv.ome_zarr_version != "rfc8"):
+        at_once = _fields_at_once(list(processed.values()), job)
+    concurrent = {"images_at_once": at_once} if at_once > 1 else {}
+    if at_once > 1:
+        logger.info(f"{os.path.basename(str(output_path))}: {len(processed)} fields, "
+                    f"{at_once} written at once")
+
     def write_field(pyr, target, **_):
         # one field, written as eubi writes an image (the plate's own version: ozp hands
-        # each field over in it; RFC 8: the collection document is ozp's)
+        # each field over in it; RFC 8: the collection document is ozp's); the fields
+        # written at once share the scene's memory and threads
         budget, region = _memory_plan_for(pyr.base_array, job)
-        dtype = np.dtype(conv.dtype or pyr.base_array.dtype)
-        xml = ome_xml(pyr, dtype) if conv.save_omexml else None
+        if at_once > 1:
+            budget, region = _field_share(pyr.base_array, job, budget, at_once)
+        xml = None
+        if conv.save_omexml:
+            # ozp hands over a copy stamped with the field's key (eubi:index)
+            index = pyr.meta.custom_blocks.get("eubi:index")
+            key = key_from_json(index) if index is not None else None
+            xml = xmls.get(key)
+            if xml is None:
+                xml = ome_xml(pyr, np.dtype(conv.dtype or pyr.base_array.dtype))
         _write(pyr, str(target), job, scene_budget_mb=budget, region_size_mb=region,
-               xml=xml, image_only=True)
+               xml=xml, image_only=True, scenes_at_once=at_once)
 
     with _replaced_on_success(output_path, conv.overwrite) as path:
         target, storage_options = _ozp_target_args(path)
         await asyncio.to_thread(written.write_plate, target, plate=plate,
                                 version=conv.ome_zarr_version, overwrite=conv.overwrite,
-                                storage_options=storage_options, writer=write_field)
+                                storage_options=storage_options, writer=write_field,
+                                **concurrent)
+
+
+def _fields_at_once(pyramids, job) -> int:
+    """How many fields of a plate are written at the same time: one per write thread,
+    while each still has four times the largest field's size of the scene's memory (the
+    field read, its levels and their encoded chunks). Fields as big as a usual image
+    (a slide, a large z-stack) are written one at a time, with every thread."""
+    from eubi_bridge.conversion.conversion_worker import (_image_mb, _memory_plan_for,
+                                                          _threads_per_scene)
+    if len(pyramids) < 2:
+        return 1
+    biggest = max((_image_mb(p.base_array) or 0.0) for p in pyramids)
+    if biggest <= 0:
+        return 1
+    budget, _ = _memory_plan_for(pyramids[0].base_array, job)
+    threads = _threads_per_scene(job.cluster)
+    return max(1, min(threads, len(pyramids), int(budget // (4.0 * biggest))))
+
+
+def _field_share(array, job, budget: float, at_once: int) -> tuple:
+    """``(write budget, region size)`` in MB of one of `at_once` fields written at the
+    same time: the scene's budget and threads divided between them."""
+    from eubi_bridge.conversion.conversion_worker import (_image_mb, _is_micro,
+                                                          _threads_per_scene)
+    from eubi_bridge.core import memory
+    share = budget / at_once
+    threads = max(1, _threads_per_scene(job.cluster) // at_once)
+    region = memory.region_mb(job.cluster.region_size_mb, share, threads,
+                              image_mb=_image_mb(array), jvm=not _is_micro(job))
+    return share, region
 
 
 @contextmanager
@@ -901,9 +959,12 @@ def _replaced_on_success(output_path: str, overwrite: bool):
         yield output_path
         return
     stem = strip_output_suffix(str(output_path).rstrip("/\\"))
+    shown = os.path.basename(str(output_path).rstrip("/\\"))
     for stale in glob.glob(f"{glob.escape(stem)}.*-*.zarr"):         # of a killed run
         if LEFT_BESIDE.fullmatch(os.path.basename(stale)[len(os.path.basename(stem)):]):
-            shutil.rmtree(stale, ignore_errors=True)
+            replaced = ".replaced-" in os.path.basename(stale)
+            remove_partial_store(stale, "left by an earlier run that was stopped", shown,
+                                 kind="old, set-aside" if replaced else "partly written")
     _warn_room(output_path)
     token = uuid.uuid4().hex[:8]
     beside, aside = f"{stem}.writing-{token}.zarr", f"{stem}.replaced-{token}.zarr"
@@ -920,7 +981,9 @@ def _replaced_on_success(output_path: str, overwrite: bool):
             os.replace(aside, output_path)
             raise
     finally:
-        shutil.rmtree(beside, ignore_errors=True)
+        # still there only when the new store was not finished: the old one stays
+        remove_partial_store(beside, f"the overwrite did not finish; the old {shown} stays "
+                                     f"as it was", shown)
     shutil.rmtree(aside, ignore_errors=True)
     if os.path.exists(aside):
         logger.warning(f"{aside}: the replaced store could not be removed: delete it by hand.")
@@ -933,8 +996,7 @@ LEFT_BESIDE = re.compile(r"\.(writing|replaced)-[0-9a-f]{8}\.zarr")
 def _warn_room(store: str) -> None:
     """A line when the drive has less room than the store being replaced takes: both stand
     until the new one is finished."""
-    size = sum(os.path.getsize(os.path.join(folder, name))
-               for folder, _, names in os.walk(store) for name in names)
+    size = store_bytes(store)
     free = shutil.disk_usage(store).free
     if free < size:
         logger.warning(f"{store}: --overwrite keeps the old store until the new one is written, "
@@ -1436,16 +1498,41 @@ def ome_xml(pyr, dtype, acquisition: Optional[dict] = None) -> str:
             logger.warning(f"Axis {ax}: OME has no unit {unit!r}: the OME-XML leaves its size out.")
             del units[ax]
     channels = (meta.metadata.get("omero") or {}).get("channels") or []
-    ome = create_ome_xml(
-        image_shape=tuple(pyr.base_array.shape), axis_order=axes,
+    kwargs = dict(
+        image_shape=tuple(int(n) for n in pyr.base_array.shape), axis_order=axes,
         **{f"pixel_size_{ax}": scales.get(ax) if ax in units else None for ax in "tzyx"},
         **{f"unit_{ax}": units.get(ax) for ax in "tzyx"},
-        dtype=str(np.dtype(dtype)), image_name=meta.tag or NAME,
+        dtype=str(np.dtype(dtype)), image_name=_NAME_SLOT,
         channel_names=[ch.get("label") for ch in channels],
         # each channel's wavelengths (a lambda scan's bands): only the colour and the name
         # carried them (review cycle 1, N-21)
         channel_wavelengths=(acquisition or getattr(pyr, "acquisition", None) or {}).get(
             "channel_wavelengths"))
+    # the document without its name is built once for every image that shares it (a
+    # plate's 10,000 fields differ in their names only; ome_types takes ~8 ms a document)
+    try:
+        key = json.dumps(kwargs, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        key = None
+    document = _OME_XML_MADE.get(key) if key is not None else None
+    if document is None:
+        document = _make_ome_xml(create_ome_xml, PFFImageMeta, kwargs)
+        if key is not None:
+            if len(_OME_XML_MADE) >= 256:
+                _OME_XML_MADE.clear()
+            _OME_XML_MADE[key] = document
+    name = xml_escape(str(meta.tag or NAME), {'"': "&quot;"})
+    return document.replace(_NAME_SLOT, name)
+
+
+#: the image name's place in a document built once for several images
+_NAME_SLOT = "eubi-image-name-slot-5f1c9a"
+#: built documents, by everything but the image name
+_OME_XML_MADE: dict = {}
+
+
+def _make_ome_xml(create_ome_xml, PFFImageMeta, kwargs) -> str:
+    ome = create_ome_xml(**kwargs)
     pixels = ome.images[0].pixels
     # one image per document: a fixed id (ome_types counts ids up per process, so the
     # n-th output of a run said "Pixels:n")
@@ -1460,9 +1547,10 @@ def ome_xml(pyr, dtype, acquisition: Optional[dict] = None) -> str:
 # -- one output -----------------------------------------------------------------------
 
 def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb: float,
-           xml: Optional[str], image_only: bool = False) -> None:
+           xml: Optional[str], image_only: bool = False, scenes_at_once: int = 1) -> None:
     """ONE write_pyramid call with the job's storage settings (eubi-bridge decides the
-    chunk shape and shards; ozp writes)."""
+    chunk shape and shards; ozp writes). `scenes_at_once`: writes running beside this
+    one that share its threads and memory share (a plate's fields)."""
     from eubi_bridge.conversion.conversion_worker import parse_chunks, parse_shard_coefs
     from eubi_bridge.core.output_store import _chunks, _memory_budget, _ozp_target_args
     from eubi_bridge.utils.optional_deps import dask_config
@@ -1491,7 +1579,8 @@ def _write(pyr, output_path: str, job, *, scene_budget_mb: float, region_size_mb
                if clus.bioformats_threads is not None else {})
     with dask_config(**dask_kw):
         _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dtype, arr,
-                       region_size_mb, budget, job, xml, image_only=image_only)
+                       region_size_mb, budget, job, xml, image_only=image_only,
+                       scenes_at_once=scenes_at_once)
 
 
 def _system_for_output(pyr):
@@ -1515,16 +1604,23 @@ def _system_for_output(pyr):
 
 
 def _write_pyramid(pyr, target, storage_options, conv, clus, chunks, shards, dtype, arr,
-                   region_size_mb, budget, job, xml, image_only=False):
+                   region_size_mb, budget, job, xml, image_only=False, scenes_at_once=1):
     from ome_zarr_pyramid import IO
 
     from eubi_bridge.conversion.conversion_worker import _threads_per_scene, _write_share
     pyr = _system_for_output(pyr)
-    threads = _threads_per_scene(clus)
+    at_once = max(1, int(scenes_at_once or 1))
+    threads = max(1, _threads_per_scene(clus) // at_once)
     # what conversions of this run that have ended left free goes to the ones still
     # busy: before each pass and during one (dyna-zarr's io.memory_share, 0.1.2+)
     sharing = contextlib.nullcontext()
     share = _write_share(arr, job, os.path.basename(str(target).rstrip("/\\")))
+    if share is not None and at_once > 1:
+        whole = share
+
+        def share():
+            mb, n = whole()
+            return mb / at_once, max(1, int(n) // at_once)
     if share is not None and budget is not None:
         from dyna_zarr import io as dyna_io
         if hasattr(dyna_io, "memory_share"):
