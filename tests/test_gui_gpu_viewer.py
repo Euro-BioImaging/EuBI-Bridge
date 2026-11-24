@@ -2,8 +2,8 @@
 views, the histogram panel, saving a transform, plates, and the choice between the GPU
 and the classic viewer.
 
-micro-glancer is not on PyPI yet: these tests skip when it cannot be imported (put its
-``python`` folder on PYTHONPATH to run them).
+micro-glancer comes with the ``viewer`` extra; these tests skip when it cannot be
+imported (CI installs eubi without it).
 """
 import json
 import os

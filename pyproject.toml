@@ -72,6 +72,9 @@ annotate = ["eubi-annotate>=0.1.2b8"]
 deep     = ["eubi-deep>=0.1.2b8"]
 docs     = ["mkdocs-material>=9.5", "pymdown-extensions>=10.0"]
 test     = ["pytest>=7.0", "pytest-cov>=4.0"]
+# the GPU viewer in the Inspect page (micro-glancer); without it, the classic viewer.
+# Also in eubi-bridge-lite ([tool.eubi-bridge.lite.optional-dependencies]).
+viewer   = ["micro-glancer[qt]>=0.0.1,<0.1"]
 
 [tool.setuptools.package-data]
 eubi_bridge = [
@@ -116,3 +119,8 @@ dependencies = [
     "PyQt6>=6.6.0,<=6.9.1",
     "pillow",
 ]
+
+[tool.eubi-bridge.lite.optional-dependencies]
+# extras of eubi-bridge-lite; each is also an extra of the full eubi-bridge, with the
+# same requirements (tests/test_lite_packaging.py checks it)
+viewer = ["micro-glancer[qt]>=0.0.1,<0.1"]

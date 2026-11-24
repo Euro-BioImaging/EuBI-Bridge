@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+- **The GPU viewer, as the `viewer` extra**: `pip install "eubi-bridge[viewer]"` or
+  `"eubi-bridge-lite[viewer]"` installs micro-glancer 0.0.x, and the Inspect page then
+  draws with it: 3-D views (planes at any angle, maximum intensity, volume, surfaces),
+  linked XY / XZ / YZ views, a histogram for each channel whose contrast flows back into
+  the channel panel (Save Channels writes what is shown), saving a layer's transform,
+  and plates, wells and collections with every field at its place, listed in a Contents
+  tree. Settings > Viewer (auto, GPU or classic) or `EUBI_VIEWER=gpu|classic` chooses;
+  "auto" takes the GPU viewer when micro-glancer is installed, and any failure falls
+  back to the classic viewer with the reason in the status line. Without the extra,
+  nothing changes. The classic viewer is removed one release later, when micro-glancer
+  becomes a regular dependency.
+
 ### Changed
 - **Plates convert several fields at once**: with ome-zarr-pyramid's `images_at_once`
   (next release), a plate's fields are written in parallel, as many as the write threads

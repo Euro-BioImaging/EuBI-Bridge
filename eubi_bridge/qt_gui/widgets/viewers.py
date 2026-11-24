@@ -6,9 +6,9 @@ when it is set, else from the settings ("Viewer" in Settings: "auto", "gpu" or
 viewer is chosen but micro-glancer cannot be imported, or the GPU viewer cannot be built,
 the classic viewer is used and the reason is kept in ``fallback_reason()``.
 
-micro-glancer is in development (Workplan WP14) and not on PyPI yet: to try it, put its
-``python`` folder (built with ``maturin develop``) on ``PYTHONPATH``, or install it into
-eubi's environment.
+micro-glancer comes with the ``viewer`` extra: ``pip install "eubi-bridge[viewer]"`` or
+``pip install "eubi-bridge-lite[viewer]"``. For development, its ``python`` folder (built
+with ``maturin develop``) can go on ``PYTHONPATH`` instead (incubation/micro-viewer/eubi-dev.ps1).
 """
 from __future__ import annotations
 
