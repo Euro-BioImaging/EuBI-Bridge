@@ -111,6 +111,8 @@ class GpuZarrViewer(QWidget):
         self._path: str | None = None
         self._shown: str | None = None          # what the view opened (a series, a field)
         self._pyr = None
+        self._loading = None                     # the store being opened in the background
+        self._progress_slot = None
         self._image: dict | None = None
         self._level_paths: list[str] = []
         self._kind = ""
@@ -375,8 +377,11 @@ class GpuZarrViewer(QWidget):
         """Open the store at `zarr_path`: an image, a plate (whole), a well or a
         bioformats2raw collection (whole: each image at its position; with a
         micro-glancer older than that, a collection's first series), and list its contents
-        (`_keep_tree`: an image of the store shown, whose tree stays)."""
-        from zarr_plane_server import pyramid_cache  # type: ignore (on the page's path)
+        (`_keep_tree`: an image of the store shown, whose tree stays).
+
+        With micro-glancer 0.0.2 the store is read on a background thread (a plate: every
+        field's metadata), the status line counting the fields, and the window stays
+        responsive; the rest follows when it is read. ``wait_loaded()`` waits for that."""
         try:
             node = micro_glancer.tree(zarr_path)
         except ERRORS:  # noqa: BLE001 (micro-glancer then says why when it opens)
@@ -393,9 +398,72 @@ class GpuZarrViewer(QWidget):
             wells = [w for w in node.get("children", []) if w.get("children")]
             if wells:
                 meta_path = wells[0]["children"][0]["path"]
+        args = (zarr_path, _keep_tree, node, kind, shown, meta_path, whole)
+        if hasattr(self.view, "open_in_background"):
+            self._loading = zarr_path
+            name = os.path.basename(os.path.normpath(zarr_path))
+            self.status_changed.emit(f"Opening {name}...")
+            what = "fields" if kind == "plate" else "images"
+
+            def progress(done, total):
+                if total > 1 and self._loading == zarr_path:
+                    self.status_changed.emit(f"Opening {name}: {done} of {total} {what}")
+
+            def finished(error):
+                try:
+                    self.view.opening.disconnect(progress)
+                except (TypeError, RuntimeError):
+                    pass
+                if self._progress_slot is progress:
+                    self._progress_slot = None
+                if self._loading == zarr_path:
+                    self._loading = None
+                self._finish_load(*args, error=error)
+
+            if self._progress_slot is not None:   # an older open, replaced by this one
+                try:
+                    self.view.opening.disconnect(self._progress_slot)
+                except (TypeError, RuntimeError):
+                    pass
+            self._progress_slot = progress
+            self.view.opening.connect(progress)
+            self.view.open_in_background(shown, done=finished)
+            return
+        error = None
         try:
-            v = self.view.viewer                 # the core first: its errors come back here
-            v.open(shown)
+            self.view.viewer.open(shown)          # the core first: its errors come back here
+        except ERRORS as exc:  # noqa: BLE001 (the page shows it)
+            # without its traceback (it would hold this frame, and so this widget, in a
+            # cycle that only Python's collector frees, on whichever thread it runs)
+            error = exc.with_traceback(None)
+        self._finish_load(*args, error=error)
+
+    def wait_loaded(self, timeout: float = 60.0) -> bool:
+        """Wait (handling events) until the dataset being opened is shown; False on a
+        timeout."""
+        import time
+
+        from PyQt6.QtWidgets import QApplication
+
+        end = time.monotonic() + timeout
+        while getattr(self.view, "opening_now", False):
+            if time.monotonic() > end:
+                return False
+            QApplication.processEvents()
+            time.sleep(0.005)
+        QApplication.processEvents()
+        return True
+
+    def _finish_load(self, zarr_path, _keep_tree, node, kind, shown, meta_path, whole,
+                     error=None):
+        """The rest of `load_dataset`, once the store is open (or failed to)."""
+        from zarr_plane_server import pyramid_cache  # type: ignore (on the page's path)
+        if error is not None:
+            self.view._changed()
+            self.status_changed.emit(f"Error loading: {error}")
+            return
+        try:
+            v = self.view.viewer
             v.fit()
             image = v.image
             if image is None:
@@ -437,7 +505,8 @@ class GpuZarrViewer(QWidget):
             if has_children:
                 self.contents.show_tree(zarr_path)
             self._contents_box.setVisible(has_children)
-        self.histogram_panel.refresh()
+        # the histogram panel follows the view change above (a moment later, once): no
+        # read of its own here (a whole plate in view reads every field of it)
         self._view_changed()
         self.status_changed.emit(zarr_path)
         if pyr is not None:
