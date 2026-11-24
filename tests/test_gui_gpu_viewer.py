@@ -83,6 +83,9 @@ def _page(app, path):
     page._tabs.setCurrentIndex(1)
     _pump(app, 0.3)
     page._load_zarr(path)
+    wait = getattr(page._viewer, "wait_loaded", None)    # micro-glancer 0.0.2: in the background
+    if wait is not None:
+        assert wait()
     _pump(app)
     return page
 
@@ -132,7 +135,10 @@ def test_histogram_and_channels_stay_in_step(app, volume):
     v = viewer.view.viewer
     _pump(app, 0.5)
     viewer.histogram_panel.refresh()
-    assert viewer.histogram_panel.hist._hist is not None
+    hist = viewer.histogram_panel.hist
+    if hasattr(hist, "wait"):               # micro-glancer 0.0.2: read on a background thread
+        assert hist.wait()
+    assert hist._hist is not None
     # contrast set on micro-glancer's side flows into eubi's panel ("Save Channels")
     v.set_channel(0, lo=100.0, hi=900.0, layer=0)
     viewer.view._changed()
@@ -188,6 +194,8 @@ def test_a_plate(app, plate):
     # a field opens from the tree; the tree stays, the metadata follows
     field = top.child(1).child(0)
     viewer.contents.view.itemActivated.emit(field, 0)
+    if hasattr(viewer, "wait_loaded"):
+        assert viewer.wait_loaded()
     _pump(app, 0.3)
     assert not viewer.is_plate and page._path.replace("\\", "/").endswith("B/2/0")
     assert viewer.contents.view.topLevelItem(0).childCount() == 2

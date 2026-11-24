@@ -16,6 +16,13 @@
   becomes a regular dependency.
 
 ### Changed
+- **The GPU viewer opens a plate without freezing the window**: with micro-glancer 0.0.2
+  the store is read in the background (a plate: every field's metadata), the status line
+  counting the fields ("Opening 0459 1A.ome.zarr: 4,200 of 10,640 fields"), and the
+  histogram too, so neither opening nor panning waits for it; the GPU driver is loaded
+  ahead, when the page is made. The 384-well Columbus plate: the window answers at once,
+  the plate shows after about 2.5-3.5 s (before: the window stood still for 5.5 s). With
+  micro-glancer 0.0.1 it opens as before, reading the histogram once instead of twice.
 - **Plates convert several fields at once**: with ome-zarr-pyramid's `images_at_once`
   (next release), a plate's fields are written in parallel, as many as the write threads
   while each still has four times its field's size of the memory budget (fields as large
