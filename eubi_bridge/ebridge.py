@@ -1778,7 +1778,7 @@ class ConversionManager:
         from eubi_bridge.utils.path_utils import (
             AGGREGATIVE_GROUP_COLUMN, PER_GROUP_CONCAT_KEYS,
             concat_without_group_problems, disambiguate_output_names,
-            partition_by_group, resolve_group_concat_params)
+            partition_by_group, resolve_group_concat_params, resolve_group_ranges)
 
         # Caught before anything is dispatched: a row with axes but no group
         # converts one-to-one, so the run would quietly produce something other
@@ -1834,6 +1834,8 @@ class ConversionManager:
             # resolved across all of its rows and a disagreement is refused.
             try:
                 concat = resolve_group_concat_params(group_id, group_rows, concat_p)
+                # the region is cut from the joined image: one per group (E-11)
+                resolve_group_ranges(group_id, group_rows, conversion_p)
             except ValueError as exc:
                 refused_groups.append((group_id, group_rows, str(exc)))
                 logger.warning(f"Group {group_id} set aside, not converted: {exc}")

@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
 
 from eubi_bridge.qt_gui.core.batch import (
     BatchModel, ParamSpec, grouped_specs, spec_for, to_cell, _PARAM_SPECS)
+from eubi_bridge.utils.path_utils import range_value
 
 
 # exec() result meaning "re-open with one more parameter", distinct from
@@ -200,8 +201,10 @@ class _Field(QWidget):
             return w
 
         w = QLineEdit()
+        if spec.kind == "range":
+            w.setPlaceholderText("start,stop (blank: the config's)")
         if value is not None:
-            w.setText(str(value))
+            w.setText(to_cell(value))
         w.textEdited.connect(self._touch)
         return w
 
@@ -410,6 +413,13 @@ class BatchCellEditor(QDialog):
             add_row.addWidget(self._add_combo, 1)
             lay.addLayout(add_row)
 
+        # a value the batch would refuse, shown here so the dialog stays open
+        self._problem = QLabel("")
+        self._problem.setWordWrap(True)
+        self._problem.setStyleSheet("font-size: 10px; color: #ef5350;")
+        self._problem.setVisible(False)
+        lay.addWidget(self._problem)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel)
@@ -501,31 +511,68 @@ class BatchCellEditor(QDialog):
 
     # -- result --
 
-    def apply(self) -> list[str]:
-        """Write every touched field into the model; returns the keys changed."""
+    def problems(self) -> list[str]:
+        """Values the batch would refuse: a range that is not 'start,stop'."""
+        found = []
+        for field in self._fields.values():
+            if (field.spec.kind == "range" and field.changed and not field.inactive
+                    and not field.reset and not field.is_blank()):
+                try:
+                    range_value(field.value(), field.spec.label)
+                except ValueError as exc:
+                    found.append(str(exc))
+        return found
+
+    def accept(self):
+        found = self.problems()
+        if found:
+            self._problem.setText("\n".join(found))
+            self._problem.setVisible(True)
+            return
+        super().accept()
+
+    def sets_region(self) -> bool:
+        """True when OK sets a region (a range given a value) on the rows: rows of
+        several images are then expanded first (decision E-11)."""
+        return any(field.spec.kind == "range" and field.changed and not field.inactive
+                   and not field.reset and not field.is_blank()
+                   for field in self._fields.values())
+
+    def apply(self, rows: Iterable[int] | None = None,
+              region_rows: Iterable[int] | None = None) -> list[str]:
+        """Write every touched field into the model; returns the keys changed.
+
+        *rows*: the rows to write (default: the rows the dialog opened on), as
+        they stand after expanding; *region_rows*: the rows the ranges go to (by
+        default the same; plates are left out, decision E-11)."""
+        if rows is not None:
+            self._rows = sorted(set(rows))
+        region = sorted(set(region_rows)) if region_rows is not None else self._rows
         applied: list[str] = []
         for key, field in self._fields.items():
+            targets = region if field.spec.kind == "range" else self._rows
             # An inert parameter must not keep an override: the value would show
             # as a column and read as applied while the writer ignores it.
             # Inertness is per row, and a mixed selection leaves the field
             # editable, so stale overrides are cleared independently of whether
             # the field itself was greyed out.
-            stale = [i for i in self._rows
+            stale = [i for i in targets
                      if self._model.is_inert(self._model.rows[i], key)
                      and self._model.cell(self._model.rows[i], key) is not None]
             if stale:
                 self._model.reset_cells(stale, key)
                 applied.append(key)
-            if field.inactive or not field.changed:
+            if field.inactive or not field.changed or not targets:
                 continue
-            if field.reset:
-                self._model.reset_cells(self._rows, key)
+            # a range cleared by hand goes back to the config's, as the reset does
+            if field.reset or (field.spec.kind == "range" and field.is_blank()):
+                self._model.reset_cells(targets, key)
                 if key not in applied:
                     applied.append(key)
                 continue
             if field.is_blank():
                 continue
-            self._model.update_cells(self._rows, key, field.value())
+            self._model.update_cells(targets, key, field.value())
             if key not in applied:
                 applied.append(key)
         return applied

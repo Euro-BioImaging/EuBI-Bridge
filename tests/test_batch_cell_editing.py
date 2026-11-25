@@ -62,7 +62,7 @@ class TestParamSpecs:
     def test_every_spec_kind_is_known(self):
         assert {s.kind for s in _PARAM_SPECS} <= {
             "bool", "int", "float", "choice", "text", "auto_int",
-            "file", "directory"}
+            "file", "directory", "range"}
 
     def test_choice_specs_offer_choices(self):
         for spec in _PARAM_SPECS:
@@ -78,8 +78,9 @@ class TestParamSpecs:
 class TestUneditableReason:
     @pytest.mark.parametrize("key", [
         "time_range", "channel_range", "z_range", "y_range", "x_range"])
-    def test_dim_ranges_are_batch_wide(self, key):
-        assert "whole batch" in uneditable_reason(key)
+    def test_dim_ranges_vary_per_row(self, key):
+        # decision E-10: a region per batch row
+        assert uneditable_reason(key) is None
 
     @pytest.mark.parametrize("key", ["max_processes", "on_slurm", "jvm_memory"])
     def test_cluster_settings_rejected(self, key):
@@ -116,9 +117,13 @@ class TestUpdateCells:
         batch.update_cells([0], "dtype", "uint16")
         assert "dtype" in batch.columns()
 
-    def test_rejects_non_row_overridable(self, batch):
-        with pytest.raises(KeyError):
-            batch.update_cells([0], "z_range", "0,10")
+    def test_a_range_is_checked_and_stored_as_typed(self, batch):
+        batch.update_cells([0], "z_range", " 0, 10 ")
+        assert batch.rows[0]["z_range"] == "0,10"
+        assert batch.cell(batch.rows[0], "z_range") == "0,10"
+        for bad in ("10,0", "0", "a,b", "-1,5", "0,5,2"):
+            with pytest.raises(ValueError):
+                batch.update_cells([1], "z_range", bad)
 
     def test_rejects_cluster_key(self, batch):
         with pytest.raises(KeyError):
@@ -206,7 +211,7 @@ class TestResetCells:
 
     def test_reset_rejects_non_overridable(self, batch):
         with pytest.raises(KeyError):
-            batch.reset_cells([0], "y_range")
+            batch.reset_cells([0], "max_processes")
 
 
 class TestCommonValue:

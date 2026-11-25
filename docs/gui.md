@@ -94,6 +94,41 @@ When you save a batch, you get two files side by side: the table (for example
 batch, its settings file is read and shown in the parameter tabs. Several
 batches can be saved in one folder; each keeps its own settings.
 
+### Rows, images and regions
+
+A row converts one file, or every file below a ticked folder. A file can hold
+several images: series, and views or illuminations written apart. The row's
+`Series index`, `View index` and `Illumination index` cells choose which of them
+the row converts (`all`, one index, or a list such as `0,2`).
+
+To give the images of a file different settings, select its row and press
+**Expand**. The row is replaced by one row per image, and each new row names its
+image in its index cells. A folder row is first replaced by one row per file.
+Expand opens the files to list their images, but it reads no pixels. Some rows
+are not expanded:
+
+* Tiles stay in one row. `Read as mosaic` decides whether they are written as
+  one image or as one image per tile.
+* A plate stays in one row, because it is written whole.
+* A row of an aggregative group stays as it is, because the group's rows build
+  one joined image.
+* A file that only Bio-Formats reads is not expanded. Set its index cells by
+  hand instead.
+
+A region (the `T range` ... `X range` cells, `start,stop` in pixels of the
+full-resolution image) belongs to the image a row writes. When you set a range
+in Edit Cells on a row that writes several images, the row is expanded first,
+and the range is set on each new row. You can then change the range of each
+image on its own row. The rows of an aggregative group must give the same
+ranges, because the range crops the joined image; Run reports the rows of a
+group whose ranges differ. A range is not set on a plate. To crop the images of
+a plate, set the row's `Write as NGFF plate` to `off`, so that each image is
+written on its own.
+
+A saved table of file rows can be reused for other files of the same structure.
+An expanded table names the images of those exact files. If a file no longer has
+the image a row names, that row is refused when the batch runs.
+
 ### Batches saved before eubi-bridge 0.3.3
 
 These batches have no settings file of their own: all batches of a folder shared
