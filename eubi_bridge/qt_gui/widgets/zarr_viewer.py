@@ -118,7 +118,11 @@ class ZarrViewer(QWidget):
 
         # ── Render worker ─────────────────────────────────────────────────────
         self._render_gen = 0
-        self._render_worker = RenderWorker(self)
+        # No Qt parent: Qt would delete the thread with this widget while it still
+        # runs (a crash). It stops when this widget is destroyed or closed, or
+        # when the application quits (render_worker.stop_all).
+        self._render_worker = RenderWorker()
+        self._render_worker.stop_with(self)
         self._render_worker.frame_ready.connect(self._on_frame_ready_internal)
         self._render_worker.render_error.connect(self._on_render_error)
         self._render_worker.start()

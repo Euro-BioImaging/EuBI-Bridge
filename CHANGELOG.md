@@ -60,6 +60,14 @@
   field's acquisition block, as an image's does. Fields of one shape share one built
   document, filled in with their names.
 
+### Fixed
+- **The classic viewer's render thread no longer outlives its viewer**: it stopped
+  only when the viewer itself was closed, so a viewer freed without that (the
+  Inspect page of a main window that was closed, or a test's page) deleted a thread
+  that was still running, and the process crashed (a segmentation fault on CI, Lite
+  on Python 3.14). The thread now stops when its viewer is destroyed, when the
+  application quits, and when Python exits.
+
 ## 0.4.2 (2026-11-17)
 
 Requires micro-reader `>=0.4.1,<0.6`, so micro-reader 0.5.0 and its native read engine

@@ -5,6 +5,7 @@ Imports rendering functions directly from zarr_plane_server, with no HTTP.
 """
 from __future__ import annotations
 
+import atexit
 import os
 import sys
 import threading
@@ -12,7 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 
 # ── Import rendering functions from zarr_plane_server ────────────────────────
 _SERVER_DIR = os.path.join(os.path.dirname(__file__), "..", "server")
@@ -104,12 +105,39 @@ def do_render(params: dict, executor: ThreadPoolExecutor) -> np.ndarray:
                                    percentile_key_base=pct_key)
 
 
+#: Every RenderWorker that was started and has not been seen finished. The set
+#: keeps each one alive until its thread has ended: Qt deleting a QThread that
+#: still runs crashes the process (CI, 2026-11-25: a segmentation fault when
+#: Python freed a viewer whose thread was still waiting for work).
+_LIVE: set = set()
+_HOOKED = False
+
+
+def stop_all(timeout_ms: int = 2000) -> None:
+    """Stop every running RenderWorker and wait for its thread to end. Runs when
+    the application quits and when Python exits."""
+    workers = list(_LIVE)
+    for worker in workers:
+        worker.stop()
+    for worker in workers:
+        worker.wait(timeout_ms)
+    _LIVE.difference_update(w for w in workers if w.isFinished())
+
+
+atexit.register(stop_all)
+
+
 class RenderWorker(QThread):
     """Background thread that renders zarr planes on demand.
 
     Call ``request(params)`` from the main thread; the worker renders the
     plane and emits ``frame_ready(rgb_array, elapsed_ms)``.  A new request
     always supersedes the previous pending one.
+
+    Give it no Qt parent and stop it with ``stop()``, or tie it to its owner
+    with ``stop_with(owner)``: it then stops when the owner is destroyed. It
+    stays alive (in ``_LIVE``) until its thread has ended, and every running
+    worker is stopped when the application quits or Python exits.
     """
 
     frame_ready = pyqtSignal(object, float, int)   # (np.ndarray, elapsed_ms, generation)
@@ -122,6 +150,22 @@ class RenderWorker(QThread):
         self._stop = False
         self._generation: int = 0          # monotonic request counter
 
+    def start(self, *args):
+        global _HOOKED
+        _LIVE.difference_update([w for w in _LIVE if w.isFinished()])
+        _LIVE.add(self)
+        app = QCoreApplication.instance()
+        if app is not None and not _HOOKED:
+            app.aboutToQuit.connect(stop_all)
+            _HOOKED = True
+        super().start(*args)
+
+    def stop_with(self, owner) -> None:
+        """Stop this worker when *owner* (a QObject) is destroyed. The worker must
+        not be a Qt child of *owner*, or Qt would delete it together with the
+        owner while its thread may still run."""
+        owner.destroyed.connect(self.stop)
+
     def request(self, params: dict):
         """Queue *params* for rendering (replaces any pending request)."""
         with self._cond:
@@ -130,7 +174,7 @@ class RenderWorker(QThread):
             self._pending = params
             self._cond.notify()
 
-    def stop(self):
+    def stop(self, *_):
         with self._cond:
             self._stop = True
             self._cond.notify()
