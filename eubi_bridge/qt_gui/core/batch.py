@@ -17,8 +17,14 @@ a table that obeys those rules. It adds no new format.
 One constraint comes from that CLI path and is enforced here:
 
 * Only scalar values survive a CSV round-trip.  Dicts (``compressor_params``)
-  and range tuples cannot be per-row overrides; they stay in the snapshot and a
-  row that would need to change one is reported via :meth:`BatchModel.add`.
+  travel as JSON and the crop ranges as ``start,stop``; a setting that fits in no
+  cell stays in the snapshot and a row that would need to change one is reported
+  via :meth:`BatchModel.add`.
+
+A row is a file plus a selection of its images (``series_index`` and the view and
+illumination indices): in a file row the selection narrows the file, in an expanded
+row it names one image (:meth:`BatchModel.expand`, decision E-11). A region (the
+ranges) belongs to the output image a row writes.
 """
 from __future__ import annotations
 
@@ -35,23 +41,18 @@ from eubi_bridge.core.config_models import (
 from eubi_bridge.qt_gui.workers.conversion_worker import _build_kwargs
 from eubi_bridge.utils.capabilities import has_bioformats
 from eubi_bridge.utils.path_utils import (
-    AGGREGATIVE_GROUP_COLUMN, concat_without_group_problems,
-    sanitise_group_name)
+    AGGREGATIVE_GROUP_COLUMN, RANGE_KEYS, WHAT_A_ROW_WRITES,
+    concat_without_group_problems, is_blank_cell, range_value,
+    resolve_group_ranges, sanitise_group_name)
 
 # Columns that are addressed positionally rather than as parameter overrides.
 _PATH_COLUMNS = ("input_path", "output_path")
 
 
-# Parameters that cannot be expressed in a single CSV cell.  They are carried by
-# the config snapshot instead; a row is never allowed to override them.
-#
-# ``compressor`` / ``compressor_params`` are deliberately absent: the params dict
-# is written as JSON and parsed back by ConversionConfig, so the codec and its
-# parameters can vary per row.  They must always be emitted *together* (see
-# _COUPLED_KEYS) because e.g. ``GZip(cname='lz4')`` raises TypeError.
-_NON_ROW_OVERRIDABLE = frozenset({
-    "time_range", "channel_range", "z_range", "y_range", "x_range",
-})
+# ``compressor`` / ``compressor_params`` vary per row: the params dict is written
+# as JSON and parsed back by ConversionConfig.  They must always be emitted
+# *together* (see _COUPLED_KEYS) because e.g. ``GZip(cname='lz4')`` raises TypeError.
+# The crop ranges vary per row too (decision E-10): a "start,stop" cell each.
 
 # Groups of keys that are only meaningful as a set.  If any member differs from
 # the baseline, every member is written to the row so they can never desynchronise.
@@ -143,10 +144,14 @@ NON_BLANK = "__non_blank__"
 
 
 _INDEX_TIP = ("'all', a single index, or a comma-separated list such as '0,2,3'.")
+_RANGE_TIP = ("start,stop in level-0 pixels (stop excluded, as a Python slice), "
+              "e.g. 0,100. Blank: the config's range, or the whole axis. The region "
+              "belongs to the image the row writes: setting one on a row of several "
+              "images expands the row first.")
 
 # The parameters an Edit Cells dialog may offer.  Anything absent is either
-# non-overridable (_NON_ROW_OVERRIDABLE), cluster-wide (_CLUSTER_KEYS), or has no
-# sensible single-cell editor; those keep the baseline value.
+# cluster-wide (_CLUSTER_KEYS) or has no sensible single-cell editor; those keep
+# the baseline value.
 #: Bio-Formats installed (the full eubi-bridge); lite offers micro-reader only
 _BIOFORMATS = has_bioformats()
 #: the reader choices, editable per row only where there is a choice (the full one)
@@ -278,6 +283,11 @@ _PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec("io_backend", "Byte backend", "choice",
               _literal_options(ConversionConfig, "io_backend"),
               tab="Conversion", group="Writer"),
+    # the region of the image a row writes (decisions E-10, E-11)
+    *(ParamSpec(f"{key}_range", f"{dim} range", "range", tooltip=_RANGE_TIP,
+                tab="Conversion", group="Dimension Ranges")
+      for key, dim in (("time", "T"), ("channel", "C"), ("z", "Z"), ("y", "Y"),
+                       ("x", "X"))),
 
     # ---- Downscaling tab ----
     # 'auto' is a value the row states, not an absence: it means auto-detect the
@@ -395,9 +405,6 @@ def uneditable_reason(key: str) -> str | None:
     """Why *key* cannot be edited per row, or None when it can be."""
     if key in _PATH_COLUMNS:
         return None
-    if key in _NON_ROW_OVERRIDABLE:
-        return ("applies to the whole batch: set it before adding rows, "
-                "or start a separate batch")
     if key in _CLUSTER_KEYS:
         return "a cluster setting: one batch runs as a single job"
     if key == "compressor_params":
@@ -463,34 +470,15 @@ def column_header(key: str) -> tuple[str, str, str]:
     return spec.tab, spec.group, spec.label
 
 
-# GUI-config locations backing the parameters in _NON_ROW_OVERRIDABLE.
-#
-# Because no row can carry these, whatever the baseline holds is what the whole
-# batch runs with.  Taking the baseline wholesale from the config file would
-# therefore discard the user's current compression / range settings outright, so
-# these specific spots are pinned from the live UI when the baseline is captured.
-_UI_PINNED_PATHS: tuple[tuple[str, str], ...] = (
-    ("conversion", "dimRangeTime"),
-    ("conversion", "dimRangeChannel"),
-    ("conversion", "dimRangeZ"),
-    ("conversion", "dimRangeY"),
-    ("conversion", "dimRangeX"),
-)
-
-
 def make_baseline(persisted: dict, ui_config: dict) -> dict:
-    """Build the batch baseline: the saved config, plus the UI's pinned settings.
+    """Build the batch baseline: the saved config.
 
     Using the saved config as the anchor keeps the first row's deliberate
-    changes visible as overrides.  Overlaying the pinned paths keeps settings
-    that cannot vary per row (compression above all) actually applied.
+    changes visible as overrides.  Every setting a row needs can vary per row
+    now (the crop ranges since decision E-10), so nothing is pinned from the
+    live UI (*ui_config*, kept for the callers).
     """
-    base = deepcopy(persisted)
-    for section, key in _UI_PINNED_PATHS:
-        ui_section = ui_config.get(section)
-        if isinstance(ui_section, dict) and key in ui_section:
-            base.setdefault(section, {})[key] = deepcopy(ui_section[key])
-    return base
+    return deepcopy(persisted)
 
 DEFAULT_BATCH_NAME = "batch.csv"
 #: the config snapshot every batch of a folder shared until eubi-bridge 0.3.2: the last
@@ -764,26 +752,6 @@ class BatchModel:
         self._base_config["cluster"] = deepcopy(cluster)
         self._compare_kwargs = None
 
-    def baseline_summary(self) -> str:
-        """One-line description of the settings that apply to the whole batch.
-
-        These are the parameters no row can override, so they are invisible in
-        the table and would otherwise be impossible to check before running.
-        """
-        if self._base_config is None:
-            return ""
-        conv = self._base_config.get("conversion", {}) or {}
-        parts: list[str] = []
-
-        ranges = [f"{ax}={conv.get('dimRange' + key)}"
-                  for ax, key in (("T", "Time"), ("C", "Channel"),
-                                  ("Z", "Z"), ("Y", "Y"), ("X", "X"))
-                  if conv.get("dimRange" + key)]
-        if ranges:
-            parts.append("ranges: " + ", ".join(ranges))
-
-        return " | ".join(parts)
-
     def clear(self) -> None:
         self._rows.clear()
         self._base_config = None
@@ -885,7 +853,7 @@ class BatchModel:
             # Coupled riders are exempt: they travel with the key that owns them.
             if key in _DERIVED:
                 continue                     # follows its source key, stored per row
-            if (key in _NON_ROW_OVERRIDABLE or not _overridable(value)
+            if (not _overridable(value)
                     or (key not in _COUPLED_RIDERS
                         and uneditable_reason(key) is not None)):
                 blocked.append(key)
@@ -907,7 +875,7 @@ class BatchModel:
         # derived values would otherwise surface as full-table columns that
         # reject every edit: visible, unexplained, and unusable.
         storable = {k: _to_sentinel(k, v) for k, v in row_kwargs.items()
-                    if k not in _NON_ROW_OVERRIDABLE and _overridable(v)
+                    if _overridable(v)
                     and (k in _COUPLED_ALL or uneditable_reason(k) is None)}
 
         # Anything with an editor but no value in row_kwargs starts blank.
@@ -961,6 +929,14 @@ class BatchModel:
             raise ValueError(f"{value!r} cannot be stored in a CSV cell")
         if key in _PATH_COLUMNS and not str(value).strip():
             raise ValueError(f"{key!r} cannot be blank")
+        if key in RANGE_KEYS:
+            if is_blank_cell(value):
+                # a blank range is the config's (a cell cannot say "uncropped"
+                # under a config that crops)
+                self.reset_cells(row_indices, key)
+                return
+            start, stop = range_value(value, _SPEC_BY_KEY[key].label)
+            value = f"{start},{stop}"
 
         base = self._effective_kwargs()
         for index in row_indices:
@@ -997,6 +973,174 @@ class BatchModel:
             return
         for index in row_indices:
             self._rows[index][key] = base[key]
+
+    # -- expanding (decision E-11) --------------------------------------
+
+    @staticmethod
+    def _row_values(row: dict[str, Any]) -> dict[str, Any]:
+        """The parameters *row* states (no paths, no blanks)."""
+        return {k: v for k, v in row.items()
+                if k not in _PATH_COLUMNS and k != _EXPLICIT
+                and v is not None and v == v}
+
+    def row_job(self, row: dict[str, Any]):
+        """The ConversionJob *row* runs as: the baseline, then the row's own values
+        (raises what the job model raises for a setting it refuses)."""
+        from eubi_bridge.core.config_models import ConversionJob
+        merged = {**self._effective_kwargs(),
+                  **{k: from_sentinel(k, v) for k, v in self._row_values(row).items()}}
+        if merged.get("dtype") == "auto":
+            merged["dtype"] = None
+        return ConversionJob.from_kwargs(str(row.get("input_path") or ""),
+                                         str(row.get("output_path") or ""), merged)
+
+    def _effective(self, row: dict[str, Any], key: str) -> Any:
+        return row[key] if key in row else self._effective_kwargs().get(key)
+
+    def _in_group(self, row: dict[str, Any]) -> str:
+        """The aggregative group *row* belongs to, or ''."""
+        return sanitise_group_name(self._effective(row, AGGREGATIVE_GROUP_COLUMN) or "")
+
+    def _folder_files(self, row: dict[str, Any]) -> list[tuple[str, str]]:
+        """``[(file, output folder)]`` for a folder row: the files below it (the
+        batch's include / exclude patterns; a plate's or set's files as its main
+        file, once), each with the folder its output goes to (mirrored below the
+        row's output folder, as a run mirrors a ticked folder, Workplan E28)."""
+        from eubi_bridge.qt_gui.workers.conversion_worker import _split_patterns
+        from eubi_bridge.utils.path_utils import (input_mains, mirrored_output,
+                                                  take_filepaths_from_path)
+        folder = os.path.abspath(str(row["input_path"]))
+        output = str(row.get("output_path") or "")
+        base = self._base_config or {}
+        paths = take_filepaths_from_path(
+            folder, includes=_split_patterns(base.get("includePattern", "")),
+            excludes=_split_patterns(base.get("excludePattern", "")), output_path=output)
+        mains = list(dict.fromkeys(m for m in input_mains([str(p) for p in paths])
+                                   if m is not None))
+        return [(m, mirrored_output(m, [folder], output) or output) for m in mains]
+
+    def expand(self, index: int, lister=None) -> tuple[list[int], list[str]]:
+        """Replace row *index* by one row per image it writes; returns the rows that
+        now stand in its place and notes for the user.
+
+        A file row gets one row per image (``series_index``, and the view or
+        illumination index when those are written one by one): the image's
+        selectors are written on its row, and the rest of the row is copied.
+        A folder row becomes one row per file first (each mirrored as a run
+        mirrors a ticked folder), and each file row is expanded in turn.  Tiles
+        are never split (they follow the mosaic setting), and a file of one
+        image keeps its row.
+
+        Refused (ValueError, the row unchanged): a row of an aggregative group,
+        whose rows build one joined image, and a plate, which is written whole.
+        *lister* (``job -> [selection] | None``) lists a row's images; by default
+        ``pyramid_path.list_images``, which opens the file and reads no pixels.
+        """
+        group = self._in_group(self._rows[index])
+        if group:
+            raise ValueError(
+                f"its rows build one joined image (aggregative group {group!r}): a "
+                f"group is not expanded; give its rows the same region instead")
+        rows, notes, plates = self._expand(index, lister)
+        if plates == [index] and rows == [index]:
+            raise ValueError(_PLATE_WHOLE)
+        return rows, notes
+
+    def _expand(self, index: int, lister=None) -> tuple[list[int], list[str], list[int]]:
+        """:meth:`expand`, also returning the plate rows among the result."""
+        from eubi_bridge.utils.path_utils import _is_input_folder
+        if lister is None:
+            from eubi_bridge.conversion.pyramid_path import list_images as lister
+        row = self._rows[index]
+        if _is_input_folder(row.get("input_path")):
+            files = self._folder_files(row)
+            if not files:
+                raise ValueError(f"no input files below {row['input_path']}")
+            file_rows = []
+            for path, output in files:
+                copy = deepcopy(row)
+                copy["input_path"], copy["output_path"] = path, output
+                file_rows.append(copy)
+            self._rows[index:index + 1] = file_rows
+            count, notes, plates = 0, [], []
+            # each file row in turn, from the last, so the earlier indices hold
+            for offset in reversed(range(len(file_rows))):
+                name = os.path.basename(file_rows[offset]["input_path"])
+                try:
+                    taken, more, found = self._expand(index + offset, lister)
+                except Exception as exc:              # noqa: BLE001 - reported
+                    taken, more, found = [index + offset], [
+                        f"{name}: {str(exc).splitlines()[0]}"], []
+                if found:
+                    more = [f"{name}: {_PLATE_WHOLE}"] + more
+                added = len(taken) - 1
+                plates = found + [p + added for p in plates]
+                count += len(taken)
+                notes = more + notes
+            return list(range(index, index + count)), notes, plates
+        images = lister(self.row_job(row))
+        if images is None:
+            return [index], [], [index]
+        if len(images) <= 1:
+            return [index], [], []
+        new_rows = []
+        for picks in images:
+            copy = deepcopy(row)
+            copy.update(picks)
+            copy[_EXPLICIT] = set(_explicit(row)) | set(picks)
+            new_rows.append(copy)
+        self._rows[index:index + 1] = new_rows
+        return list(range(index, index + len(new_rows))), [], []
+
+    def prepare_region(self, row_indices: Iterable[int],
+                       lister=None) -> tuple[list[int], list[str], list[int]]:
+        """Get *row_indices* ready to carry a region (decision E-11): a row that
+        writes several images is expanded first, so the region is set on each image
+        row.  Returns ``(rows, notes, refused)``: the rows to set it on (indices
+        after expanding), what happened, and the rows refused (plates, which are
+        written whole).  Rows of an aggregative group keep their row: the region
+        is cut from the joined image, and the group's rows must agree (checked by
+        :meth:`validate`).  A row whose images cannot be listed keeps its row too,
+        with a note."""
+        from eubi_bridge.utils.path_utils import _is_input_folder
+        if lister is None:
+            from eubi_bridge.conversion.pyramid_path import list_images as lister
+        wanted = sorted({i for i in row_indices if 0 <= i < len(self._rows)})
+        targets: list[int] = []
+        refused: list[int] = []
+        notes: list[str] = []
+        # from the last, so expanding a row leaves the earlier indices valid; the
+        # rows found so far shift by what each expansion added
+        for index in reversed(wanted):
+            row = self._rows[index]
+            name = os.path.basename(str(row.get("input_path", "")))
+            plates, more = [], []
+            if self._in_group(row):
+                taken = [index]
+            else:
+                try:
+                    folder = _is_input_folder(row.get("input_path"))
+                    taken, more, plates = self._expand(index, lister)
+                    if plates == [index] and taken == [index]:
+                        more = [f"{name}: {_REGION_ON_PLATE}"]
+                    elif folder:
+                        more.insert(0, f"{name}: a folder, expanded into {len(taken)} "
+                                       f"rows")
+                    elif len(taken) > 1:
+                        more.insert(0, f"{name}: {len(taken)} images, expanded into "
+                                       f"{len(taken)} rows")
+                except Exception as exc:             # noqa: BLE001 - reported
+                    taken = [index]
+                    more = [f"{name}: its images could not be listed "
+                            f"({str(exc).splitlines()[0]}); the region applies to "
+                            f"every image the row writes"]
+            notes = more + notes
+            added = len(taken) - 1
+            targets = [t + added for t in targets]
+            refused = [r + added for r in refused]
+            targets[:0] = [t for t in taken if t not in plates]
+            refused[:0] = plates
+        return targets, notes, refused
 
     # -- views -----------------------------------------------------------
 
@@ -1178,15 +1322,11 @@ class BatchModel:
         Each distinct combination of settings is checked once. In eubi-bridge-lite, a
         row that needs the full one (a Bio-Formats reader from an older CSV) is reported
         as the conversion would refuse it."""
-        from eubi_bridge.core.config_models import ConversionJob
         from eubi_bridge.utils.capabilities import NeedsFullEubiBridge, check_run
-        base = self._effective_kwargs()
         found: list[str] = []
         verdicts: dict[str, str] = {}
         for i, row in enumerate(self._rows, 1):
-            values = {k: v for k, v in row.items()
-                      if k not in _PATH_COLUMNS and k != _EXPLICIT
-                      and v is not None and v == v}
+            values = self._row_values(row)
             for key, value in values.items():
                 spec = _SPEC_BY_KEY.get(key)
                 if spec is not None and spec.kind == "choice" and str(value) not in spec.choices:
@@ -1194,12 +1334,8 @@ class BatchModel:
                                  f"{', '.join(spec.choices)}.")
             signature = repr(sorted(((k, str(v)) for k, v in values.items())))
             if signature not in verdicts:
-                merged = {**base, **{k: from_sentinel(k, v) for k, v in values.items()}}
-                if merged.get("dtype") == "auto":
-                    merged["dtype"] = None
                 try:
-                    job = ConversionJob.from_kwargs(str(row.get("input_path") or ""),
-                                                    str(row.get("output_path") or ""), merged)
+                    job = self.row_job(row)
                     check_run(job.metadata.metadata_reader, job.readers.pixel_reader,
                               job.cluster.on_slurm, job.readers.force_bioformats)
                     verdicts[signature] = ""
@@ -1241,6 +1377,11 @@ class BatchModel:
                     parse_scale(row.get(f"{ax}_scale"), f"{ax.capitalize()} scale")
                 except ValueError as exc:
                     problems.append(f"Row {i}: {exc}")
+            for key in RANGE_KEYS:
+                try:
+                    range_value(row.get(key), _SPEC_BY_KEY[key].label)
+                except ValueError as exc:
+                    problems.append(f"Row {i}: {exc}")
 
         problems.extend(self._setting_problems())
 
@@ -1257,24 +1398,44 @@ class BatchModel:
         problems.extend(concat_without_group_problems(
             frame, self._effective_kwargs()))
 
+        # A group's rows build one joined image and its region is cut from it, so
+        # the rows of a group must give the same ranges (decision E-11).
+        base = self._effective_kwargs()
+        groups: dict[str, list[int]] = {}
+        for i, row in enumerate(self._rows):
+            group = sanitise_group_name(row.get(AGGREGATIVE_GROUP_COLUMN, ""))
+            if group:
+                groups.setdefault(group, []).append(i)
+        for group, members in groups.items():
+            table = pd.DataFrame([{key: self._rows[i].get(key) for key in RANGE_KEYS}
+                                  for i in members])
+            try:
+                resolve_group_ranges(group, table, base)
+            except ValueError as exc:
+                rows = ", ".join(str(i + 1) for i in members)
+                problems.append(f"Rows {rows}: {exc}")
+
         # A duplicated output path means one conversion silently overwrites
         # another; easy to create by adding the same file twice.  Rows in the
         # same aggregative group are exempt: they are meant to share an output,
         # and their group name prefixes it, so two groups holding a file of the
-        # same name no longer collide.
-        seen: dict[tuple[str, str], int] = {}
+        # same name no longer collide.  Rows of one file that pick different
+        # images (an expanded row each) write different outputs: they collide
+        # only where their selections share an image.
+        seen: dict[tuple[str, str], list[int]] = {}
         for i, row in enumerate(self._rows, 1):
             if sanitise_group_name(row.get(AGGREGATIVE_GROUP_COLUMN, "")):
                 continue
             key = (str(row.get("output_path", "")),
                    os.path.basename(str(row.get("input_path", ""))))
-            if key in seen:
+            earlier = [j for j in seen.get(key, [])
+                       if _selections_overlap(self._rows[j - 1], row, base)]
+            if earlier:
                 problems.append(
-                    f"Row {i}: same output target as row {seen[key]} "
+                    f"Row {i}: same output target as row {earlier[0]} "
                     f"({key[1]} -> {key[0]}) : one would overwrite the other."
                 )
-            else:
-                seen[key] = i
+            seen.setdefault(key, []).append(i)
 
         return problems
 
@@ -1390,6 +1551,41 @@ class BatchModel:
             model.snapshot_path = snapshot
 
         return model
+
+
+# ── selections ────────────────────────────────────────────────────────────────
+
+_PLATE_WHOLE = "a plate is written whole: its row is not expanded"
+_REGION_ON_PLATE = ("a plate is written whole: a region is not set on it (decision "
+                    "E-11); set its row's 'Write as NGFF plate' to off to crop its "
+                    "images, each written as a store of its own")
+
+#: the index options a row selects its file's images by (they name what it writes)
+_SELECTORS = tuple(k for k in WHAT_A_ROW_WRITES if k.endswith("_index"))
+
+
+def _picks(value: Any) -> set | None:
+    """The positions an index cell picks, or None for all of them."""
+    if is_blank_cell(value) or str(value).strip().lower() in ("all", "none"):
+        return None
+    if isinstance(value, (list, tuple)):
+        return {int(v) for v in value}
+    try:
+        return {int(float(v)) for v in str(value).split(",") if v.strip()}
+    except ValueError:
+        return None                       # reported by the conversion's own check
+
+
+def _selections_overlap(a: dict, b: dict, base: dict) -> bool:
+    """True when rows *a* and *b* (of one file) pick at least one image in common:
+    every index option they select by shares a position (a blank cell is the
+    config's choice)."""
+    for key in _SELECTORS:
+        left = _picks(a.get(key) if key in a else base.get(key))
+        right = _picks(b.get(key) if key in b else base.get(key))
+        if left is not None and right is not None and not left & right:
+            return False
+    return True
 
 
 # ── path helpers ──────────────────────────────────────────────────────────────

@@ -266,6 +266,12 @@ eubi to_zarr /path/to/input_dir /path/to/output_dir --time_range 0,100 --z_range
 
 This will convert a subset of the input datasets (0-100 in the time range and 15-125 in the z range) to OME-Zarr.
 
+A range is `start,stop` in pixels of the full-resolution image, and `stop` is excluded, as in a Python slice. A range crops each output image. When files are concatenated, the range crops the joined image.
+
+A conversion table can give each row its own ranges: add a `time_range`, `channel_range`, `z_range`, `y_range` or `x_range` column, and write a cell such as `"0,100"` (quoted, because of the comma). A blank cell uses the range given on the command line, or the whole axis when none is given. Rows that share an `aggregative_group` build one joined image, so they must give the same ranges; a group whose rows disagree is not converted, and the run lists it at the end. To crop the images of one file differently, give each image its own row and pick it with `series_index` (and `view_index` or `illumination_index` when views or illuminations are written apart).
+
+A plate is written whole, so a range on a file that is converted as a plate is refused. To crop the images of a plate, add `--as_plate False`: each image is then written as an OME-Zarr of its own.
+
 
 > ℹ️ For more examples, see the [conversion tutorial](conversion_tutorial.md#tutorial).
 
