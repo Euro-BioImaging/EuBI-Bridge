@@ -291,16 +291,30 @@ GUI_TESTS = ("test_inspect_page.py", "test_convert_page_actions.py", "test_gui_w
              "test_batch_dialog_dependencies.py", "test_batch_without_csv.py")
 
 
+def _crash_report(result: subprocess.CompletedProcess) -> str:
+    """What a failed run shows: the end of its output, and of a crash the START of
+    stderr too, where faulthandler puts every thread's Python stack (the C stack
+    and the long list of extension modules come after it)."""
+    err = result.stderr
+    if "Fatal Python error" in err and len(err) > 8000:
+        err = err[:6000] + "\n[...]\n" + err[-1500:]
+    else:
+        err = err[-6000:]
+    return result.stdout[-4000:] + "\n" + err
+
+
 def test_the_gui_tests_pass_without_the_standard_stack():
     """The GUI -- viewer, Convert page, batch mode -- runs in eubi-bridge-lite."""
+    # -v and unbuffered output: after a crash, the last test named is the one that ran
     result = _run_lite(f"""
         import os, sys
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        sys.stdout.reconfigure(line_buffering=True)
         import pytest
         sys.exit(pytest.main([*{[str(HERE / f) for f in GUI_TESTS]!r},
-                              "-q", "-p", "no:cacheprovider", "-o", "addopts="]))
+                              "-v", "-p", "no:cacheprovider", "-o", "addopts="]))
     """)
-    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
+    assert result.returncode == 0, _crash_report(result)
     assert " passed" in result.stdout and " error" not in result.stdout
 
 
