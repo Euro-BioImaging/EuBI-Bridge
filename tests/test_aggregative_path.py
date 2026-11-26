@@ -212,12 +212,29 @@ def _multifile_ome(folder: Path, layout: str) -> Path:
 
 
 @pytest.mark.parametrize("layout", ["full", "stub"])
-def test_a_multi_file_ome_tiff_is_not_joined_as_the_whole_set_from_each_file(tmp_path, layout):
+def test_a_multi_file_ome_tiff_joins_one_file_each_on_micro_readers_route(tmp_path, layout):
+    """micro-reader reads each file of the set alone (multifile=False): the join holds one
+    plane per file, in order, not the set once per file (Workplan E6)."""
+    src = _multifile_ome(tmp_path / "in", layout)
+    _convert(src, tmp_path / "new", ["--time_tag", "T", "--concatenation_axes", "t"])
+    (store,) = list((tmp_path / "new").glob("*.zarr"))
+    arr = np.asarray(zarr.open_group(str(store), mode="r")["0"])
+    assert arr.size == 3 * 24 * 32                                # one plane per file
+    assert [int(plane.mean()) for plane in arr.reshape(3, 24, 32)] == [100, 200, 300]
+
+
+@pytest.mark.parametrize("layout", ["full", "stub"])
+def test_a_multi_file_ome_tiff_is_refused_on_the_older_readers_route(tmp_path, layout):
+    """The older readers open a file of the set as the whole set (Bio-Formats: 9 time
+    points from 3 files of one each), so there the join is refused."""
+    pytest.importorskip("scyjava")                     # Bio-Formats: not in eubi-bridge-lite
+    pytest.importorskip("bfio")
     src = _multifile_ome(tmp_path / "in", layout)
     result = _run(src, tmp_path / "new",
-                  ["--time_tag", "T", "--concatenation_axes", "t"])
+                  ["--time_tag", "T", "--concatenation_axes", "t", "--force_bioformats", "True"])
     log = " ".join((result.stdout + result.stderr).split())
-    assert "multi-file OME-TIFF" in log and "img_T0.ome.tif" in log, log[-3000:]
+    assert "multi-file OME-TIFF" in log and "older readers" in log, log[-3000:]
+    assert "--force_bioformats" in log, log[-3000:]
     assert not list((tmp_path / "new").glob("*.zarr/0"))
 
 

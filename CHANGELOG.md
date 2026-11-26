@@ -59,6 +59,15 @@
   was written and thrown away, then built again for each field; it now carries the
   field's acquisition block, as an image's does. Fields of one shape share one built
   document, filled in with their names.
+- **The files of a multi-file OME-TIFF can be joined** (Workplan E6): an aggregative
+  conversion of such files (`--concatenation_axes t` over `img_T0.ome.tif`,
+  `img_T1.ome.tif`, ...) was refused, because a reader that follows the set's OME-XML
+  opens each file as the whole set and the join would repeat it once per file.
+  micro-reader reads each file's own planes, so the join now runs and holds one plane
+  per file. Files that go to the older readers (`--force_bioformats`, `--pixel_reader
+  standard`, or a file micro-reader does not read) are still refused, since those
+  readers still open the whole set: Bio-Formats wrote 9 time points from 3 files of
+  one each.
 
 ### Fixed
 - **The classic viewer's render thread no longer outlives its viewer**: it stopped

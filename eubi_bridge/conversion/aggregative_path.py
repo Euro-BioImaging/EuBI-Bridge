@@ -180,7 +180,9 @@ class _Inputs:
                             self._one_scene(path, len({k[SERIES] for k in entry.file.indices}))
                     return arr
             logger.info(f"{os.path.basename(path)}: older readers ({why})")
-        image = self._legacy_image(path)
+        else:
+            why = _micro_reason(job)
+        image = self._legacy_image(path, why)
         array = image.array
         # a zarr or numpy array of the older readers: the join takes lazy arrays
         if not hasattr(array, "_with_transform") and not _is_dask(array):
@@ -251,8 +253,13 @@ class _Inputs:
                 raise InputError(f"{os.path.basename(path)}: --{option} {value} needs "
                                  f"micro-reader: the older readers join each file's first.")
 
-    def _legacy_image(self, path: str):
+    def _legacy_image(self, path: str, why: str = ""):
+        """The image of `path` from the older readers. *why*: why micro-reader does not
+        read it, for the refusals."""
         self._refuse_picks(path)
+        # only here: micro-reader reads each file of a multi-file OME set alone
+        # (multifile=False), the older readers open it as the whole set (Workplan E6)
+        _refuse_multifile_ome(path, self.paths, why)
         f = self._legacy_file(path)
         keys = sorted({int(k[SERIES]) for k in f.indices})
         self._one_scene(path, len(keys))
@@ -270,8 +277,8 @@ class _Inputs:
         job = _file_job(self.job, path)
         try:
             f = _open_micro(job)
-        except NotYet:
-            return self._legacy_image(path)
+        except NotYet as exc:
+            return self._legacy_image(path, str(exc))
         try:
             if any(SERIES not in k for k in f.indices):
                 raise InputError(f"{os.path.basename(path)} is a plate: its images have no "
@@ -348,25 +355,29 @@ def _check_agreement(paths: list, arrays: list, joined: list) -> None:
 _OME_TIFF = (".ome.tif", ".ome.tiff", ".ome.btf")
 
 
-def _refuse_multifile_ome(paths: list) -> None:
-    """A multi-file OME-TIFF among the inputs: the first file's OME-XML lists planes in
-    other input files, or points to one of them for its metadata. Such a file opens as
-    the whole set, so joining the files would repeat the set's planes; refused until
-    micro-reader can open each file with its own planes only (micro-reader tracker,
-    'Open an OME-TIFF with only its own planes')."""
-    first = paths[0]
-    if not first.lower().endswith(_OME_TIFF):
+def _refuse_multifile_ome(path: str, paths: list, why: str = "") -> None:
+    """`path`, about to be read by the older readers, is a file of a multi-file OME-TIFF
+    whose other files are inputs too: its OME-XML lists planes in other input files, or
+    points to one of them for its metadata. The older readers open such a file as the
+    whole set, so joining the files would repeat the set's planes once per file (3 files
+    of one time point each gave 9 time points). micro-reader reads each file's own planes
+    (multifile=False), so this is asked only on the older readers' route (Workplan E6).
+
+    Bio-Formats' setGroupFiles(False) is no way out: it reads a file of a set whose XML
+    lists every file alone, but sends a BinaryOnly file to its metadata file and returns
+    that file's planes, with no error (checked with Bio-Formats 8.0.0)."""
+    if not path.lower().endswith(_OME_TIFF):
         return
     try:
         import tifffile
-        with tifffile.TiffFile(first) as tif:
+        with tifffile.TiffFile(path) as tif:
             xml = tif.pages[0].description or ""
     except Exception:                                    # noqa: BLE001 - not readable here
         return
     if "<OME" not in xml:
         return
     inputs = {os.path.basename(p) for p in paths}
-    own = os.path.basename(first)
+    own = os.path.basename(path)
     named = set(re.findall(r'FileName="([^"]+)"', xml))
     named |= set(re.findall(r'MetadataFile="([^"]+)"', xml))
     others = sorted({os.path.basename(n.replace("\\", "/")) for n in named} & inputs - {own})
@@ -374,9 +385,12 @@ def _refuse_multifile_ome(paths: list) -> None:
         raise InputError(
             f"Aggregative conversion: {own} is part of a multi-file OME-TIFF: its OME-XML "
             f"refers to {len(others)} of the other input files ({', '.join(others[:3])}"
-            f"{', ...' if len(others) > 3 else ''}). Such a file opens as the whole set, so "
-            f"joining the files would repeat its planes. Convert the set as one image "
-            f"instead: convert {own} on its own (no --concatenation_axes).")
+            f"{', ...' if len(others) > 3 else ''}). It goes to the older readers"
+            f"{f' ({why})' if why else ''}, which open such a file as the whole set, so "
+            f"joining the files would repeat its planes. Let micro-reader read the files "
+            f"(it reads each file's own planes: drop --force_bioformats or "
+            f"--pixel_reader standard), or convert the set as one image: {own} on its "
+            f"own, without --concatenation_axes.")
 
 
 def _channel_groups(paths: list, job_kwargs: dict) -> list:
@@ -496,7 +510,6 @@ def _build_entry(paths: list, job, job_kwargs: dict):
     paths = FileSet(paths, shapes=[(1,) * 5] * len(paths), **_tags(job_kwargs)).in_order()
     scene = _scene(job_kwargs)
     joined_axes = _axis_list(job_kwargs.get("concatenation_axes"))
-    _refuse_multifile_ome(paths)
     inputs = _Inputs(paths, job, scene)
     scene = inputs.scene                                   # 'all': each file's only series
     try:
