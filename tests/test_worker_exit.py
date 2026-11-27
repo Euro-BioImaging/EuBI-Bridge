@@ -91,7 +91,7 @@ def test_a_worker_that_never_exits_does_not_hang_the_run(tmp_path, monkeypatch):
     import stuck_worker
     from eubi_bridge.conversion import dispatcher
     monkeypatch.setattr(dispatcher, "_WORKER_EXIT_S", 2.0)
-    job = SimpleNamespace(cluster=SimpleNamespace(tensorstore_data_copy_concurrency=1))
+    job = SimpleNamespace(cluster=SimpleNamespace())
     t0 = time.monotonic()
     results = asyncio.run(dispatcher._dispatch(
         [job], stuck_worker.work, ProcessPoolExecutor,

@@ -122,7 +122,6 @@ _FIELD_HINTS: dict[str, str] = {
     "max_concurrent_scenes": "Parallel scenes per file (default 1); they share `max_threads`.",
     "decode_threads": "micro-reader's decode threads per worker process (formerly `micro_read_concurrency`).",
     "bioformats_threads": "Threads for parallel Bio-Formats tile reads (formerly `bf_read_concurrency`).",
-    "tensorstore_data_copy_concurrency": "TensorStore internal copy threads.",
     "max_retries": "Retries on a broken worker process.",
     "on_slurm": "Submit to a SLURM cluster.",
     "on_local_cluster": "Use a Dask LocalCluster backend.",
@@ -303,7 +302,6 @@ _EXAMPLES: dict[str, str | list[str]] = {
     "on_local_cluster": "eubi to_zarr /data/input /data/output --on_local_cluster",
     "memory_budget": "eubi to_zarr /data/input /data/output --memory_budget 16GB",
     "log_file": "eubi to_zarr /data/input /data/output --log_file /data/logs/run1.log",
-    "tensorstore_data_copy_concurrency": "eubi to_zarr /data/input /data/output --tensorstore_data_copy_concurrency 8",
     "slurm_time": "eubi to_zarr /data/input /data/output --on_slurm --slurm_time 48:00:00",
     "slurm_account": "eubi to_zarr /data/input /data/output --on_slurm --slurm_account myaccount",
     "slurm_partition": "eubi to_zarr /data/input /data/output --on_slurm --slurm_partition gpu",
@@ -635,10 +633,6 @@ _CMD_EXAMPLES: dict[str, dict[str, str | list[str]]] = {
         "use_threading": [
             "# Switch from ProcessPool to ThreadPool (useful when GIL is not a bottleneck)",
             "eubi configure cluster --use_threading",
-        ],
-        "tensorstore_data_copy_concurrency": [
-            "# Allow TensorStore to copy data with 8 internal threads",
-            "eubi configure cluster --tensorstore_data_copy_concurrency 8",
         ],
         "max_retries": [
             "# Retry failed workers up to 5 times before aborting",
