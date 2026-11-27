@@ -108,6 +108,15 @@
   that was still running, and the process crashed (a segmentation fault on CI, Lite
   on Python 3.14). The thread now stops when its viewer is destroyed, when the
   application quits, and when Python exits.
+- **An OME companion whose image has no name of its own keeps the companion's name**
+  (Workplan E8): an `ome-tiff.companion.ome` whose image carries no `Name` wrote
+  `ome-tiff.companion.ome.zarr`, because micro-reader names such an image after the
+  file and that name was taken for the dataset's. It now writes `ome-tiff.ome.zarr`,
+  the name the file gives. A Bruker companion, whose image is called `Sequence:1`,
+  wrote `Sequence_1.ome.zarr` since 0.4.0; "Sequence" with a number names nothing now,
+  as "Image:0" and "Series 0" already did, so it keeps the companion's name
+  (`TSeries-02282025-1111-071.ome.zarr`). Companions whose image or plate has a real
+  name keep taking it.
 
 ## 0.4.2 (2026-11-17)
 

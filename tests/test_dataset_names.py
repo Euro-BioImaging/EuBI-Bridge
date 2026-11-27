@@ -16,9 +16,9 @@ from eubi_bridge.utils.path_utils import (dataset_names, disambiguate_output_nam
 NS = "http://www.openmicroscopy.org/Schemas/OME/2016-06"
 
 
-def _viventis(folder: Path, image_name: str, Z=2, value=1):
-    """A Viventis-like batch: ``ome-tiff.companion.ome`` naming one image, and one plane
-    file per z (each pointing back at the companion)."""
+def _viventis(folder: Path, image_name: str, Z=2, value=1, named=True):
+    """A Viventis-like batch: ``ome-tiff.companion.ome`` naming one image (no ``Name``
+    when not `named`), and one plane file per z (each pointing back at the companion)."""
     folder.mkdir(parents=True, exist_ok=True)
     this = f"urn:uuid:companion-{image_name}"
     tiffdata = []
@@ -31,8 +31,9 @@ def _viventis(folder: Path, image_name: str, Z=2, value=1):
                          metadata=None)
         tiffdata.append(f'<TiffData FirstT="0" FirstC="0" FirstZ="{z}" IFD="0" PlaneCount="1">'
                         f'<UUID FileName="{name}">{uuid}</UUID></TiffData>')
+    name_attr = f' Name="{image_name}"' if named else ""
     xml = (f'<?xml version="1.0" encoding="UTF-8"?><OME xmlns="{NS}" UUID="{this}">'
-           f'<Image ID="Image:0" Name="{image_name}"><Pixels ID="Pixels:0" '
+           f'<Image ID="Image:0"{name_attr}><Pixels ID="Pixels:0" '
            f'DimensionOrder="XYZCT" Type="uint16" SizeX="20" SizeY="16" SizeZ="{Z}" SizeC="1" '
            f'SizeT="1" PhysicalSizeX="0.5" PhysicalSizeY="0.5"><Channel ID="Channel:0:0" '
            f'SamplesPerPixel="1"/>{"".join(tiffdata)}</Pixels></Image></OME>')
@@ -45,6 +46,7 @@ def _viventis(folder: Path, image_name: str, Z=2, value=1):
     ("0459 1A", "0459 1A"),
     ("a/b:c", "a_b_c"),
     ("Plate01", None), ("Microplate", None), ("Image:0", None), ("Series 0", None),
+    ("Sequence:1", None),                      # a Bruker companion's image (E8)
     ("Position 1", None), ("", None), ("cf91602d-0ed3-4cc7-b5c2-6374492106ab", None),
 ])
 def test_generic_names_name_nothing(name, kept):
@@ -54,6 +56,30 @@ def test_generic_names_name_nothing(name, kept):
 def test_a_companion_set_takes_its_image_name(tmp_path):
     path = _viventis(tmp_path / "Position 11_Settings 1", "Position 11_Settings 1")
     assert dataset_names([str(path)]) == {str(path): "Position 11_Settings 1"}
+
+
+@pytest.mark.parametrize("image_name, named", [("Image:0", True), ("unused", False)])
+def test_a_companion_without_an_image_name_keeps_its_file_name(tmp_path, image_name, named):
+    """Workplan E8: an OME companion whose image has a generic name, or none, is named
+    after the companion file, without its suffix: 'ome-tiff', never
+    'ome-tiff.companion' (micro-reader's name for an image of no name of its own, which
+    wrote 'ome-tiff.companion.ome.zarr')."""
+    path = str(_viventis(tmp_path / "Embryo_A_run3", image_name, named=named))
+    assert dataset_names([path]) == {}
+    assert disambiguate_output_names([path]) == {path: "ome-tiff"}
+
+
+def test_a_companion_converts_under_its_file_name(tmp_path):
+    """End to end (E8): an unnamed companion image converts once, as 'ome-tiff.ome.zarr',
+    with the planes the companion lists."""
+    from eubi_bridge.ebridge import EuBIBridge
+    import zarr
+    path = _viventis(tmp_path / "in" / "Embryo_A_run3", "unused", Z=3, value=5, named=False)
+    EuBIBridge().to_zarr(str(path), str(tmp_path / "out"), use_threading=True, verbose=False)
+    assert [p.name for p in (tmp_path / "out").iterdir()] == ["ome-tiff.ome.zarr"]
+    level = np.asarray(zarr.open_group(str(tmp_path / "out" / "ome-tiff.ome.zarr"),
+                                       mode="r")["0"])
+    assert level.squeeze().tolist() == [np.full((16, 20), 5 + z).tolist() for z in range(3)]
 
 
 def test_viventis_batches_no_longer_collide(tmp_path):

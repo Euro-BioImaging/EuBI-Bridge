@@ -1082,9 +1082,9 @@ def input_mains(input_paths: List[str], plates: bool = True) -> List[Optional[st
 #: MetaXpress .htd, InCell .xdce, Opera .flex
 DATASET_NAMED_SUFFIXES = (".companion.ome", ".wpi", ".htd", ".xdce", ".flex")
 #: names that say nothing about the dataset: a kind with a number (Plate01, Image:0,
-#: Series 0, Microplate, Position 1), a GUID, nothing
+#: Series 0, Microplate, Position 1, Bruker's Sequence:1), a GUID, nothing
 _GENERIC_DATASET_NAME = re.compile(
-    r"(?:image|series|plate|microplate|well|field|position|default|untitled|sample|"
+    r"(?:image|series|sequence|plate|microplate|well|field|position|default|untitled|sample|"
     r"experiment|measurement|dataset)[\s_:.#-]*\d*"
     r"|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\W*", re.IGNORECASE)
 
@@ -1096,6 +1096,15 @@ def usable_dataset_name(name) -> Optional[str]:
         return None
     safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name.strip()).rstrip(" .")
     return safe[:120] or None
+
+
+def _is_file_stem(name: str, path: str) -> bool:
+    """Whether *name* is only *path*'s own file name without its suffix: the name
+    micro-reader gives an image whose format names none (``ome-tiff.companion`` for
+    ``ome-tiff.companion.ome``, ``cells`` for ``cells.ome.tif``)."""
+    base = os.path.basename(str(path).replace("\\", "/").rstrip("/"))
+    stems = {os.path.splitext(base)[0], output_stem(base)}
+    return name.strip().lower() in {s.lower() for s in stems if s}
 
 
 def dataset_names(input_paths: List[str], per_image=()) -> dict:
@@ -1122,6 +1131,12 @@ def dataset_names(input_paths: List[str], per_image=()) -> dict:
                     base = [im for im in f.images if not dict(im.index).get("resolution")]
                     name = base[0].name if len(base) == 1 else None
         except Exception:                       # noqa: BLE001 - keeps the name it had
+            continue
+        if name is not None and _is_file_stem(name, path):
+            # micro-reader names a set's only image after the main file when its format
+            # gives it no name (micro-reader's naming rule 4): no dataset name, so the
+            # input keeps its own (Workplan E8: an unnamed OME companion image wrote
+            # 'ome-tiff.companion.ome.zarr')
             continue
         name = usable_dataset_name(name)
         if name:
