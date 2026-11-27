@@ -138,7 +138,6 @@ def _build_executor(cluster, use_threading: bool) -> tuple:
         "max_workers": cluster.max_processes,
         "mp_context": ctx,
         "initializer": initialize_worker_process,
-        "initargs": (cluster.tensorstore_data_copy_concurrency,),
     }
 
 
@@ -201,7 +200,6 @@ async def _dispatch(
     executor_kwargs: dict,
     use_threading: bool,
     label: str = "Main",
-    tsc=None,
     order: list = None,
 ) -> list:
     """Shared coroutine: submit all jobs to a pool, gather, report failures.
@@ -211,8 +209,6 @@ async def _dispatch(
     *order*: the order to start the jobs in (indices into *jobs*, the biggest first);
     results come back, and failures are numbered, in *jobs*' own order.
     """
-    if tsc is None:
-        tsc = jobs[0].cluster.tensorstore_data_copy_concurrency if jobs else 1
     loop = asyncio.get_running_loop()
 
     async def _submit_one(pool, idx: int, job: ConversionJob):
@@ -226,7 +222,7 @@ async def _dispatch(
             ctx = mp.get_context("spawn")
             temp = ProcessPoolExecutor(
                 max_workers=1, mp_context=ctx,
-                initializer=initialize_worker_process, initargs=(tsc,),
+                initializer=initialize_worker_process,
             )
             try:
                 return await loop.run_in_executor(temp, worker_fn, job)
@@ -342,8 +338,7 @@ async def _dispatch_unary_with_slurm(jobs: list) -> list:
                 logger.info(f"Cluster dashboard: {client.dashboard_link}")
                 client.wait_for_workers(cfg.max_processes,
                                         timeout=cfg.slurm_worker_timeout)
-                client.run(_slurm_worker_init,
-                           cfg.tensorstore_data_copy_concurrency)
+                client.run(_slurm_worker_init)
                 futures = [
                     client.submit(unary_worker_sync, j, pure=False)
                     for j in jobs
@@ -684,8 +679,7 @@ def dispatch_mixed_jobs(unary_jobs: list, aggregative_jobs: list,
     order = _largest_first([job.input_path for job in unary_jobs]
                            + [paths for paths, _out, _kw in planned])
     return asyncio.run(_dispatch(tasks, _call, exc_cls, exc_kw, use_threading,
-                                 label="Conversion table",
-                                 tsc=first.tensorstore_data_copy_concurrency, order=order))
+                                 label="Conversion table", order=order))
 
 
 def dispatch_aggregative_jobs(jobs: list) -> list:
@@ -748,7 +742,6 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
 
     max_workers   = int(global_kwargs.get("max_processes", 4))
     use_threading = global_kwargs.get("use_threading", False)
-    tsc           = global_kwargs.get('tensorstore_data_copy_concurrency', 1)
 
     from eubi_bridge.conversion.conversion_worker import metadata_reader_sync
 
@@ -761,7 +754,6 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
             "max_workers": max_workers,
             "mp_context": ctx,
             "initializer": initialize_worker_process,
-            "initargs": (tsc,),
         }
 
     loop = asyncio.get_running_loop()
@@ -777,7 +769,7 @@ async def run_metadata_collection_from_filepaths(input_path, **global_kwargs):
             ctx2 = mp.get_context("spawn")
             temp = ProcessPoolExecutor(
                 max_workers=1, mp_context=ctx2,
-                initializer=initialize_worker_process, initargs=(tsc,),
+                initializer=initialize_worker_process,
             )
             try:
                 return await loop.run_in_executor(temp, metadata_reader_sync, ip, job_kw)
@@ -862,10 +854,10 @@ def _parse_filepaths_with_tags(filepaths, tags):
     return [path for path in filepaths if all(path in place for place in places)]
 
 
-def _slurm_worker_init(tensorstore_data_copy_concurrency='default'):
+def _slurm_worker_init():
     """Worker initialiser for Dask SLURM/LocalCluster workers."""
     from eubi_bridge.conversion.worker_init import initialize_worker_process
-    initialize_worker_process(tensorstore_data_copy_concurrency)
+    initialize_worker_process()
 
 
 def _aggregative_slurm_task(input_path, output_path, kwargs_dict):
@@ -903,7 +895,6 @@ async def run_aggregative_with_slurm(input_path, output_path, **kwargs):
     slurm_account   = kwargs.get('slurm_account', None)
     slurm_partition = kwargs.get('slurm_partition', None)
     slurm_sif_path  = kwargs.get('slurm_sif_path', None)
-    tsc             = kwargs.get('tensorstore_data_copy_concurrency', 'default')
     worker_timeout  = int(kwargs.get('slurm_worker_timeout', 300))
 
     cluster_kwargs = dict(
@@ -926,7 +917,7 @@ async def run_aggregative_with_slurm(input_path, output_path, **kwargs):
         with Client(cluster) as client:
             logger.info(f"Cluster dashboard: {client.dashboard_link}")
             client.wait_for_workers(1, timeout=worker_timeout)
-            client.run(_slurm_worker_init, tsc)
+            client.run(_slurm_worker_init)
             # the whole aggregative run is this one SLURM job: its memory is the run's
             future = client.submit(
                 _aggregative_slurm_task, input_path, output_path,
@@ -1100,9 +1091,6 @@ def _aggregative_groups(
         tag_folders=folders,                # a worker reads its files' tags as the plan did
         **kwargs,
     )
-
-    tsc = kwargs.get('tensorstore_data_copy_concurrency', 1)
-    os.environ['EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY'] = str(tsc)
 
     jvm_memory = kwargs.get('jvm_memory')
     if jvm_memory:

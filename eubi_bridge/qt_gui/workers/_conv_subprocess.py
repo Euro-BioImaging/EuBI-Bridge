@@ -103,10 +103,8 @@ def _conversion_subprocess(call_args: dict, log_queue, result_queue) -> None:
 
     class _LoggingPPE(_orig_ppe):
         def __init__(self, max_workers=None, **kw):
-            raw = kw.get("initargs", (1,))[0] if "initargs" in kw else 1
-            tsc = raw if isinstance(raw, int) else 1
             kw["initializer"] = setup_mp_logging_with_worker_init
-            kw["initargs"]    = (_lq, tsc)
+            kw["initargs"]    = (_lq,)
             super().__init__(max_workers, **kw)
 
     _conv_module.ProcessPoolExecutor = _LoggingPPE

@@ -2427,7 +2427,8 @@ class EuBIBridge:
             max_processes: Override the configured max_processes (images converted
                 at once) for this run. Formerly ``max_workers``, which still works.
             max_retries: Override the configured max_retries.
-            tensorstore_data_copy_concurrency: TensorStore internal copy threads.
+            tensorstore_data_copy_concurrency: RETIRED in 0.2.0: does nothing (warned
+                about once when set).
             use_threading: Use a ThreadPool instead of a ProcessPool.
             on_slurm: Submit jobs to a SLURM cluster (the full eubi-bridge only).
             on_local_cluster: DEPRECATED and ignored.

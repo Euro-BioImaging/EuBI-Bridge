@@ -61,6 +61,13 @@
   document, filled in with their names.
 
 ### Fixed
+- **No more "Tensorstore context configured: data_copy_concurrency=…" in the worker
+  log.** `tensorstore_data_copy_concurrency` has done nothing since 0.2.0, but each worker
+  still built a TensorStore context from it that nothing read, and its log line said
+  the setting applied. The context, the log line and the `EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY`
+  variable are gone. The setting is still accepted, so saved configs and scripts keep
+  working; a value other than the default warns once that it does nothing, as before.
+  The threads of a conversion are `max_threads` (and `decode_threads` for reading).
 - **The classic viewer's render thread no longer outlives its viewer**: it stopped
   only when the viewer itself was closed, so a viewer freed without that (the
   Inspect page of a main window that was closed, or a test's page) deleted a thread

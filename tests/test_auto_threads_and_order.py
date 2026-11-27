@@ -152,12 +152,12 @@ def test_jobs_start_biggest_first_and_report_in_their_own_order():
     jobs = ["a", "b", "c"]
     with pytest.raises(RuntimeError, match=r"Task 1: b broke"):     # b is still task 1
         asyncio.run(dispatcher._dispatch(jobs, work, ThreadPoolExecutor, {"max_workers": 1},
-                                         use_threading=True, tsc=1, order=[2, 0, 1]))
+                                         use_threading=True, order=[2, 0, 1]))
     assert started == ["c", "a", "b"]
 
     results = asyncio.run(dispatcher._dispatch(["a", "c"], lambda j: j.upper(), ThreadPoolExecutor,
                                                {"max_workers": 1}, use_threading=True,
-                                               tsc=1, order=[1, 0]))
+                                               order=[1, 0]))
     assert results == ["A", "C"]
 
 
