@@ -66,8 +66,10 @@ def test_standard_lif_route_matches_micro_reader(name):
 
 def test_full_install_pins_bioio_lif_2_and_drops_readlif():
     import tomllib
-    root = Path(__file__).resolve().parents[1]
-    deps = tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"]
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    if not pyproject.exists():
+        pytest.skip("no pyproject.toml next to the tests (an installed copy)")
+    deps = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["dependencies"]
     lif = [d for d in deps if d.replace("_", "-").startswith("bioio-lif")]
     assert lif and ">=2.0.1" in lif[0], lif
     assert not [d for d in deps if d.startswith("readlif")]
