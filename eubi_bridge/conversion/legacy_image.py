@@ -177,14 +177,15 @@ class LegacyImage:
         return np.asarray(part.compute() if hasattr(part, "compute") else part)
 
 
-def _refuse_what_is_dropped(path: str, readers) -> None:
+def _refuse_what_is_dropped(path: str, readers, metadata_reader: str = "micro") -> None:
     """The older readers read a file's first view and illumination, and the first tile of a
     mosaic that is not a CZI (bioio's CZI and LIF readers get only the phase and rotation):
     a file with more, converted as the default 'all', would give one image of several in
     silence (tenth review N-06). Refused in one line, counted by micro-reader; a file it
     cannot open is not refused. A choice of 0 takes the first, as asked. With
     force_bioformats, Bio-Formats reads the pixels: views are its series, illuminations
-    its channels, nothing is dropped."""
+    its channels, nothing is dropped. The line names the setting that chose the older
+    readers (until 0.4.2 always --metadata_reader bfio, also for --pixel_reader standard)."""
     from eubi_bridge.utils.errors import InputError
     if readers.force_bioformats:
         return
@@ -204,11 +205,19 @@ def _refuse_what_is_dropped(path: str, readers) -> None:
                if getattr(readers, option[index], "all") not in (0, "0")]
     if dropped:
         what = " and ".join(f"{n} {index}s" for index, n in dropped)
+        first = " ".join(f"--{option[index]} 0" for index, _ in dropped)
+        given = ([f"--metadata_reader {metadata_reader}"] if metadata_reader != "micro" else []) \
+            + ([f"--pixel_reader {readers.pixel_reader}"]
+               if getattr(readers, "pixel_reader", "micro") != "micro" else [])
+        if given:
+            raise InputError(
+                f"{os.path.basename(path)} has {what}; the older readers ({' '.join(given)}) "
+                f"read only the first of each. Convert it with the default readers (without "
+                f"{' and '.join(given)}), or choose {first} to convert the first.")
         raise InputError(
-            f"{os.path.basename(path)} has {what}; the older readers (--metadata_reader "
-            f"bfio) read only the first of each. Convert it with the default reader "
-            f"(without --metadata_reader bfio), or choose "
-            f"{' '.join(f'--{option[index]} 0' for index, _ in dropped)} to convert the first.")
+            f"{os.path.basename(path)} has {what}; micro-reader did not take the file (see "
+            f"the line above), and the older readers read only the first of each. Choose "
+            f"{first} to convert the first.")
 
 
 class LegacyFile:
@@ -221,7 +230,7 @@ class LegacyFile:
         from eubi_bridge.core.data_manager import SceneLoader
         readers, meta = job.readers, job.metadata
         self.path = str(job.input_path)
-        _refuse_what_is_dropped(self.path, readers)
+        _refuse_what_is_dropped(self.path, readers, meta.metadata_reader)
         # a CZI's phase and rotation (0.1.x never passed them on in a unary conversion:
         # always 0); the other readers take no such option
         czi_kwargs = ({"phase_index": int(readers.phase_index or 0),

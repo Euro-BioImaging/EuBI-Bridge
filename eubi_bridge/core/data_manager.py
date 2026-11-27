@@ -891,6 +891,16 @@ class PFFImageMeta(ImageReader):
         if not problem:
             self.reader.set_scene(min(self._series, self.reader.n_scenes - 1))
             return
+        if str(self.root).lower().endswith('.czi'):
+            from eubi_bridge.core.czi_hilo import misread_by_libczi
+            if misread_by_libczi(self.root):
+                # the standard CZI readers misread it (Workplan E9): no reader left
+                from eubi_bridge.utils.errors import InputError
+                raise InputError(
+                    f"{self.root}: micro-reader's image disagrees with the metadata "
+                    f"({problem}), and the standard CZI readers decode this file's hi-lo "
+                    f"packed 16-bit RGB zstd subblocks wrongly: not converted. "
+                    f"metadata_reader='micro' takes the metadata from micro-reader too.")
         logger.warning(f"pixel_reader=micro: {self.root}: standard reader used ({problem})")
         self._reader_kwargs = {k: v for k, v in self._reader_kwargs.items()
                                if k != 'pixel_reader'}

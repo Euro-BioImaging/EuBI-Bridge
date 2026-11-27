@@ -61,6 +61,40 @@
   document, filled in with their names.
 
 ### Fixed
+- **LIF on the standard reader: right planes in tile scans over time**: the full install
+  now uses bioio-lif 2 or later (`>=2.0.1,<4`), which reads through liffile; readlif is
+  no longer installed. bioio-lif 1.1.0 (readlif 0.6.5) mixed up tiles and time points:
+  asking for tile 0 at t=1 returned tile 1 at t=0 (XYCST.lif: 18 of 24 planes wrong;
+  XYCZST.lif: 90 of 120), and it read two more of our sample files wrongly. On 16 LIFs
+  (105 scenes) the standard route now matches micro-reader plane for plane (as before,
+  a tile scan is refused there unless `--mosaic_tile_index 0` takes its first tile). Only
+  `pixel_reader='standard'` and the fallback for files micro-reader declines used it;
+  the default route and eubi-bridge-lite are unchanged. RGB and lambda LIFs, which
+  bioio-lif 1.1.0 read wrongly without a word, now fail in bioio-lif with an error;
+  micro-reader reads them.
+- **CZI with 16-bit RGB hi-lo zstd on the standard reader**: libCZI (under pylibCZIrw
+  6.1.0 and aicspylibczi) decodes 16-bit RGB subblocks that ZEN stored zstd-compressed
+  with hi-lo byte packing wrongly (every pixel of the Zeiss-5 slide preview). Such a
+  file is now read by micro-reader even with `pixel_reader='standard'`, with a warning
+  saying why; when micro-reader does not read it either, it is refused instead of
+  converted with wrong pixels. Detected from the subblock directory and a few header
+  bytes, without reading pixels. 16-bit grey hi-lo files are read correctly by libCZI
+  and keep the standard reader.
+- **Every file micro-reader reads is read by micro-reader**: the default route took only
+  the file suffixes it listed, so a file micro-reader recognises by its content went to
+  the older readers under any other name: a Luxendo experiment folder (no suffix), a
+  lone MetaMorph `.stk`, `.tf2` / `.tf8` and `.ome.tf2` / `.ome.tf8` BigTIFFs, a TIFF or
+  JPEG under an unusual suffix (`.jfif`). They are now read by micro-reader; a file it does not
+  recognise, or recognises but cannot read, still goes to the older readers, and a
+  format that needs a newer micro-reader (VSI before 0.3.0, KLB before 0.4.0) still
+  waits for it. Over the 984 files of our samples whose suffix was not listed, only the
+  Luxendo folder changes reader: every other one is a side file, or a part whose main
+  file was already converted with micro-reader.
+- **The older readers' refusal names the setting that chose them**: a file with several
+  tiles, views or illuminations is refused on the older readers unless the first is
+  chosen; the line said `--metadata_reader bfio` also when `--pixel_reader standard`
+  was given, and now names what was given (or, when micro-reader declined the file,
+  says so).
 - **No more "Tensorstore context configured: data_copy_concurrency=…" in the worker
   log.** `tensorstore_data_copy_concurrency` has done nothing since 0.2.0, but each worker
   still built a TensorStore context from it that nothing read, and its log line said

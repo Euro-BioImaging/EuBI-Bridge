@@ -4,7 +4,7 @@ bioformats_jar>=0.0.0
 bioio-base>=0.0.0
 bioio-czi==2.1.0
 bioio-imageio==1.1.0
-bioio-lif==1.1.0
+bioio-lif>=2.0.1,<4
 bioio-nd2==1.1.0
 bioio-ome-tiff-fork-by-bugra==0.0.1b2
 bioio-tifffile-fork-by-bugra>=0.0.1b2
@@ -20,7 +20,6 @@ numpy>=1.24
 ome_zarr_pyramid[remote]>=0.5.0,<0.7
 pydantic>=2.11.7
 pylibczirw>=0.0.0
-readlif==0.6.5
 s3fs>=0.0.0
 tensorstore>=0.1.86
 tifffile>=2025.5.21

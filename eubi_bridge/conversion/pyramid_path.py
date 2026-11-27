@@ -39,7 +39,11 @@ logger = get_logger(__name__)
 #: colour notices already logged: a plate repeats one per well, so repeats go to debug
 _COLOUR_NOTICES: set = set()
 
-#: files micro-reader reads here (the others go to the older readers, as in 0.1.5)
+#: the suffixes put on micro-reader's route one group at a time, each checked against the
+#: older readers first (the record below). After 0.4.2 the route no longer stops at this
+#: list: every file micro-reader opens by its content is read by it (_open_micro), also
+#: under a suffix not named here (a Luxendo experiment folder, a lone MetaMorph .stk,
+#: .tf2 / .tf8 BigTIFFs); only FORMATS_SINCE still keeps a format off the route
 FORMATS = (".ome.tif", ".ome.tiff",
            ".tif", ".tiff", ".lsm", ".btf",                # step 1c, group 1
            ".nd2", ".lif", ".oir",                         # group 2
@@ -142,12 +146,17 @@ def _retired_settings(job) -> None:
             "once more with pixel_reader='standard' and compare the two outputs.")
 
 
+def _listed(path) -> bool:
+    """Whether *path* has a suffix of FORMATS (else micro-reader may still read it by its
+    content: _open_micro)."""
+    return str(path).lower().endswith(FORMATS)
+
+
 def _off_route(path) -> str:
-    """Why a file named *path* is not on micro-reader's route (FORMATS, FORMATS_SINCE),
-    or ''."""
+    """Why a file named *path* is kept off micro-reader's route (FORMATS_SINCE: its format
+    needs a newer micro-reader there), or ''. Every other file is offered to micro-reader,
+    which decides by its content (_open_micro)."""
     name = str(path).lower()
-    if not name.endswith(FORMATS):
-        return f"format not on micro-reader's route yet ({', '.join(FORMATS)})"
     for ending, since in FORMATS_SINCE.items():
         if name.endswith(ending):
             from eubi_bridge.core.micro_source import micro_reader_version
@@ -434,10 +443,15 @@ def _open_micro(job) -> _MicroFile:
     reason = _micro_reason(job, suffix=False)
     if reason:
         raise NotYet(reason)
-    # A file whose suffix is not on the route may still be a part of a composite whose
-    # main file is (a Harmony measurement's side files, e.g. images/image.index.txt, open
-    # images/index.xml): micro-reader opens the main file, and the job reads that.
+    # A file whose suffix is kept off the route (FORMATS_SINCE) may still be a part of a
+    # composite whose main file is on it: micro-reader opens the main file, and the job
+    # reads that. A file under a suffix FORMATS does not list is micro-reader's when it
+    # opens it by its content: as a part, its main file is converted (a Harmony
+    # measurement's side files, e.g. images/image.index.txt, open images/index.xml); as
+    # its own main file, the file itself (a Luxendo experiment folder; until 0.4.2 these
+    # went to the older readers, although micro-reader reads them)
     off_route = _micro_reason(job)
+    listed = _listed(job.input_path)
     require_micro_reader()      # MicroReaderVersionError: a wrong micro-reader is no fallback
     # "auto": the cores over the conversions running at once until the file is open;
     # the memory plan narrows it to what the file's blocks leave room for
@@ -462,14 +476,23 @@ def _open_micro(job) -> _MicroFile:
     except micro_reader.MicroReaderError as exc:
         if off_route:
             raise NotYet(f"{off_route}; micro-reader: {exc}") from exc
+        if not listed:
+            # a suffix micro-reader's route never named: the older readers, as before
+            raise NotYet(f"micro-reader cannot read it ({exc})") from exc
         raise
-    if off_route:
+    if off_route or not listed:
         main = str(f.path)
-        if os.path.normcase(os.path.abspath(main)) == os.path.normcase(os.path.abspath(path))                 or _off_route(main):
+        itself = os.path.normcase(os.path.abspath(main)) == os.path.normcase(os.path.abspath(path))
+        if off_route and (itself or _off_route(main)):
             f.close()
             raise NotYet(off_route)
-        logger.info(f"{path}: a part of {main}; converting {main}")
-        job.input_path = path = main
+        if itself:
+            logger.info(f"{os.path.basename(path.rstrip('/' + os.sep)) or path}: read by "
+                        f"micro-reader ({getattr(f, 'backend', None) or 'its format'}), by its "
+                        f"content")
+        else:
+            logger.info(f"{path}: a part of {main}; converting {main}")
+            job.input_path = path = main
     names = set().union(*(set(k) for k in f.indices)) - {"resolution"}
     if getattr(f, "plates", None):
         plate = _plate_or_not(f, job, names)

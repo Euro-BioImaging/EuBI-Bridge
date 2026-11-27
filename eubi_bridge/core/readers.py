@@ -30,6 +30,37 @@ def _is_hdf5(path) -> bool:
         return True                 # a remote path: as before
 
 
+def _hilo_czi(input_path: str, *, tried_micro: bool, **kwargs):
+    """micro-reader's reader for a CZI the standard CZI readers misread, else None.
+
+    libCZI (under pylibCZIrw 6.1.0 and aicspylibczi) does not undo the hi-lo byte
+    packing of 16-bit RGB zstd subblocks, so every pixel would be wrong (Workplan
+    E9).  Such a file is read by micro-reader even with pixel_reader='standard';
+    when micro-reader cannot take it either, the file is refused rather than
+    converted with wrong pixels.
+    """
+    from eubi_bridge.core.czi_hilo import misread_by_libczi
+    if not misread_by_libczi(input_path):
+        return None
+    from eubi_bridge.utils.errors import InputError
+    why = ("its 16-bit RGB subblocks are zstd-compressed with hi-lo byte packing, which "
+           "the standard CZI readers (pylibCZIrw, aicspylibczi) decode wrongly")
+    if tried_micro:
+        raise InputError(f"{input_path}: {why}, and micro-reader does not read this file "
+                         f"(see the line above): not converted, as its pixels would be wrong")
+    from eubi_bridge.core.micro_source import MicroReader
+    reader = MicroReader.open(input_path, **kwargs)
+    if reader is None:
+        raise InputError(f"{input_path}: {why}, and micro-reader does not read this file "
+                         f"(see the line above): not converted, as its pixels would be wrong")
+    logger.warning(f"{input_path}: pixel_reader='standard', but {why}: micro-reader reads "
+                   f"its pixels instead")
+    scene_index = kwargs.get('scene_index', None)
+    if scene_index is not None:
+        reader.set_scene(scene_index)
+    return reader
+
+
 async def read_single_image(
     input_path: str,
     aszarr: bool = False,
@@ -78,6 +109,10 @@ async def read_single_image(
             scene_index = kwargs.get('scene_index', None)
             if scene_index is not None:
                 reader.set_scene(scene_index)
+            return reader
+    if suffix.endswith('.czi'):
+        reader = _hilo_czi(input_path, tried_micro=pixel_reader == 'micro', **kwargs)
+        if reader is not None:
             return reader
 
     # Route to appropriate reader

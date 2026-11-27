@@ -39,7 +39,7 @@ STANDARD_ONLY = (
     "bioio", "bioio_base", "bioio_bioformats", "bioio_czi", "bioio_imageio", "bioio_lif",
     "bioio_nd2", "bioio_ome_tiff", "bioio_tifffile",
     "bfio", "scyjava", "jpype", "bioformats_jar", "install_jdk",
-    "aicspylibczi", "pylibCZIrw", "nd2", "readlif", "imageio", "imageio_ffmpeg", "matplotlib",
+    "aicspylibczi", "pylibCZIrw", "nd2", "readlif", "liffile", "imageio", "imageio_ffmpeg", "matplotlib",
 )
 #: where a lite run may try to import the standard stack: eubi-bridge's probes,
 #: and libraries' own optional imports (which they handle themselves)
