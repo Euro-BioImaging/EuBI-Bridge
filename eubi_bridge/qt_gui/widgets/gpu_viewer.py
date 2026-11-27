@@ -155,6 +155,15 @@ class GpuZarrViewer(QWidget):
         rl.setSpacing(0)
         rl.addWidget(self._toolbar())
         rl.addWidget(self.view, 1)
+        # below the view: compass, angles and Depth (micro-glancer 0.0.2, Workplan V14)
+        self.view_bar = None
+        try:
+            from micro_glancer.controls import ViewBar
+        except ImportError:                       # an older micro-glancer: no view bar
+            ViewBar = None
+        if ViewBar is not None:
+            self.view_bar = ViewBar(self.view)
+            rl.addWidget(self.view_bar)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.addWidget(side)
         split.addWidget(right)

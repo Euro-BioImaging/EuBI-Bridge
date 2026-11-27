@@ -391,6 +391,56 @@ def resolve_group_concat_params(group_id, group_df, defaults: dict) -> dict:
     return resolved
 
 
+#: an output's region, one "start,stop" per axis (decision E-11)
+RANGE_KEYS = ("time_range", "channel_range", "z_range", "y_range", "x_range")
+
+
+def range_value(value, label: str = "range") -> Optional[tuple]:
+    """A crop range as ``(start, stop)``, or None for a blank cell: ``"0,10"``, ``(0, 10)``
+    or ``[0, 10]``, two whole numbers with 0 <= start < stop (stop excluded, as a Python
+    slice). Anything else is a ValueError naming *label*."""
+    if is_blank_cell(value):
+        return None
+    parts = (list(value) if isinstance(value, (list, tuple))
+             else str(value).strip().strip("()[]").split(","))
+    try:
+        numbers = [float(str(p).strip()) for p in parts]
+        if len(numbers) != 2 or not all(n.is_integer() for n in numbers):
+            raise ValueError
+        start, stop = (int(n) for n in numbers)
+    except ValueError:
+        raise ValueError(f"{label} {value!r} is not 'start,stop': two whole numbers, "
+                         f"such as 0,100") from None
+    if not 0 <= start < stop:
+        raise ValueError(f"{label} {value!r}: start must be 0 or more and below stop "
+                         f"(stop is excluded)")
+    return start, stop
+
+
+def resolve_group_ranges(group_id, group_df, defaults: dict) -> None:
+    """Refuse an aggregative group whose rows give different regions.
+
+    A group's rows build one joined image, and its region is cut from that image
+    (decision E-11), so each range must be the same on every row; a blank cell is the
+    run's own value (*defaults*). A disagreement is a ValueError naming the group, the
+    range and the values, as for the concatenation settings."""
+    for key in RANGE_KEYS:
+        if key not in group_df.columns:
+            continue
+        default = defaults.get(key)
+        found = []
+        for cell in group_df[key].tolist():
+            value = range_value(default if is_blank_cell(cell) else cell, key)
+            if value not in found:
+                found.append(value)
+        if len(found) > 1:
+            shown = ", ".join("none" if v is None else f"'{v[0]},{v[1]}'" for v in found)
+            raise ValueError(
+                f"Aggregative group {group_id!r} has conflicting {key}: {shown}. Its rows "
+                f"build one joined image, and the region is cut from that image, so every "
+                f"row of the group must give the same range.")
+
+
 def concat_without_group_problems(df: pd.DataFrame,
                                   defaults: dict | None = None) -> list:
     """Report rows that ask to concatenate but say nothing to concatenate with.

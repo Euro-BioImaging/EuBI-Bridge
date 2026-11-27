@@ -512,12 +512,22 @@ INDEX_OPTIONS = {"series_index": "all", "mosaic_tile_index": "all", "view_index"
                  "illumination_index": "all", "phase_index": 0, "rotation_index": 0}
 
 
+#: the crop options: an output's region, "start,stop" per axis
+RANGE_OPTIONS = ("time_range", "channel_range", "z_range", "y_range", "x_range")
+
+
+def _range_text(value) -> str:
+    """A range as it is typed: ``(0, 5)`` -> ``0,5``."""
+    return ",".join(str(v) for v in value) if isinstance(value, (list, tuple)) else str(value)
+
+
 def _refuse_indices_on_a_plate(f, job, name: str) -> None:
     """A file written as a plate is written whole: an index option choosing some of its
     images picks nothing there. Refused in one line naming --as_plate False, for every
     index option alike (review cycle 1, N-23: --series_index was ignored, the whole plate
     written; cycle 2, R2-01: --view_index / --illumination_index too, and a tile index
-    gave PlateFieldTilesError's wrong advice). The defaults pick nothing out."""
+    gave PlateFieldTilesError's wrong advice). The defaults pick nothing out. A region
+    (the crop ranges) is refused the same way (decision E-11)."""
     chosen = [(option, getattr(job.readers, option, None))
               for option, default in INDEX_OPTIONS.items()]
     chosen = [(o, v) for o, v in chosen
@@ -529,6 +539,18 @@ def _refuse_indices_on_a_plate(f, job, name: str) -> None:
                          f"nothing there. To convert only those images, each as a store of "
                          f"its own, add --as_plate False; to convert the plate, leave "
                          f"{'it' if len(chosen) == 1 else 'them'} out.")
+    # a region on a plate is refused for now (decision E-11): one range for every field
+    # of every well is rarely what is meant, and plates seldom need cropping
+    conversion = getattr(job, "conversion", None)
+    ranges = [(option, getattr(conversion, option, None)) for option in RANGE_OPTIONS]
+    ranges = [(o, v) for o, v in ranges if v is not None and str(v).strip() != ""]
+    if ranges:
+        f.close()
+        given = " ".join(f"--{o} {_range_text(v)}" for o, v in ranges)
+        raise InputError(f"{name} is read as a plate, which is written whole: a region "
+                         f"({given}) is not applied to a plate. To crop its images, each "
+                         f"written as a store of its own, add --as_plate False; to convert "
+                         f"the plate, leave the range{'s' if len(ranges) > 1 else ''} out.")
 
 
 def _plate_or_not(f, job, names: set):
@@ -658,112 +680,7 @@ def _load_input_collection(job):
     try:
         path = str(job.input_path)
         readers = job.readers
-        keys = [tuple((k, v) for k, v in index.items()) for index in f.indices]
-        keys = _picked(keys, readers, os.path.basename(path))
-        stem = job.resolved_basename or output_stem(path)
-        file = pathlib.Path(path)
-
-        scene_values = _values(keys, SERIES)
-        scenes = _positions(readers.series_index, len(scene_values), "series")
-        n_scenes = len(scene_values)
-        concat_views, concat_illus = readers.concat_views, readers.concat_illuminations
-        view_option = _multi(readers.view_index)
-        illu_option = _multi(readers.illumination_index)
-        # 0.1.5 iterates views / illuminations only when asked to (unary_worker)
-        by_view = (view_option != 0 or concat_views or isinstance(view_option, list))
-        by_illu = (illu_option != 0 or concat_illus or isinstance(illu_option, list))
-        n_views_file = n_illus_file = 1
-        if by_view or by_illu:
-            view_option = view_option if by_view else 0
-            illu_option = illu_option if by_illu else 0
-            first = [k for k in keys if dict(k).get(SERIES) == scene_values[scenes[0]]]
-            n_views_file = len([v for v in _values(first, "view") if v is not None]) or 1
-            n_illus_file = len([v for v in _values(first, "illumination")
-                                if v is not None]) or 1
-            _check_positions(view_option, n_views_file, "view", os.path.basename(path),
-                             "--view_index")
-            _check_positions(illu_option, n_illus_file, "illumination",
-                             os.path.basename(path), "--illumination_index")
-            if n_views_file <= 1 and n_illus_file <= 1:
-                by_view = by_illu = False             # nothing to iterate
-
-        option = readers.mosaic_tile_index
-        plans, tiled = [], False                  # (entry, keys, group or None)
-        by_scene = [[k for k in keys if dict(k).get(SERIES) == scene_values[scene]]
-                    for scene in scenes]
-        varying = {name for key in keys for name, _ in key if len(_values(keys, name)) > 1}
-        for scene, here, other in ((s, [k for k in scoped if set(o) <= set(k)], o)
-                                   for s, scoped in zip(scenes, by_scene)
-                                   for o in _other_values(scoped)):
-            more = _other_suffix(other, varying)
-            tile_values = _values(here, "tile")
-            views, illus = _values(here, "view"), _values(here, "illumination")
-            tiled = tiled or len(tile_values) > 1
-            if option is None:
-                # no tile asked for: the scene's first tile (a file without tiles: the
-                # whole image), and no tile in the name or the acquisition block
-                picked = [None]
-            else:
-                picked = _tile_positions(option, len(tile_values), scene)
-            for tile in picked:
-                tile_value = tile_values[tile or 0]
-                if not (by_view or by_illu):
-                    key = _full_key(_key(scene_values[scene], tile_value, views[0], illus[0]),
-                                    other, here)
-                    plans.append((SimpleNamespace(
-                        scene=scene, tile=tile,
-                        series_path=f"{path}_{scene}" + (f"_tile{tile}" if tile else "") + more,
-                        basename=stem + more, other_index=bool(more),
-                        name_scene=scene if n_scenes > 1 else None, name_tile=tile),
-                        [key], None))
-                    continue
-                # views / illuminations, as 0.1.5's load_views_illuminations
-                tile_named = tile if tile is not None and len(tile_values) > 1 else None
-                combos = [(v, i) for v in _chosen(view_option, len(views))
-                          for i in _chosen(illu_option, len(illus))]
-                if concat_views and concat_illus:
-                    groups = [combos] if combos else []
-                elif concat_views:
-                    groups = [[c for c in combos if c[1] == i]
-                              for i in dict.fromkeys(c[1] for c in combos)]
-                elif concat_illus:
-                    groups = [[c for c in combos if c[0] == v]
-                              for v in dict.fromkeys(c[0] for c in combos)]
-                else:
-                    groups = [[c] for c in combos]
-                for group in groups:
-                    view, illumination = group[-1]
-                    suffix = more
-                    if n_views_file > 1:
-                        suffix += "_view_concat" if concat_views else f"_view{view}"
-                    if n_illus_file > 1:
-                        suffix += "_illu_concat" if concat_illus else f"_illu{illumination}"
-                    if tile_named is not None:
-                        suffix += f"_tile{tile_named}"
-                    group_keys = [_full_key(_key(scene_values[scene], tile_value, views[v],
-                                                 illus[i]), other, here) for v, i in group]
-                    plans.append((SimpleNamespace(
-                        scene=scene, tile=tile_named,
-                        series_path=str(file.parent / (file.stem + suffix + file.suffix)),
-                        basename=stem + suffix,
-                        name_scene=scene if n_scenes > 1 else None, name_tile=None),
-                        group_keys,
-                        group if (concat_views or concat_illus) else None))
-        if not plans:
-            counts = {s: len(_values([k for k in scoped], "tile"))
-                      for s, scoped in zip(scenes, by_scene)}
-            tiled_scenes = {s: n for s, n in counts.items() if n > 1}
-            if not tiled_scenes:
-                # a chosen tile index already reads the tiles apart (as_mosaic off,
-                # _a_chosen_tile_is_a_tile): a file with none has no tiles at all (cycle 2,
-                # R2-03: the reason sent the user to --as_mosaic False, which changes nothing)
-                raise InputError(f"{os.path.basename(path)} has no tiles: "
-                                 f"--mosaic_tile_index {option} has none to pick (leave it "
-                                 f"out).")
-            reason = "; ".join(f"series {s} has {n} tiles (0..{n - 1})"   # cycle 1, N-24
-                               for s, n in tiled_scenes.items())
-            raise InputError(f"No valid mosaic tile index in {option!r} for "
-                             f"{os.path.basename(path)}: {reason}.")
+        plans, tiled = _plan_outputs(f, job)
 
         # only the images the outputs need, read one at a time
         needed = list(dict.fromkeys(k for _, plan_keys, _ in plans for k in plan_keys))
@@ -813,6 +730,164 @@ def _load_input_collection(job):
     except BaseException:
         f.close()
         raise
+
+
+def list_images(job) -> list[dict] | None:
+    """The images a conversion of *job* writes, each as the index options that name it
+    alone: ``{"series_index": s}``, with ``view_index`` / ``illumination_index`` when the
+    file's views / illuminations are written one by one (joined ones stay one image).
+    Tiles are never split (they follow the mosaic setting), nor are the indices with no
+    option of their own (block, excitation, ...). None for a plate, which is written
+    whole. Opens the file and reads no pixels (a batch row's Expand, decision E-11).
+
+    Lists what micro-reader (or ozp, for an OME-Zarr input) reads; a file only the
+    standard reader takes is refused (InputError): its series are Bio-Formats', which
+    micro-reader may count differently, and the GUI does not start Java to ask."""
+    from eubi_bridge.utils.path_utils import is_zarr_group
+    path = str(job.input_path)
+    if is_zarr_group(path) or path.lower().endswith(".zip"):
+        f, _ = _open_input(job)
+    else:
+        from eubi_bridge.core.micro_source import require_ozp
+        require_ozp()
+        try:
+            f = _open_micro(job)
+        except NotYet as exc:
+            raise InputError(
+                f"{os.path.basename(path)}: its images are not listed, because micro-reader "
+                f"does not read it ({exc}). Set series_index (and the view and illumination "
+                f"indices) on its rows by hand.") from None
+    try:
+        if getattr(f, "is_plate", False):
+            return None
+        plans, _ = _plan_outputs(f, job)
+    finally:
+        f.close()
+    found = []
+    for entry, _, _ in plans:
+        picks = {"series_index": entry.scene}
+        if entry.view is not None:
+            picks["view_index"] = entry.view
+        if entry.illumination is not None:
+            picks["illumination_index"] = entry.illumination
+        if picks not in found:
+            found.append(picks)
+    return found
+
+
+def _plan_outputs(f, job):
+    """``(plans, tiled)``: one ``(entry, keys, group or None)`` per output of the opened
+    file *f*, chosen from its index by the job's index options; *tiled*: a series has
+    several tiles. An entry's ``view`` / ``illumination`` is the position it was chosen
+    by when they are written one by one, else None."""
+    path = str(job.input_path)
+    readers = job.readers
+    keys = [tuple((k, v) for k, v in index.items()) for index in f.indices]
+    keys = _picked(keys, readers, os.path.basename(path))
+    stem = job.resolved_basename or output_stem(path)
+    file = pathlib.Path(path)
+
+    scene_values = _values(keys, SERIES)
+    scenes = _positions(readers.series_index, len(scene_values), "series")
+    n_scenes = len(scene_values)
+    concat_views, concat_illus = readers.concat_views, readers.concat_illuminations
+    view_option = _multi(readers.view_index)
+    illu_option = _multi(readers.illumination_index)
+    # a file's views / illuminations are each an output of their own, named by their
+    # position, whichever the options pick: 0.1.5 wrote view_index 0 (its default then)
+    # as the plain image, so a batch row expanded to view 0 lost the "_view0" that 'all'
+    # writes (E33)
+    first = [k for k in keys if dict(k).get(SERIES) == scene_values[scenes[0]]]
+    n_views_file = len([v for v in _values(first, "view") if v is not None]) or 1
+    n_illus_file = len([v for v in _values(first, "illumination") if v is not None]) or 1
+    _check_positions(view_option, n_views_file, "view", os.path.basename(path),
+                     "--view_index")
+    _check_positions(illu_option, n_illus_file, "illumination",
+                     os.path.basename(path), "--illumination_index")
+    apart = n_views_file > 1 or n_illus_file > 1
+
+    option = readers.mosaic_tile_index
+    plans, tiled = [], False                  # (entry, keys, group or None)
+    by_scene = [[k for k in keys if dict(k).get(SERIES) == scene_values[scene]]
+                for scene in scenes]
+    varying = {name for key in keys for name, _ in key if len(_values(keys, name)) > 1}
+    for scene, here, other in ((s, [k for k in scoped if set(o) <= set(k)], o)
+                               for s, scoped in zip(scenes, by_scene)
+                               for o in _other_values(scoped)):
+        more = _other_suffix(other, varying)
+        tile_values = _values(here, "tile")
+        views, illus = _values(here, "view"), _values(here, "illumination")
+        tiled = tiled or len(tile_values) > 1
+        if option is None:
+            # no tile asked for: the scene's first tile (a file without tiles: the
+            # whole image), and no tile in the name or the acquisition block
+            picked = [None]
+        else:
+            picked = _tile_positions(option, len(tile_values), scene)
+        for tile in picked:
+            tile_value = tile_values[tile or 0]
+            if not apart:
+                key = _full_key(_key(scene_values[scene], tile_value, views[0], illus[0]),
+                                other, here)
+                plans.append((SimpleNamespace(
+                    scene=scene, tile=tile, view=None, illumination=None,
+                    series_path=f"{path}_{scene}" + (f"_tile{tile}" if tile else "") + more,
+                    basename=stem + more, other_index=bool(more),
+                    name_scene=scene if n_scenes > 1 else None, name_tile=tile),
+                    [key], None))
+                continue
+            # views / illuminations, as 0.1.5's load_views_illuminations
+            tile_named = tile if tile is not None and len(tile_values) > 1 else None
+            combos = [(v, i) for v in _chosen(view_option, len(views))
+                      for i in _chosen(illu_option, len(illus))]
+            if concat_views and concat_illus:
+                groups = [combos] if combos else []
+            elif concat_views:
+                groups = [[c for c in combos if c[1] == i]
+                          for i in dict.fromkeys(c[1] for c in combos)]
+            elif concat_illus:
+                groups = [[c for c in combos if c[0] == v]
+                          for v in dict.fromkeys(c[0] for c in combos)]
+            else:
+                groups = [[c] for c in combos]
+            for group in groups:
+                view, illumination = group[-1]
+                suffix = more
+                if n_views_file > 1:
+                    suffix += "_view_concat" if concat_views else f"_view{view}"
+                if n_illus_file > 1:
+                    suffix += "_illu_concat" if concat_illus else f"_illu{illumination}"
+                if tile_named is not None:
+                    suffix += f"_tile{tile_named}"
+                group_keys = [_full_key(_key(scene_values[scene], tile_value, views[v],
+                                             illus[i]), other, here) for v, i in group]
+                plans.append((SimpleNamespace(
+                    scene=scene, tile=tile_named,
+                    view=view if n_views_file > 1 and not concat_views else None,
+                    illumination=(illumination if n_illus_file > 1 and not concat_illus
+                                  else None),
+                    series_path=str(file.parent / (file.stem + suffix + file.suffix)),
+                    basename=stem + suffix,
+                    name_scene=scene if n_scenes > 1 else None, name_tile=None),
+                    group_keys,
+                    group if (concat_views or concat_illus) else None))
+    if not plans:
+        counts = {s: len(_values([k for k in scoped], "tile"))
+                  for s, scoped in zip(scenes, by_scene)}
+        tiled_scenes = {s: n for s, n in counts.items() if n > 1}
+        if not tiled_scenes:
+            # a chosen tile index already reads the tiles apart (as_mosaic off,
+            # _a_chosen_tile_is_a_tile): a file with none has no tiles at all (cycle 2,
+            # R2-03: the reason sent the user to --as_mosaic False, which changes nothing)
+            raise InputError(f"{os.path.basename(path)} has no tiles: "
+                             f"--mosaic_tile_index {option} has none to pick (leave it "
+                             f"out).")
+        reason = "; ".join(f"series {s} has {n} tiles (0..{n - 1})"   # cycle 1, N-24
+                           for s, n in tiled_scenes.items())
+        raise InputError(f"No valid mosaic tile index in {option!r} for "
+                         f"{os.path.basename(path)}: {reason}.")
+
+    return plans, tiled
 
 
 # -- plates ------------------------------------------------------------------------------

@@ -87,6 +87,8 @@ def _value_for(spec, current):
         return 3
     if spec.kind == "float":
         return 0.0947                       # below 0.001 precision: a pixel size
+    if spec.kind == "range":
+        return "2,7"                        # start,stop (E-10)
     return TEXT.get(spec.key, "/d/x.tif" if spec.kind in ("file", "directory") else "x")
 
 

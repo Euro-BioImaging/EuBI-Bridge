@@ -3,6 +3,19 @@
 ## Unreleased
 
 ### Added
+- **A region per batch row, and rows per image** (Workplan E33; decisions E-10, E-11):
+  the T / C / Z / Y / X ranges are row cells now (Edit Cells checks `start,stop`), not
+  one setting for the whole batch. A region belongs to the image a row writes, so a
+  new **Expand** button replaces a row by one row per image (its series, and its views
+  or illuminations when they are written apart; a folder row by one row per file
+  first, mirrored as a run mirrors it), and setting a range on a row of several images
+  expands it first. Tiles, plates and the rows of an aggregative group stay one row.
+  Expand lists what micro-reader reads, without reading pixels; a file only
+  Bio-Formats reads is left for its index cells to be set by hand. The rows of an
+  aggregative group must give the same ranges (the region is cut from the joined
+  image): Run reports the rows of a group whose ranges differ, and a conversion table
+  sets such a group aside, as for differing concatenation settings. A conversion
+  table on the command line gives each row its ranges the same way (`"0,100"` cells).
 - **The GPU viewer, as the `viewer` extra**: `pip install "eubi-bridge[viewer]"` or
   `"eubi-bridge-lite[viewer]"` installs micro-glancer 0.0.x, and the Inspect page then
   draws with it: 3-D views (planes at any angle, maximum intensity, volume, surfaces),
@@ -16,6 +29,18 @@
   becomes a regular dependency.
 
 ### Changed
+- **A range on a plate is refused** (decision E-11): a plate is written whole, and one
+  region for every field of every well is rarely what is meant. The message says to
+  add `--as_plate False` (in a batch: `Write as NGFF plate` off) to crop its images,
+  each written as an OME-Zarr of its own. Before, every field was cropped.
+- **View 0 and illumination 0 are named like the others**: `--view_index 0` on a file
+  of several views wrote `<name>.ome.zarr`; it now writes `<name>_view0.ome.zarr`, the
+  name `--view_index all` gives that view (the same for `--illumination_index 0`).
+  0.1.5 left index 0 out of the name because 0 was its default; the default is `all`
+  now, and an expanded batch row picks view 0 by its index.
+- **The batch has no batch-wide ranges line any more**: the ranges of the Conversion
+  tab go into the rows added (as every other setting does), and a batch saved before
+  keeps the ranges of its settings file for every row whose cells are blank.
 - **The GPU viewer opens a plate without freezing the window**: with micro-glancer 0.0.2
   the store is read in the background (a plate: every field's metadata), the status line
   counting the fields ("Opening 0459 1A.ome.zarr: 4,200 of 10,640 fields"), and the
@@ -58,9 +83,8 @@
 - **Every file micro-reader reads is read by micro-reader**: the default route took only
   the file suffixes it listed, so a file micro-reader recognises by its content went to
   the older readers under any other name: a Luxendo experiment folder (no suffix), a
-  lone MetaMorph
-  `.stk`, `.tf2` / `.tf8` and `.ome.tf2` / `.ome.tf8` BigTIFFs, a TIFF or JPEG under an
-  unusual suffix (`.jfif`). They are now read by micro-reader; a file it does not
+  lone MetaMorph `.stk`, `.tf2` / `.tf8` and `.ome.tf2` / `.ome.tf8` BigTIFFs, a TIFF or
+  JPEG under an unusual suffix (`.jfif`). They are now read by micro-reader; a file it does not
   recognise, or recognises but cannot read, still goes to the older readers, and a
   format that needs a newer micro-reader (VSI before 0.3.0, KLB before 0.4.0) still
   waits for it. Over the 984 files of our samples whose suffix was not listed, only the
@@ -71,6 +95,19 @@
   chosen; the line said `--metadata_reader bfio` also when `--pixel_reader standard`
   was given, and now names what was given (or, when micro-reader declined the file,
   says so).
+- **No more "Tensorstore context configured: data_copy_concurrency=…" in the worker
+  log.** `tensorstore_data_copy_concurrency` has done nothing since 0.2.0, but each worker
+  still built a TensorStore context from it that nothing read, and its log line said
+  the setting applied. The context, the log line and the `EUBI_TENSORSTORE_DATA_COPY_CONCURRENCY`
+  variable are gone. The setting is still accepted, so saved configs and scripts keep
+  working; a value other than the default warns once that it does nothing, as before.
+  The threads of a conversion are `max_threads` (and `decode_threads` for reading).
+- **The classic viewer's render thread no longer outlives its viewer**: it stopped
+  only when the viewer itself was closed, so a viewer freed without that (the
+  Inspect page of a main window that was closed, or a test's page) deleted a thread
+  that was still running, and the process crashed (a segmentation fault on CI, Lite
+  on Python 3.14). The thread now stops when its viewer is destroyed, when the
+  application quits, and when Python exits.
 
 ## 0.4.2 (2026-11-17)
 

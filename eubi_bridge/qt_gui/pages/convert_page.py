@@ -9,6 +9,7 @@ Layout:
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from copy import deepcopy
 
 from PyQt6.QtCore import Qt, QItemSelectionModel, QTimer, pyqtSignal
@@ -109,6 +110,17 @@ def _labeled_spin(label: str, minimum: int, maximum: int, value: int, step: int 
     spin.setValue(value)
     spin.setSingleStep(step)
     return lbl, spin
+
+
+@contextmanager
+def _busy():
+    """A wait cursor while the batch opens files (Expand lists their images)."""
+    from PyQt6.QtWidgets import QApplication
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
 
 
 def _form_row(label: str, *widgets) -> QHBoxLayout:
@@ -1693,13 +1705,6 @@ class ConvertPage(QWidget):
             edit.textChanged.connect(self._update_batch_cluster_summary)
         self._update_batch_cluster_summary()
 
-        # Batch-wide settings that no row can override.  Shown explicitly, since
-        # they never appear as a table column and are otherwise unverifiable.
-        self._batch_baseline = QLabel("")
-        self._batch_baseline.setWordWrap(True)
-        self._batch_baseline.setStyleSheet("font-size: 10px; color: #4fc3f7;")
-        lay.addWidget(self._batch_baseline)
-
         # Row-editing buttons.  Add to Batch leads, since nothing else is usable
         # until the table has rows.
         edit_row = QHBoxLayout()
@@ -1722,6 +1727,10 @@ class ConvertPage(QWidget):
         for label, slot, tip in [
             ("Remove",    self._on_batch_remove,    "Remove the selected row from the batch"),
             ("Duplicate", self._on_batch_duplicate, "Copy the selected row, then edit one field to make a variant"),
+            ("Expand",    self._on_batch_expand,
+             "Replace the selected rows by one row per image they write (a folder: one "
+             "row per file first),\nso each image can get its own settings, such as a "
+             "region. Tiles and plates stay one row."),
             ("Move Up",   lambda: self._on_batch_move(-1), "Move the selected row earlier in the run order"),
             ("Move Down", lambda: self._on_batch_move(1),  "Move the selected row later in the run order"),
             ("Clear",     self._on_batch_clear,     "Discard every row and reset the batch baseline"),
@@ -1944,10 +1953,6 @@ class ConvertPage(QWidget):
         # Edit Cells enabled for cells that no longer exist.
         self._update_edit_cells_enabled()
 
-        summary = self._batch.baseline_summary()
-        self._batch_baseline.setText(
-            f"Applies to every row: {summary}" if summary else "")
-
         n = len(self._batch)
         if n == 0:
             self._batch_status.setText("Batch is empty")
@@ -2040,15 +2045,28 @@ class ConvertPage(QWidget):
             break
         if not result:
             return
-        applied = dlg.apply()
-        if not applied:
+        notes: list[str] = []
+        if dlg.sets_region():
+            # a region belongs to one output image: rows writing several are
+            # expanded first, plates refused (decision E-11)
+            with _busy():
+                targets, notes, refused = self._batch.prepare_region(rows)
+            applied = dlg.apply(rows=targets + refused, region_rows=targets)
+            rows = targets + refused
+        else:
+            applied = dlg.apply()
+        for note in notes:
+            self._batch_log.append_line(f"NOTE: {note}")
+        if not applied and not notes:
             return
 
         self._refresh_batch_table()
         self._batch_log.append_line(
             f"Updated {', '.join(applied)} on {len(rows)} row(s).")
         self._batch_status.setText(
-            f"Updated {len(applied)} parameter(s) on {len(rows)} row(s).")
+            f"Updated {len(applied)} parameter(s) on {len(rows)} row(s)."
+            + (f" {notes[0]}" + (f" (+{len(notes) - 1} more in the log)"
+                                 if len(notes) > 1 else "") if notes else ""))
         self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
 
     def _batch_ui_config(self) -> dict:
@@ -2123,8 +2141,7 @@ class ConvertPage(QWidget):
                 )
                 persisted = cfg
             # Anchor on the saved config so this row's deliberate changes stay
-            # visible, but pin compression / ranges from the live UI.  No row can
-            # carry those, so the baseline is the only place they can take effect.
+            # visible (the ranges too: a row carries its own region, E-10).
             self._batch.set_baseline(make_baseline(persisted, cfg))
 
         blocked = self._batch.add(cfg, selected, output_path)
@@ -2223,6 +2240,49 @@ class ConvertPage(QWidget):
         self._batch_status.setText(
             f"Duplicated {len(copies)} row(s); {len(self._batch)} in the batch. "
             "The copies are selected, ready for Edit Cells.")
+        self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
+
+    def _on_batch_expand(self):
+        """One row per image for each selected row (decision E-11)."""
+        rows = self._selected_batch_rows()
+        if not rows:
+            self._batch_status.setText("Select a row first.")
+            return
+        before = len(self._batch)
+        notes: list[str] = []
+        expanded: list[int] = []
+        with _busy():
+            # from the last, so expanding a row leaves the earlier indices valid
+            for index in reversed(rows):
+                name = os.path.basename(str(self._batch.rows[index].get("input_path", "")))
+                try:
+                    taken, more = self._batch.expand(index)
+                except Exception as exc:              # noqa: BLE001 - reported
+                    notes.insert(0, f"{name}: {str(exc).splitlines()[0]}")
+                    continue
+                notes[:0] = more
+                added = len(taken) - 1
+                expanded = [i + added for i in expanded]
+                if added:
+                    expanded[:0] = taken
+        for note in notes:
+            self._batch_log.append_line(f"NOTE: {note}")
+        self._batch_table.clearSelection()
+        self._refresh_batch_table()
+        selection = self._batch_table.selectionModel()
+        model = self._batch_table.model()
+        for index in expanded:
+            selection.select(model.index(index, 0),
+                             QItemSelectionModel.SelectionFlag.Select
+                             | QItemSelectionModel.SelectionFlag.Rows)
+        grown = len(self._batch) - before
+        message = (f"Expanded into {len(expanded)} row(s) ({grown} added); "
+                   f"{len(self._batch)} in the batch." if grown
+                   else "Nothing to expand: each selected row writes one image.")
+        if notes:
+            message += f" {notes[0]}" + (f" (+{len(notes) - 1} more in the log)"
+                                         if len(notes) > 1 else "")
+        self._batch_status.setText(message)
         self._batch_status.setStyleSheet("font-size: 10px; color: #aaa;")
 
     def _on_batch_move(self, delta: int):

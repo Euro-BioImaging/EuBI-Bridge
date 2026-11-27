@@ -1778,7 +1778,7 @@ class ConversionManager:
         from eubi_bridge.utils.path_utils import (
             AGGREGATIVE_GROUP_COLUMN, PER_GROUP_CONCAT_KEYS,
             concat_without_group_problems, disambiguate_output_names,
-            partition_by_group, resolve_group_concat_params)
+            partition_by_group, resolve_group_concat_params, resolve_group_ranges)
 
         # Caught before anything is dispatched: a row with axes but no group
         # converts one-to-one, so the run would quietly produce something other
@@ -1834,6 +1834,8 @@ class ConversionManager:
             # resolved across all of its rows and a disagreement is refused.
             try:
                 concat = resolve_group_concat_params(group_id, group_rows, concat_p)
+                # the region is cut from the joined image: one per group (E-11)
+                resolve_group_ranges(group_id, group_rows, conversion_p)
             except ValueError as exc:
                 refused_groups.append((group_id, group_rows, str(exc)))
                 logger.warning(f"Group {group_id} set aside, not converted: {exc}")
@@ -2425,7 +2427,8 @@ class EuBIBridge:
             max_processes: Override the configured max_processes (images converted
                 at once) for this run. Formerly ``max_workers``, which still works.
             max_retries: Override the configured max_retries.
-            tensorstore_data_copy_concurrency: TensorStore internal copy threads.
+            tensorstore_data_copy_concurrency: RETIRED in 0.2.0: does nothing (warned
+                about once when set).
             use_threading: Use a ThreadPool instead of a ProcessPool.
             on_slurm: Submit jobs to a SLURM cluster (the full eubi-bridge only).
             on_local_cluster: DEPRECATED and ignored.
