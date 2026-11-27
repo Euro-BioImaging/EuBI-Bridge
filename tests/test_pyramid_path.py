@@ -405,8 +405,13 @@ def test_micro_reader_names_why_it_does_not_take_a_file():
     from eubi_bridge.core.config_models import ConversionJob
     job = ConversionJob.from_kwargs(input_path="a.ome.tif", output_path="o", kwargs={})
     assert _micro_reason(job) == ""
+    # a suffix FORMATS does not list is offered to micro-reader too: it decides by content
+    # (_open_micro; tests/test_micro_route_by_content.py)
     zvi = job.model_copy(update={"input_path": "a.zvi"})
-    assert "format" in _micro_reason(zvi)                 # the older readers take it
+    assert _micro_reason(zvi) == ""
+    std = job.model_copy(update={"readers": job.readers.model_copy(
+        update={"pixel_reader": "standard"})})
+    assert _micro_reason(std) == "the standard reader was asked for"
     for slide in ("a.svs", "a.NDPI", "a.scn", "a.qptiff", "a.bif", "a.ics",   # 0.3.3: route
                   "a.h5", "a.lux.h5", "a.hdf5", "a.mrc", "a.map", "a.rec", "a.png", "a.JPG",
                   "a.bmp", "a.xlif", "a.xlcf", "a.lof", "a.ndpis", "matl.omp2info",

@@ -156,7 +156,7 @@ jobs:
         python - <<'PY'
         import importlib.util, sys
         full = ("bioio_base", "bfio", "scyjava", "jpype", "dask", "distributed",
-                "dask_jobqueue", "aicspylibczi", "pylibCZIrw", "nd2", "readlif")
+                "dask_jobqueue", "aicspylibczi", "pylibCZIrw", "nd2", "readlif", "liffile")
         present = [m for m in full if importlib.util.find_spec(m)]
         if present:
             sys.exit(f"eubi-bridge-lite pulled in the full stack: {present}")

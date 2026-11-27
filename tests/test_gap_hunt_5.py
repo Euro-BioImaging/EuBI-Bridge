@@ -299,10 +299,36 @@ def test_the_older_readers_refuse_what_they_would_drop(monkeypatch, name, counts
     for key, value in picks.items():
         setattr(readers, key, value)
     if refused is None:
-        legacy_image._refuse_what_is_dropped(name, readers)
+        legacy_image._refuse_what_is_dropped(name, readers, "bfio")
     else:
         with pytest.raises(InputError, match=f"has {refused}.*without --metadata_reader bfio"):
-            legacy_image._refuse_what_is_dropped(name, readers)
+            legacy_image._refuse_what_is_dropped(name, readers, "bfio")
+
+
+@pytest.mark.parametrize("metadata_reader, pixel_reader, said", [
+    ("bfio", "micro", r"\(--metadata_reader bfio\).*without --metadata_reader bfio\)"),
+    ("micro", "standard", r"\(--pixel_reader standard\).*without --pixel_reader standard\)"),
+    ("bioio", "standard", r"without --metadata_reader bioio and --pixel_reader standard\)"),
+    ("micro", "micro", r"micro-reader did not take the file.*--mosaic_tile_index 0"),
+])
+def test_the_refusal_names_the_setting_that_chose_the_older_readers(
+        monkeypatch, metadata_reader, pixel_reader, said):
+    # until 0.4.2 it named --metadata_reader bfio also for --pixel_reader standard
+    import micro_reader
+
+    class Opened:
+        index_range = {"series": 1, "tile": 4}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+    monkeypatch.setattr(micro_reader, "open", lambda path, **_: Opened())
+    readers = SimpleNamespace(force_bioformats=False, view_index="all", illumination_index="all",
+                              mosaic_tile_index="all", pixel_reader=pixel_reader)
+    with pytest.raises(InputError, match=said):
+        legacy_image._refuse_what_is_dropped("mosaic.lif", readers, metadata_reader)
 
 
 def test_an_image_of_its_own_named_like_a_plane_is_not_folded_into_the_plate(tmp_path, monkeypatch, caplog):

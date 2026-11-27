@@ -23,7 +23,7 @@ PYPROJECT = ROOT / "pyproject.toml"
 FULL_ONLY = {
     "bfio", "bioformats-jar", "scyjava", "jpype1", "jgo", "install-jdk",
     "dask", "distributed", "dask-jobqueue", "xarray",
-    "aicspylibczi", "pylibczirw", "nd2", "readlif",
+    "aicspylibczi", "pylibczirw", "nd2", "readlif", "liffile",
 }
 
 
